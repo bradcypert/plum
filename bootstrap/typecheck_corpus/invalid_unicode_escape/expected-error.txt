@@ -1,0 +1,2 @@
+not a Unicode scalar value
+<source>:1:35

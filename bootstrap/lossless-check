@@ -46,7 +46,29 @@ work="$(mktemp -d 2>/dev/null || mktemp -d -t plum-lossless)"
 trap 'rm -rf "$work"' EXIT
 
 ok=0; fail=0
+expected_lex_errors=0
 while IFS= read -r f; do
+    expected_lex_error=""
+    case "$f" in
+        ./bootstrap/typecheck_corpus/invalid_hex_escape/main.plum)
+            expected_lex_error="requires exactly two hexadecimal digits" ;;
+        ./bootstrap/typecheck_corpus/invalid_unicode_escape/main.plum)
+            expected_lex_error="not a Unicode scalar value" ;;
+        ./bootstrap/typecheck_corpus/unknown_string_escape/main.plum)
+            expected_lex_error="unknown escape \\q" ;;
+    esac
+    if [ -n "$expected_lex_error" ]; then
+        if SH_TIMEOUT="${SH_TIMEOUT:-60}" "$plum" relex "$f" > "$work/out" 2>"$work/err"; then
+            printf 'FAIL  %-58s expected lexer rejection\n' "$f"
+            fail=$((fail + 1)); continue
+        fi
+        if ! { cat "$work/out"; cat "$work/err"; } | grep -Fq "$expected_lex_error"; then
+            printf 'FAIL  %-58s wrong lexer error: %s\n' "$f" "$(head -n 1 "$work/err")"
+            fail=$((fail + 1)); continue
+        fi
+        expected_lex_errors=$((expected_lex_errors + 1))
+        continue
+    fi
     if ! SH_TIMEOUT="${SH_TIMEOUT:-60}" "$plum" relex "$f" > "$work/out" 2>"$work/err"; then
         printf 'FAIL  %-58s relex errored: %s\n' "$f" "$(head -n 1 "$work/err")"
         fail=$((fail + 1)); continue
@@ -78,4 +100,4 @@ if [ "$fail" -ne 0 ]; then
     printf '\nlossless-check: %d file(s) do NOT round-trip, %d do\n' "$fail" "$ok"
     exit 1
 fi
-printf 'lossless-check: %d .plum files round-trip byte-for-byte, through the token stream AND through item spans\n' "$ok"
+printf 'lossless-check: %d .plum files round-trip byte-for-byte, through the token stream AND through item spans; %d intentional lexer errors rejected\n' "$ok" "$expected_lex_errors"

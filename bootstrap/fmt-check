@@ -39,8 +39,26 @@ plum="${1:-./sh.real}"
 work="$(mktemp -d 2>/dev/null || mktemp -d -t plum-fmt)"
 trap 'rm -rf "$work"' EXIT
 
-ok=0; fail=0
+ok=0; fail=0; expected_lex_errors=0
 while IFS= read -r f; do
+    expected_lex_error=0
+    case "$f" in
+        ./bootstrap/typecheck_corpus/invalid_hex_escape/main.plum)
+            expected_lex_error=1 ;;
+        ./bootstrap/typecheck_corpus/invalid_unicode_escape/main.plum)
+            expected_lex_error=1 ;;
+        ./bootstrap/typecheck_corpus/unknown_string_escape/main.plum)
+            expected_lex_error=1 ;;
+    esac
+    if [ "$expected_lex_error" -eq 1 ]; then
+        if "$plum" fmt "$f" > "$work/out" 2>"$work/err"; then
+            printf 'FAIL  %-58s fmt accepted an invalid escape\n' "$f"
+            fail=$((fail + 1)); continue
+        fi
+        expected_lex_errors=$((expected_lex_errors + 1))
+        continue
+    fi
+
     if ! "$plum" fmt "$f" > "$work/out" 2>"$work/err"; then
         printf 'FAIL  %-58s fmt errored: %s\n' "$f" "$(head -n 1 "$work/err")"
         fail=$((fail + 1)); continue
@@ -151,4 +169,4 @@ if [ "$fail" -ne 0 ]; then
     printf '\nfmt-check: %d file(s) failed, %d already formatted\n' "$fail" "$ok"
     exit 1
 fi
-printf 'fmt-check: %d checks pass -- every repo file already formatted, and fmt_corpus reformatted as recorded\n' "$ok"
+printf 'fmt-check: %d checks pass -- every repo file already formatted, and fmt_corpus reformatted as recorded; %d intentional lexer errors rejected\n' "$ok" "$expected_lex_errors"
