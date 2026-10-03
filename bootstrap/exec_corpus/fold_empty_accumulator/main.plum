@@ -1,0 +1,17 @@
+// The fold result annotation pins the initially empty accumulator. The
+// nested filter closure needs that type before it can read `author`.
+struct R { author: String, title: String }
+
+let latest (rs: Array[R]): Array[R] =
+    Array.fold(rs, [], |acc, r| acc.filter(|x| x.author != r.author).concat([r]))
+
+let main (): Unit = {
+    let rs = latest([
+        R { author: "Ada", title: "first" },
+        R { author: "Grace", title: "compiler" },
+        R { author: "Ada", title: "latest" },
+    ]);
+    println(rs.len().to_string());
+    println(rs[0].author.concat(": ").concat(rs[0].title));
+    println(rs[1].author.concat(": ").concat(rs[1].title))
+}
