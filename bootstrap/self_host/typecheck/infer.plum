@@ -786,7 +786,10 @@ let check_fn_typed (p20: Program2) (def: parser.LetDefNode) (module_name: String
     let sig = Option.unwrap_or(find_sig(p2x, def.name), FnSig { name: def.name, module: module_name, generics: [], params: [], ret: ITUnit, is_extern: false, is_pub: true });
     let p2 = Program2 { sigs: p20.sigs, globals: p20.globals, ctx: p20.ctx, current: module_name, generics: sig.generics };
     let env = bind_params(tyenv_empty(()), def.params, sig.params, 0);
-    let r = infer_expr(p2, fresh_state_new(()), env, subst_empty(()), def.body);
+    // A declared result type can pin an empty Array.fold accumulator
+    // before the closure is checked. This matters when a nested closure
+    // reads fields from elements of that accumulator.
+    let r = infer_expr_for_return(p2, fresh_state_new(()), env, subst_empty(()), def.body, sig.ret);
     let body_ty = subst_apply(r.subst, r.ty);
     let ret_ty = subst_apply(r.subst, sig.ret);
     match unify(body_ty, ret_ty) {
@@ -984,6 +987,14 @@ pub let infer_expr (p2: Program2) (state: FreshState) (env: TyEnv) (acc: Subst) 
         // `select` is not, and saying "select/channels" sent people
         // looking for a channel bug that was not there.
         ESelect(arms, _) => infer_select(p2, state, env, acc, arms),
+    }
+
+let infer_expr_for_return (p2: Program2) (state: FreshState) (env: TyEnv) (acc: Subst) (e: parser.PExpr) (expected: ITy): InferResult =
+    match e {
+        ECall(EField(EIdent("Array", _), "fold"), args) =>
+            if args.len() == 3 { infer_array_fold_expected(p2, state, env, acc, args[0], args[1], args[2], Some(expected)) }
+            else { infer_expr(p2, state, env, acc, e) },
+        _ => infer_expr(p2, state, env, acc, e),
     }
 
 // A closure literal's params get FRESH type variables (no annotations
@@ -2170,11 +2181,22 @@ let infer_array_filter (p2: Program2) (state: FreshState) (env: TyEnv) (acc: Sub
 }
 
 let infer_array_fold (p2: Program2) (state: FreshState) (env: TyEnv) (acc: Subst) (arr_expr: parser.PExpr) (init_expr: parser.PExpr) (f_expr: parser.PExpr): InferResult = {
+    infer_array_fold_expected(p2, state, env, acc, arr_expr, init_expr, f_expr, None)
+}
+
+let infer_array_fold_expected (p2: Program2) (state: FreshState) (env: TyEnv) (acc: Subst) (arr_expr: parser.PExpr) (init_expr: parser.PExpr) (f_expr: parser.PExpr) (expected: Option[ITy]): InferResult = {
     let ar = infer_expr(p2, state, env, acc, arr_expr);
     let elem_fresh = fresh(ar.state);
     let s1 = match unify(subst_apply(ar.subst, ar.ty), ITStruct("Array", [elem_fresh.ty])) { Ok(s) => subst_compose(s, ar.subst), Err(e) => { fail_tc("Array.fold: ".concat(e)); ar.subst } };
     let ir = infer_expr(p2, elem_fresh.state, env, s1, init_expr);
-    let fr = infer_closure_seeded(p2, ir.state, env, ir.subst, f_expr, [subst_apply(ir.subst, ir.ty), subst_apply(ir.subst, elem_fresh.ty)]);
+    let s_init = match expected {
+        Some(t) => match unify(subst_apply(ir.subst, ir.ty), subst_apply(ir.subst, t)) {
+            Ok(s) => subst_compose(s, ir.subst),
+            Err(e) => { fail_tc("Array.fold result: ".concat(e)); ir.subst },
+        },
+        None => ir.subst,
+    };
+    let fr = infer_closure_seeded(p2, ir.state, env, s_init, f_expr, [subst_apply(s_init, ir.ty), subst_apply(s_init, elem_fresh.ty)]);
     let acc_ty = subst_apply(fr.subst, ir.ty);
     let elem_ty = subst_apply(fr.subst, elem_fresh.ty);
     let s2 = match unify(subst_apply(fr.subst, fr.ty), ITFunction([acc_ty, elem_ty], acc_ty)) { Ok(s) => subst_compose(s, fr.subst), Err(e) => { fail_tc("Array.fold function argument: ".concat(e)); fr.subst } };
