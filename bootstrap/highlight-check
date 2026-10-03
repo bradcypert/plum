@@ -41,6 +41,15 @@ PATTERNS = (
 
 TAGS = re.compile(r"</?span[^>]*>")
 
+# These fixtures intentionally contain lexically invalid string escapes.
+# The highlighter uses the real lexer, so it must reject them rather than
+# produce markup for a token stream that does not exist.
+EXPECTED_LEX_ERRORS = {
+    "bootstrap/typecheck_corpus/invalid_hex_escape/main.plum": "requires exactly two hexadecimal digits",
+    "bootstrap/typecheck_corpus/invalid_unicode_escape/main.plum": "not a Unicode scalar value",
+    "bootstrap/typecheck_corpus/unknown_string_escape/main.plum": "unknown escape \\q",
+}
+
 
 def main() -> int:
     root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -55,6 +64,18 @@ def main() -> int:
     failed = 0
     for src in files:
         done = subprocess.run([plum, "highlight", src], capture_output=True, text=True)
+        expected_error = EXPECTED_LEX_ERRORS.get(src)
+        if expected_error is not None:
+            output = done.stdout + done.stderr
+            if done.returncode != 0 and expected_error in output:
+                continue
+            failed += 1
+            if done.returncode == 0:
+                print(f"FAIL {src}: expected the lexer to reject this escape")
+            else:
+                print(f"FAIL {src}: lexer error did not contain {expected_error!r}")
+                print("    " + output.strip().replace("\n", "\n    "))
+            continue
         if done.returncode != 0:
             failed += 1
             print(f"FAIL {src}: highlight exited {done.returncode}")

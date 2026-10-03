@@ -1759,7 +1759,7 @@ pub let cg_runtime (unit: Unit): String = cg_lines([
     "; That includes inheriting the documented caveat exactly: case",
     "; mapping goes through libc's `towupper`/`towlower`, which are",
     "; one-codepoint-in-one-codepoint-out, so multi-codepoint expansions",
-    "; (German `\xc3\x9f` -> `SS`) cannot happen and the character is left",
+    "; (German U+00DF -> `SS`) cannot happen and the character is left",
     "; alone. The interpreter's `str::to_uppercase()` does expand it.",
     "; A divergence, unchanged by this port, and stated where the real",
     "; backend states it.",

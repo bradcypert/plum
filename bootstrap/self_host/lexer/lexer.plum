@@ -235,15 +235,73 @@ let lex_number (chars: Array[String]) (pos: Int): NumResult = {
 
 struct EscResult { ch: String, next_pos: Int }
 
-let escape_char (chars: Array[String]) (pos: Int): EscResult =
-    if pos >= chars.len() { EscResult { ch: "", next_pos: pos } }
+let hex_digit (c: String): Int = match c {
+    "0" => 0, "1" => 1, "2" => 2, "3" => 3, "4" => 4,
+    "5" => 5, "6" => 6, "7" => 7, "8" => 8, "9" => 9,
+    "a" => 10, "b" => 11, "c" => 12, "d" => 13, "e" => 14, "f" => 15,
+    "A" => 10, "B" => 11, "C" => 12, "D" => 13, "E" => 14, "F" => 15,
+    _ => -1,
+}
+
+let escape_error (source: String) (offset: Int) (msg: String) (next_pos: Int): EscResult = {
+    panic_raw(render_at(source, "<source>", offset, msg));
+    EscResult { ch: "", next_pos: next_pos }
+}
+
+let scalar_string (n: Int): String = {
+    let bs = if n <= 127 { [n] }
+        else if n <= 2047 { [192 + n / 64, 128 + n % 64] }
+        else if n <= 65535 { [224 + n / 4096, 128 + (n / 64) % 64, 128 + n % 64] }
+        else { [240 + n / 262144, 128 + (n / 4096) % 64, 128 + (n / 64) % 64, 128 + n % 64] };
+    match Bytes.as_string(Bytes.from_array(bs)) {
+        Ok(s) => s,
+        Err(_) => "",
+    }
+}
+
+let scan_hex (chars: Array[String]) (pos: Int) (end: Int) (value: Int): Int =
+    if pos >= end { value }
+    else { scan_hex(chars, pos + 1, end, value * 16 + hex_digit(chars[pos])) }
+
+let unicode_escape_end (chars: Array[String]) (pos: Int) (limit: Int): Int =
+    if pos >= chars.len() || pos >= limit || chars[pos] == "}" { pos }
+    else { unicode_escape_end(chars, pos + 1, limit) }
+
+let escape_char (source: String) (chars: Array[String]) (pos: Int) (slash: Int): EscResult =
+    if pos >= chars.len() { escape_error(source, slash, "incomplete escape sequence", pos) }
     else if chars[pos] == "n" { EscResult { ch: "\n", next_pos: pos + 1 } }
     else if chars[pos] == "t" { EscResult { ch: "\t", next_pos: pos + 1 } }
     else if chars[pos] == "r" { EscResult { ch: "\r", next_pos: pos + 1 } }
     else if chars[pos] == "\\" { EscResult { ch: "\\", next_pos: pos + 1 } }
     else if chars[pos] == "\"" { EscResult { ch: "\"", next_pos: pos + 1 } }
     else if chars[pos] == "$" { EscResult { ch: "$", next_pos: pos + 1 } }
-    else { EscResult { ch: chars[pos], next_pos: pos + 1 } }
+    else if chars[pos] == "x" {
+        if pos + 2 >= chars.len() || hex_digit(chars[pos + 1]) < 0 || hex_digit(chars[pos + 2]) < 0 {
+            escape_error(source, slash, "\\x escape requires exactly two hexadecimal digits", if pos + 1 < chars.len() { pos + 2 } else { chars.len() })
+        } else {
+            let code = hex_digit(chars[pos + 1]) * 16 + hex_digit(chars[pos + 2]);
+            EscResult { ch: scalar_string(code), next_pos: pos + 3 }
+        }
+    }
+    else if chars[pos] == "u" {
+        if pos + 1 >= chars.len() || chars[pos + 1] != "{" {
+            escape_error(source, slash, "\\u escape must use the form \\u{...}", pos + 1)
+        } else {
+            let hex_end = unicode_escape_end(chars, pos + 2, pos + 9);
+            let count = hex_end - (pos + 2);
+            let digits_ok = count > 0 && count <= 6 && hex_end < chars.len() && chars[hex_end] == "}" &&
+                Array.all(Array.slice(chars, pos + 2, hex_end), |c| hex_digit(c) >= 0);
+            if !digits_ok {
+                escape_error(source, slash, "\\u escape requires 1 to 6 hexadecimal digits in braces", if hex_end < chars.len() && chars[hex_end] == "}" { hex_end + 1 } else { hex_end })
+            } else {
+                let code = scan_hex(chars, pos + 2, hex_end, 0);
+                if code > 1114111 || (code >= 55296 && code <= 57343) {
+                    escape_error(source, slash, "\\u escape is not a Unicode scalar value", hex_end + 1)
+                } else { EscResult { ch: scalar_string(code), next_pos: hex_end + 1 } }
+            }
+        }
+    }
+    else { escape_error(source, slash, "unknown escape ".concat("\\").concat(chars[pos]).concat("; supported escapes: n, t, r, backslash, quote, dollar, xNN, u{...}"), pos + 1) }
 
 struct InterpExprResult { text: String, next_pos: Int }
 
@@ -288,7 +346,7 @@ let finish_string (pieces: Array[InterpPiece]) (acc: String) (has_interp: Bool) 
 // if none yet); `has_interp` mirrors the Rust lexer's own `parts.is_
 // empty()` check — a plain `Str`, unless at least one `${...}` was
 // seen, in which case the whole thing becomes an `InterpStr`.
-let scan_string_body (chars: Array[String]) (pos: Int) (acc: String) (pieces: Array[InterpPiece]) (has_interp: Bool): StrResult =
+let scan_string_body (source: String) (chars: Array[String]) (pos: Int) (acc: String) (pieces: Array[InterpPiece]) (has_interp: Bool): StrResult =
     if pos >= chars.len() {
         // Unterminated — same permissive "just stop" precedent the
         // Rust lexer uses.
@@ -298,20 +356,20 @@ let scan_string_body (chars: Array[String]) (pos: Int) (acc: String) (pieces: Ar
         finish_string(pieces, acc, has_interp, pos + 1)
     }
     else if chars[pos] == "\\" {
-        let esc = escape_char(chars, pos + 1);
-        scan_string_body(chars, esc.next_pos, acc.concat(esc.ch), pieces, has_interp)
+        let esc = escape_char(source, chars, pos + 1, pos);
+        scan_string_body(source, chars, esc.next_pos, acc.concat(esc.ch), pieces, has_interp)
     }
     else if chars[pos] == "$" && pos + 1 < chars.len() && chars[pos + 1] == "{" {
         let with_literal = pieces.push(PieceLiteral(acc));
         let expr = scan_interp_expr(chars, pos + 2, "", 0);
-        scan_string_body(chars, expr.next_pos, "", with_literal.push(PieceExpr(expr.text)), true)
+        scan_string_body(source, chars, expr.next_pos, "", with_literal.push(PieceExpr(expr.text)), true)
     }
     else {
-        scan_string_body(chars, pos + 1, acc.concat(chars[pos]), pieces, has_interp)
+        scan_string_body(source, chars, pos + 1, acc.concat(chars[pos]), pieces, has_interp)
     }
 
-let lex_string (chars: Array[String]) (pos: Int): StrResult =
-    scan_string_body(chars, pos + 1, "", [], false)
+let lex_string (source: String) (chars: Array[String]) (pos: Int): StrResult =
+    scan_string_body(source, chars, pos + 1, "", [], false)
 
 // --- Identifiers and keywords ---
 
@@ -438,10 +496,10 @@ let lex_operator (chars: Array[String]) (pos: Int): OpResult =
 
 struct FullTokResult { token: Token, next_pos: Int }
 
-let lex_one (chars: Array[String]) (pos: Int): FullTokResult =
+let lex_one (source: String) (chars: Array[String]) (pos: Int): FullTokResult =
     if pos >= chars.len() { FullTokResult { token: TokEof, next_pos: pos } }
     else if is_digit_char(chars[pos]) { let r = lex_number(chars, pos); FullTokResult { token: r.token, next_pos: r.next_pos } }
-    else if chars[pos] == "\"" { let r = lex_string(chars, pos); FullTokResult { token: r.token, next_pos: r.next_pos } }
+    else if chars[pos] == "\"" { let r = lex_string(source, chars, pos); FullTokResult { token: r.token, next_pos: r.next_pos } }
     else if chars[pos] == "@" { let r = lex_builtin(chars, pos); FullTokResult { token: r.token, next_pos: r.next_pos } }
     else if is_ident_start_char(chars[pos]) { let r = lex_ident_or_keyword(chars, pos); FullTokResult { token: r.token, next_pos: r.next_pos } }
     else { let r = lex_operator(chars, pos); FullTokResult { token: r.token, next_pos: r.next_pos } }
@@ -517,7 +575,7 @@ pub let tokenize_spanned (source: String): LexedSource = {
     for tok_step in 0..(chars.len() + 1) {
         if !done {
             let start = skip_ws_and_comments(chars, pos);
-            let r = lex_one(chars, start);
+            let r = lex_one(source, chars, start);
             match r.token {
                 // EOF is empty and sits at the very end, so the final
                 // gap -- a trailing comment, a trailing newline -- is

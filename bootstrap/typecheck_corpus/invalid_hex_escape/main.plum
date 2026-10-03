@@ -1,0 +1,1 @@
+let main (): Unit = println("bad: \xG1")

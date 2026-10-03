@@ -41,12 +41,19 @@ sections.
 IntLiteral    ::= digit { digit | "_" }
 FloatLiteral  ::= digit { digit | "_" } "." digit { digit | "_" }
 StringLiteral ::= '"' { StringChar | Interpolation } '"'
-StringChar    ::= any character except '"', '$', or newline, or an escape sequence
+StringChar    ::= any character except '"', '$', or newline, or one of the escapes below
 Interpolation ::= "${" InterpExprSource "}"
 BoolLiteral   ::= "true" | "false"
 Literal       ::= IntLiteral | FloatLiteral | StringLiteral | BoolLiteral
 Comment       ::= "//" { any character except newline }
 ```
+
+String escapes are `\\n` (newline), `\\t` (tab), `\\r` (carriage return),
+`\\\\` (backslash), `\\"` (double quote), and `\\$` (literal dollar sign).
+Arbitrary Unicode scalar values can be written as `\\u{...}` with one to
+six hexadecimal digits (for example, `\\u{1b}` for ESC). `\\xNN` writes
+the character with the value of exactly two hexadecimal digits, such as
+`\\x1b`. Unknown escapes and malformed numeric escapes are errors.
 
 **String interpolation** (`"hello, ${name}!"`) is pure syntax sugar,
 fully resolved by the lexer+parser. `plum-types`/`plum-ir`/both
