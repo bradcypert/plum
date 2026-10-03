@@ -1,0 +1,4 @@
+let main (): Unit = {
+    println(Bytes.from_string("\n\t\r\\\"\$").to_hex());
+    println(Bytes.from_string("\x1b\u{1b}\u{1f642}").to_hex());
+}

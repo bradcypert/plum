@@ -1,0 +1,2 @@
+requires exactly two hexadecimal digits
+<source>:1:35
