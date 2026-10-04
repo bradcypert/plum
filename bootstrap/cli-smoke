@@ -153,6 +153,51 @@ printf 'use greet;\nuse vendor.vendored as v;\nlet main (): Unit = println(greet
 SH_TIMEOUT="${SH_TIMEOUT:-120}" "$plum" check "$work/proj" > "$work/depcheck.log" 2>&1
 check $? "the project stopped type-checking against its dependency: $(head -n 1 "$work/depcheck.log")"
 
+# --- hidden source entries and lexer diagnostics (issue #58) -----------
+# Poison sources at both traversal levels: none may reach the parser.
+mkdir -p "$work/hidden/greet/.nested" "$work/hidden/.hidden" "$work/hidden/.git"
+printf 'use greet;\nlet main (): Unit = println(greet.hello())\n' > "$work/hidden/main.plum"
+printf 'pub let hello (): String = "visible module"\n' > "$work/hidden/greet/greet.plum"
+for f in ._main.plum .hidden/main.plum .git/main.plum greet/._greet.plum greet/.nested/main.plum; do
+    printf '\000' > "$work/hidden/$f"
+done
+# The dependency root uses its own walker, and must follow the same rule.
+mkdir -p "$work/vendor/.hidden" "$work/vendor/vendored/.nested"
+for f in ._main.plum .hidden/main.plum vendored/._vendored.plum vendored/.nested/main.plum; do
+    printf '\000' > "$work/vendor/$f"
+done
+printf 'Package { name: "hidden", version: "0.1.0", deps: [ Dep { name: "vendor", path: "../vendor" } ] }\n' > "$work/hidden/plum.pkg"
+"$plum" build "$work/hidden" -o "$work/hidden/prog" > "$work/hidden-build.log" 2>&1
+check $? "build included a hidden source: $(head -n 1 "$work/hidden-build.log")"
+out="$("$work/hidden/prog" 2>&1)"
+[ "$out" = "visible module" ]; check $? "build skipped a visible module: $out"
+
+# Explicitly named hidden sources remain usable; only discovery skips them.
+printf 'let main (): Unit = ()\n' > "$work/hidden/.explicit.plum"
+"$plum" check "$work/hidden/.explicit.plum" > "$work/explicit.log" 2>&1
+check $? "check skipped an explicitly named hidden source"
+
+# Character columns must stay correct after UTF-8 text. Compare the whole
+# diagnostic, including the caret and a visible replacement for controls.
+for case in nul del c1 invisible emoji printable; do
+    case "$case" in
+        nul) ch='\000'; shown='U+0000'; text='�' ;;
+        del) ch='\177'; shown='U+007F'; text='�' ;;
+        c1) ch='\302\205'; shown='U+0085'; text='�' ;;
+        invisible) ch='\342\200\213'; shown='U+200B'; text="$(printf "$ch")" ;;
+        emoji) ch='\360\237\230\200'; shown='U+1F600'; text="$(printf "$ch")" ;;
+        printable) ch='$'; shown='`$`'; text='$' ;;
+    esac
+    printf 'let greeting (): String = "é"\n  "é" %b\n' "$ch" > "$work/bad.plum"
+    printf 'error: unexpected character %s\n  --> %s:2:7\n  |\n2 |   "é" %s\n  |       ^\n\n' "$shown" "$work/bad.plum" "$text" > "$work/expected-error"
+    for cmd in check tokens ast fmt; do
+        "$plum" "$cmd" "$work/bad.plum" > "$work/error" 2>&1
+        [ $? -ne 0 ]; check $? "$cmd accepted unexpected $case character"
+        cmp -s "$work/expected-error" "$work/error"
+        check $? "$cmd diagnostic for $case lacks its path, position, code or caret"
+    done
+done
+
 # --- native/ source selection -----------------------------------------
 #
 # `native/*.c` is compiled for every target; `native/<os>/*.c` only when
