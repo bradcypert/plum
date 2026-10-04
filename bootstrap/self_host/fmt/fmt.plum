@@ -443,7 +443,7 @@ pub let format (path: String) (src: String): String = format_pass(path, src, 8)
 let format_pass (path: String) (src: String) (fuel: Int): String =
     if fuel <= 0 { src }
     else {
-        let next = format_once(path, normalize_gaps(src));
+        let next = format_once(path, normalize_gaps(path, src));
         if next == src { src } else { format_pass(path, next, fuel - 1) }
     }
 
@@ -464,8 +464,8 @@ let format_pass (path: String) (src: String) (fuel: Int): String =
 // A gap containing a NEWLINE is left alone -- that is line structure,
 // and belongs to the indent pass. So is a gap containing a comment: a
 // trailing `// ...` sets its own distance from the code.
-pub let normalize_gaps (src: String): String = {
-    let lexed = lexer.tokenize_spanned(src);
+pub let normalize_gaps (path: String) (src: String): String = {
+    let lexed = lexer.tokenize_spanned_at(src, path);
     let chars = chars_of(src);
     gaps_acc(chars, lexed, 0, "")
 }
@@ -538,7 +538,7 @@ let ends_an_operand (tok: String): Bool =
         && tok != "|>" && tok != "-"
 
 let format_once (path: String) (src: String): String = {
-    let lexed = lexer.tokenize_spanned(src);
+    let lexed = lexer.tokenize_spanned_at(src, path);
     parser.set_source_context(path, src, lexed.starts, lexed.ends);
     parser.record_spans(true);
     let items = parser.parse_program(lexed.tokens).items;

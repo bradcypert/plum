@@ -2125,7 +2125,7 @@ pub let cmd_spans (path: String): Unit =
     match Os.read_file(path) {
         Err(_) => (),
         Ok(src) => {
-            let lexed = lexer.tokenize_spanned(src);
+            let lexed = lexer.tokenize_spanned_at(src, path);
             parser.set_source_context(path, src, lexed.starts, lexed.ends);
             parser.record_spans(true);
             let prog = parser.parse_program(lexed.tokens);
@@ -3164,7 +3164,7 @@ let parse_file_items (path: String) (module_name: String): Array[parser.ItemNode
         // with a caret instead of a bare message. See
         // `parser.set_source_context`.
         Ok(src) => {
-            let lexed = lexer.tokenize_spanned(src);
+            let lexed = lexer.tokenize_spanned_at(src, path);
             parser.set_source_context(path, src, lexed.starts, lexed.ends);
             parser.with_module(parser.parse_program(lexed.tokens).items, module_name)
         },
@@ -3183,7 +3183,7 @@ let parse_file_items (path: String) (module_name: String): Array[parser.ItemNode
 // other side: the gap would be negative-width and the slice would
 // repeat text.
 let relex_items (path: String) (src: String): String = {
-    let lexed = lexer.tokenize_spanned(src);
+    let lexed = lexer.tokenize_spanned_at(src, path);
     parser.set_source_context(path, src, lexed.starts, lexed.ends);
     let items = parser.parse_program(lexed.tokens).items;
     let chars = chars_of(src);
@@ -3617,7 +3617,7 @@ let collect_dependency (dir: String) (dep_name: String): Array[parser.ItemNode] 
 
 let collect_dep_entries (dir: String) (dep_name: String) (entries: Array[String]) (i: Int) (acc: Array[parser.ItemNode]): Array[parser.ItemNode] =
     if i >= entries.len() { acc }
-    else if entries[i] == "." || entries[i] == ".." { collect_dep_entries(dir, dep_name, entries, i + 1, acc) }
+    else if entries[i].starts_with(".") { collect_dep_entries(dir, dep_name, entries, i + 1, acc) }
     else {
         let full = Path.join(dir, entries[i]);
         if Result.unwrap_or(Os.is_directory(full), false) {
@@ -3658,18 +3658,18 @@ let module_names (items: Array[parser.ItemNode]) (i: Int) (acc: Array[String]): 
 
 let collect_root_entries (root: String) (entries: Array[String]) (i: Int) (acc: Array[parser.ItemNode]): Array[parser.ItemNode] =
     if i >= entries.len() { acc }
-    else if entries[i] == "." || entries[i] == ".." || entries[i] == "vendor" { collect_root_entries(root, entries, i + 1, acc) }
+    else if entries[i].starts_with(".") || entries[i] == "vendor" { collect_root_entries(root, entries, i + 1, acc) }
     else {
         let full = Path.join(root, entries[i]);
         let m = if Result.unwrap_or(Os.is_directory(full), false) { entries[i] } else { "" };
         collect_root_entries(root, entries, i + 1, Array.concat(acc, collect_path_items(full, m)))
     }
 
-// `.`/`..` are skipped explicitly — `list_dir` surfaces raw `readdir`
-// entries, so descending into them would recurse forever.
+// Skip hidden files and directories, including AppleDouble companions
+// and `.git`. This also excludes the raw `readdir` entries `.` and `..`.
 let collect_entries (dir: String) (module_name: String) (entries: Array[String]) (i: Int) (acc: Array[parser.ItemNode]): Array[parser.ItemNode] =
     if i >= entries.len() { acc }
-    else if entries[i] == "." || entries[i] == ".." { collect_entries(dir, module_name, entries, i + 1, acc) }
+    else if entries[i].starts_with(".") { collect_entries(dir, module_name, entries, i + 1, acc) }
     else {
         let full = Path.join(dir, entries[i]);
         collect_entries(dir, module_name, entries, i + 1, Array.concat(acc, collect_path_items(full, module_name)))
@@ -3889,7 +3889,7 @@ let main (): Unit = {
             Ok(src) => {
                 // Same source context the project path sets, so a parse
                 // error in a single file reports its location too.
-                let lexed0 = lexer.tokenize_spanned(src);
+                let lexed0 = lexer.tokenize_spanned_at(src, argv[1]);
                 parser.set_source_context(argv[1], src, lexed0.starts, lexed0.ends);
                 if argv[0] == "tokens" || argv[0] == "dump-tokens" {
                     println(lexer.render_tokens(lexer.tokenize(src)));
