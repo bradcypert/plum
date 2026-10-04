@@ -1,0 +1,48 @@
+// Issue #54: the unnamed Unit parameter must survive into LLVM signatures.
+let attempts = ref(0)
+
+let next (): Int = {
+    attempts.set(attempts.get() + 1);
+    if attempts.get() < 4 { 0 } else { 42 }
+}
+
+let retry (): Int = {
+    let b = next(());
+    if b == 0 { retry(()) } else { b }
+}
+
+let retry_sugar (): Int = {
+    let b = next();
+    if b == 0 { retry_sugar() } else { b }
+}
+
+// Keep later arguments in their original positions, including owned values.
+let count () (n: Int) (label: String): String =
+    if n == 0 { label } else { count((), n - 1, label) }
+
+let effect (): Unit = attempts.set(attempts.get() + 1)
+
+let named (unit: Unit) (n: Int): Int =
+    if n == 0 { attempts.get() } else { named(unit, n - 1) }
+
+// Anonymous parameter slots must not shadow source identifiers.
+let collision (__unit_param1: Int) (): Int = __unit_param1
+
+let ping (): Int = if next() == 0 { pong(()) } else { 17 }
+let pong (): Int = if next(()) == 0 { ping() } else { 17 }
+
+let main (): Unit = {
+    println(retry(()));
+    attempts.set(0);
+    println(retry_sugar());
+    println(count((), 100, "unit and heap"));
+    attempts.set(0);
+    println(ping());
+    attempts.set(0);
+    let callback = retry;
+    println(callback(()));
+    attempts.set(0);
+    println(count(effect(), 2, "evaluated unit"));
+    println(named((), 2));
+    println(collision(23, ()));
+}

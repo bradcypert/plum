@@ -5685,9 +5685,8 @@ let cg_fn (p0: CgProgram) (def: typecheck.TFn) (targs: Array[typecheck.ITy]) (n0
 }
 
 // The checker's `TParam`s carry resolved types already; this only maps
-// them to representations. `()` — the Unit pattern — contributed no
-// entry there, so a `let main (): Unit` really does emit as a
-// zero-argument LLVM function.
+// them to representations, including the unnamed Unit parameter in
+// `let main (): Unit`.
 struct CgParam { name: String, ty: CgTy }
 
 let cg_params_of (p: CgProgram) (params: Array[typecheck.TParam]) (i: Int) (acc: Array[CgParam]): Array[CgParam] =
@@ -5747,7 +5746,8 @@ let cg_entry_named (entry_sym: String): String = cg_lines([
     "  %seed32 = trunc i64 %seed to i32",
     "  call void @srand(i32 %seed32)",
     "  call void @plum_init_globals()",
-    "  %r = call i1 ${entry_sym}()",
+    // Both main and the test dispatcher declare an unnamed Unit parameter.
+    "  %r = call i1 ${entry_sym}(i1 false)",
     "  ret i32 0",
     "}",
 ])

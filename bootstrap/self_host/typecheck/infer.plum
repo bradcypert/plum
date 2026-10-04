@@ -800,9 +800,10 @@ let check_fn_typed (p20: Program2) (def: parser.LetDefNode) (module_name: String
 }
 
 // Parameter names paired with their (now resolved) declared types.
-// `()` — the Unit pattern — binds no name and contributes no entry, the
-// same treatment it gets in `bind_param`, the interpreter, and the
-// backend.
+// `()` binds no source name, but it is still a Unit parameter in the
+// function signature. Keep it under a synthetic name that cannot be a
+// source identifier, so calls and definitions have matching parameters
+// without shadowing a user binding.
 let typed_params (params: Array[parser.ParamNode]) (tys: Array[ITy]) (subst: Subst) (i: Int) (acc: Array[TParam]): Array[TParam] =
     if i >= params.len() || i >= tys.len() { acc }
     else {
@@ -810,6 +811,7 @@ let typed_params (params: Array[parser.ParamNode]) (tys: Array[ITy]) (subst: Sub
             ParamIdent(name) => typed_params(params, tys, subst, i + 1, acc.push(TParam { name: name, ty: subst_apply(subst, tys[i]) })),
             ParamPatternTy(pattern, _) => match pattern {
                 PIdent(name, _) => typed_params(params, tys, subst, i + 1, acc.push(TParam { name: name, ty: subst_apply(subst, tys[i]) })),
+                PTuple(_) => typed_params(params, tys, subst, i + 1, acc.push(TParam { name: "(unit${i})", ty: subst_apply(subst, tys[i]) })),
                 _ => typed_params(params, tys, subst, i + 1, acc),
             },
         }

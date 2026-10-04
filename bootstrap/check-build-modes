@@ -135,6 +135,36 @@ heap_tail_recursion debug
 heap_tail_recursion release --release
 heap_tail_recursion traced --trace
 
+# Issue #54: `()` is a real Unit parameter, including in a self-tail
+# call. Use mutable state to terminate a deep recursion without adding
+# the named parameter that used to hide the prototype mismatch.
+mkdir -p "$work/tu"
+cat > "$work/tu/main.plum" <<'PLUM'
+let calls = ref(0)
+let retry (): Int = {
+    calls.set(calls.get() + 1);
+    if calls.get() < 3000000 { retry(()) } else { calls.get() }
+}
+let main (): Unit = println(retry())
+PLUM
+
+unit_tail_recursion() {   # <label> [flags...]
+    local label="$1"; shift
+    if ! SH_MEM="${SH_MEM:-512M}" SH_TIMEOUT="${SH_TIMEOUT:-120}" "$plum" build "$work/tu" -o "$work/tu.bin" "$@" > "$work/tu-$label.err" 2>&1; then
+        echo "FAIL: $label Unit tail-recursion build failed: $(head -n 1 "$work/tu-$label.err")" >&2
+        fail=1
+        return
+    fi
+    if [ "$("$work/tu.bin" 2>&1)" != "3000000" ]; then
+        echo "FAIL: deep tail recursion over Unit does not run in the $label build" >&2
+        fail=1
+    fi
+}
+
+unit_tail_recursion debug
+unit_tail_recursion release --release
+unit_tail_recursion traced --trace
+
 # MUTUAL recursion over a heap parameter -- the same bug one step out.
 # `ping`'s release sat between its tail call to `pong` and the `ret`, so
 # this overflowed while the same pair over `Int` was fine, for exactly
