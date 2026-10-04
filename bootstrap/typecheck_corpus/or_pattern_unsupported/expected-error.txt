@@ -1,2 +1,0 @@
-error: or-patterns aren't supported yet -- write one arm per alternative
-main.plum:10:42

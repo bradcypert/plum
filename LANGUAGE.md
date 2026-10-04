@@ -132,6 +132,13 @@ Struct/enum equality (`==`) and `.to_string()` are structural and work
 recursively through nested structs/enums/arrays, generated for every
 type automatically, with no `derive` needed or available.
 
+Or-patterns share one arm: `A(x) | B(x) if x > 0 => x` tests the
+alternatives from left to right, binds the first match, then evaluates
+the guard once. A false guard continues at the next arm. Every
+alternative must bind the same names with compatible types; positions
+may differ. Alternatives compose inside enum payloads, tuples, and
+struct fields, including nested structural patterns.
+
 Field access (`.radius`, `.x`, ...) needs its receiver's type to
 already be known at that point in inference. An unannotated
 function/closure parameter that's only ever used for field access

@@ -1,0 +1,2 @@
+error: or-pattern alternatives must bind the same names
+main.plum:1:41

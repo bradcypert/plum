@@ -5350,19 +5350,47 @@ let cg_pattern (p: CgProgram) (env: Array[CgSlot]) (n: Int) (pattern: parser.PPa
         // one shape — so it contributes no test of its own, only the
         // sub-patterns'.
         PTuple(pats) => cg_pat_fields(p, env, n, cg_tuple_index_names(pats, 0, []), cg_tuple_elem_itys(sity), cg_tuple_field_pats(pats, 0, []), 0, sval, "1", "", "", "", "", ""),
-        POr(ps) => cg_pat_literal_or(p, env, n, ps, sval, sity, 0, "", "", ""),
+        POr(ps) => cg_pat_or(p, env, n, ps, sval, sity),
     }
 
-let cg_pat_literal_or (p: CgProgram) (env: Array[CgSlot]) (n: Int) (patterns: Array[parser.PPattern]) (sval: String) (sity: typecheck.ITy) (i: Int) (code: String) (globals: String) (test: String): PatEmit =
-    if i >= patterns.len() { PatEmit { code: code, binds: "", allocas: "", releases: "", globals: globals, test: test, env: env, n: n } }
+// Pure tests precede binding selection. Only the first matching
+// alternative stores and retains values in the shared arm slots.
+let cg_pat_or (p: CgProgram) (env: Array[CgSlot]) (n: Int) (patterns: Array[parser.PPattern]) (sval: String) (sity: typecheck.ITy): PatEmit = {
+    let first = cg_pattern(p, env, n, patterns[0], sval, sity);
+    let end = cg_label(first.n);
+    let choose = cg_label(first.n + 1);
+    let next = cg_label(first.n + 2);
+    let binds = "  br i1 ${first.test}, label %${choose}, label %${next}\n${choose}:\n"
+        .concat(first.binds).concat("  br label %${end}\n${next}:\n");
+    cg_pat_or_alts(p, env, first.n + 3, patterns, sval, sity, 1, first, end, binds)
+}
+
+let cg_pat_or_alts (p: CgProgram) (outer: Array[CgSlot]) (n: Int) (patterns: Array[parser.PPattern]) (sval: String) (sity: typecheck.ITy) (i: Int) (shared: PatEmit) (end: String) (binds: String): PatEmit =
+    if i >= patterns.len() {
+        PatEmit { code: shared.code, binds: binds.concat("  br label %${end}\n${end}:\n"), allocas: shared.allocas,
+            releases: shared.releases, globals: shared.globals, test: shared.test, env: shared.env, n: n }
+    } else {
+        let alt = cg_pattern(p, outer, n, patterns[i], sval, sity);
+        let test = cg_reg(alt.n);
+        let choose = cg_label(alt.n + 1);
+        let next = cg_label(alt.n + 2);
+        let stores = cg_or_stores(shared.env, alt.env, outer.len(), alt.binds);
+        let selected = "  br i1 ${alt.test}, label %${choose}, label %${next}\n${choose}:\n"
+            .concat(stores).concat("  br label %${end}\n${next}:\n");
+        let merged = PatEmit { code: shared.code.concat(alt.code).concat("  ${test} = or i1 ${shared.test}, ${alt.test}\n"),
+            binds: "", allocas: shared.allocas, releases: shared.releases,
+            globals: shared.globals.concat(alt.globals), test: test, env: shared.env, n: alt.n + 3 };
+        cg_pat_or_alts(p, outer, alt.n + 3, patterns, sval, sity, i + 1, merged, end, binds.concat(selected))
+    }
+
+let cg_or_stores (shared: Array[CgSlot]) (actual: Array[CgSlot]) (i: Int) (code: String): String =
+    if i >= actual.len() { code }
     else {
-        let alt = cg_pattern(p, env, n, patterns[i], sval, sity);
-        if i == 0 { cg_pat_literal_or(p, env, alt.n, patterns, sval, sity, i + 1, code.concat(alt.code), globals.concat(alt.globals), alt.test) }
-        else {
-            let reg = cg_reg(alt.n);
-            let combine = "  ${reg} = or i1 ${test}, ${alt.test}\n";
-            cg_pat_literal_or(p, env, alt.n + 1, patterns, sval, sity, i + 1, code.concat(alt.code).concat(combine), globals.concat(alt.globals), reg)
-        }
+        let rewritten = match cg_lookup(shared, actual[i].name) {
+            Some(slot) => String.replace(code, ", ptr ${actual[i].ptr}\n", ", ptr ${slot.ptr}\n"),
+            None => { cg_fail("internal: missing or-pattern binding"); code },
+        };
+        cg_or_stores(shared, actual, i + 1, rewritten)
     }
 
 let cg_pat_cmp (env: Array[CgSlot]) (n: Int) (op: String) (sval: String) (lit: String): PatEmit = {
@@ -5489,8 +5517,12 @@ let cg_pat_derefs (pat: parser.PPattern): Bool =
         PStruct(_, _, _) => true,
         PTuple(_) => true,
         PStr(_) => true,
+        POr(ps) => cg_or_derefs(ps, 0),
         _ => false,
     }
+
+let cg_or_derefs (patterns: Array[parser.PPattern]) (i: Int): Bool =
+    if i >= patterns.len() { false } else { cg_pat_derefs(patterns[i]) || cg_or_derefs(patterns, i + 1) }
 
 // A struct pattern has no tag to check — it always matches its own
 // type — so the running test starts at `1` and only sub-patterns can

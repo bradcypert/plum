@@ -1,0 +1,70 @@
+enum Choice[T] { A(T), B(Int, T), Empty }
+struct Pair { left: String, right: String }
+
+let pick (v: Choice[String]): String = match v {
+    A(x) | B(_, x) if x != "skip" => x,
+    A(x) | B(_, x) => "fallback ${x}",
+    Empty => "empty",
+}
+
+// Overlapping alternatives select the first binding, then test the
+// guard once. Guard failure continues at the next arm.
+let overlap (p: Pair): String = match p {
+    Pair(x, _) | Pair(_, x) if x == "right" => "wrong",
+    Pair { left: x, .. } | Pair { right: x, .. } => x,
+}
+
+let nested (v: Option[Choice[String]]): String = match v {
+    Some(A(x) | B(_, x)) => x,
+    _ => "none",
+}
+
+let structural (v: Choice[Pair]): String = match v {
+    A(Pair { left: x, .. }) | B(_, Pair { right: x, .. }) => x,
+    Empty => "empty",
+}
+
+let literal (v: Option[String]): Bool = match v {
+    Some("yes" | "ok") => true,
+    _ => false,
+}
+
+let tags (v: Option[Int]): Bool = match v { None | Some(_) => true }
+let reordered (v: Choice[Pair]): String = match v {
+    A(Pair(x, y)) | B(_, Pair(y, x)) => "${x}:${y}",
+    Empty => "empty",
+}
+
+enum Outer { Direct(String), Wrapped(Choice[String]), Missing }
+let later_nested (v: Outer): String = match v {
+    Direct(x) | Wrapped(A(x) | B(_, x)) => x,
+    _ => "missing",
+}
+
+let main (): Unit = {
+    println(pick(A("first".concat("!"))));
+    println(pick(B(42, "second".concat("!"))));
+    println(pick(A("sk".concat("ip"))));
+    println(pick(B(42, "sk".concat("ip"))));
+    println(pick(Empty));
+    println(overlap(Pair { left: "left".concat("!"), right: "right" }));
+    println(nested(None));
+    println(nested(Some(Empty)));
+    println(nested(Some(A("nested a"))));
+    println(nested(Some(B(7, "nested b".concat("!")))));
+    println(structural(A(Pair { left: "left", right: "unused" })));
+    println(structural(B(8, Pair { left: "unused", right: "right" })));
+    println(literal(None).to_string());
+    println(literal(Some("ok")).to_string());
+    println(tags(None).to_string());
+    println(tags(Some(1)).to_string());
+    println(reordered(B(1, Pair { left: "left", right: "right" })));
+    println(later_nested(Wrapped(B(9, "deep".concat("!")))));
+    println(later_nested(Wrapped(Empty)));
+    println(later_nested(Missing));
+    println(match ("tuple", "second") { (x, _) | (_, x) => x });
+    println(match (Pair { left: "ok", right: "field" }) {
+        Pair { left: "yes" | "ok", right: x } => x,
+        _ => "miss",
+    });
+}

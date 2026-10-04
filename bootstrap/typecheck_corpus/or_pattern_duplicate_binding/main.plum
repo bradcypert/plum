@@ -1,0 +1,3 @@
+enum Choice { A(String, String), B(String, String) }
+let f (v: Choice): String = match v { A(x, x) | B(x, y) => x }
+let main (): Unit = ()
