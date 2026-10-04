@@ -1,0 +1,2 @@
+error: or-pattern binding types: Int != String
+main.plum:1:43

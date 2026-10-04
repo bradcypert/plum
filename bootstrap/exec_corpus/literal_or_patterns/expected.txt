@@ -2,3 +2,9 @@ closed
 small
 small
 other
+string
+float
+bool
+nested
+mixed
+tags

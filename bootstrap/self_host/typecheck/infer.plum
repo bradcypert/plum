@@ -3438,15 +3438,83 @@ let bind_pattern_ty (p2: Program2) (state: FreshState) (acc: Subst) (env: TyEnv)
         PTuple(elems) => bind_tuple_pattern(p2, state, acc, env, elems, scrutinee_ty),
         PVariant(path, arg_pats) => bind_variant_pattern(p2, state, acc, env, path, arg_pats, scrutinee_ty),
         PStruct(path, field_pats, rest) => bind_struct_pattern(p2, state, acc, env, path, field_pats, rest, scrutinee_ty),
-        POr(alts) => {
-            let first = bind_pattern_ty(p2, state, acc, env, alts[0], scrutinee_ty);
-            check_or_unique_bindings(first.env.bindings, env.bindings.len());
-            bind_or_alts(p2, first.state, first.subst, env, first.env, alts, scrutinee_ty, 1, [first.pattern])
-        },
+        POr(alts) => bind_or_pattern(p2, state, acc, env, alts, scrutinee_ty),
     }
 
-// Alternatives start in the outer environment and share the first
-// binding environment. Every alternative contributes type constraints.
+// Category is local to this or-pattern, including nested occurrences.
+// Constructor syntax is tag-shaped until name resolution: `Pair(x, y)`
+// may resolve to a positional struct rather than an enum variant.
+// Mixed alternatives and nested or-patterns use the structural rules.
+enum OrPatternCategory { OrLiteral, OrTagShaped, OrStructural }
+
+let or_pattern_category (alts: Array[parser.PPattern]): OrPatternCategory =
+    if Array.is_empty(alts) { OrStructural }
+    else { or_pattern_category_rest(alts, 1, or_alternative_category(alts[0])) }
+
+let or_alternative_category (pattern: parser.PPattern): OrPatternCategory =
+    match pattern {
+        PInt(_) => OrLiteral,
+        PFloat(_) => OrLiteral,
+        PStr(_) => OrLiteral,
+        PBool(_) => OrLiteral,
+        PVariant(_, _) => OrTagShaped,
+        _ => OrStructural,
+    }
+
+let or_pattern_category_rest (alts: Array[parser.PPattern]) (i: Int) (category: OrPatternCategory): OrPatternCategory =
+    if i >= alts.len() { category }
+    else if or_alternative_category(alts[i]) == category { or_pattern_category_rest(alts, i + 1, category) }
+    else { OrStructural }
+
+// Classification tests include syntax that only name resolution can
+// disambiguate, plus mixed and empty lists that cannot take the literal
+// fast path.
+pub let test_or_pattern_categories (): Unit = {
+    assert(match or_pattern_category([PInt(1), PFloat(2.0), PStr("yes"), PBool(true)]) { OrLiteral => true, _ => false });
+    assert(match or_pattern_category([PVariant(["None"], []), PVariant(["Some"], [PIdent("x", 0)])]) { OrTagShaped => true, _ => false });
+    assert(match or_pattern_category([PVariant(["Pair"], [PWildcard, PWildcard])]) { OrTagShaped => true, _ => false });
+    assert(match or_pattern_category([PTuple([PWildcard]), PTuple([PWildcard])]) { OrStructural => true, _ => false });
+    assert(match or_pattern_category([PStruct(["Pair"], [], true)]) { OrStructural => true, _ => false });
+    assert(match or_pattern_category([PInt(1), PWildcard]) { OrStructural => true, _ => false });
+    assert(match or_pattern_category([PVariant(["None"], []), POr([PVariant(["None"], [])])]) { OrStructural => true, _ => false });
+    assert(match or_pattern_category([]) { OrStructural => true, _ => false });
+}
+
+let bind_or_pattern (p2: Program2) (state: FreshState) (acc: Subst) (env: TyEnv) (alts: Array[parser.PPattern]) (scrutinee_ty: ITy): BindResult =
+    match or_pattern_category(alts) {
+        // Literals introduce no bindings. Check EVERY alternative
+        // against the scrutinee, including mixed literal types.
+        OrLiteral => bind_literal_or_alts(p2, state, acc, env, alts, scrutinee_ty, 0, []),
+        // Tag-shaped alternatives resolve their heads through the
+        // ordinary binder, then enforce the shared binding contract.
+        OrTagShaped => bind_binding_or_pattern(p2, state, acc, env, alts, scrutinee_ty),
+        // Structural alternatives are supported too (issue #75).
+        // Their recursively introduced names obey the same contract.
+        OrStructural => bind_binding_or_pattern(p2, state, acc, env, alts, scrutinee_ty),
+    }
+
+let bind_literal_or_alts (p2: Program2) (state: FreshState) (acc: Subst) (env: TyEnv) (alts: Array[parser.PPattern]) (scrutinee_ty: ITy) (i: Int) (out: Array[parser.PPattern]): BindResult =
+    if i >= alts.len() { BindResult { env: env, subst: acc, state: state, pattern: POr(out) } }
+    else {
+        let r = bind_pattern_ty(p2, state, acc, env, alts[i], scrutinee_ty);
+        bind_literal_or_alts(p2, r.state, r.subst, env, alts, scrutinee_ty, i + 1, out.push(r.pattern))
+    }
+
+let bind_binding_or_pattern (p2: Program2) (state: FreshState) (acc: Subst) (env: TyEnv) (alts: Array[parser.PPattern]) (scrutinee_ty: ITy): BindResult =
+    if Array.is_empty(alts) {
+        fail_tc("or-pattern must have at least one alternative");
+        BindResult { env: env, subst: acc, state: state, pattern: POr(alts) }
+    } else {
+        let first = bind_pattern_ty(p2, state, acc, env, alts[0], scrutinee_ty);
+        check_or_unique_bindings(first.env.bindings, env.bindings.len());
+        bind_or_alts(p2, first.state, first.subst, env, first.env, alts, scrutinee_ty, 1, [first.pattern])
+    }
+
+// Each alternative starts in the OUTER environment, so shadowed outer
+// names do not count toward the contract. Alternatives must introduce
+// the same set of names, once each, with unifiable types; order may
+// differ. Only the first environment escapes to the guard and body.
+// Every alternative contributes constraints to the shared substitution.
 let bind_or_alts (p2: Program2) (state: FreshState) (acc: Subst) (outer: TyEnv) (shared: TyEnv) (alts: Array[parser.PPattern]) (scrutinee_ty: ITy) (i: Int) (out: Array[parser.PPattern]): BindResult =
     if i >= alts.len() { BindResult { env: shared, subst: acc, state: state, pattern: POr(out) } }
     else {

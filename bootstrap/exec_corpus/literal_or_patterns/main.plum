@@ -8,5 +8,11 @@ let main (): Unit = {
     println(classify(-1));
     println(classify(0));
     println(classify(3));
-    println(classify(4))
+    println(classify(4));
+    println(match "ok" { "yes" | "ok" => "string", _ => "miss" });
+    println(match 2.5 { 1.5 | 2.5 => "float", _ => "miss" });
+    println(match false { true | false => "bool" });
+    println(match Some("ok") { Some("yes" | "ok") => "nested", _ => "miss" });
+    println(match 7 { 1 | _ => "mixed" });
+    println(match None { None | Some(_) => "tags" })
 }

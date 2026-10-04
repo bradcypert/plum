@@ -1,0 +1,2 @@
+let f (v: (Int, String)): Int = match v { (x, _) | (_, x) => x }
+let main (): Unit = ()
