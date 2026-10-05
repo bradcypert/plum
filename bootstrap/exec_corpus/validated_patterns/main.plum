@@ -1,0 +1,25 @@
+struct Empty {}
+struct Pair[T] { left: T, right: T }
+
+let positional_empty (v: Empty): Int = match v { Empty() => 1 }
+let named_empty (v: Empty): Int = match v { Empty {} => 2 }
+
+let choose [T] (v: Option[Pair[T]]) (fallback: T): T = match v {
+    Some(Pair(x, _)) | Some(Pair { right: x, .. }) => x,
+    None => fallback,
+}
+
+let main (): Unit = {
+    println(positional_empty(Empty {}));
+    println(named_empty(Empty {}));
+    println(choose(Some(Pair { left: "left".concat("!"), right: "right" }), "fallback"));
+    println(choose(None, "fallback"));
+    let Pair(left, right) = Pair { left: "local", right: "binding" };
+    println("${left}:${right}");
+    let outer = "outer";
+    println(match true { true | false => outer });
+    println(match Some(("tuple", 42)) {
+        Some((x, 0 | 42)) => x,
+        _ => "miss",
+    });
+}

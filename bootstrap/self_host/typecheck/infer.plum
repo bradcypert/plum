@@ -179,7 +179,7 @@ pub struct Program2 { pub sigs: Array[FnSig], pub globals: Array[GlobalDef], pub
 // module now, and something has to be able to refuse. It was not
 // carried before because nothing could reach one -- `pub` on a global
 // was a keyword with no effect.
-pub struct GlobalDef { pub module: String, pub def: parser.LetDefNode, pub is_pub: Bool }
+pub struct GlobalDef { pub module: String, pub def: parser.LetDefNode, pub is_pub: Bool, pub path: String, pub offset: Int }
 
 pub let build_sigs (ctx: TyContext) (program: parser.ProgramNode): Program2 = {
     set_uses(collect_uses(program.items, 0, []));
@@ -259,7 +259,7 @@ let collect_sigs_acc (ctx: TyContext) (items: Array[parser.ItemNode]) (i: Int) (
     else {
         match items[i].kind {
             IKLet(def) => {
-                if Array.is_empty(def.params) { collect_sigs_acc(ctx, items, i + 1, sigs, globals.push(GlobalDef { module: items[i].module, def: def, is_pub: items[i].is_pub })) }
+                if Array.is_empty(def.params) { collect_sigs_acc(ctx, items, i + 1, sigs, globals.push(GlobalDef { module: items[i].module, def: def, is_pub: items[i].is_pub, path: items[i].path, offset: items[i].start })) }
                 else {
                     let generic_names = Array.map(def.generics, |g| g.name);
                     let params = Array.map(def.params, |p| resolve_param_ty(ctx, items[i].module, generic_names, p));
@@ -848,6 +848,9 @@ pub let typed_globals (program: parser.ProgramNode): Array[TFn] = {
 let typed_globals_acc (p20: Program2) (globals: Array[GlobalDef]) (i: Int) (acc: Array[TFn]): Array[TFn] =
     if i >= globals.len() { acc }
     else {
+        // Match `check_all_fns`: initializer diagnostics and the typed
+        // global's recorded location belong to its own definition.
+        set_err_pos(globals[i].path, globals[i].offset, globals[i].def.name);
         let p2 = Program2 { sigs: p20.sigs, globals: p20.globals, ctx: p20.ctx, current: globals[i].module, generics: [] };
         let r = infer_expr(p2, fresh_state_new(()), tyenv_empty(()), subst_empty(()), globals[i].def.body);
         // The declared type, unified with what the initializer inferred.
@@ -3044,6 +3047,7 @@ let infer_for (p2: Program2) (state: FreshState) (env: TyEnv) (acc: Subst) (patt
             let hr = infer_expr(p2, lr.state, env, s1, hi_e);
             let s2 = match unify(subst_apply(hr.subst, hr.ty), ITInt) { Ok(s) => subst_compose(s, hr.subst), Err(e) => { fail_tc("'for' range end: ".concat(e)); hr.subst } };
             let br = bind_pattern_ty(p2, hr.state, s2, env, pattern, ITInt);
+            check_loop_pattern(br.pattern);
             let bodyr = infer_block(p2, br.state, br.env, br.subst, body);
             ir_leaf(ITUnit, bodyr.subst, bodyr.state, TFor(br.pattern, lr.texpr, hr.texpr, bodyr.texpr))
         },
@@ -3060,10 +3064,16 @@ let infer_for (p2: Program2) (state: FreshState) (env: TyEnv) (acc: Subst) (patt
             };
             let elem = subst_apply(s1, ef.ty);
             let br = bind_pattern_ty(p2, ef.state, s1, env, pattern, elem);
+            check_loop_pattern(br.pattern);
             let bodyr = infer_block(p2, br.state, br.env, br.subst, body);
             ir_leaf(ITUnit, bodyr.subst, bodyr.state, TForArray(br.pattern, ir.texpr, bodyr.texpr))
         },
     }
+
+// Loop lowering currently allocates one named slot; destructuring and
+// filtering patterns must be rejected here rather than by codegen.
+let check_loop_pattern (pattern: TPattern): Unit =
+    if pattern_is_binding(pattern) { () } else { fail_tc("for-loop pattern must be a binding") }
 
 // `Game { ship.rotation: r, ..g }` -- the nested field-update sugar the
 // parser records as a FieldInitNode with a non-empty `extra_path`.
@@ -3186,7 +3196,7 @@ let infer_match (p2: Program2) (state: FreshState) (env: TyEnv) (acc: Subst) (sc
     let sr = infer_expr(p2, state, env, acc, scrutinee);
     let ar = infer_match_arms(p2, sr.state, env, sr.subst, subst_apply(sr.subst, sr.ty), arms, 0, None, []);
     set_stmt_pos(here);
-    check_exhaustive(p2, subst_apply(ar.subst, sr.ty), arms);
+    check_exhaustive(p2, subst_apply(ar.subst, sr.ty), ar.tarms);
     ir_leaf(ar.ty, ar.subst, ar.state, TMatch(sr.texpr, ar.tarms))
 }
 
@@ -3326,7 +3336,7 @@ let infer_select_arm (p2: Program2) (state: FreshState) (env: TyEnv) (acc: Subst
 // guard that fails hits the existing runtime error unchanged, and this
 // check exists to catch the far more common case of a variant with no
 // arm at all, without reasoning about guard truth at compile time.
-let check_exhaustive (p2: Program2) (scrutinee_ty: ITy) (arms: Array[parser.MatchArmNode]): Unit =
+let check_exhaustive (p2: Program2) (scrutinee_ty: ITy) (arms: Array[TArm]): Unit =
     match scrutinee_ty {
         ITEnum(enum_name, _) => match ctx_enum_tags(p2.ctx, enum_name) {
             None => (),
@@ -3344,27 +3354,12 @@ let check_exhaustive (p2: Program2) (scrutinee_ty: ITy) (arms: Array[parser.Matc
 // Only the LAST arm can exempt the match: an earlier catch-all would
 // make every arm after it dead, which is a different problem and not
 // this check's business.
-let has_catchall_arm (arms: Array[parser.MatchArmNode]): Bool =
-    if Array.is_empty(arms) { false } else { is_catchall_pattern(arms[arms.len() - 1].pattern) }
+let has_catchall_arm (arms: Array[TArm]): Bool =
+    if Array.is_empty(arms) { false } else { pattern_is_catchall(arms[arms.len() - 1].pattern) }
 
-let is_catchall_pattern (pattern: parser.PPattern): Bool =
-    match pattern { PWildcard => true, PIdent(_, _) => true, _ => false }
-
-let covered_tags (arms: Array[parser.MatchArmNode]) (i: Int) (acc: Array[String]): Array[String] =
+let covered_tags (arms: Array[TArm]) (i: Int) (acc: Array[String]): Array[String] =
     if i >= arms.len() { acc }
-    else { covered_tags(arms, i + 1, Array.concat(acc, tags_of_pattern(arms[i].pattern))) }
-
-// An or-pattern covers every tag its alternatives name.
-let tags_of_pattern (pattern: parser.PPattern): Array[String] =
-    match pattern {
-        PVariant(path, _) => [path[path.len() - 1]],
-        POr(alts) => or_alt_tags(alts, 0, []),
-        _ => [],
-    }
-
-let or_alt_tags (alts: Array[parser.PPattern]) (i: Int) (acc: Array[String]): Array[String] =
-    if i >= alts.len() { acc }
-    else { or_alt_tags(alts, i + 1, Array.concat(acc, tags_of_pattern(alts[i]))) }
+    else { covered_tags(arms, i + 1, Array.concat(acc, pattern_tags(arms[i].pattern))) }
 
 let missing_tags (all_tags: Array[String]) (covered: Array[String]) (i: Int) (acc: Array[String]): Array[String] =
     if i >= all_tags.len() { acc }
@@ -3419,22 +3414,20 @@ struct GuardCheckResult { subst: Subst, state: FreshState, tguard: Option[TExpr]
 // --- Pattern typing: binds pattern-introduced names into `env`,
 // unifying the pattern's own shape against `scrutinee_ty` ---
 
-// `pattern` is the pattern REWRITTEN with what the names in it
-// resolved to: a variant path becomes `[enum, tag]` and a struct path
-// becomes `[struct]`, both fully qualified. The backend then reads the
-// answer instead of searching for one -- see `TVariantNew` in
-// texpr.plum for what went wrong when both ends searched separately.
-struct BindResult { env: TyEnv, subst: Subst, state: FreshState, pattern: parser.PPattern }
-struct BindListResult { env: TyEnv, subst: Subst, state: FreshState, pats: Array[parser.PPattern] }
+// The result carries a VALIDATED classification, recursively. Enum
+// tags and structs are distinct and fully qualified; codegen never
+// receives parser constructor syntax or unchecked alternatives.
+struct BindResult { env: TyEnv, subst: Subst, state: FreshState, pattern: TPattern }
+struct BindListResult { env: TyEnv, subst: Subst, state: FreshState, pats: Array[TPattern] }
 
 let bind_pattern_ty (p2: Program2) (state: FreshState) (acc: Subst) (env: TyEnv) (pattern: parser.PPattern) (scrutinee_ty: ITy): BindResult =
     match pattern {
-        PWildcard => BindResult { env: env, subst: acc, state: state, pattern: pattern },
-        PIdent(name, off) => { note_binding(name, off, scrutinee_ty); BindResult { env: tyenv_extend(env, name, scrutinee_ty, off), subst: acc, state: state, pattern: pattern } },
-        PInt(_) => BindResult { env: env, subst: unify_pattern_prim(acc, scrutinee_ty, ITInt), state: state, pattern: pattern },
-        PFloat(_) => BindResult { env: env, subst: unify_pattern_prim(acc, scrutinee_ty, ITFloat), state: state, pattern: pattern },
-        PStr(_) => BindResult { env: env, subst: unify_pattern_prim(acc, scrutinee_ty, ITStr), state: state, pattern: pattern },
-        PBool(_) => BindResult { env: env, subst: unify_pattern_prim(acc, scrutinee_ty, ITBool), state: state, pattern: pattern },
+        PWildcard => BindResult { env: env, subst: acc, state: state, pattern: TPWildcard },
+        PIdent(name, off) => { note_binding(name, off, scrutinee_ty); BindResult { env: tyenv_extend(env, name, scrutinee_ty, off), subst: acc, state: state, pattern: TPIdent(name, off) } },
+        PInt(v) => BindResult { env: env, subst: unify_pattern_prim(acc, scrutinee_ty, ITInt), state: state, pattern: TPInt(v) },
+        PFloat(v) => BindResult { env: env, subst: unify_pattern_prim(acc, scrutinee_ty, ITFloat), state: state, pattern: TPFloat(v) },
+        PStr(v) => BindResult { env: env, subst: unify_pattern_prim(acc, scrutinee_ty, ITStr), state: state, pattern: TPStr(v) },
+        PBool(v) => BindResult { env: env, subst: unify_pattern_prim(acc, scrutinee_ty, ITBool), state: state, pattern: TPBool(v) },
         PTuple(elems) => bind_tuple_pattern(p2, state, acc, env, elems, scrutinee_ty),
         PVariant(path, arg_pats) => bind_variant_pattern(p2, state, acc, env, path, arg_pats, scrutinee_ty),
         PStruct(path, field_pats, rest) => bind_struct_pattern(p2, state, acc, env, path, field_pats, rest, scrutinee_ty),
@@ -3493,8 +3486,8 @@ let bind_or_pattern (p2: Program2) (state: FreshState) (acc: Subst) (env: TyEnv)
         OrStructural => bind_binding_or_pattern(p2, state, acc, env, alts, scrutinee_ty),
     }
 
-let bind_literal_or_alts (p2: Program2) (state: FreshState) (acc: Subst) (env: TyEnv) (alts: Array[parser.PPattern]) (scrutinee_ty: ITy) (i: Int) (out: Array[parser.PPattern]): BindResult =
-    if i >= alts.len() { BindResult { env: env, subst: acc, state: state, pattern: POr(out) } }
+let bind_literal_or_alts (p2: Program2) (state: FreshState) (acc: Subst) (env: TyEnv) (alts: Array[parser.PPattern]) (scrutinee_ty: ITy) (i: Int) (out: Array[TPattern]): BindResult =
+    if i >= alts.len() { BindResult { env: env, subst: acc, state: state, pattern: TPOr(out) } }
     else {
         let r = bind_pattern_ty(p2, state, acc, env, alts[i], scrutinee_ty);
         bind_literal_or_alts(p2, r.state, r.subst, env, alts, scrutinee_ty, i + 1, out.push(r.pattern))
@@ -3503,7 +3496,7 @@ let bind_literal_or_alts (p2: Program2) (state: FreshState) (acc: Subst) (env: T
 let bind_binding_or_pattern (p2: Program2) (state: FreshState) (acc: Subst) (env: TyEnv) (alts: Array[parser.PPattern]) (scrutinee_ty: ITy): BindResult =
     if Array.is_empty(alts) {
         fail_tc("or-pattern must have at least one alternative");
-        BindResult { env: env, subst: acc, state: state, pattern: POr(alts) }
+        BindResult { env: env, subst: acc, state: state, pattern: TPWildcard }
     } else {
         let first = bind_pattern_ty(p2, state, acc, env, alts[0], scrutinee_ty);
         check_or_unique_bindings(first.env.bindings, env.bindings.len());
@@ -3515,8 +3508,8 @@ let bind_binding_or_pattern (p2: Program2) (state: FreshState) (acc: Subst) (env
 // the same set of names, once each, with unifiable types; order may
 // differ. Only the first environment escapes to the guard and body.
 // Every alternative contributes constraints to the shared substitution.
-let bind_or_alts (p2: Program2) (state: FreshState) (acc: Subst) (outer: TyEnv) (shared: TyEnv) (alts: Array[parser.PPattern]) (scrutinee_ty: ITy) (i: Int) (out: Array[parser.PPattern]): BindResult =
-    if i >= alts.len() { BindResult { env: shared, subst: acc, state: state, pattern: POr(out) } }
+let bind_or_alts (p2: Program2) (state: FreshState) (acc: Subst) (outer: TyEnv) (shared: TyEnv) (alts: Array[parser.PPattern]) (scrutinee_ty: ITy) (i: Int) (out: Array[TPattern]): BindResult =
+    if i >= alts.len() { BindResult { env: shared, subst: acc, state: state, pattern: TPOr(out) } }
     else {
         let r = bind_pattern_ty(p2, state, acc, outer, alts[i], scrutinee_ty);
         check_or_unique_bindings(r.env.bindings, outer.bindings.len());
@@ -3558,10 +3551,10 @@ let bind_tuple_pattern (p2: Program2) (state: FreshState) (acc: Subst) (env: TyE
     let fr = fresh_list(state, elems.len());
     let s1 = match unify(subst_apply(acc, scrutinee_ty), ITTuple(fr.tys)) { Ok(s) => subst_compose(s, acc), Err(e) => { fail_tc(e); acc } };
     let r = bind_pattern_list(p2, fr.state, s1, env, elems, fr.tys, 0, []);
-    BindResult { env: r.env, subst: r.subst, state: r.state, pattern: PTuple(r.pats) }
+    BindResult { env: r.env, subst: r.subst, state: r.state, pattern: TPTuple(r.pats) }
 }
 
-let bind_pattern_list (p2: Program2) (state: FreshState) (acc: Subst) (env: TyEnv) (pats: Array[parser.PPattern]) (tys: Array[ITy]) (i: Int) (out: Array[parser.PPattern]): BindListResult =
+let bind_pattern_list (p2: Program2) (state: FreshState) (acc: Subst) (env: TyEnv) (pats: Array[parser.PPattern]) (tys: Array[ITy]) (i: Int) (out: Array[TPattern]): BindListResult =
     if i >= pats.len() { BindListResult { env: env, subst: acc, state: state, pats: out } }
     else {
         let r = bind_pattern_ty(p2, state, acc, env, pats[i], subst_apply(acc, tys[i]));
@@ -3608,8 +3601,11 @@ let bind_variant_pattern (p2: Program2) (state: FreshState) (acc: Subst) (env: T
             let fr = fresh_list(state, v.enum_generics.len());
             let s1 = match unify(subst_apply(acc, scrutinee_ty), ITEnum(v.enum_name, fr.tys)) { Ok(s) => subst_compose(s, acc), Err(e) => { fail_tc(e); acc } };
             let payload = Array.map(v.payload, |t| instantiate_template(v.enum_generics, fr.tys, t));
+            if arg_pats.len() != payload.len() {
+                fail_tc("variant ${tag} has ${payload.len()} payload(s), pattern binds ${arg_pats.len()}")
+            } else { () };
             let r = bind_pattern_list(p2, fr.state, s1, env, arg_pats, payload, 0, []);
-            BindResult { env: r.env, subst: r.subst, state: r.state, pattern: PVariant([v.enum_name, tag], r.pats) }
+            BindResult { env: r.env, subst: r.subst, state: r.state, pattern: TPVariant(v.enum_name, tag, r.pats) }
         },
         // Not a variant — try a STRUCT of that name. `Point(x, y)`
         // destructures a struct POSITIONALLY, binding its fields in
@@ -3624,7 +3620,7 @@ let bind_variant_pattern (p2: Program2) (state: FreshState) (acc: Subst) (env: T
                 let s1 = match unify(subst_apply(acc, scrutinee_ty), ITStruct(info.name, fr.tys)) { Ok(s) => subst_compose(s, acc), Err(e) => { fail_tc(e); acc } };
                 if arg_pats.len() != info.fields.len() {
                     fail_tc("struct ${tag} has ${info.fields.len()} field(s), pattern binds ${arg_pats.len()}");
-                    BindResult { env: env, subst: s1, state: fr.state, pattern: PVariant([info.name, tag], arg_pats) }
+                    BindResult { env: env, subst: s1, state: fr.state, pattern: TPWildcard }
                 } else {
                     // `Point(x, y)` names no field and binds all of
                     // them, so every one has to be visible -- otherwise
@@ -3633,14 +3629,12 @@ let bind_variant_pattern (p2: Program2) (state: FreshState) (acc: Subst) (env: T
                     check_all_fields_visible(p2, info, 0);
                     let tys = Array.map(info.fields, |f| instantiate_template(info.generics, fr.tys, f.ty));
                     let r = bind_pattern_list(p2, fr.state, s1, env, arg_pats, tys, 0, []);
-                    // A positional STRUCT pattern, still spelled as a
-                    // variant one. The head names the struct, so the
-                    // backend can tell the two apart the same way this
-                    // did: by what the name resolved to.
-                    BindResult { env: r.env, subst: r.subst, state: r.state, pattern: PVariant([info.name, tag], r.pats) }
+                    // Canonical struct classification: positional and
+                    // named syntax now have the same typed shape.
+                    BindResult { env: r.env, subst: r.subst, state: r.state, pattern: TPStruct(info.name, positional_pattern_fields(info.fields, r.pats, 0, [])) }
                 }
             },
-            None => { fail_tc("unbound variant: ".concat(tag)); BindResult { env: env, subst: acc, state: state, pattern: PVariant([tag], arg_pats) } },
+            None => { fail_tc("unbound variant: ".concat(tag)); BindResult { env: env, subst: acc, state: state, pattern: TPWildcard } },
         },
     }
 }
@@ -3676,15 +3670,15 @@ let bind_struct_pattern (p2: Program2) (state: FreshState) (acc: Subst) (env: Ty
             let fr = fresh_list(state, info.generics.len());
             let s1 = match unify(subst_apply(acc, scrutinee_ty), ITStruct(info.name, fr.tys)) { Ok(s) => subst_compose(s, acc), Err(e) => { fail_tc(e); acc } };
             let r = bind_struct_field_pats(p2, fr.state, s1, env, info, fr.tys, field_pats, 0, []);
-            BindResult { env: r.env, subst: r.subst, state: r.state, pattern: PStruct([info.name], r.fields, rest) }
+            BindResult { env: r.env, subst: r.subst, state: r.state, pattern: TPStruct(info.name, r.fields) }
         },
-        None => { fail_tc("unknown struct: ".concat(name)); BindResult { env: env, subst: acc, state: state, pattern: PStruct([name], field_pats, rest) } },
+        None => { fail_tc("unknown struct: ".concat(name)); BindResult { env: env, subst: acc, state: state, pattern: TPWildcard } },
     }
 }
 
-struct BindFieldsResult { env: TyEnv, subst: Subst, state: FreshState, fields: Array[parser.FieldPatternNode] }
+struct BindFieldsResult { env: TyEnv, subst: Subst, state: FreshState, fields: Array[TFieldPattern] }
 
-let bind_struct_field_pats (p2: Program2) (state: FreshState) (acc: Subst) (env: TyEnv) (info: StructInfo) (gen_args: Array[ITy]) (field_pats: Array[parser.FieldPatternNode]) (i: Int) (out: Array[parser.FieldPatternNode]): BindFieldsResult =
+let bind_struct_field_pats (p2: Program2) (state: FreshState) (acc: Subst) (env: TyEnv) (info: StructInfo) (gen_args: Array[ITy]) (field_pats: Array[parser.FieldPatternNode]) (i: Int) (out: Array[TFieldPattern]): BindFieldsResult =
     if i >= field_pats.len() { BindFieldsResult { env: env, subst: acc, state: state, fields: out } }
     else {
         check_field_visible(p2.ctx, p2.current, info.name, field_pats[i].name);
@@ -3694,5 +3688,9 @@ let bind_struct_field_pats (p2: Program2) (state: FreshState) (acc: Subst) (env:
         };
         let r = bind_pattern_ty(p2, state, acc, env, field_pats[i].pattern, subst_apply(acc, field_ty));
         bind_struct_field_pats(p2, r.state, r.subst, r.env, info, gen_args, field_pats, i + 1,
-            out.push(parser.FieldPatternNode { name: field_pats[i].name, pattern: r.pattern }))
+            out.push(TFieldPattern { name: field_pats[i].name, pattern: r.pattern }))
     }
+
+let positional_pattern_fields (fields: Array[StructFieldTemplate]) (pats: Array[TPattern]) (i: Int) (acc: Array[TFieldPattern]): Array[TFieldPattern] =
+    if i >= pats.len() { acc }
+    else { positional_pattern_fields(fields, pats, i + 1, acc.push(TFieldPattern { name: fields[i].name, pattern: pats[i] })) }

@@ -1,0 +1,98 @@
+// Validated patterns are the classification shared by inference,
+// exhaustiveness and code generation. Only the checker constructs them:
+// constructor syntax has resolved to either an enum tag or a struct,
+// every child has been checked, and alternatives obey the binding rules.
+// Unsupported combinations have no representation in the typed tree.
+pub enum TPattern {
+    TPInt(Int),
+    TPFloat(Float),
+    TPStr(String),
+    TPBool(Bool),
+    TPWildcard,
+    TPIdent(String, Int),
+    TPTuple(Array[TPattern]),
+    TPVariant(String, String, Array[TPattern]),
+    TPStruct(String, Array[TFieldPattern]),
+    TPOr(Array[TPattern]),
+}
+
+pub struct TFieldPattern { pub name: String, pub pattern: TPattern }
+
+// Preserve the language's existing coverage rule: only a final bare
+// catch-all exempts a match, and top-level tags count even with nested
+// payload tests or guards. A struct constructor contributes no enum tag.
+pub let pattern_is_catchall (pattern: TPattern): Bool =
+    match pattern { TPWildcard => true, TPIdent(_, _) => true, _ => false }
+
+pub let pattern_is_binding (pattern: TPattern): Bool =
+    match pattern { TPIdent(_, _) => true, _ => false }
+
+pub let pattern_tags (pattern: TPattern): Array[String] =
+    match pattern {
+        TPVariant(_, tag, _) => [tag],
+        TPOr(alts) => pattern_alt_tags(alts, 0, []),
+        _ => [],
+    }
+
+let pattern_alt_tags (alts: Array[TPattern]) (i: Int) (acc: Array[String]): Array[String] =
+    if i >= alts.len() { acc }
+    else { pattern_alt_tags(alts, i + 1, Array.concat(acc, pattern_tags(alts[i]))) }
+
+pub let pattern_names (pattern: TPattern) (acc: Array[String]): Array[String] =
+    match pattern {
+        TPIdent(name, _) => acc.push(name),
+        TPTuple(ps) => pattern_list_names(ps, 0, acc),
+        TPVariant(_, _, ps) => pattern_list_names(ps, 0, acc),
+        TPStruct(_, fields) => pattern_field_names(fields, 0, acc),
+        // Every alternative binds the same names. Visit one, so a
+        // shared binding appears once in liveness and scope analysis.
+        TPOr(ps) => pattern_names(ps[0], acc),
+        _ => acc,
+    }
+
+let pattern_list_names (ps: Array[TPattern]) (i: Int) (acc: Array[String]): Array[String] =
+    if i >= ps.len() { acc } else { pattern_list_names(ps, i + 1, pattern_names(ps[i], acc)) }
+
+let pattern_field_names (fields: Array[TFieldPattern]) (i: Int) (acc: Array[String]): Array[String] =
+    if i >= fields.len() { acc } else { pattern_field_names(fields, i + 1, pattern_names(fields[i].pattern, acc)) }
+
+// Whether testing this pattern reads through a scrutinee pointer.
+// Codegen uses this when guarding nested payload tests with a tag test.
+pub let pattern_derefs (pattern: TPattern): Bool =
+    match pattern {
+        TPVariant(_, _, _) => true,
+        TPStruct(_, _) => true,
+        TPTuple(_) => true,
+        TPStr(_) => true,
+        TPOr(ps) => pattern_alts_deref(ps, 0),
+        _ => false,
+    }
+
+let pattern_alts_deref (ps: Array[TPattern]) (i: Int): Bool =
+    if i >= ps.len() { false } else { pattern_derefs(ps[i]) || pattern_alts_deref(ps, i + 1) }
+
+pub let test_pattern_coverage (): Unit = {
+    assert(pattern_is_catchall(TPWildcard));
+    assert(pattern_is_catchall(TPIdent("x", 0)));
+    assert(!pattern_is_catchall(TPOr([TPWildcard, TPInt(1)])));
+    assert_eq(pattern_tags(TPStruct("Pair", [])), []);
+    assert_eq(pattern_tags(TPOr([TPVariant("Choice", "A", [TPInt(1)]), TPVariant("Choice", "B", [])])), ["A", "B"]);
+    assert_eq(pattern_tags(TPTuple([TPVariant("Choice", "A", [])])), []);
+}
+
+pub let test_pattern_shared_bindings (): Unit = {
+    let pattern = TPOr([
+        TPVariant("Choice", "A", [TPIdent("x", 0), TPIdent("y", 1)]),
+        TPVariant("Choice", "B", [TPIdent("y", 2), TPIdent("x", 3)]),
+    ]);
+    assert_eq(pattern_names(pattern, ["outer"]), ["outer", "x", "y"]);
+    assert_eq(pattern_names(TPStruct("Pair", [TFieldPattern { name: "left", pattern: TPTuple([TPIdent("z", 0), TPWildcard]) }]), []), ["z"]);
+}
+
+pub let test_pattern_payload_safety (): Unit = {
+    assert(!pattern_derefs(TPOr([TPInt(1), TPWildcard])));
+    assert(pattern_derefs(TPOr([TPIdent("x", 0), TPStr("ok")])));
+    assert(pattern_derefs(TPStruct("Empty", [])));
+    assert(pattern_derefs(TPTuple([])));
+    assert(pattern_derefs(TPVariant("Choice", "Empty", [])));
+}

@@ -22,10 +22,9 @@
 //      backend can never disagree with the checker about what a call
 //      IS — a whole class of bug removed rather than tested for.
 //
-// Cases the checker accepts but the backend doesn't compile (tuples,
-// generic instantiation, `unsafe`, `spawn`, `select`) become
-// `TUnsupported`, carrying the reason, so the backend's failure names
-// the real construct instead of a missing match arm.
+// Patterns are a recursive `TPattern` classification validated by the
+// checker. Constructor syntax is resolved once, so the backend cannot
+// reinterpret a struct as an enum tag or receive unsupported patterns.
 
 use parser;
 
@@ -39,12 +38,12 @@ pub struct TExpr { pub ty: ITy, pub node: TNode }
 pub struct TBlock { pub stmts: Array[TStmt], pub tail: Option[TExpr], pub starts: Array[Int] }
 
 pub enum TStmt {
-    TSLet(parser.PPattern, TExpr),
+    TSLet(TPattern, TExpr),
     TSAssign(String, TExpr),
     TSExpr(TExpr),
 }
 
-pub struct TArm { pub pattern: parser.PPattern, pub guard: Option[TExpr], pub body: TExpr }
+pub struct TArm { pub pattern: TPattern, pub guard: Option[TExpr], pub body: TExpr }
 
 // One `select` arm: the RECEIVER to wait on, the pattern its value is
 // bound by, and the body. No guard -- an arm that can decline after
@@ -53,7 +52,7 @@ pub struct TArm { pub pattern: parser.PPattern, pub guard: Option[TExpr], pub bo
 // Mirrors `parser.SelectArmKindNode`, for the same reason: an `else`
 // arm has no channel, so it must not be possible to ask for one.
 pub enum TSelectArmKind {
-    TSARecv(TExpr, parser.PPattern),
+    TSARecv(TExpr, TPattern),
     TSAAfter(TExpr),
     TSAElse,
 }
@@ -96,14 +95,14 @@ pub enum TNode {
     TIf(TExpr, TExpr, Option[TExpr]),
     TMatch(TExpr, Array[TArm]),
     // pattern, range start, range end, body
-    TFor(parser.PPattern, TExpr, TExpr, TExpr),
+    TFor(TPattern, TExpr, TExpr, TExpr),
     // `for x in xs` over an ARRAY, as opposed to `TFor`'s range. Its
     // own node rather than a flag on `TFor`: the two share no operands
     // (a range has two bounds, an array has one iterand) and no codegen
     // (an index-and-load loop versus a counter), so folding them
     // together would be a tag pretending to be a shape.
     // pattern, array, body
-    TForArray(parser.PPattern, TExpr, TExpr),
+    TForArray(TPattern, TExpr, TExpr),
     TClosure(Array[String], TExpr),
     // `Game { score: 0, ..g }` -- the optional `TExpr` is the SPREAD
     // base, whose fields fill in every position the literal does not
