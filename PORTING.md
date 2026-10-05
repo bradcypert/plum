@@ -96,6 +96,23 @@ execution fixture on that platform. `dir_shim.c` and `thread_shim.c` needed no
 Windows code at all, because MinGW-w64 supplies `dirent.h` and pthreads, which
 is why neither is on the list of things that had to be written.
 
+### HTTPS transport
+
+`tls_shim.c` adds a client TLS transport beside the socket shim. The
+compiler embeds a pinned Mbed TLS source snapshot, including its
+headers, and compiles it into programs that use TLS. Building an HTTPS
+client requires no external TLS development library or network access.
+
+Certificate and hostname verification are required. On Unix the shim
+looks for `/etc/ssl/certs/ca-certificates.crt`, `/etc/ssl/cert.pem`, or
+`/etc/pki/tls/certs/ca-bundle.crt`. On Windows it reads the system ROOT
+certificate store. A new platform needs a usable trust-store lookup
+as well as sockets; Plum does not ship its own CA bundle.
+
+Windows links `ws2_32`, `crypt32`, and `bcrypt` for sockets, certificate
+loading, and the TLS library's native entropy source. These link flags
+are supplied by `plum build`.
+
 ### Unix commands the compiler shelled out to: fixed
 
 These were never in the shims. They were in the compiler's own Plum
