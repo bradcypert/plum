@@ -139,6 +139,58 @@ alternative must bind the same names with compatible types; positions
 may differ. Alternatives compose inside enum payloads, tuples, and
 struct fields, including nested structural patterns.
 
+Literal patterns can match negative integers as well as positive values.
+Use `|` to give several values the same result:
+
+```plum
+let classify (code: Int): String = match code {
+    -1 => "closed",
+    0 | 1 | 2 => "small",
+    _ => "other",
+}
+
+let main (): Unit = {
+    println(classify(-1));
+    println(classify(2));
+    println(classify(9))
+}
+```
+
+```
+closed
+small
+other
+```
+
+Alternatives can also select payloads from different variants, even
+when the shared binding occurs in different positions:
+
+```plum
+enum Choice { Direct(String), Tagged(Int, String), Empty }
+
+let describe (choice: Choice): String = match choice {
+    Direct(text) | Tagged(_, text) if text != "" => text,
+    _ => "empty",
+}
+
+let main (): Unit = {
+    println(describe(Direct("hello")));
+    println(describe(Tagged(7, "world")));
+    println(describe(Empty))
+}
+```
+
+```
+hello
+world
+empty
+```
+
+Nested alternatives such as `Some("yes" | "ok")` work too. An arm
+like `Some(x) | None => x` is rejected because `None` does not bind
+`x`. Guarded arms do not establish exhaustiveness, so include an
+unguarded arm for the remaining cases.
+
 Field access (`.radius`, `.x`, ...) needs its receiver's type to
 already be known at that point in inference. An unannotated
 function/closure parameter that's only ever used for field access
@@ -299,8 +351,15 @@ the common ones are:
 
 ```plum fragment
 let doubled = Option.map(Some(21), |x| x * 2);          // Some(42)
+let chosen = Option.or(None, Some(42));                // Some(42)
+let lazy = Option.or_else(Some(21), || Some(42));      // Some(21); closure is not called
 let total = Result.unwrap_or(Os.read_file("a.txt"), "");    // "" if the file is missing
 ```
+
+`Option.or` chooses the first present option; its fallback is evaluated
+eagerly. `Option.or_else` calls its fallback closure only when the first
+option is `None`. Both return an `Option`; `Option.unwrap_or` instead
+returns the contained value or a default value.
 
 ## Arrays
 
@@ -371,6 +430,25 @@ binding stays in scope via capture (`Result.and_then(_, |head| Result
 .map(read_body(head), |body| Response { head, body }))`).
 
 ## Strings
+
+String literals support `\n`, `\t`, `\r`, `\\`, `\"`, and `\$`.
+Use `\xNN` for a character written with exactly two hexadecimal digits,
+or `\u{...}` for a Unicode scalar value written with one to six digits:
+
+```plum
+let main (): Unit = {
+    println("\x41\u{42}");
+    println("\u{1f600}")
+}
+```
+
+```
+AB
+😀
+```
+
+Unknown escapes, malformed hexadecimal escapes, and invalid Unicode
+scalar values are compile errors.
 
 ```plum fragment
 let s = "hello";

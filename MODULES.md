@@ -211,7 +211,7 @@ modules, and a file that wants one says so:
 | `Os` | files, directories, environment, subprocesses, platform, exit |
 | `Time` | the clock, and the calendar on top of it |
 | `Net` | TCP sockets |
-| `Http` | HTTP client and server, built on `Net` |
+| `Http` | HTTP and HTTPS client; HTTP server |
 | `Crypto` | SHA-256. Cryptographic, unlike `String.hash` |
 
 ```plum fragment
@@ -223,9 +223,9 @@ let here (): String = Os.platform()
 let conf (): Result[String, String] = Os.read_file("app.conf")
 ```
 
-A module can depend on another. `Http` is ordinary Plum over `Net`'s
-sockets, so `use Http;` brings `Net` in with it, and you do not have to
-know what a module is built on to use it.
+A module can depend on another. `Http` uses `Net` for plain HTTP and a
+native TLS transport for HTTPS. `use Http;` brings its dependencies in
+with it, so you do not have to import them separately.
 
 Without the `use`, the error says what to do:
 
@@ -233,6 +233,37 @@ Without the `use`, the error says what to do:
 unbound variant/function: Time -- `Time` is a standard library module;
 add `use Time;` to this file
 ```
+
+### HTTP and HTTPS
+
+`Http.get`, `Http.post`, and `Http.request` accept both `http://` and
+`https://` URLs and return `Result[Http.Response, String]`. A response
+contains its status code, headers, and body:
+
+```plum fragment
+use Http;
+
+let fetch (): Unit = match Http.get("https://example.com/") {
+    Ok(response) => {
+        println(response.status.to_string());
+        println(response.body)
+    },
+    Err(message) => println(message),
+}
+```
+
+HTTPS verifies the server's certificate and hostname. Plum embeds Mbed
+TLS, so no separate TLS development library is needed to build a
+client. Root certificates come from the system: conventional CA files
+on Unix and the Windows ROOT certificate store. No CA bundle ships
+with Plum; a system without usable roots cannot establish a verified
+HTTPS connection.
+
+Redirects are returned to the caller rather than followed. Connections
+close after each request, and chunked transfer encoding is unsupported.
+`Http.serve` and `Http.serve_once` serve plain HTTP; HTTPS support is
+for the client. See [the Http API reference](docs/stdlib/Http.md) for
+the request and server functions.
 
 `Time` moved in 0.0.8 and the rest in 0.0.9. `Os` was held back
 deliberately: unlike `Time`, it was reachable from every program
@@ -329,8 +360,8 @@ hash. The layout mirrors the cache (`vendor/github.com/acme/parsec/<commit>/`)
 so two commits coexist, and `vendor/` is never scanned as one of the
 project's own modules. A vendored project builds with no cache or network.
 
-**`git` is only needed if you fetch.** Plum shells out to it rather than
-implementing TLS; a project with only `path` dependencies never needs
+**`git` is only needed if you fetch.** Plum delegates repository transport
+to Git; a project with only `path` dependencies never needs
 it, and neither does building the compiler. If it is missing, the error
 says so by name.
 
@@ -466,10 +497,10 @@ dependencies.
 
 ### What is not here yet
 
-Version numbers are recorded and not used. There is no registry, no
-fetching, no lockfile and no way to depend on a package you have not
-already got a copy of. Those are separable, and the ordering is
-discussed in [issue #36](https://github.com/bradcypert/plum/issues/36).
+Version numbers are recorded but do not select dependency versions.
+There is no registry or lockfile. Git dependencies instead pin a full
+commit and content hash in the manifest; `plum fetch` downloads them
+explicitly, and `plum vendor` makes them available for offline builds.
 
 Whatever arrives, the compiler's own bootstrap stays what it is today:
 a seed, and no network.

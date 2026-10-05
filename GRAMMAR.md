@@ -48,12 +48,12 @@ Literal       ::= IntLiteral | FloatLiteral | StringLiteral | BoolLiteral
 Comment       ::= "//" { any character except newline }
 ```
 
-String escapes are `\\n` (newline), `\\t` (tab), `\\r` (carriage return),
-`\\\\` (backslash), `\\"` (double quote), and `\\$` (literal dollar sign).
-Arbitrary Unicode scalar values can be written as `\\u{...}` with one to
-six hexadecimal digits (for example, `\\u{1b}` for ESC). `\\xNN` writes
+String escapes are `\n` (newline), `\t` (tab), `\r` (carriage return),
+`\\` (backslash), `\"` (double quote), and `\$` (literal dollar sign).
+Arbitrary Unicode scalar values can be written as `\u{...}` with one to
+six hexadecimal digits (for example, `\u{1b}` for ESC). `\xNN` writes
 the character with the value of exactly two hexadecimal digits, such as
-`\\x1b`. Unknown escapes and malformed numeric escapes are errors.
+`\x1b`. Unknown escapes and malformed numeric escapes are errors.
 
 **String interpolation** (`"hello, ${name}!"`) is pure syntax sugar,
 fully resolved by the lexer+parser. `plum-types`/`plum-ir`/both
@@ -513,7 +513,7 @@ noted here so it isn't forgotten as an implementation detail.
 ```
 Pattern        ::= OrPattern
 OrPattern      ::= PrimaryPattern { "|" PrimaryPattern }
-PrimaryPattern ::= Literal | "-" IntegerLiteral
+PrimaryPattern ::= Literal | "-" IntLiteral
                   | "_"
                   | Identifier
                   | PathType
@@ -525,6 +525,15 @@ FieldPatternList ::= FieldPattern { "," FieldPattern } [ "," [ ".." ] ]
                     | ".."
 FieldPattern     ::= Identifier [ ":" Pattern ]
 ```
+
+Negative integer literals are patterns (`-1 => ...`); a leading minus
+does not form a float pattern. Literal alternatives such as `0 | 1`
+and variant alternatives such as `A(x) | B(_, x)` share one arm.
+Every alternative must bind the same names with compatible types.
+Alternatives may be nested in payloads, tuples, and struct fields, for
+example `Some("yes" | "ok")`. They are tested from left to right;
+after the first match, the arm's guard runs once. If it is false,
+matching continues at the next arm.
 
 `FieldPattern`'s shorthand form (`Identifier` with no `: Pattern`) binds
 a variable of the same name: `Point { x, y }` binds `x` and `y`

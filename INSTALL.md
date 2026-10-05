@@ -18,11 +18,17 @@ anything: the C shims Plum programs use are embedded in the compiler
 itself.
 
 **`git` is needed only to fetch packages.** `plum fetch` shells out to
-it rather than Plum implementing TLS, so a project whose dependencies
+it for repository transport, so a project whose dependencies
 are all local `path` entries never needs it, and neither does building
 the compiler from source. If it is missing, `plum fetch` says so by
 name rather than failing as something that looks like a network
 problem. See [MODULES.md](MODULES.md#depending-on-a-git-repository).
+
+HTTPS clients use the Mbed TLS sources embedded in the compiler and
+need no separately installed TLS development library. Certificate
+verification uses system CA files on Unix or the Windows ROOT store;
+install your platform's CA certificates if they are absent. Plum does
+not include a CA bundle.
 
 Or take an archive from
 [Releases](https://github.com/bradcypert/plum/releases) directly. It
