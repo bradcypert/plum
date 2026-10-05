@@ -1776,7 +1776,7 @@ let cg_if (p: CgProgram) (env: Array[CgSlot]) (n: Int) (cond: typecheck.TExpr) (
 // The range's two ends arrive as separate typed children — the checker
 // already destructured `lo..hi`, so there is no `BRange` node left to
 // pattern-match on here.
-let cg_for (p: CgProgram) (env: Array[CgSlot]) (n: Int) (pattern: parser.PPattern) (lo_e: typecheck.TExpr) (hi_e: typecheck.TExpr) (body: typecheck.TExpr): Emit = {
+let cg_for (p: CgProgram) (env: Array[CgSlot]) (n: Int) (pattern: typecheck.TPattern) (lo_e: typecheck.TExpr) (hi_e: typecheck.TExpr) (body: typecheck.TExpr): Emit = {
     let lo = cg_expr(p, env, n, lo_e);
     let hi = cg_expr(p, env, lo.n, hi_e);
     let iv = cg_reg(hi.n);
@@ -1824,7 +1824,7 @@ let cg_for (p: CgProgram) (env: Array[CgSlot]) (n: Int) (pattern: parser.PPatter
 // gives it back on the way out, so a body that stores the element
 // somewhere longer-lived has already incremented it independently, and
 // a body that merely reads it leaves the count where it started.
-let cg_for_array (p: CgProgram) (env: Array[CgSlot]) (n: Int) (pattern: parser.PPattern) (arr_e: typecheck.TExpr) (body: typecheck.TExpr): Emit = {
+let cg_for_array (p: CgProgram) (env: Array[CgSlot]) (n: Int) (pattern: typecheck.TPattern) (arr_e: typecheck.TExpr) (body: typecheck.TExpr): Emit = {
     let a = cg_expr(p, env, n, arr_e);
     let elem_ity = cg_elem_ity(p, arr_e);
     let elem = cg_of_ity(elem_ity);
@@ -2015,7 +2015,7 @@ let cg_stmts_at (p: CgProgram) (env: Array[CgSlot]) (n: Int) (stmts: Array[typec
                 let vty = cg_concrete(p, typecheck.texpr_ty(p.subst, value));
                 let pat = cg_pattern(p, env, r.n, pattern, r.val, vty);
                 // Bindings borrow from the scrutinee and take their own
-                // reference (see `cg_pattern`'s `PIdent` arm), so the
+                // reference (see `cg_pattern`'s `TPIdent` arm), so the
                 // scrutinee's own reference is released once they have.
                 let head = r.code.concat(pat.code).concat(pat.binds).concat(cg_dec(vty, r.val));
                 let rest = cg_stmts(p, pat.env, pat.n, stmts, i + 1, starts);
@@ -2228,29 +2228,8 @@ let cg_is_movable (p: CgProgram) (name: String): Bool = cg_name_in(p.movable, na
 let cg_name_in (xs: Array[String]) (name: String) (i: Int): Bool =
     if i >= xs.len() { false } else { if xs[i] == name { true } else { cg_name_in(xs, name, i + 1) } }
 
-let cg_pattern_binds (pat: parser.PPattern) (name: String): Bool =
-    match pat {
-        PIdent(v, _) => v == name,
-        PTuple(ps) => cg_any_pattern_binds(ps, name, 0),
-        PVariant(_, ps) => cg_any_pattern_binds(ps, name, 0),
-        POr(ps) => cg_any_pattern_binds(ps, name, 0),
-        PStruct(_, fps, _) => cg_any_field_pattern_binds(fps, name, 0),
-        PInt(_) => false,
-        PFloat(_) => false,
-        PStr(_) => false,
-        PBool(_) => false,
-        PWildcard => false,
-    }
-
-let cg_any_pattern_binds (ps: Array[parser.PPattern]) (name: String) (i: Int): Bool =
-    if i >= ps.len() { false } else {
-        if cg_pattern_binds(ps[i], name) { true } else { cg_any_pattern_binds(ps, name, i + 1) }
-    }
-
-let cg_any_field_pattern_binds (fps: Array[parser.FieldPatternNode]) (name: String) (i: Int): Bool =
-    if i >= fps.len() { false } else {
-        if cg_pattern_binds(fps[i].pattern, name) { true } else { cg_any_field_pattern_binds(fps, name, i + 1) }
-    }
+let cg_pattern_binds (pat: typecheck.TPattern) (name: String): Bool =
+    Array.contains(typecheck.pattern_names(pat, []), name)
 
 let cg_cap2 (v: Int): Int = if v > 2 { 2 } else { v }
 let cg_max2 (a: Int) (b: Int): Int = if a > b { a } else { b }
@@ -2590,25 +2569,8 @@ let lv_assigned (stmts: Array[typecheck.TStmt]) (from: Int) (acc: Array[String])
         })
     }
 
-let lv_pat_names (pat: parser.PPattern) (acc: Array[String]): Array[String] =
-    match pat {
-        PIdent(v, _) => acc.push(v),
-        PTuple(ps) => lv_pat_names_all(ps, 0, acc),
-        PVariant(_, ps) => lv_pat_names_all(ps, 0, acc),
-        POr(ps) => lv_pat_names_all(ps, 0, acc),
-        PStruct(_, fps, _) => lv_field_pat_names(fps, 0, acc),
-        PInt(_) => acc,
-        PFloat(_) => acc,
-        PStr(_) => acc,
-        PBool(_) => acc,
-        PWildcard => acc,
-    }
-
-let lv_pat_names_all (ps: Array[parser.PPattern]) (i: Int) (acc: Array[String]): Array[String] =
-    if i >= ps.len() { acc } else { lv_pat_names_all(ps, i + 1, lv_pat_names(ps[i], acc)) }
-
-let lv_field_pat_names (fps: Array[parser.FieldPatternNode]) (i: Int) (acc: Array[String]): Array[String] =
-    if i >= fps.len() { acc } else { lv_field_pat_names(fps, i + 1, lv_pat_names(fps[i].pattern, acc)) }
+let lv_pat_names (pat: typecheck.TPattern) (acc: Array[String]): Array[String] =
+    typecheck.pattern_names(pat, acc)
 
 // A function body, rewritten. Its parameters are the outermost scope
 // and there is nothing after the body, so the continuation starts
@@ -2729,12 +2691,12 @@ let cg_self_push (p: CgProgram) (env: Array[CgSlot]) (n: Int) (name: String) (va
 
 // A plain `let x = ..` binds one name and needs no pattern machinery;
 // anything else destructures.
-let cg_is_ident_pattern (pattern: parser.PPattern): Bool =
-    match pattern { PIdent(_, _) => true, _ => false }
+let cg_is_ident_pattern (pattern: typecheck.TPattern): Bool =
+    typecheck.pattern_is_binding(pattern)
 
-let cg_let_name (pattern: parser.PPattern): String =
+let cg_let_name (pattern: typecheck.TPattern): String =
     match pattern {
-        PIdent(name, _) => name,
+        TPIdent(name, _) => name,
         _ => { cg_fail("destructuring `let` isn't supported yet"); "_" },
     }
 
@@ -5113,7 +5075,7 @@ let cg_select_arms (p: CgProgram) (env: Array[CgSlot]) (n: Int) (arms: Array[typ
         let elem = cg_array_elem_ity(p, typecheck.texpr_ty(p.subst, chan));
         let vty = cg_of_ity(elem);
         let v = cg_reg(n);
-        let pat = cg_pattern(p, env, n + 1, match arms[i].kind { TSARecv(_, pt) => pt, _ => PWildcard }, v, elem);
+        let pat = cg_pattern(p, env, n + 1, match arms[i].kind { TSARecv(_, pt) => pt, _ => TPWildcard }, v, elem);
         let b = cg_expr(p, pat.env, pat.n, arms[i].body);
         let this_code = cg_select_label(base, i).concat(":\n")
             .concat("  ").concat(v).concat(" = load ").concat(cg_llvm_ty(vty)).concat(", ptr ").concat(box).concat("\n")
@@ -5312,12 +5274,12 @@ struct PatEmit { code: String, binds: String, allocas: String, releases: String,
 // has already thrown away. `CgStruct("Box")` cannot tell you whether
 // its `item` loads as an `i64` or a `ptr`; `ITStruct("Box", [Int])`
 // can.
-let cg_pattern (p: CgProgram) (env: Array[CgSlot]) (n: Int) (pattern: parser.PPattern) (sval: String) (sity: typecheck.ITy): PatEmit =
+let cg_pattern (p: CgProgram) (env: Array[CgSlot]) (n: Int) (pattern: typecheck.TPattern) (sval: String) (sity: typecheck.ITy): PatEmit =
     match pattern {
-        PWildcard => PatEmit { code: "", binds: "", allocas: "", releases: "", globals: "", test: "1", env: env, n: n },
+        TPWildcard => PatEmit { code: "", binds: "", allocas: "", releases: "", globals: "", test: "1", env: env, n: n },
         // A binding always matches; the slot it introduces is what the
         // arm body reads.
-        PIdent(name, _) => {
+        TPIdent(name, _) => {
             let slot = cg_reg(n);
             let sty = cg_of_ity(sity);
             let lty = cg_llvm_ty(sty);
@@ -5340,22 +5302,22 @@ let cg_pattern (p: CgProgram) (env: Array[CgSlot]) (n: Int) (pattern: parser.PPa
                 globals: "", test: "1", env: env.push(CgSlot { name: name, ptr: slot, ty: sty, ity: sity }), n: n + 1,
             }
         },
-        PInt(v) => cg_pat_cmp(env, n, "icmp eq i64 ", sval, v.to_string()),
-        PFloat(v) => cg_pat_cmp(env, n, "fcmp oeq double ", sval, cg_float_text(v)),
-        PBool(v) => cg_pat_cmp(env, n, "icmp eq i1 ", sval, if v { "1" } else { "0" }),
-        PStr(v) => cg_pat_str(env, n, sval, v),
-        PVariant(path, arg_pats) => cg_pat_variant(p, env, n, path, arg_pats, sval, sity),
-        PStruct(path, field_pats, _) => cg_pat_struct(p, env, n, path[path.len() - 1], field_pats, sval, sity),
+        TPInt(v) => cg_pat_cmp(env, n, "icmp eq i64 ", sval, v.to_string()),
+        TPFloat(v) => cg_pat_cmp(env, n, "fcmp oeq double ", sval, cg_float_text(v)),
+        TPBool(v) => cg_pat_cmp(env, n, "icmp eq i1 ", sval, if v { "1" } else { "0" }),
+        TPStr(v) => cg_pat_str(env, n, sval, v),
+        TPVariant(enum_name, tag, arg_pats) => cg_pat_variant(p, env, n, enum_name, tag, arg_pats, sval, sity),
+        TPStruct(name, field_pats) => cg_pat_struct(p, env, n, name, field_pats, sval, sity),
         // A tuple pattern always matches its own type — there is only
         // one shape — so it contributes no test of its own, only the
         // sub-patterns'.
-        PTuple(pats) => cg_pat_fields(p, env, n, cg_tuple_index_names(pats, 0, []), cg_tuple_elem_itys(sity), cg_tuple_field_pats(pats, 0, []), 0, sval, "1", "", "", "", "", ""),
-        POr(ps) => cg_pat_or(p, env, n, ps, sval, sity),
+        TPTuple(pats) => cg_pat_fields(p, env, n, cg_tuple_index_names(pats, 0, []), cg_tuple_elem_itys(sity), cg_tuple_field_pats(pats, 0, []), 0, sval, "1", "", "", "", "", ""),
+        TPOr(ps) => cg_pat_or(p, env, n, ps, sval, sity),
     }
 
 // Pure tests precede binding selection. Only the first matching
 // alternative stores and retains values in the shared arm slots.
-let cg_pat_or (p: CgProgram) (env: Array[CgSlot]) (n: Int) (patterns: Array[parser.PPattern]) (sval: String) (sity: typecheck.ITy): PatEmit = {
+let cg_pat_or (p: CgProgram) (env: Array[CgSlot]) (n: Int) (patterns: Array[typecheck.TPattern]) (sval: String) (sity: typecheck.ITy): PatEmit = {
     let first = cg_pattern(p, env, n, patterns[0], sval, sity);
     let end = cg_label(first.n);
     let choose = cg_label(first.n + 1);
@@ -5365,7 +5327,7 @@ let cg_pat_or (p: CgProgram) (env: Array[CgSlot]) (n: Int) (patterns: Array[pars
     cg_pat_or_alts(p, env, first.n + 3, patterns, sval, sity, 1, first, end, binds)
 }
 
-let cg_pat_or_alts (p: CgProgram) (outer: Array[CgSlot]) (n: Int) (patterns: Array[parser.PPattern]) (sval: String) (sity: typecheck.ITy) (i: Int) (shared: PatEmit) (end: String) (binds: String): PatEmit =
+let cg_pat_or_alts (p: CgProgram) (outer: Array[CgSlot]) (n: Int) (patterns: Array[typecheck.TPattern]) (sval: String) (sity: typecheck.ITy) (i: Int) (shared: PatEmit) (end: String) (binds: String): PatEmit =
     if i >= patterns.len() {
         PatEmit { code: shared.code, binds: binds.concat("  br label %${end}\n${end}:\n"), allocas: shared.allocas,
             releases: shared.releases, globals: shared.globals, test: shared.test, env: shared.env, n: n }
@@ -5410,28 +5372,14 @@ let cg_pat_str (env: Array[CgSlot]) (n: Int) (sval: String) (lit: String): PatEm
     PatEmit { code: code, binds: "", allocas: "", releases: "", globals: cg_str_constant(n, lit), test: test, env: env, n: n + 3 }
 }
 
-// `path` is what the CHECKER resolved the pattern head to:
-// `[enum, tag]` for a variant, `[struct, tag]` for a positional struct
-// pattern, both qualified. A one-element path is a pattern that never
-// reached the checker; it falls back to the flat scan, which is what
-// every pattern used to get.
-let cg_pat_variant (p: CgProgram) (env: Array[CgSlot]) (n: Int) (path: Array[String]) (arg_pats: Array[parser.PPattern]) (sval: String) (sity: typecheck.ITy): PatEmit = {
-    let name = path[path.len() - 1];
-    let head = if path.len() >= 2 { path[0] } else { "" };
-    match cg_pat_head_variant(p, head, name) {
-        // Not a variant — a STRUCT destructured positionally,
-        // `Point(x, y)`. The parser can't tell the two apart; the name
-        // decides. Reuses the struct path by pairing each position
-        // with its declared field name, exactly the way the tuple case
-        // just below reuses it by pairing with an index.
+// The checker has already resolved an enum tag and validated its
+// payload count. A missing declaration here is an internal invariant
+// failure, never a request to reinterpret the pattern as a struct.
+let cg_pat_variant (p: CgProgram) (env: Array[CgSlot]) (n: Int) (enum_name: String) (name: String) (arg_pats: Array[typecheck.TPattern]) (sval: String) (sity: typecheck.ITy): PatEmit =
+    match cg_enum_opt(p, enum_name).and_then(|e| cg_find_variant_in(e.variants, name, 0)) {
         None => {
-            let fnames = typecheck.ctx_field_names(p.ctx, head_or(head, name));
-            if Array.is_empty(fnames) {
-                cg_fail("unknown variant in pattern: ".concat(name));
-                PatEmit { code: "", binds: "", allocas: "", releases: "", globals: "", test: "0", env: env, n: n }
-            } else {
-                cg_pat_struct(p, env, n, head_or(head, name), cg_positional_field_pats(fnames, arg_pats, 0, []), sval, sity)
-            }
+            cg_fail("internal: validated pattern tag missing: ${enum_name}.${name}");
+            PatEmit { code: "", binds: "", allocas: "", releases: "", globals: "", test: "0", env: env, n: n }
         },
         Some(v) => {
             let tag = cg_reg(n);
@@ -5443,21 +5391,11 @@ let cg_pat_variant (p: CgProgram) (env: Array[CgSlot]) (n: Int) (path: Array[Str
             // own type arguments — `Yes(v)` matched on a `Maybe[Int]`
             // binds `v` as an `Int`, and on a `Maybe[String]` as a
             // pointer, from one unspecialized enum declaration.
-            let payload = Array.map(typecheck.ctx_variant_payload(p.ctx, v.enum_name, name), |t| typecheck.instantiate_template(typecheck.ctx_variant_generics(p.ctx, v.enum_name, name), cg_ity_args(sity), t));
+            let payload = Array.map(typecheck.ctx_variant_payload(p.ctx, enum_name, name), |t| typecheck.instantiate_template(typecheck.ctx_variant_generics(p.ctx, enum_name, name), cg_ity_args(sity), t));
             let sub = cg_pat_payloads(p, env, n + 2, payload, arg_pats, 0, sval, tag_ok, "", "", "", "", "");
             PatEmit { code: load.concat(sub.code), binds: sub.binds, allocas: sub.allocas, releases: sub.releases, globals: sub.globals, test: sub.test, env: sub.env, n: sub.n }
         },
     }
-}
-
-let head_or (head: String) (name: String): String = if head == "" { name } else { head }
-
-// `None` covers both "this head names a struct, not an enum" and "no
-// such variant", which are the same answer to the caller: not a
-// variant, try the struct path.
-let cg_pat_head_variant (p: CgProgram) (head: String) (tag: String): Option[CgVariant] =
-    if head == "" { { cg_fail("internal: pattern head reached codegen unresolved: ".concat(tag)); None } }
-    else { match cg_enum_opt(p, head) { None => None, Some(e) => cg_find_variant_in(e.variants, tag, 0) } }
 
 let cg_enum_opt (p: CgProgram) (name: String): Option[CgEnumDecl] = cg_enum_opt_acc(p.enums, name, 0)
 let cg_enum_opt_acc (es: Array[CgEnumDecl]) (name: String) (i: Int): Option[CgEnumDecl] =
@@ -5484,7 +5422,7 @@ let cg_enum_opt_acc (es: Array[CgEnumDecl]) (name: String) (i: Int): Option[CgEn
 // instruction on a path that was already loading. Binding is unchanged:
 // `select` yields the REAL payload on the matching path, and `binds`
 // only ever runs there.
-let cg_pat_payloads (p: CgProgram) (env: Array[CgSlot]) (n: Int) (payload: Array[typecheck.ITy]) (pats: Array[parser.PPattern]) (i: Int) (sval: String) (test: String) (code: String) (binds: String) (allocas: String) (releases: String) (globals: String): PatEmit =
+let cg_pat_payloads (p: CgProgram) (env: Array[CgSlot]) (n: Int) (payload: Array[typecheck.ITy]) (pats: Array[typecheck.TPattern]) (i: Int) (sval: String) (test: String) (code: String) (binds: String) (allocas: String) (releases: String) (globals: String): PatEmit =
     if i >= pats.len() { PatEmit { code: code, binds: binds, allocas: allocas, releases: releases, globals: globals, test: test, env: env, n: n } }
     else {
         let pp = cg_reg(n);
@@ -5511,24 +5449,13 @@ let cg_pat_payloads (p: CgProgram) (env: Array[CgSlot]) (n: Int) (payload: Array
 // ones that need `cg_pat_payloads`'s safe stand-in. A string pattern
 // counts: `plum_str_eq` reads a length out of the cell and then
 // memcmp's from it.
-let cg_pat_derefs (pat: parser.PPattern): Bool =
-    match pat {
-        PVariant(_, _) => true,
-        PStruct(_, _, _) => true,
-        PTuple(_) => true,
-        PStr(_) => true,
-        POr(ps) => cg_or_derefs(ps, 0),
-        _ => false,
-    }
-
-let cg_or_derefs (patterns: Array[parser.PPattern]) (i: Int): Bool =
-    if i >= patterns.len() { false } else { cg_pat_derefs(patterns[i]) || cg_or_derefs(patterns, i + 1) }
+let cg_pat_derefs (pat: typecheck.TPattern): Bool = typecheck.pattern_derefs(pat)
 
 // A struct pattern has no tag to check — it always matches its own
 // type — so the running test starts at `1` and only sub-patterns can
 // falsify it. `Point { x, y }` binds shorthand fields, which the parser
 // already expands into `x: x` field patterns.
-let cg_pat_struct (p: CgProgram) (env: Array[CgSlot]) (n: Int) (name: String) (field_pats: Array[parser.FieldPatternNode]) (sval: String) (sity: typecheck.ITy): PatEmit =
+let cg_pat_struct (p: CgProgram) (env: Array[CgSlot]) (n: Int) (name: String) (field_pats: Array[typecheck.TFieldPattern]) (sval: String) (sity: typecheck.ITy): PatEmit =
     cg_pat_fields(p, env, n, typecheck.ctx_field_names(p.ctx, name),
         Array.map(typecheck.ctx_field_types(p.ctx, name), |t| typecheck.instantiate_template(typecheck.ctx_struct_generics(p.ctx, name), cg_ity_args(sity), t)),
         field_pats, 0, sval, "1", "", "", "", "", "")
@@ -5537,19 +5464,12 @@ let cg_pat_struct (p: CgProgram) (env: Array[CgSlot]) (n: Int) (name: String) (f
 // works by field name — so each position is given its index as a name.
 // Reusing the struct path is the point: a tuple is an anonymous struct,
 // and the emitter should not have a second copy of the same loop.
-// Pairs positional sub-patterns with a struct's DECLARED field names,
-// in order, so `Point(x, y)` becomes the same shape as
-// `Point { x: x, y: y }`.
-let cg_positional_field_pats (fnames: Array[String]) (pats: Array[parser.PPattern]) (i: Int) (acc: Array[parser.FieldPatternNode]): Array[parser.FieldPatternNode] =
-    if i >= pats.len() || i >= fnames.len() { acc }
-    else { cg_positional_field_pats(fnames, pats, i + 1, acc.push(parser.FieldPatternNode { name: fnames[i], pattern: pats[i] })) }
-
-let cg_tuple_index_names (pats: Array[parser.PPattern]) (i: Int) (acc: Array[String]): Array[String] =
+let cg_tuple_index_names (pats: Array[typecheck.TPattern]) (i: Int) (acc: Array[String]): Array[String] =
     if i >= pats.len() { acc } else { cg_tuple_index_names(pats, i + 1, acc.push(i.to_string())) }
 
-let cg_tuple_field_pats (pats: Array[parser.PPattern]) (i: Int) (acc: Array[parser.FieldPatternNode]): Array[parser.FieldPatternNode] =
+let cg_tuple_field_pats (pats: Array[typecheck.TPattern]) (i: Int) (acc: Array[typecheck.TFieldPattern]): Array[typecheck.TFieldPattern] =
     if i >= pats.len() { acc }
-    else { cg_tuple_field_pats(pats, i + 1, acc.push(parser.FieldPatternNode { name: i.to_string(), pattern: pats[i] })) }
+    else { cg_tuple_field_pats(pats, i + 1, acc.push(typecheck.TFieldPattern { name: i.to_string(), pattern: pats[i] })) }
 
 let cg_tuple_elem_itys (t: typecheck.ITy): Array[typecheck.ITy] =
     match t { ITTuple(elems) => elems, _ => { cg_fail("expected a tuple"); [] } }
@@ -5563,7 +5483,7 @@ let cg_ity_args (t: typecheck.ITy): Array[typecheck.ITy] =
         _ => [],
     }
 
-let cg_pat_fields (p: CgProgram) (env: Array[CgSlot]) (n: Int) (field_names: Array[String]) (field_tys: Array[typecheck.ITy]) (pats: Array[parser.FieldPatternNode]) (i: Int) (sval: String) (test: String) (code: String) (binds: String) (allocas: String) (releases: String) (globals: String): PatEmit =
+let cg_pat_fields (p: CgProgram) (env: Array[CgSlot]) (n: Int) (field_names: Array[String]) (field_tys: Array[typecheck.ITy]) (pats: Array[typecheck.TFieldPattern]) (i: Int) (sval: String) (test: String) (code: String) (binds: String) (allocas: String) (releases: String) (globals: String): PatEmit =
     if i >= pats.len() { PatEmit { code: code, binds: binds, allocas: allocas, releases: releases, globals: globals, test: test, env: env, n: n } }
     else {
         let idx = cg_field_index(field_names, pats[i].name, 0);

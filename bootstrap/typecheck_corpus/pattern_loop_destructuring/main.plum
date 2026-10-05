@@ -1,0 +1,3 @@
+let main (): Unit = {
+    for (x, y) in [(1, 2)] { println(x + y) }
+}

@@ -25,7 +25,9 @@
 #      the right point. A program that stops halfway has no "output" to
 #      compare in the exec_corpus sense; what matters is the partial
 #      output, the message and the exit code together.
-#   4. typecheck_corpus -- every fixture is REJECTED (`check` exits 1).
+#   4. typecheck_corpus -- every fixture is REJECTED by both `check`
+#      and `emit-llvm`, with the same recorded diagnostic. The latter
+#      exercises the compilation path before linking.
 #      Without this half, "the checker prints ok for everything" and
 #      "the checker discriminates" look identical.
 #
@@ -248,49 +250,51 @@ for dir in bootstrap/abort_corpus/*/; do
 done
 
 echo
-echo "typecheck_corpus: every fixture must be REJECTED"
+echo "typecheck_corpus: check and compilation must REJECT every fixture"
 for dir in bootstrap/typecheck_corpus/*/; do
     name="$(basename "$dir")"
     [ -f "$dir/main.plum" ] || continue
     in_shard || continue
 
-    if SH_MEM="${SH_MEM:-256M}" SH_TIMEOUT="${SH_TIMEOUT:-120}" ./sh check "$dir" > "$work/tc-$name.out" 2>&1; then
-        fail_with "$name" "ACCEPTED an ill-typed program"
-        continue
-    fi
-    # A fixture may PIN what it is rejected with. Every line of
-    # `expected-error.txt` has to appear in the output, so a fixture can
-    # assert the message, the position (`main.plum:6:5`), or both.
-    #
-    # Rejection alone was all this checked, and rejection alone cannot
-    # tell a good diagnostic from a bad one. Match-arm errors were
-    # reported at the enclosing function's first line for months and
-    # every fixture still passed, because they were still rejections.
-    # REQUIRED, not optional. It was optional, and 53 of 55 fixtures
-    # did not have one, so they asserted nothing but the exit code --
-    # passing whether the compiler said the right thing, said something
-    # misleading, or said the right thing in the wrong place. A fixture
-    # that pins no message is a fixture that cannot tell a good
-    # diagnostic from a bad one, which is the only thing it is for.
-    #
-    # Regenerate with `bootstrap/record-typecheck-errors`.
-    if [ ! -f "$dir/expected-error.txt" ]; then
-        fail_with "$name" "no expected-error.txt (record it with bootstrap/record-typecheck-errors)"
-        continue
-    fi
-    if [ -f "$dir/expected-error.txt" ]; then
-        missing=""
-        while IFS= read -r want; do
-            [ -z "$want" ] && continue
-            grep -qF -- "$want" "$work/tc-$name.out" || missing="$missing
-    want: $want"
-        done < "$dir/expected-error.txt"
-        if [ -n "$missing" ]; then
-            fail_with "$name" "rejected, but not as recorded:$missing
-    got:  $(grep -m1 -v '^[[:space:]]*$' "$work/tc-$name.out")"
-            continue
+    for command in check emit-llvm; do
+        if SH_MEM="${SH_MEM:-256M}" SH_TIMEOUT="${SH_TIMEOUT:-120}" ./sh "$command" "$dir" > "$work/tc-$name.out" 2>&1; then
+            fail_with "$name" "$command ACCEPTED an ill-typed program"
+            continue 2
         fi
-    fi
+        # A fixture may PIN what it is rejected with. Every line of
+        # `expected-error.txt` has to appear in the output, so a fixture can
+        # assert the message, the position (`main.plum:6:5`), or both.
+        #
+        # Rejection alone was all this checked, and rejection alone cannot
+        # tell a good diagnostic from a bad one. Match-arm errors were
+        # reported at the enclosing function's first line for months and
+        # every fixture still passed, because they were still rejections.
+        # REQUIRED, not optional. It was optional, and 53 of 55 fixtures
+        # did not have one, so they asserted nothing but the exit code --
+        # passing whether the compiler said the right thing, said something
+        # misleading, or said the right thing in the wrong place. A fixture
+        # that pins no message is a fixture that cannot tell a good
+        # diagnostic from a bad one, which is the only thing it is for.
+        #
+        # Regenerate with `bootstrap/record-typecheck-errors`.
+        if [ ! -f "$dir/expected-error.txt" ]; then
+            fail_with "$name" "no expected-error.txt (record it with bootstrap/record-typecheck-errors)"
+            continue 2
+        fi
+        if [ -f "$dir/expected-error.txt" ]; then
+            missing=""
+            while IFS= read -r want; do
+                [ -z "$want" ] && continue
+                grep -qF -- "$want" "$work/tc-$name.out" || missing="$missing
+        want: $want"
+            done < "$dir/expected-error.txt"
+            if [ -n "$missing" ]; then
+                fail_with "$name" "$command rejected, but not as recorded:$missing
+        got:  $(grep -m1 -v '^[[:space:]]*$' "$work/tc-$name.out")"
+                continue 2
+            fi
+        fi
+    done
     printf 'OK    %-24s rejected: %s\n' "$name" "$(grep -m1 -v '^\s*$' "$work/tc-$name.out" | cut -c1-60)"
     ok=$((ok + 1))
 done

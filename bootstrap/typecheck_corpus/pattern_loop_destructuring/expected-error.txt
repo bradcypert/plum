@@ -1,0 +1,2 @@
+error: for-loop pattern must be a binding
+main.plum:2:5

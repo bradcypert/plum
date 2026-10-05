@@ -1,0 +1,3 @@
+enum Choice { A(Int), B }
+let f (v: Choice): Int = match v { A(x, y) => x, B => 2 }
+let main (): Unit = ()

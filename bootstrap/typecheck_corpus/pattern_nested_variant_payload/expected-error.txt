@@ -1,0 +1,2 @@
+error: variant B has 0 payload(s), pattern binds 1
+main.plum:2:44

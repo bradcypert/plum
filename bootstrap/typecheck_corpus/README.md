@@ -1,24 +1,26 @@
 # `bootstrap/typecheck_corpus/`
 
 The REJECTION counterpart to `bootstrap/exec_corpus/` — Stage 4 (the
-self-hosted type checker) is validated two ways: all 32 `exec_corpus/`
-fixtures must type-check successfully (`ok`), and these twelve fixtures
+self-hosted type checker) is validated two ways: all `exec_corpus/`
+fixtures must type-check successfully (`ok`), and these rejection fixtures
 must all be REJECTED. Without this half,
 "the checker prints `ok` for everything" and "the checker actually
 discriminates well-typed from ill-typed programs" would be
 indistinguishable.
 
-Each `<name>/main.plum` is a small, deliberately ILL-TYPED program.
-Every one was confirmed to be genuinely rejected by the REAL Plum
-compiler first (`plum run <dir>`) before being added here — a fixture
-that accidentally happened to be valid Plum would prove nothing.
+Each `<name>/main.plum` is a small program that must be rejected.
+Its `expected-error.txt` records the diagnostic and source position,
+so rejecting it for an unrelated reason cannot pass the test.
 
 ```
 bootstrap/corpus-check
 ```
 
 That runs both halves — every `exec_corpus/` fixture must type-check
-clean, every fixture here must exit 1 — with no Rust compiler involved.
+clean, every fixture here must be rejected by both `check` and
+`emit-llvm` with the recorded message and position — with no Rust
+compiler involved. This also catches checking/compilation drift before
+code generation or linking.
 Until 2026-08-20 nothing ran either half, and the acceptance half was
 in fact failing: `check` rejected `exec_corpus/collections` outright,
 because `Map`/`Set` had been missed when the builtin signatures were
@@ -30,12 +32,20 @@ To run one by hand:
 
 ```
 ./sh check bootstrap/typecheck_corpus/<name>   # must exit 1
+./sh emit-llvm bootstrap/typecheck_corpus/<name>   # same diagnostic
 ```
 
-The twelve fixtures, and what each pins down:
+Selected fixtures, and what each pins down:
 
 - `wrong_return_type/` — a function's body doesn't match its declared
   return type.
+- `pattern_variant_missing_payload/`, `pattern_variant_extra_payload/`,
+  `pattern_nested_variant_payload/` — constructor arity is checked
+  before a validated pattern can reach code generation, including
+  constructors inside nested alternatives.
+- `pattern_loop_destructuring/`, `pattern_loop_literal/` — unsupported
+  loop patterns fail during checking instead of reaching the backend's
+  single-binding loop lowering.
 - `wrong_arg_type/` — a function call with an argument of the wrong
   type.
 - `mismatched_if_branches/` — an `if`/`else` whose two branches don't
