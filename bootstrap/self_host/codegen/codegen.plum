@@ -70,6 +70,7 @@
 use lexer;
 use parser;
 use typecheck;
+use buildcache;
 
 let cg_fail (msg: String): Unit = panic_raw("self-hosted codegen: ".concat(msg))
 
@@ -5728,6 +5729,20 @@ let cg_eq_code (t: typecheck.ITy) (av: String) (bv: String) (n: Int): EqEmit = {
 // `seen` check is what makes a RECURSIVE type (`PExpr` whose payload is
 // a `PExpr`) terminate — it needs exactly one function, which calls
 // itself.
+let EQ_TYPES: Ref[Map[String, Bool]] = ref(cg_empty_type_set(()))
+let REL_TYPES: Ref[Map[String, Bool]] = ref(cg_empty_type_set(()))
+let cg_empty_type_set (): Map[String, Bool] = Map.new(())
+
+// Preserve the emitter's existing symbol identity and discovery order.
+// The old scan remangled every prior type AND the candidate on every
+// expression visit. A set computes the candidate's name once per visit.
+let cg_type_seen (table: Ref[Map[String, Bool]]) (t: typecheck.ITy): Bool = {
+    let key = cg_ity_mangle(t);
+    let current = table.get();
+    if current.contains(key) { true }
+    else { table.set(current.insert(key, true)); false }
+}
+
 let cg_eq_close (p: CgProgram) (t: typecheck.ITy) (acc: Array[typecheck.ITy]): Array[typecheck.ITy] =
     // A type with a handle ANYWHERE inside it gets no equality function,
     // not even a container's. The checker refuses `==` on exactly these
@@ -5740,7 +5755,7 @@ let cg_eq_close (p: CgProgram) (t: typecheck.ITy) (acc: Array[typecheck.ITy]): A
     // asked for `Result[Os.File, String]`'s.
     if Option.is_some(typecheck.first_handle_within(p.ctx, t, [])) { acc }
     else if cg_eq_is_primitive(t) { acc }
-    else if cg_ty_in(acc, t, 0) { acc }
+    else if cg_type_seen(EQ_TYPES, t) { acc }
     else {
         let acc2 = acc.push(t);
         match t {
@@ -5759,7 +5774,10 @@ let cg_eq_close (p: CgProgram) (t: typecheck.ITy) (acc: Array[typecheck.ITy]): A
     }
 
 let cg_ty_in (acc: Array[typecheck.ITy]) (t: typecheck.ITy) (i: Int): Bool =
-    if i >= acc.len() { false } else if cg_ity_mangle(acc[i]) == cg_ity_mangle(t) { true } else { cg_ty_in(acc, t, i + 1) }
+    cg_ty_name_in(acc, cg_ity_mangle(t), i)
+
+let cg_ty_name_in (acc: Array[typecheck.ITy]) (name: String) (i: Int): Bool =
+    if i >= acc.len() { false } else if cg_ity_mangle(acc[i]) == name { true } else { cg_ty_name_in(acc, name, i + 1) }
 
 let cg_eq_close_list (p: CgProgram) (ts: Array[typecheck.ITy]) (i: Int) (acc: Array[typecheck.ITy]): Array[typecheck.ITy] =
     if i >= ts.len() { acc } else { cg_eq_close_list(p, ts, i + 1, cg_eq_close(p, ts[i], acc)) }
@@ -6411,7 +6429,8 @@ let cg_rel_sym (t: typecheck.ITy): String =
 let cg_rel_close (p: CgProgram) (t: typecheck.ITy) (acc: Array[typecheck.ITy]): Array[typecheck.ITy] =
     if !cg_rc_enabled(()) { acc }
     else if !cg_is_heap(cg_of_ity(t)) { acc }
-    else if cg_ty_in(acc, t, 0) { acc }
+    else if match t { ITStr => true, ITBytes => true, _ => false } { acc }
+    else if cg_type_seen(REL_TYPES, t) { acc }
     else {
         match t {
             // A string owns nothing; the runtime releases it. Nor does
@@ -6997,37 +7016,65 @@ pub let cg_emit_program (program0: parser.ProgramNode): String = cg_emit_program
 // test that touched the prelude failed.
 pub let cg_emit_program_entry (program0: parser.ProgramNode) (entry: String): String = {
     cg_dbg_reset(());
+    EQ_TYPES.set(cg_empty_type_set(()));
+    REL_TYPES.set(cg_empty_type_set(()));
+    let prelude_time = buildcache.start(());
     let program = cg_with_prelude(program0);
+    buildcache.finish("prelude/stdlib", prelude_time);
+    let type_time = buildcache.start(());
     let p = cg_build_program(program);
+    buildcache.finish("type checking", type_time);
     if !cg_has_fn(p, entry) { cg_fail("no top-level '${entry}' function to compile") };
     // Globals are roots too: their bodies can call functions that
     // nothing else reaches.
+    let reachable_time = buildcache.start(());
     let insts = cg_reachable(p, cg_global_roots(p, 0, [CgInst { module: "", name: entry, targs: [] }]), [], 0);
+    buildcache.finish("reachability", reachable_time);
+    buildcache.count("instantiations", insts.len());
     // Equality functions are discovered from the SAME reachable set —
     // an aggregate compared inside an unreachable function needs no
     // function emitted for it.
+    let helper_time = buildcache.start(());
     let eqs = cg_eq_types_of(p, insts, 0, []);
     // Release functions are needed for every heap type that appears
     // ANYWHERE reachable, not just where `==` is used, so the closure
     // starts from every function's parameter and return types and from
     // every equality type already found.
     let rels = cg_rel_types_of(p, insts, 0, cg_rel_close_list(p, eqs, 0, []));
+    buildcache.finish("helper discovery", helper_time);
+    let global_time = buildcache.start(());
     let gl = cg_emit_globals(p, 0, 1000000, "", "");
-    Array.concat_all([
-        cg_runtime(()),
-        cg_emit_extern_decls(program.items, 0, ""),
+    buildcache.finish("global emission", global_time);
+    let helpers_time = buildcache.start(());
+    let helpers = Array.concat_all([
         cg_emit_eq_fns(p, eqs, 0, ""),
         cg_emit_rel_fns(p, rels, 0, ""),
         cg_emit_channel_copy_fns(p, rels),
         cg_emit_str_fns(p, rels, 0, ""),
+    ]);
+    buildcache.finish("helper emission", helpers_time);
+    let emit_time = buildcache.start(());
+    let functions = cg_emit_insts(p, insts, 0, 0, "");
+    buildcache.finish("function emission", emit_time);
+    let metadata_time = buildcache.start(());
+    let metadata = cg_dbg_module(());
+    buildcache.finish("debug metadata", metadata_time);
+    let join_time = buildcache.start(());
+    let result = Array.concat_all([
+        cg_runtime(()),
+        cg_emit_extern_decls(program.items, 0, ""),
+        helpers,
         gl.slots,
-        cg_emit_insts(p, insts, 0, 0, ""),
+        functions,
         gl.init,
         cg_entry_named("@".concat(cg_sym("", entry, []))),
         // Last, because the nodes are allocated as functions are
         // emitted and nothing knows the full set until they are.
-        cg_dbg_module(()),
-    ])
+        metadata,
+    ]);
+    buildcache.finish("IR join", join_time);
+    buildcache.count("IR bytes", result.len());
+    result
 }
 
 // Each top-level 0-parameter binding gets a module-level SLOT and one

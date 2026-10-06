@@ -144,6 +144,8 @@ jobs:
         run: ./bootstrap/check-build-modes
       - name: the user-facing commands work
         run: ./bootstrap/cli-smoke
+      - name: build cache preserves program behavior
+        run: ./bootstrap/build-cache-check
       - name: packages resolve and manifests stay data
         run: ./bootstrap/pkg-check
       - name: allocations have not risen
@@ -251,6 +253,8 @@ jobs:
         run: tar -xzf plum-macos-compiler.tar.gz
       - name: real programs work on macOS
         run: ./bootstrap/platform-smoke ./sh.real
+      - name: build cache preserves program behavior
+        run: ./bootstrap/build-cache-check ./sh.real
 
   platforms-memory-and-debug:
     name: macOS memory and debug checks
@@ -368,6 +372,9 @@ jobs:
       - name: the compiler it built works
         run: ./bootstrap/platform-smoke ./sh.real
 
+      - name: build cache preserves program behavior
+        run: ./bootstrap/build-cache-check ./sh.real
+
       - name: the language server answers a real session
         run: ./bootstrap/lsp-smoke ./sh.real
 
@@ -456,6 +463,8 @@ jobs:
         run: tar -xzf plum-windows-compiler.tar.gz
       - name: real programs work on Windows
         run: ./bootstrap/platform-smoke ./sh.real
+      - name: build cache preserves program behavior
+        run: ./bootstrap/build-cache-check ./sh.real
 
   windows-lsp:
     name: Windows language server smoke

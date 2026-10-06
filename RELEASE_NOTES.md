@@ -18,6 +18,14 @@ Git dependencies name a repository, a full commit hash, and a SHA-256 content ha
 
 ## Language and compiler
 
+- `plum run` reuses validated LLVM IR; supported Linux Clang invocations
+  also reuse objects and link a fresh executable. Build-cache diagnostics,
+  bypass controls and `plum cache list/clean build` are documented in
+  RUNNING.md. Parsing documentation comments now reuses decoded source
+  characters instead of decoding the entire source for each declaration.
+  Equality/release helper discovery uses emission-scoped membership maps
+  while preserving helper order and whole-program type checking.
+
 - Match patterns support negative numeric literals and alternatives such as `A(x) | B(_, x)`. Alternatives must bind the same names with compatible types; guards run after an alternative matches.
 - String literals support `\xNN` and `\u{...}` escapes. Unknown escapes and malformed hexadecimal or Unicode escapes are rejected with source positions.
 - Empty `Array.fold` accumulators infer their element types from the callback.

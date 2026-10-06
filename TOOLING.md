@@ -1,5 +1,22 @@
 # Tooling
 
+## Build-cache diagnostics
+
+`PLUM_CACHE_TRACE=1 plum run <project>` reports IR/object hits, misses and
+conservative fallbacks on stderr. `PLUM_PROFILE=1` reports compiler phase
+timings in microseconds and emission counts. Neither changes the program's
+stdout or LLVM output. See [RUNNING.md](RUNNING.md) for cache locations,
+bypass controls, supported native reuse, and manual cleaning.
+
+`bootstrap/measure-build-cache --baseline <original-compiler> --out <report.json>`
+measures uncached, empty-cache, warm and edited runs sequentially, along with
+checking and LLVM emission. It compares both compilers' IR for identical
+inputs and records compiler digests, platform, sample spread and profiles.
+Use an idle host; this is a measurement tool, not a timing assertion in CI.
+See [the issue 63 results](docs/issue-63-results.md) for the baseline and
+validation evidence, and [the incremental compilation proposal](docs/incremental-compilation.md)
+for the next architectural stage.
+
 ## Testing
 
 Any top-level function whose name starts with `test_` is a test. No

@@ -11,7 +11,7 @@ are. This is the operating manual.
 ```sh
 ./sh build bootstrap/self_host -o sh.real   # your change, compiled in
 for h in check-version help-check check-shims check-declares check-builtins cross-check \
-         lsp-smoke test-smoke net-smoke cli-smoke \
+         lsp-smoke test-smoke net-smoke cli-smoke build-cache-check \
          self-test stdin-smoke tty-smoke check-docs check-doc-names check-build-modes \
          highlight-check pkg-check time-harnesses \
          property-check doc-check alloc-check lossless-check fmt-check \
@@ -52,6 +52,7 @@ advice used to describe.
 | `check-doc-names` | every standard-library name the documentation mentions in prose exists, with the `use` list DERIVED from `parser.std_module_names()` rather than typed out | <1s |
 | `check-build-modes` | a debug build and a release build differ in the ways they are supposed to | 17s |
 | `cli-smoke` | the user-facing commands nothing else runs: `plum new` scaffolds a project that runs AND whose embedded test passes, `plum doc` on an ordinary project directory, `dump-tokens`, `dump-ast` — and which `native/*.c` sources a target selects, proved with an `#error` in the directory that must not be reached | 5s |
+| `build-cache-check` | isolated IR/object reuse, content/membership/embed/dependency invalidation, header/library search changes, assembler file inputs, compiler/configuration changes, mode separation, failed edits, integrity repair, inherited streams, concurrent writers/cleaning, cache I/O fallback and build-cache cleaning | ~3m |
 | `time-harnesses` | this table names every harness in the loop, and every row names a script that exists. `--measure` re-measures the `time` column instead, which takes as long as the loop does | <1s |
 | `check-site-links` | a built site links only to pages it contains. Not in the loop above — it needs `build-site` to have run first, and CI runs the pair | <1s |
 | `check-shims` | the embedded C shims match `native_stdlib/`, and include no non-portable header outside a platform guard | 1s |

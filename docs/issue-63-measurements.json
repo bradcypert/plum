@@ -1,0 +1,250 @@
+{
+  "platform": "Linux-7.0.13-arch1-1-x86_64-with-glibc2.44",
+  "architecture": "x86_64",
+  "clang": "clang version 22.1.8\nTarget: x86_64-pc-linux-gnu\nThread model: posix\nInstalledDir: /usr/bin\n",
+  "source_base": "ae5303f34a6fd2c889cf0a39970b8810d165e714",
+  "source_note": "Both binaries compile the modified current working tree; source_base identifies its parent revision.",
+  "baseline_sha256": "24b0181ee253423a5afa940b7791d5d3c09eac06a430cb0125e5516f584e3a46",
+  "candidate_sha256": "9e453a44891dc1bc2720f5baeef1d31314928d290fa77e140083e50279c3dcee",
+  "samples": 3,
+  "results": {
+    "hello/baseline-run": {
+      "seconds": [
+        1.0945048430003226,
+        1.0241944547742605,
+        1.0849853549152613
+      ],
+      "median": 1.0849853549152613,
+      "min": 1.0241944547742605,
+      "max": 1.0945048430003226
+    },
+    "hello/candidate-uncached-run": {
+      "seconds": [
+        0.8825662550516427,
+        0.8838529968634248,
+        0.8718427810817957
+      ],
+      "median": 0.8825662550516427,
+      "min": 0.8718427810817957,
+      "max": 0.8838529968634248
+    },
+    "hello/candidate-empty-cache-run": {
+      "seconds": [
+        1.968698862940073,
+        1.9178766016848385,
+        1.9444004991091788
+      ],
+      "median": 1.9444004991091788,
+      "min": 1.9178766016848385,
+      "max": 1.968698862940073
+    },
+    "hello/candidate-warm-run": {
+      "seconds": [
+        0.5404205461964011,
+        0.5315183619968593,
+        0.5639651571400464
+      ],
+      "median": 0.5404205461964011,
+      "min": 0.5315183619968593,
+      "max": 0.5639651571400464
+    },
+    "hello/candidate-edit-run": {
+      "seconds": [
+        0.6970154019072652,
+        0.6883248686790466,
+        0.6942574591375887
+      ],
+      "median": 0.6942574591375887,
+      "min": 0.6883248686790466,
+      "max": 0.6970154019072652
+    },
+    "hello/baseline-check": {
+      "seconds": [
+        0.32444860273972154,
+        0.3292730301618576,
+        0.3158992510288954
+      ],
+      "median": 0.32444860273972154,
+      "min": 0.3158992510288954,
+      "max": 0.3292730301618576
+    },
+    "hello/baseline-emit": {
+      "seconds": [
+        0.31411091797053814,
+        0.33808875596150756,
+        0.32691208692267537
+      ],
+      "median": 0.32691208692267537,
+      "min": 0.31411091797053814,
+      "max": 0.33808875596150756
+    },
+    "hello/candidate-check": {
+      "seconds": [
+        0.040025144815444946,
+        0.0259130890481174,
+        0.03775220084935427
+      ],
+      "median": 0.03775220084935427,
+      "min": 0.0259130890481174,
+      "max": 0.040025144815444946
+    },
+    "hello/candidate-emit": {
+      "seconds": [
+        0.03016575425863266,
+        0.027653863187879324,
+        0.03291611187160015
+      ],
+      "median": 0.03016575425863266,
+      "min": 0.027653863187879324,
+      "max": 0.03291611187160015
+    },
+    "json/baseline-run": {
+      "seconds": [
+        1.4464653320610523,
+        1.4527527340687811,
+        1.4411935438401997
+      ],
+      "median": 1.4464653320610523,
+      "min": 1.4411935438401997,
+      "max": 1.4527527340687811
+    },
+    "json/candidate-uncached-run": {
+      "seconds": [
+        1.1721497760154307,
+        1.1647716001607478,
+        1.2278200811706483
+      ],
+      "median": 1.1721497760154307,
+      "min": 1.1647716001607478,
+      "max": 1.2278200811706483
+    },
+    "json/candidate-empty-cache-run": {
+      "seconds": [
+        2.2113932110369205,
+        2.266510953195393,
+        2.2388583258725703
+      ],
+      "median": 2.2388583258725703,
+      "min": 2.2113932110369205,
+      "max": 2.266510953195393
+    },
+    "json/candidate-warm-run": {
+      "seconds": [
+        0.5491528413258493,
+        0.5690376721322536,
+        0.5487772319465876
+      ],
+      "median": 0.5491528413258493,
+      "min": 0.5487772319465876,
+      "max": 0.5690376721322536
+    },
+    "json/candidate-edit-run": {
+      "seconds": [
+        1.0060306871309876,
+        1.040144759695977,
+        1.022898812778294
+      ],
+      "median": 1.022898812778294,
+      "min": 1.0060306871309876,
+      "max": 1.040144759695977
+    },
+    "json/baseline-check": {
+      "seconds": [
+        0.34109150106087327,
+        0.3446609890088439,
+        0.3528591562062502
+      ],
+      "median": 0.3446609890088439,
+      "min": 0.34109150106087327,
+      "max": 0.3528591562062502
+    },
+    "json/baseline-emit": {
+      "seconds": [
+        0.41342330211773515,
+        0.40422807913273573,
+        0.4318862152285874
+      ],
+      "median": 0.41342330211773515,
+      "min": 0.40422807913273573,
+      "max": 0.4318862152285874
+    },
+    "json/candidate-check": {
+      "seconds": [
+        0.0347979492507875,
+        0.03501585824415088,
+        0.05463199084624648
+      ],
+      "median": 0.03501585824415088,
+      "min": 0.0347979492507875,
+      "max": 0.05463199084624648
+    },
+    "json/candidate-emit": {
+      "seconds": [
+        0.057939785066992044,
+        0.07335435692220926,
+        0.07300208695232868
+      ],
+      "median": 0.07300208695232868,
+      "min": 0.057939785066992044,
+      "max": 0.07335435692220926
+    },
+    "compiler/baseline-check": {
+      "seconds": [
+        6.483398374635726,
+        6.530711157247424,
+        6.32066830759868
+      ],
+      "median": 6.483398374635726,
+      "min": 6.32066830759868,
+      "max": 6.530711157247424
+    },
+    "compiler/baseline-emit": {
+      "seconds": [
+        36.17154025379568,
+        36.10651514260098,
+        35.845639183185995
+      ],
+      "median": 36.10651514260098,
+      "min": 35.845639183185995,
+      "max": 36.17154025379568
+    },
+    "compiler/candidate-check": {
+      "seconds": [
+        0.5470837536267936,
+        0.5640169251710176,
+        0.5503964759409428
+      ],
+      "median": 0.5503964759409428,
+      "min": 0.5470837536267936,
+      "max": 0.5640169251710176
+    },
+    "compiler/candidate-emit": {
+      "seconds": [
+        3.164711079094559,
+        3.244815601967275,
+        3.2314806189388037
+      ],
+      "median": 3.2314806189388037,
+      "min": 3.164711079094559,
+      "max": 3.244815601967275
+    },
+    "json/candidate-profiled-emit": {
+      "seconds": [
+        0.05720541113987565,
+        0.06607539905235171,
+        0.06297158263623714
+      ],
+      "median": 0.06297158263623714,
+      "min": 0.05720541113987565,
+      "max": 0.06607539905235171
+    }
+  },
+  "profiles": {
+    "hello/warm": "profile: dependency resolution 56 us\nprofile: source discovery 25 us\nprofile: IR lookup 13098 us\ncache: IR hit\nprofile: shim extraction 3043 us\nprofile: native toolchain fingerprint 170959 us\nprofile: preprocess 0 us\nprofile: object lookup preparation 40444 us\ncache: object hit 0\nprofile: object compile 0 us\nprofile: preprocess 16672 us\nprofile: object lookup preparation 35788 us\ncache: object hit 1\nprofile: object compile 0 us\nprofile: preprocess 24673 us\nprofile: object lookup preparation 1110 us\ncache: object hit 2\nprofile: object compile 0 us\nprofile: preprocess 23500 us\nprofile: object lookup preparation 1358 us\ncache: object hit 3\nprofile: object compile 0 us\nprofile: preprocess 21750 us\nprofile: object lookup preparation 1077 us\ncache: object hit 4\nprofile: object compile 0 us\nprofile: preprocess 24440 us\nprofile: object lookup preparation 1123 us\ncache: object hit 5\nprofile: object compile 0 us\nprofile: preprocess 22907 us\nprofile: object lookup preparation 989 us\ncache: object hit 6\nprofile: object compile 0 us\nprofile: preprocess 25283 us\nprofile: object lookup preparation 1633 us\ncache: object hit 7\nprofile: object compile 0 us\nprofile: preprocess 24715 us\nprofile: object lookup preparation 750 us\ncache: object hit 8\nprofile: object compile 0 us\nprofile: preprocess 21615 us\nprofile: object lookup preparation 611 us\ncache: object hit 9\nprofile: object compile 0 us\nprofile: preprocess 22463 us\nprofile: object lookup preparation 612 us\ncache: object hit 10\nprofile: object compile 0 us\nprofile: preprocess 21620 us\nprofile: object lookup preparation 965 us\ncache: object hit 11\nprofile: object compile 0 us\nprofile: link 42395 us\n",
+    "json/warm": "profile: dependency resolution 37 us\nprofile: source discovery 20 us\nprofile: IR lookup 11765 us\ncache: IR hit\nprofile: shim extraction 1884 us\nprofile: native toolchain fingerprint 158239 us\nprofile: preprocess 0 us\nprofile: object lookup preparation 33160 us\ncache: object hit 0\nprofile: object compile 0 us\nprofile: preprocess 22248 us\nprofile: object lookup preparation 32666 us\ncache: object hit 1\nprofile: object compile 0 us\nprofile: preprocess 18379 us\nprofile: object lookup preparation 438 us\ncache: object hit 2\nprofile: object compile 0 us\nprofile: preprocess 23580 us\nprofile: object lookup preparation 468 us\ncache: object hit 3\nprofile: object compile 0 us\nprofile: preprocess 23202 us\nprofile: object lookup preparation 384 us\ncache: object hit 4\nprofile: object compile 0 us\nprofile: preprocess 25864 us\nprofile: object lookup preparation 1038 us\ncache: object hit 5\nprofile: object compile 0 us\nprofile: preprocess 21628 us\nprofile: object lookup preparation 644 us\ncache: object hit 6\nprofile: object compile 0 us\nprofile: preprocess 27450 us\nprofile: object lookup preparation 769 us\ncache: object hit 7\nprofile: object compile 0 us\nprofile: preprocess 20964 us\nprofile: object lookup preparation 757 us\ncache: object hit 8\nprofile: object compile 0 us\nprofile: preprocess 20139 us\nprofile: object lookup preparation 621 us\ncache: object hit 9\nprofile: object compile 0 us\nprofile: preprocess 22872 us\nprofile: object lookup preparation 575 us\ncache: object hit 10\nprofile: object compile 0 us\nprofile: preprocess 20901 us\nprofile: object lookup preparation 321 us\ncache: object hit 11\nprofile: object compile 0 us\nprofile: link 31986 us\n",
+    "compiler/emit": "profile: dependency resolution 40 us\nprofile: source discovery 196 us\nprofile: prelude/stdlib 25438 us\nprofile: type checking 354786 us\nprofile: reachability 119404 us\nprofile: instantiations 1726\nprofile: helper discovery 149657 us\nprofile: global emission 661 us\nprofile: helper emission 145931 us\nprofile: function emission 2127011 us\nprofile: debug metadata 43 us\nprofile: IR join 3196 us\nprofile: IR bytes 26511320\n"
+  },
+  "hello_identical_ir": true,
+  "json_identical_ir": true,
+  "compiler_identical_ir": true
+}

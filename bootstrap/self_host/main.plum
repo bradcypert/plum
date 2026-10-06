@@ -62,6 +62,7 @@ use shims;
 use highlight;
 use pkg;
 use Path;
+use buildcache;
 
 // `query <project> <path> <line> <col>` -- what is the type of the
 // identifier at that position?
@@ -2290,7 +2291,12 @@ let usage (): Unit = {
     println("                      -Og -g, which keeps frames and debug information.");
     println("  --target <triple>   build for another platform, e.g. aarch64-linux-musl.");
     println("                      Needs a C compiler that can link for it: set PLUM_CC,");
-    println("                      e.g. PLUM_CC=\"zig cc\". Plum ships no sysroot.")
+    println("                      e.g. PLUM_CC=\"zig cc\". Plum ships no sysroot.");
+    println("  cache list build    inspect reusable IR, objects and generated shims.");
+    println("  cache clean build   remove build artifacts; fetched packages are kept.");
+    println("  PLUM_NO_BUILD_CACHE=1  run without reusing build artifacts.");
+    println("  PLUM_CACHE_TRACE=1     cache decisions on stderr.");
+    println("  PLUM_PROFILE=1         compiler phase timings on stderr.")
 }
 
 // Every top-level `let` whose name's LAST segment starts with `test_`,
@@ -2435,15 +2441,18 @@ let compile_and_run_tests (dir: String) (program: parser.ProgramNode) (names: Ar
                 Err(e) => TestRun { failed: 1, detail: "could not write test IR: ".concat(e) },
                 Ok(_) => {
                     let extra = link_args([], dir, native_target());
-                    let cfiles = write_shims(scratch, needs_tls(ir, extra));
-                    // Native, for the same reason `run` is: each test
-                    // runs as a child of this binary.
-                    let argv = Array.concat(Array.concat(Array.concat(cc_prefix_args(), Array.concat(cc_mode_args(release), ["-Wno-override-module", ll, "-I", scratch, "-I", scratch.concat("/mbedtls/include"), "-I", scratch.concat("/mbedtls/library")])), cfiles),
+                    let written = write_shims(scratch, needs_tls(ir, extra));
+                    if written.err != "" { TestRun { failed: 1, detail: written.err } } else {
+                        let cfiles = written.files;
+                        // Native, for the same reason `run` is: each test
+                        // runs as a child of this binary.
+                        let argv = Array.concat(Array.concat(Array.concat(cc_prefix_args(), Array.concat(cc_mode_args(release), ["-Wno-override-module", ll, "-I", scratch, "-I", scratch.concat("/mbedtls/include"), "-I", scratch.concat("/mbedtls/library")])), cfiles),
                         Array.concat(extra, Array.concat(platform_libs(native_target()), ["-o", bin])));
-                    match run_process(cc_program(), argv) {
-                        Err(e) => TestRun { failed: 1, detail: "could not link tests: ".concat(e) },
-                        Ok(r) => if r.exit_code == 0 { run_tests(bin, names, 0, TestRun { failed: 0, detail: "" }) }
+                        match run_process(cc_program(), argv) {
+                            Err(e) => TestRun { failed: 1, detail: "could not link tests: ".concat(e) },
+                            Ok(r) => if r.exit_code == 0 { run_tests(bin, names, 0, TestRun { failed: 0, detail: "" }) }
                             else { TestRun { failed: 1, detail: "could not link tests:\n".concat(r.stderr) } },
+                        }
                     }
                 },
             };
@@ -2751,7 +2760,8 @@ let compile_objs (srcs: Array[String]) (i: Int) (scratch: String) (flags: Array[
     }
 
 let compile_two_phase (srcs: Array[String]) (out: String) (extra: Array[String]) (scratch: String) (target: String) (release: Bool): String = {
-    let flags = Array.concat(target_args(target), Array.concat(cc_mode_args(release), ["-Wno-override-module", "-I", scratch, "-I", scratch.concat("/mbedtls/include"), "-I", scratch.concat("/mbedtls/library")]));
+    let shim_dir = if srcs.len() > 1 { Path.dirname(srcs[1]) } else { scratch };
+    let flags = Array.concat(target_args(target), Array.concat(cc_mode_args(release), ["-Wno-override-module", "-I", shim_dir, "-I", shim_dir.concat("/mbedtls/include"), "-I", shim_dir.concat("/mbedtls/library")]));
     let built = compile_objs(srcs, 0, scratch, flags, []);
     if built.err != "" { built.err }
     else {
@@ -2781,6 +2791,116 @@ let run_dsymutil (out: String): Unit =
             println("warning: dsymutil (exit ${r.exit_code}): ${r.stderr}")
         } else { () },
         Err(e) => println("warning: could not run dsymutil: ".concat(e)),
+    }
+
+// Cache compiled objects, then resolve the link afresh. Preprocess C on
+// every lookup: the captured input includes system headers, search-path
+// shadowing and time-dependent macros. Compile THAT snapshot, never reread
+// the original source after computing its key.
+let compile_cached_objects (ll: String) (cfiles: Array[String]) (out: String) (extra: Array[String]) (scratch: String) (target: String) (release: Bool): String = {
+    let tool_time = buildcache.start(());
+    let fingerprint = buildcache.native_fingerprint(());
+    buildcache.finish("native toolchain fingerprint", tool_time);
+    let flags = Array.concat(target_args(target), Array.concat(cc_mode_args(release), ["-Wno-override-module"]));
+    let shim_dir = if cfiles.len() == 0 { scratch } else { Path.dirname(cfiles[0]) };
+    let includes = ["-I", shim_dir, "-I", shim_dir.concat("/mbedtls/include"), "-I", shim_dir.concat("/mbedtls/library")];
+    if fingerprint == "" {
+        buildcache.diagnostic("objects bypass: unsupported driver or loader");
+        link_ir_uncached(ll, cfiles, out, extra, scratch, target, release)
+    } else {
+        let cs = Array.filter(extra, |p| p.ends_with(".c"));
+        let linked = Array.filter(extra, |p| !p.ends_with(".c"));
+        let srcs = Array.concat(Array.concat([ll], cfiles), cs);
+        let built = cached_object_loop(srcs, 0, scratch, flags, includes, fingerprint, []);
+        if built.err == "uncertified native cache invocation" {
+            buildcache.diagnostic("objects bypass: uncertified compiler configuration");
+            link_ir_uncached(ll, cfiles, out, extra, scratch, target, release)
+        } else if built.err != "" { built.err.concat("\nIR left at ${ll}") }
+        else {
+            let link_time = buildcache.start(());
+            let argv = Array.concat(Array.concat(Array.concat(cc_prefix_args(), target_args(target)), built.objs),
+                Array.concat(linked, Array.concat(platform_libs(target), ["-o", out])));
+            let result = match run_process(cc_program(), argv) {
+                Err(e) => "build failed: ${e}",
+                Ok(r) => if r.exit_code != 0 { "${cc_program()} failed to link (exit ${r.exit_code.to_string()}):\n${r.stderr}" }
+                    else { let removed = Os.remove_file(ll); "" },
+            };
+            buildcache.finish("link", link_time);
+            result
+        }
+    }
+}
+
+let link_ir_uncached (ll: String) (cfiles: Array[String]) (out: String) (extra: Array[String]) (scratch: String) (target: String) (release: Bool): String = {
+    if !release && target_os(target) == "macos" { compile_two_phase(Array.concat([ll], cfiles), out, extra, scratch, target, release) }
+    else {
+        let shim_dir = if cfiles.len() == 0 { scratch } else { Path.dirname(cfiles[0]) };
+        let base = Array.concat(target_args(target), Array.concat(cc_mode_args(release), ["-Wno-override-module", ll, "-I", shim_dir, "-I", shim_dir.concat("/mbedtls/include"), "-I", shim_dir.concat("/mbedtls/library")]));
+        let argv = Array.concat(Array.concat(Array.concat(cc_prefix_args(), base), cfiles),
+            Array.concat(extra, Array.concat(platform_libs(target), ["-o", out])));
+        let t = buildcache.start(());
+        let result = match run_process(cc_program(), argv) {
+            Err(e) => "build failed: ${e}",
+            Ok(r) => if r.exit_code != 0 { "${cc_program()} failed (exit ${r.exit_code.to_string()}):\n${r.stderr}\nIR left at ${ll}" }
+                else { let removed = Os.remove_file(ll); "" },
+        };
+        buildcache.finish("native compile/link", t);
+        result
+    }
+}
+
+let cached_object_loop (srcs: Array[String]) (i: Int) (scratch: String) (flags: Array[String]) (includes: Array[String]) (fingerprint: String) (acc: Array[String]): ObjBuild =
+    if i >= srcs.len() { ObjBuild { err: "", objs: acc } }
+    else {
+        let src = srcs[i];
+        let obj = scratch.concat("/obj${i.to_string()}.o");
+        let input = if src.ends_with(".ll") { src } else { scratch.concat("/input${i.to_string()}.i") };
+        let prep_time = buildcache.start(());
+        let prep_err = if src.ends_with(".ll") { "" }
+            else { match run_process(cc_program(), Array.concat(Array.concat(flags, includes), ["-E", src, "-o", input])) {
+                Err(e) => "build failed: ${e}",
+                Ok(r) => if r.exit_code != 0 { "${cc_program()} preprocessing failed: ${r.stderr}" } else { "" },
+            } };
+        buildcache.finish("preprocess", prep_time);
+        if prep_err != "" { ObjBuild { err: prep_err, objs: acc } }
+        else {
+            let args = Array.concat(flags, ["-c", input, "-o", obj]);
+            let probe_time = buildcache.start(());
+            let spec = buildcache.compile_signature(cc_program(), flags, input, obj);
+            // An uncertified configuration must use the original source
+            // compile/link path. Merely avoiding object reuse while still
+            // compiling preprocessed snapshots could change driver behavior.
+            if spec == "" { ObjBuild { err: "uncertified native cache invocation", objs: acc } }
+            else {
+                let digest = buildcache.file_hash(input);
+                let snapshot = Result.unwrap_or(Os.read_file(input), "");
+                // LLVM input is generated by this compiler. Conservatively
+                // bypass any inline/module assembly even when encoded.
+                let llvm_asm = src.ends_with(".ll") && !buildcache.safe_ir(snapshot);
+                let key = if digest != "" && !llvm_asm {
+                    buildcache.hash("plum-native-object-v2".concat(buildcache.frame(fingerprint)).concat(buildcache.frame(spec)).concat(digest))
+                } else { "" };
+                let hit = key != "" && buildcache.load_object(key, obj);
+                // Validate C assembly through Clang's parsed AST on misses.
+                // Text searches miss concatenated/escaped asm strings. A
+                // stored object already passed this check under the v2 key.
+                let reusable = hit || (key != "" && (src.ends_with(".ll") || buildcache.c_snapshot_safe(cc_program(), flags, input)));
+                buildcache.finish("object lookup preparation", probe_time);
+                if hit { buildcache.diagnostic("object hit ${i.to_string()}") }
+                else {
+                    buildcache.diagnostic(if !reusable { "object bypass ${i.to_string()}" } else { "object miss ${i.to_string()}" })
+                };
+                let compile_time = buildcache.start(());
+                let err = if hit { "" } else { match run_process(cc_program(), args) {
+                    Err(e) => "build failed: ${e}",
+                    Ok(r) => if r.exit_code != 0 { "${cc_program()} failed on ${src}: ${r.stderr}" }
+                    else { if reusable { buildcache.store("obj", key, obj, "") } else { () }; "" },
+                } };
+                buildcache.finish("object compile", compile_time);
+                if err != "" { ObjBuild { err: err, objs: acc } }
+                else { cached_object_loop(srcs, i + 1, scratch, flags, includes, fingerprint, acc.push(obj)) }
+            }
+        }
     }
 
 let platform_libs (target: String): Array[String] =
@@ -2877,8 +2997,12 @@ let target_args (target: String): Array[String] =
 // and repeat it. A shim over libc, or over anything already linked,
 // needs nothing extra.
 let link_args (argv: Array[String]) (dir: String) (target: String): Array[String] = {
-    let os = target_os(target);
     let deps = project_deps(dir);
+    link_args_resolved(argv, dir, target, deps)
+}
+
+let link_args_resolved (argv: Array[String]) (dir: String) (target: String) (deps: Array[pkg.Dep]): Array[String] = {
+    let os = target_os(target);
     // Libraries come from three places, and only the first was ever
     // available: the command line, this project's own manifest, and
     // every DEPENDENCY's manifest. The third is the point -- a package
@@ -2927,19 +3051,63 @@ let declares_tls (lines: Array[String]) (i: Int): Bool =
 
 // Writes the required embedded shims into `dir`, returning the paths
 // clang should compile. Headers accompany their library sources.
-let write_shims (dir: String) (tls: Bool): Array[String] =
+struct ShimBuild { err: String, files: Array[String] }
+let write_shims (dir: String) (tls: Bool): ShimBuild =
     write_shims_acc(shims.shim_files(()), dir, tls, 0, [])
 
-let write_shims_acc (files: Array[shims.ShimFile]) (dir: String) (tls: Bool) (i: Int) (acc: Array[String]): Array[String] =
-    if i >= files.len() { acc }
+// Shared extraction is immutable and published as one complete directory.
+// Writing directly to shared paths lets a concurrent preprocessor see a
+// truncated header/source, even when both writers have identical bytes.
+let shared_shims (dir: String) (tls: Bool): ShimBuild = {
+    let files = shims.shim_files(());
+    let existing = verify_shims(files, dir, tls, 0, []);
+    if existing.err == "" { existing }
+    else {
+        let parent = Path.dirname(dir);
+        if !buildcache.make_dirs(parent) { existing }
+        else {
+            let stage = buildcache.temp(parent);
+            if stage == "" { existing }
+            else {
+                let staged = write_shims(stage, true);
+                if staged.err == "" {
+                    // A cleaner/corrupt entry may leave an incomplete tree.
+                    // Readers never compile while a writer fills this tree.
+                    if verify_shims(files, dir, true, 0, []).err != "" {
+                        let removed = Os.remove_tree(dir); ()
+                    } else { () };
+                    let published = Os.rename_file(stage, dir); ()
+                } else { () };
+                let cleaned = Os.remove_tree(stage);
+                verify_shims(files, dir, tls, 0, [])
+            }
+        }
+    }
+}
+
+let verify_shims (files: Array[shims.ShimFile]) (dir: String) (tls: Bool) (i: Int) (acc: Array[String]): ShimBuild =
+    if i >= files.len() { ShimBuild { err: "", files: acc } }
+    else if !tls && (files[i].name == "tls_shim.c" || files[i].name.starts_with("mbedtls/")) {
+        verify_shims(files, dir, tls, i + 1, acc)
+    } else {
+        let path = Path.join(dir, files[i].name);
+        if buildcache.file_hash(path) != buildcache.hash(files[i].source) {
+            ShimBuild { err: "missing or corrupt embedded shim: ${path}", files: acc }
+        } else { verify_shims(files, dir, tls, i + 1, if files[i].compile { acc.push(path) } else { acc }) }
+    }
+
+let write_shims_acc (files: Array[shims.ShimFile]) (dir: String) (tls: Bool) (i: Int) (acc: Array[String]): ShimBuild =
+    if i >= files.len() { ShimBuild { err: "", files: acc } }
     else if !tls && (files[i].name == "tls_shim.c" || files[i].name.starts_with("mbedtls/")) {
         write_shims_acc(files, dir, tls, i + 1, acc)
     } else {
         let path = Path.join(dir, files[i].name);
-        doc_make_dirs(Path.dirname(path));
-        match Os.write_file(path, files[i].source) {
-            Err(_) => write_shims_acc(files, dir, tls, i + 1, acc),
-            Ok(_) => write_shims_acc(files, dir, tls, i + 1, if files[i].compile { acc.push(path) } else { acc }),
+        if !buildcache.make_dirs(Path.dirname(path)) { ShimBuild { err: "cannot create shim directory for ${path}", files: acc } }
+        else {
+            match Os.write_file(path, files[i].source) {
+                Err(e) => ShimBuild { err: e, files: acc },
+                Ok(_) => write_shims_acc(files, dir, tls, i + 1, if files[i].compile { acc.push(path) } else { acc }),
+            }
         }
     }
 
@@ -3000,14 +3168,17 @@ pub let wants_release (argv: Array[String]): Bool = Array.contains(argv, "--rele
 // the runtime.
 pub let wants_trace (argv: Array[String]): Bool = Array.contains(argv, "--trace")
 
-let compile_project (dir: String) (out: String) (extra: Array[String]) (target: String) (release: Bool) (trace: Bool): String = {
+let compile_project (dir: String) (out: String) (extra: Array[String]) (target: String) (release: Bool) (trace: Bool): String =
+    compile_prepared(dir, out, extra, target, release, trace, prepare_inputs(dir), false)
+
+let compile_prepared (dir: String) (out: String) (extra: Array[String]) (target: String) (release: Bool) (trace: Bool) (inputs: BuildInputs) (cached: Bool): String = {
     let bad = target_error(target);
     if bad != "" { bad }
     else {
         match Os.temp_dir() {
             Err(e) => "build failed: ".concat(e),
             Ok(scratch) => {
-                let err = compile_with_scratch(dir, out, extra, scratch, target, release, trace);
+                let err = compile_with_scratch(dir, out, extra, scratch, target, release, trace, inputs, cached);
                 let cleaned = Os.remove_tree(scratch);
                 err
             },
@@ -3015,7 +3186,7 @@ let compile_project (dir: String) (out: String) (extra: Array[String]) (target: 
     }
 }
 
-let compile_with_scratch (dir: String) (out: String) (extra: Array[String]) (scratch: String) (target: String) (release: Bool) (trace: Bool): String = {
+let compile_with_scratch (dir: String) (out: String) (extra: Array[String]) (scratch: String) (target: String) (release: Bool) (trace: Bool) (inputs: BuildInputs) (cached: Bool): String = {
     let ll = out.concat(".ll");
     // Debug builds carry the shadow call stack; release builds do not.
     codegen.set_debug_frames(trace);
@@ -3023,38 +3194,61 @@ let compile_with_scratch (dir: String) (out: String) (extra: Array[String]) (scr
     // lines. A DEBUG build only: `--release` is compiled without `-g`
     // and has nothing to read them.
     codegen.set_debug_info(!release);
-    let ir = codegen.cg_emit_program(parser.ProgramNode { items: collect_project(dir) });
+    let key_time = buildcache.start(());
+    let key = if cached && buildcache.enabled(()) { ir_input_key(dir, inputs, release, trace) } else { "" };
+    let hit = if key == "" { None } else { buildcache.load_ir(key) };
+    buildcache.finish("IR lookup", key_time);
+    let ir = match hit {
+        Some(text) => { buildcache.diagnostic("IR hit"); text },
+        None => {
+            buildcache.diagnostic(if key == "" { "IR bypass" } else { "IR miss" });
+            buildcache.begin_reads(key != "");
+            let t = buildcache.start(());
+            let program = parser.ProgramNode { items: parse_source_files(inputs.files, 0, []) };
+            buildcache.finish("lex/parse", t);
+            codegen.cg_emit_program(program)
+        },
+    };
     match Os.write_file(ll, ir) {
         Err(e) => "build failed: ".concat(e),
         Ok(_) => {
+            if Option.is_none(hit) && key != "" {
+                let reads = buildcache.read_manifest(());
+                // Check captured bytes against the live tree and rediscover
+                // file membership before publishing. Concurrent edits yield
+                // an uncached build, never an artifact under the old key.
+                if buildcache.unchanged(reads) && ir_input_key(dir, prepare_inputs(dir), release, trace) == key {
+                    buildcache.store("ir", key, ll, reads)
+                } else { buildcache.diagnostic("inputs changed; IR not stored") }
+            } else { () };
+            buildcache.begin_reads(false);
             // The shims are EMBEDDED and written out per build, not read
             // from `native_stdlib/` on disk: that path was relative to
             // the current directory, so this compiler only worked when
             // run from the repo root. See `shims/shims.plum`.
-            let cfiles = write_shims(scratch, needs_tls(ir, extra));
-            let base = Array.concat(target_args(target), Array.concat(cc_mode_args(release), ["-Wno-override-module", ll, "-I", scratch, "-I", scratch.concat("/mbedtls/include"), "-I", scratch.concat("/mbedtls/library")]));
-            let argv2 = Array.concat(Array.concat(Array.concat(Array.concat(cc_prefix_args(), base), cfiles), extra), Array.concat(platform_libs(target), ["-o", out]));
-            // Mach-O debug builds take a different route entirely -- see
-            // `compile_two_phase`. Everything else compiles and links in
-            // one clang invocation, which is both faster and what every
-            // platform but this one wants.
-            if !release && target_os(target) == "macos" {
-                compile_two_phase(Array.concat([ll], cfiles), out, extra, scratch, target, release)
-            } else {
-                match run_process(cc_program(), argv2) {
-                    Err(e) => "build failed: ".concat(e),
-                    Ok(r) => if r.exit_code == 0 {
-                        // The scratch `.ll` is removed on SUCCESS and kept on
-                        // failure, where it is the thing you want to look at.
-                        // Leaving it always is the same leak `plum build` had
-                        // (see DESIGN.md) -- several MB per build, forever.
-                        let cleaned = Os.remove_file(ll);
-                        ""
-                    } else {
-                        Array.join(cc_words(), " ").concat(" failed (exit ").concat(r.exit_code.to_string()).concat("):\n").concat(r.stderr)
-                            .concat("\nIR left at ").concat(ll)
-                    },
-                } }
+            let shim_time = buildcache.start(());
+            let stable_shims = Path.join(Path.join(buildcache.root(()), "shims"), buildcache.compiler_hash(()));
+            let shim_dir = if cached && key != "" { stable_shims } else { scratch };
+            let first = if shim_dir == scratch { write_shims(scratch, needs_tls(ir, extra)) }
+                else { shared_shims(shim_dir, needs_tls(ir, extra)) };
+            let written = if first.err != "" && shim_dir != scratch { write_shims(scratch, needs_tls(ir, extra)) } else { first };
+            buildcache.finish("shim extraction", shim_time);
+            if written.err != "" { "build failed: ${written.err}" }
+            else {
+                let cfiles = written.files;
+                let err = if cached && key != "" && buildcache.env("PLUM_NO_OBJECT_CACHE") != "1" {
+                    compile_cached_objects(ll, cfiles, out, extra, scratch, target, release)
+                } else { link_ir_uncached(ll, cfiles, out, extra, scratch, target, release) };
+                if err != "" && shim_dir != scratch {
+                    // A concurrent cleaner may remove generated inputs.
+                    // Retry from private scratch; real source/link errors
+                    // still fail, and no older executable is available.
+                    buildcache.diagnostic("native cache unavailable; retrying uncached");
+                    let fresh = write_shims(scratch, needs_tls(ir, extra));
+                    if fresh.err != "" { "build failed: ${fresh.err}" }
+                    else { link_ir_uncached(ll, fresh.files, out, extra, scratch, target, release) }
+                } else { err }
+            }
         },
     }
 }
@@ -3073,7 +3267,8 @@ let fail_cmd (err: String): Unit = {
 let build_project (argv: Array[String]): Unit = {
     let target = match find_flag_value(argv, "--target", 0) { Some(t) => t, None => native_target() };
     let out = output_path(argv, target);
-    let err = compile_project(argv[1], out, link_args(argv, argv[1], target), target, wants_release(argv), wants_trace(argv));
+    let inputs = prepare_inputs(argv[1]);
+    let err = compile_prepared(argv[1], out, link_args_resolved(argv, argv[1], target, inputs.deps), target, wants_release(argv), wants_trace(argv), inputs, false);
     if err == "" { println("wrote ".concat(out)) } else { fail_cmd(err) }
 }
 
@@ -3111,7 +3306,8 @@ let run_project (argv: Array[String]): Unit = {
             // machine cannot execute a foreign binary. Anything that
             // looks like `--target` after the project directory is one
             // of the PROGRAM's own arguments, not ours.
-            let err = compile_project(argv[1], out, link_args(argv, argv[1], native_target()), native_target(), wants_release(argv), wants_trace(argv));
+            let inputs = prepare_inputs(argv[1]);
+            let err = compile_prepared(argv[1], out, link_args_resolved(argv, argv[1], native_target(), inputs.deps), native_target(), wants_release(argv), wants_trace(argv), inputs, true);
             if err != "" { fail_cmd(err) }
             else {
                 let args = Array.slice(argv, 2, argv.len());
@@ -3164,6 +3360,7 @@ let parse_file_items (path: String) (module_name: String): Array[parser.ItemNode
         // with a caret instead of a bare message. See
         // `parser.set_source_context`.
         Ok(src) => {
+            buildcache.observe(path, src);
             let lexed = lexer.tokenize_spanned_at(src, path);
             parser.set_source_context(path, src, lexed.starts, lexed.ends);
             parser.with_module(parser.parse_program(lexed.tokens).items, module_name)
@@ -3316,13 +3513,114 @@ let fmt_write (path: String) (out: String): Unit = {
 // which matches how the sources are actually laid out and avoids
 // inventing a path syntax nothing writes.
 let collect_path_items (path: String) (module_name: String): Array[parser.ItemNode] =
-    if Result.unwrap_or(Os.is_directory(path), false) {
-        collect_entries(path, module_name, Result.unwrap_or(Os.list_dir(path), []), 0, [])
-    } else if path.ends_with(".plum") {
-        parse_file_items(path, module_name)
-    } else {
-        []
+    parse_source_files(source_path_files(path, module_name), 0, [])
+
+struct SourceFile { path: String, module_name: String, owner: String, dep_name: String }
+struct BuildInputs { files: Array[SourceFile], deps: Array[pkg.Dep] }
+
+let source_entries (path: String): Array[String] =
+    match Os.list_dir(path) {
+        Ok(xs) => xs,
+        Err(e) => { panic_raw("cannot discover sources at ${path}: ${e}"); [] },
     }
+
+let source_path_files (path: String) (module_name: String): Array[SourceFile] =
+    if Result.unwrap_or(Os.is_directory(path), false) {
+        source_walk(path, module_name, source_entries(path), 0, [])
+    } else if path.ends_with(".plum") { [SourceFile { path: path, module_name: module_name, owner: "", dep_name: "" }] }
+    else { [] }
+
+let source_walk (dir: String) (module_name: String) (entries: Array[String]) (i: Int) (acc: Array[SourceFile]): Array[SourceFile] =
+    if i >= entries.len() { acc }
+    else if entries[i].starts_with(".") { source_walk(dir, module_name, entries, i + 1, acc) }
+    else { source_walk(dir, module_name, entries, i + 1, Array.concat(acc, source_path_files(Path.join(dir, entries[i]), module_name))) }
+
+let source_root (dir: String) (dep_name: String) (entries: Array[String]) (i: Int) (acc: Array[SourceFile]): Array[SourceFile] =
+    if i >= entries.len() { acc }
+    else if entries[i].starts_with(".") || (dep_name == "" && entries[i] == "vendor") { source_root(dir, dep_name, entries, i + 1, acc) }
+    else {
+        let full = Path.join(dir, entries[i]);
+        let is_dir = Result.unwrap_or(Os.is_directory(full), false);
+        if dep_name != "" && !is_dir && entries[i].ends_with(".plum") {
+            panic_raw("dependency `${dep_name}` has Plum source at its root: ${full}\n  A dependency's code lives in module subdirectories, so its module names are the same whether it is built on its own or used from another project.\n  Move it into a directory named for the module it should be.")
+        } else { () };
+        let module_name = if !is_dir { "" } else if dep_name == "" { entries[i] } else { dep_module_name(dep_name, entries[i]) };
+        let found = if dep_name != "" && !is_dir { [] } else { source_path_files(full, module_name) };
+        source_root(dir, dep_name, entries, i + 1, Array.concat(acc, found))
+    }
+
+let source_deps (deps: Array[pkg.Dep]) (i: Int) (acc: Array[SourceFile]): Array[SourceFile] =
+    if i >= deps.len() { acc }
+    else {
+        let files = Array.map(source_root(deps[i].path, deps[i].name, source_entries(deps[i].path), 0, []),
+            |f| SourceFile { path: f.path, module_name: f.module_name, owner: deps[i].path, dep_name: deps[i].name });
+        source_deps(deps, i + 1, Array.concat(acc, files))
+    }
+
+let prepare_inputs (dir: String): BuildInputs = {
+    let t = buildcache.start(());
+    let deps = project_deps(dir);
+    buildcache.finish("dependency resolution", t);
+    let s = buildcache.start(());
+    let own = if Result.unwrap_or(Os.is_directory(dir), false) { source_root(dir, "", source_entries(dir), 0, []) }
+        else { source_path_files(dir, "") };
+    let files = source_deps(deps, 0, own);
+    buildcache.finish("source discovery", s);
+    BuildInputs { files: files, deps: deps }
+}
+
+let parse_source_files (files: Array[SourceFile]) (i: Int) (acc: Array[parser.ItemNode]): Array[parser.ItemNode] =
+    if i >= files.len() { acc }
+    else {
+        let end = source_group_end(files, i + 1, files[i].owner);
+        let items = parse_source_group(files, i, end, []);
+        if files[i].owner != "" {
+            reject_module_clash(module_names(acc, 0, []), module_names(items, 0, []), files[i].dep_name, 0)
+        } else { () };
+        parse_source_files(files, end, Array.concat(acc, items))
+    }
+
+let source_group_end (files: Array[SourceFile]) (i: Int) (owner: String): Int =
+    if i >= files.len() { i }
+    else if files[i].owner != owner { i }
+    else { source_group_end(files, i + 1, owner) }
+
+let parse_source_group (files: Array[SourceFile]) (i: Int) (end: Int) (acc: Array[parser.ItemNode]): Array[parser.ItemNode] =
+    if i >= end { acc }
+    else { parse_source_group(files, i + 1, end, Array.concat(acc, parse_file_items(files[i].path, files[i].module_name))) }
+
+let manifest_input (dir: String): String = {
+    let path = Path.join(dir, "plum.pkg");
+    match Os.exists(path) {
+        Ok(false) => buildcache.frame(path).concat("absent"),
+        _ => buildcache.frame(path).concat(buildcache.file_hash(path)),
+    }
+}
+
+let ir_input_key (dir: String) (inputs: BuildInputs) (release: Bool) (trace: Bool): String = {
+    let compiler = buildcache.compiler_hash(());
+    let cwd = Result.unwrap_or(Os.cwd(()), "");
+    if compiler == "" || cwd == "" { "" }
+    else {
+        let mut parts = ["plum-ir-v1", buildcache.frame(compiler), buildcache.frame(cwd), buildcache.frame(dir), release.to_string(), trace.to_string(), buildcache.frame(manifest_input(dir))];
+        let mut valid = true;
+        for d in inputs.deps {
+            parts = parts.push("D");
+            parts = parts.push(buildcache.frame(d.name));
+            parts = parts.push(buildcache.frame(d.path));
+            parts = parts.push(buildcache.frame(manifest_input(d.path)));
+        };
+        for f in inputs.files {
+            let digest = buildcache.file_hash(f.path);
+            if digest == "" { valid = false; () } else { () };
+            parts = parts.push("S");
+            parts = parts.push(buildcache.frame(f.module_name));
+            parts = parts.push(buildcache.frame(f.path));
+            parts = parts.push(digest);
+        };
+        if valid { buildcache.hash(Array.concat_all(parts)) } else { "" }
+    }
+}
 
 // The project ROOT: each subdirectory names a module, each root-level
 // file belongs to `""`, and anything the project's `plum.pkg` declares
@@ -3335,18 +3633,7 @@ let collect_path_items (path: String) (module_name: String): Array[parser.ItemNo
 // compiler already knew how to read source from a directory; the only
 // new question was which directories to read.
 let collect_project (root: String): Array[parser.ItemNode] =
-    if Result.unwrap_or(Os.is_directory(root), false) {
-        // The ROOT's own path seeds the visited set, and it has to:
-        // its modules are already loaded above, so a dependency that
-        // leads back here must be skipped like any other package
-        // already seen. Without it, `a -> b -> a` loaded `a` a second
-        // time as a dependency and reported it as a module clash with
-        // itself.
-        collect_deps(dep_closure(root, DepScan { root: Path.clean(root), visited: [Path.clean(root)], found: [], fetch: false }).found, 0,
-            collect_own(root))
-    } else {
-        collect_path_items(root, "")
-    }
+    parse_source_files(prepare_inputs(root).files, 0, [])
 
 // The project's OWN items -- what `collect_project` loads before it
 // loads anything a manifest names.
@@ -3365,7 +3652,7 @@ let collect_project (root: String): Array[parser.ItemNode] =
 // that happens to contain a dot in a directory name.
 let collect_own (root: String): Array[parser.ItemNode] =
     if Result.unwrap_or(Os.is_directory(root), false) {
-        collect_root_entries(root, Result.unwrap_or(Os.list_dir(root), []), 0, [])
+        parse_source_files(source_root(root, "", source_entries(root), 0, []), 0, [])
     } else {
         collect_path_items(root, "")
     }
@@ -3579,14 +3866,6 @@ let dep_path (dir: String) (declared: String): String =
     if Path.is_absolute(declared) { Path.clean(declared) }
     else { Path.clean(Path.join(dir, declared)) }
 
-let collect_deps (deps: Array[pkg.Dep]) (i: Int) (acc: Array[parser.ItemNode]): Array[parser.ItemNode] =
-    if i >= deps.len() { acc }
-    else {
-        let items = collect_dependency(deps[i].path, deps[i].name);
-        reject_module_clash(module_names(acc, 0, []), module_names(items, 0, []), deps[i].name, 0);
-        collect_deps(deps, i + 1, Array.concat(acc, items))
-    }
-
 // A dependency contributes only its module SUBDIRECTORIES. Source at a
 // dependency's root is an error.
 //
@@ -3612,24 +3891,6 @@ let collect_deps (deps: Array[pkg.Dep]) (i: Int) (acc: Array[parser.ItemNode]): 
 // rather than `parsec/parsec.plum`, which is the same shape as Rust's
 // `src/lib.rs` and one a later release can relax without breaking
 // anything written against this rule.
-let collect_dependency (dir: String) (dep_name: String): Array[parser.ItemNode] =
-    collect_dep_entries(dir, dep_name, Result.unwrap_or(Os.list_dir(dir), []), 0, [])
-
-let collect_dep_entries (dir: String) (dep_name: String) (entries: Array[String]) (i: Int) (acc: Array[parser.ItemNode]): Array[parser.ItemNode] =
-    if i >= entries.len() { acc }
-    else if entries[i].starts_with(".") { collect_dep_entries(dir, dep_name, entries, i + 1, acc) }
-    else {
-        let full = Path.join(dir, entries[i]);
-        if Result.unwrap_or(Os.is_directory(full), false) {
-            collect_dep_entries(dir, dep_name, entries, i + 1, Array.concat(acc, collect_path_items(full, dep_module_name(dep_name, entries[i]))))
-        } else {
-            if entries[i].ends_with(".plum") {
-                panic_raw("dependency `${dep_name}` has Plum source at its root: ${full}\n  A dependency's code lives in module subdirectories, so its module names are the same whether it is built on its own or used from another project.\n  Move it into a directory named for the module it should be.")
-            };
-            collect_dep_entries(dir, dep_name, entries, i + 1, acc)
-        }
-    }
-
 // Module names ARE namespaced by package now, so two dependencies that
 // both ship a `util` are `a.util` and `b.util` and never meet. What is
 // left is narrower and is the one collision a package prefix cannot
@@ -3655,25 +3916,6 @@ let module_names (items: Array[parser.ItemNode]) (i: Int) (acc: Array[String]): 
     if i >= items.len() { acc }
     else if items[i].module == "" || Array.contains(acc, items[i].module) { module_names(items, i + 1, acc) }
     else { module_names(items, i + 1, acc.push(items[i].module)) }
-
-let collect_root_entries (root: String) (entries: Array[String]) (i: Int) (acc: Array[parser.ItemNode]): Array[parser.ItemNode] =
-    if i >= entries.len() { acc }
-    else if entries[i].starts_with(".") || entries[i] == "vendor" { collect_root_entries(root, entries, i + 1, acc) }
-    else {
-        let full = Path.join(root, entries[i]);
-        let m = if Result.unwrap_or(Os.is_directory(full), false) { entries[i] } else { "" };
-        collect_root_entries(root, entries, i + 1, Array.concat(acc, collect_path_items(full, m)))
-    }
-
-// Skip hidden files and directories, including AppleDouble companions
-// and `.git`. This also excludes the raw `readdir` entries `.` and `..`.
-let collect_entries (dir: String) (module_name: String) (entries: Array[String]) (i: Int) (acc: Array[parser.ItemNode]): Array[parser.ItemNode] =
-    if i >= entries.len() { acc }
-    else if entries[i].starts_with(".") { collect_entries(dir, module_name, entries, i + 1, acc) }
-    else {
-        let full = Path.join(dir, entries[i]);
-        collect_entries(dir, module_name, entries, i + 1, Array.concat(acc, collect_path_items(full, module_name)))
-    }
 
 // `new <name>` — scaffold a project, mirroring the real compiler's own
 // `run_new`/`new_project`, including refusing to overwrite.
@@ -3728,6 +3970,7 @@ let mkdir_ok (name: String): Bool =
     }
 
 let main (): Unit = {
+    buildcache.configure_profile(());
     let argv = args();
     // Before the `argv.len() < 2` guard below, alongside `lsp`: both
     // are complete with no second argument. Placed after it at first,
@@ -3777,6 +4020,10 @@ let main (): Unit = {
         cmd_cache_list(())
     } else if argv.len() == 2 && argv[0] == "cache" && argv[1] == "clean" {
         cmd_cache_clean(())
+    } else if argv.len() == 3 && argv[0] == "cache" && argv[1] == "list" && argv[2] == "build" {
+        buildcache.list_cache(())
+    } else if argv.len() == 3 && argv[0] == "cache" && argv[1] == "clean" && argv[2] == "build" {
+        buildcache.clean_cache(())
     } else if argv.len() >= 1 && argv[0] == "cache" {
         // A cache subcommand is never a source file. Without this,
         // `plum cache typo` reaches the generic single-file path below
@@ -3881,7 +4128,7 @@ let main (): Unit = {
                 else { print(lexer.relex(src)) },
             Err(e) => { println("relex: ".concat(e)); Os.exit_with(1) },
         };
-    } else if argv[0] == "run" && Result.unwrap_or(Os.is_directory(argv[1]), false) {
+    } else if argv[0] == "run" {
         run_project(argv);
     } else {
         match Os.read_file(argv[1]) {
