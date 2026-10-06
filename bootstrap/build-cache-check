@@ -15,6 +15,10 @@ import time
 
 ROOT = Path(__file__).resolve().parent.parent
 COMPILER = Path(sys.argv[1] if len(sys.argv) > 1 else ROOT / "sh").resolve()
+# MSYS/Cygwin Python exposes POSIX APIs while the compiler is a native
+# Windows executable. Unix PTYs, symlinks and executable paths cannot be
+# assumed to have the same meaning to both processes.
+WINDOWS_HOST = os.name == "nt" or sys.platform.startswith(("msys", "cygwin"))
 passed = 0
 
 
@@ -150,7 +154,17 @@ with tempfile.TemporaryDirectory(prefix="plum-cache-check-") as tmp:
     hidden.write_text('let main (): Unit = println("hidden")\n')
     run("hidden\n", "miss", target=hidden)
     run("hidden\n", "hit", target=hidden)
-    if os.name != "nt":
+    # Native Windows argv can contain ANSI bytes rather than UTF-8. A
+    # POSIX byte filename reproduces that manifest round-trip locally.
+    if os.name == "posix" and sys.platform.startswith("linux"):
+        byte_path = Path(os.fsdecode(os.fsencode(work) + b"/source-\xfc.plum"))
+        byte_path.write_text('let main (): Unit = println("bytes")\n')
+        run("bytes\n", "miss", target=byte_path)
+        run("bytes\n", "hit", target=byte_path)
+        byte_path.write_text('let main (): Unit = println("edit")\n')
+        run("edit\n", "miss", target=byte_path)
+        run("edit\n", "hit", target=byte_path)
+    if not WINDOWS_HOST:
         alias = work / "source-link.plum"
         alias.symlink_to(src)
         run("file\n", "miss", target=alias)
@@ -217,7 +231,7 @@ with tempfile.TemporaryDirectory(prefix="plum-cache-check-") as tmp:
         require(failure.returncode == reference.returncode and failure.stdout == reference.stdout,
                 "cached run changed nonzero child status handling")
 
-    if os.name != "nt":
+    if not WINDOWS_HOST:
         import fcntl
         import pty
         import select
@@ -308,7 +322,7 @@ with tempfile.TemporaryDirectory(prefix="plum-cache-check-") as tmp:
 
     # Library bytes and newly shadowing search candidates are resolved at
     # every fresh link, even when the IR and compiled objects all hit.
-    if os.name != "nt" and shutil.which("ar"):
+    if not WINDOWS_HOST and shutil.which("ar"):
         def archive(directory, word):
             source = work / "library.c"
             source.write_text(f'const char *cache_word(void) {{ return "{word}"; }}\n')
@@ -377,7 +391,7 @@ with tempfile.TemporaryDirectory(prefix="plum-cache-check-") as tmp:
     # Also force the native-input disappearance deterministically. This
     # opaque driver blocks before Clang reads shared C inputs; after clean
     # it fails that compilation, and the private retry must succeed.
-    if os.name != "nt":
+    if not WINDOWS_HOST:
         driver = work / "blocking-driver.py"
         driver.write_text('''import os, pathlib, subprocess, sys, time
 ready = pathlib.Path(os.environ["CACHE_TEST_READY"])

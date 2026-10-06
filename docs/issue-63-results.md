@@ -152,6 +152,29 @@ Actual macOS/Windows runtime cache checks and native Linux arm64 cache
 checks are added to their existing CI jobs. Those runners were not available
 locally; cross-linking is not a substitute for their runtime results.
 
+### Windows CI follow-up
+
+The first PR run passed Linux, Linux arm64 and macOS validation. Windows
+built the compiler and passed the language-server and ordinary-program
+checks, but the cache fixture with `ü` in its path missed repeatedly.
+Windows native argv contains active-code-page bytes; decoding a saved path
+as UTF-8 rejected that unchanged filename. Saved paths now round-trip as
+bytes through the native file-hashing helper. Malformed hex and embedded
+NULs are rejected before opening a file.
+
+A Linux filename containing a non-UTF-8 byte reproduces the original
+failure and now has regression coverage for both warm hits and edited
+source misses. The harness also distinguishes MSYS/Cygwin Python from a
+Unix compiler host: native Windows cannot use Unix PTYs, MSYS symlinks or
+Unix executable paths as if it were a POSIX process. Argument, stdin, cwd,
+exit-status, invalidation, corruption and concurrency checks still run on
+Windows; Unix terminal and wrapper checks run on Linux/macOS. Windows
+console attachment is not covered by these Unix PTY checks.
+
+The measurement JSON describes the original implementation in commit
+`6f97f6c`, before this correction. Its binary hashes and timings are retained
+as recorded, rather than attributed to the rebuilt compiler.
+
 ## Tradeoffs and remaining gates
 
 Initial object-cache population is slower than an uncached invocation on

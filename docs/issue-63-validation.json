@@ -1,5 +1,5 @@
 {
-  "note": "Local Linux x86_64 checks; durations of the broad suite and targeted reruns are not performance benchmarks. Platform execution CI awaits submission.",
+  "note": "Original local Linux x86_64 validation plus Windows CI follow-up. Durations are not performance benchmarks; the original measurements retain their recorded binary digest.",
   "checks": [
     {
       "harness": "check-version",
@@ -163,5 +163,39 @@
       "status": 0,
       "final_log": "the seed carries every shim in native_stdlib/, at its current content ...\nseed -> compiler (clang only) ...\nseed compiler -> today's source ...\ncomparing what it produces against the current compiler ...\nSEED OK: bootstraps to a compiler identical to the current one\n"
     }
-  ]
+  ],
+  "windows_followup": {
+    "original_ci_run": "https://github.com/bradcypert/plum/actions/runs/37491257302",
+    "cause": "Saved source paths were decoded as UTF-8, rejecting native Windows ANSI argv bytes.",
+    "compiler_sha256": "2031ecdf38641cc084fbcb11cee8b404ca346a669fadff540f90c0a086ebb367",
+    "checks": [
+      {
+        "harness": "build-cache-check",
+        "status": 0,
+        "final_log": "build-cache-check: 326 checks pass\n"
+      },
+      {
+        "harness": "check-seed",
+        "status": 0,
+        "final_log": "the seed carries every shim in native_stdlib/, at its current content ...\nseed -> compiler (clang only) ...\nseed compiler -> today's source ...\ncomparing what it produces against the current compiler ...\nSEED OK: bootstraps to a compiler identical to the current one\n"
+      },
+      {
+        "harness": "self-test",
+        "status": 0,
+        "final_log": "self-test: test result: ok. 20 passed; 0 failed\n"
+      },
+      {
+        "harness": "cross-check",
+        "status": 0,
+        "final_log": "zig 0.16.0, cross-compiling for: aarch64-macos x86_64-macos x86_64-windows-gnu aarch64-linux-gnu\n\n--- aarch64-macos ---\n  compat_shim.c      compiles\n  dir_shim.c         compiles\n  file_shim.c        compiles\n  handle_shim.c      compiles\n  io_shim.c          compiles\n  net_shim.c         compiles\n  os_shim.c          compiles\n  process_shim.c     compiles\n  term_shim.c        compiles\n  thread_shim.c      compiles\n  time_shim.c        compiles\n  tls_shim.c         compiles\n  seed -> binary     links (11M)\n\n--- x86_64-macos ---\n  compat_shim.c      compiles\n  dir_shim.c         compiles\n  file_shim.c        compiles\n  handle_shim.c      compiles\n  io_shim.c          compiles\n  net_shim.c         compiles\n  os_shim.c          compiles\n  process_shim.c     compiles\n  term_shim.c        compiles\n  thread_shim.c      compiles\n  time_shim.c        compiles\n  tls_shim.c         compiles\n  seed -> binary     links (11M)\n\n--- x86_64-windows-gnu ---\n  compat_shim.c      compiles\n  dir_shim.c         compiles\n  file_shim.c        compiles\n  handle_shim.c      compiles\n  io_shim.c          compiles\n  net_shim.c         compiles\n  os_shim.c          compiles\n  process_shim.c     compiles\n  term_shim.c        compiles\n  thread_shim.c      compiles\n  time_shim.c        compiles\n  tls_shim.c         compiles\n  seed -> binary     links (12M)\n\n--- aarch64-linux-gnu ---\n  compat_shim.c      compiles\n  dir_shim.c         compiles\n  file_shim.c        compiles\n  handle_shim.c      compiles\n  io_shim.c          compiles\n  net_shim.c         compiles\n  os_shim.c          compiles\n  process_shim.c     compiles\n  term_shim.c        compiles\n  thread_shim.c      compiles\n  time_shim.c        compiles\n  tls_shim.c         compiles\n  seed -> binary     links (12M)\n\n--- plum build --target ---\n  aarch64-linux-musl   built (ELF 64-bit LSB executable, ARM aarch64)\n  x86_64-windows-gnu   built (PE32+ executable for MS Windows 6.00 (console), x86-64)\n  aarch64-macos        built (Mach-O 64-bit arm64 executable, flags:<NOUNDEFS|DYLDLINK|TWOLEVEL|NO_REEXPORTED_DYLIBS|PIE|HAS_TLV_DESCRIPTORS>)\n  aarch64 under qemu   ran: cross ok on linux\n  i686 refused         refused, as it must be\n\ncross-check: every shim compiles and the compiler links for all 4 targets\n  (only the aarch64 leg is RUN -- see bootstrap/platform-smoke and the CI platform legs)\n"
+      },
+      {
+        "harness": "fmt-check",
+        "status": 0,
+        "final_log": "fmt-check: 376 checks pass -- every repo file already formatted, and fmt_corpus reformatted as recorded; 3 intentional lexer errors rejected\n"
+      }
+    ],
+    "native_path_hash": "Matches Python hashlib for a non-UTF-8 filename with lowercase and uppercase hex; rejects six malformed or NUL-containing paths.",
+    "windows_ci": "Pending corrected PR run."
+  }
 }

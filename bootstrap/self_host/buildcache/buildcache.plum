@@ -2,12 +2,12 @@
 // every run; this store contains IR and objects, never executable programs.
 use Os;
 use Path;
-use Encoding;
 use Time;
 
 extern "C" {
     fn plum_cache_hash_text(text: CStr, size: Int) -> CStr;
     fn plum_cache_hash_file(path: CStr) -> CStr;
+    fn plum_cache_hash_file_hex(path: CStr) -> CStr;
     fn plum_cache_copy(src: CStr, dst: CStr, digest: CStr) -> Int;
     fn plum_cache_temp(root: CStr) -> CStr;
     fn plum_cache_tool(name: CStr) -> CStr;
@@ -15,6 +15,7 @@ extern "C" {
 
 pub let hash (text: String): String = unsafe { plum_cache_hash_text(text.as_cstr(), text.len()).as_string() }
 pub let file_hash (path: String): String = unsafe { plum_cache_hash_file(path.as_cstr()).as_string() }
+let saved_path_hash (path: String): String = unsafe { plum_cache_hash_file_hex(path.as_cstr()).as_string() }
 pub let tool_path (name: String): String = unsafe { plum_cache_tool(name.as_cstr()).as_string() }
 pub let temp (root: String): String = unsafe { plum_cache_temp(root.as_cstr()).as_string() }
 pub let copy (src: String) (dst: String) (digest: String): Bool = unsafe {
@@ -82,15 +83,9 @@ pub let read_manifest (): String = {
 let valid_reads (lines: Array[String]) (i: Int): Bool =
     if i >= lines.len() { true }
     else if i + 1 >= lines.len() { false }
-    else { match Encoding.hex_decode(lines[i]) {
-        Err(_) => false,
-        Ok(b) => match b.as_string() {
-            Err(_) => false,
-            Ok(path) => if lines[i + 1].len() != 64 { false }
-                else if file_hash(path) != lines[i + 1] { false }
-                else { valid_reads(lines, i + 2) },
-        },
-    } }
+    else if lines[i + 1].len() != 64 { false }
+    else if saved_path_hash(lines[i]) != lines[i + 1] { false }
+    else { valid_reads(lines, i + 2) }
 pub let unchanged (manifest: String): Bool =
     if manifest == "" { true } else { valid_reads(manifest.split("\n"), 0) }
 
@@ -213,4 +208,11 @@ pub let test_cache_hash_vectors (): Unit = {
     assert_eq(hash(""), "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855");
     assert_eq(hash("abc"), "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad");
     assert_eq(hash("abcdbcdecdefdefgefghfghighijhijkijkljklmklmnlmnomnopnopq"), "248d6a61d20638b8e5c026930c3e6039a33ce45964ff2167f6ecedd419db06c1")
+}
+
+pub let test_cache_saved_path_rejects_malformed (): Unit = {
+    assert_eq(saved_path_hash(""), "");
+    assert_eq(saved_path_hash("0"), "");
+    assert_eq(saved_path_hash("gg"), "");
+    assert_eq(saved_path_hash("610062"), "")
 }

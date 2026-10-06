@@ -199,6 +199,36 @@ const char *plum_cache_hash_file(const char *path) {
     return out;
 }
 
+// Saved input paths are byte strings, just like fopen's paths. Windows
+// argv uses the active ANSI code page, and POSIX filenames need not be
+// UTF-8 either. Decode the hex envelope without treating it as Unicode.
+static int plum_cache_hex_digit(unsigned char c) {
+    if (c >= '0' && c <= '9') return c - '0';
+    if (c >= 'a' && c <= 'f') return c - 'a' + 10;
+    if (c >= 'A' && c <= 'F') return c - 'A' + 10;
+    return -1;
+}
+
+const char *plum_cache_hash_file_hex(const char *hex) {
+    size_t n = strlen(hex);
+    if (n == 0 || n % 2 != 0) return "";
+    char *path = malloc(n / 2 + 1);
+    if (!path) return "";
+    for (size_t i = 0; i < n; i += 2) {
+        int a = plum_cache_hex_digit((unsigned char)hex[i]);
+        int b = plum_cache_hex_digit((unsigned char)hex[i + 1]);
+        // Embedded NUL must not truncate a corrupt manifest's path.
+        if (a < 0 || b < 0 || (a == 0 && b == 0)) {
+            free(path); return "";
+        }
+        path[i / 2] = (char)((a << 4) | b);
+    }
+    path[n / 2] = '\0';
+    const char *digest = plum_cache_hash_file(path);
+    free(path);
+    return digest;
+}
+
 // Verify the bytes actually copied, not a prior read of the source path.
 // A concurrent cleaner can remove an entry at any point; that is a miss.
 long long plum_cache_copy(const char *src, const char *dst, const char *digest) {
