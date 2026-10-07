@@ -3179,6 +3179,7 @@ let compile_prepared (dir: String) (out: String) (extra: Array[String]) (target:
             Err(e) => "build failed: ".concat(e),
             Ok(scratch) => {
                 let err = compile_with_scratch(dir, out, extra, scratch, target, release, trace, inputs, cached);
+                if cached && buildcache.enabled(()) { buildcache.prune(()) } else { () };
                 let cleaned = Os.remove_tree(scratch);
                 err
             },

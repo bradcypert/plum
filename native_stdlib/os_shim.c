@@ -35,6 +35,8 @@
 #include <dirent.h>
 #include <stdint.h>
 #include <ctype.h>
+#include <errno.h>
+#include <time.h>
 
 #if defined(_WIN32)
 #include <windows.h>
@@ -44,6 +46,7 @@
 #define PLUM_RMDIR(p) _rmdir(p)
 #else
 #include <unistd.h>
+#include <signal.h>
 #define PLUM_MKDIR(p) mkdir((p), 0700)
 #define PLUM_RMDIR(p) rmdir(p)
 #endif
@@ -258,6 +261,20 @@ const char *plum_cache_temp(const char *root) {
     if (snprintf(plum_os_buf,sizeof(plum_os_buf),"%s/.partial-XXXXXX",root) >= (int)sizeof(plum_os_buf)
         || mkdtemp(plum_os_buf) == NULL) plum_os_buf[0]='\0';
 #endif
+    if (plum_os_buf[0]) {
+        char owner[PLUM_PATH_MAX];
+        if (snprintf(owner,sizeof(owner),"%s/.owner",plum_os_buf) < (int)sizeof(owner)) {
+            FILE *f=fopen(owner,"w");
+            if (f) {
+#if defined(_WIN32)
+                fprintf(f,"%lu",(unsigned long)GetCurrentProcessId());
+#else
+                fprintf(f,"%ld",(long)getpid());
+#endif
+                fclose(f);
+            }
+        }
+    }
     return plum_os_buf;
 }
 
@@ -454,6 +471,12 @@ static int plum_remove_tree(const char *path) {
     if (lstat(path, &st) != 0) return -1;
     if (!S_ISDIR(st.st_mode)) return remove(path) == 0 ? 0 : -1;
 #else
+    DWORD attrs=GetFileAttributesA(path);
+    if (attrs == INVALID_FILE_ATTRIBUTES) return -1;
+    if (attrs & FILE_ATTRIBUTE_REPARSE_POINT) {
+        if (attrs & FILE_ATTRIBUTE_DIRECTORY) return RemoveDirectoryA(path) ? 0 : -1;
+        return remove(path) == 0 ? 0 : -1;
+    }
     if (!plum_is_dir(path)) return remove(path) == 0 ? 0 : -1;
 #endif
 
@@ -585,6 +608,108 @@ long long os_stat_load(const char *path) {
 long long os_stat_size(void) { return stat_size; }
 long long os_stat_mtime(void) { return stat_mtime; }
 long long os_stat_is_dir(void) { return stat_is_dir; }
+
+// Retention is best effort and runs after compilation. Only complete hash
+// entries are eviction candidates; staging is protected by its live owner.
+// Cache roots must be private to this host/user (not a shared network store).
+typedef struct { char *path; uint64_t bytes; time_t age; } plum_cache_entry;
+
+static int plum_cache_stat_private(const char *path, struct stat *st) {
+#if defined(_WIN32)
+    DWORD attrs=GetFileAttributesA(path);
+    if (attrs == INVALID_FILE_ATTRIBUTES || (attrs & FILE_ATTRIBUTE_REPARSE_POINT)) return -1;
+    return stat(path,st);
+#else
+    return lstat(path,st);
+#endif
+}
+
+static uint64_t plum_cache_tree_bytes(const char *path) {
+    struct stat st;
+    if (plum_cache_stat_private(path,&st) != 0) return 0;
+    if (S_ISREG(st.st_mode)) return st.st_size > 0 ? (uint64_t)st.st_size : 0;
+    if (!S_ISDIR(st.st_mode)) return 0;
+    DIR *d=opendir(path); if (!d) return 0;
+    uint64_t bytes=0; struct dirent *e; char child[PLUM_PATH_MAX];
+    while ((e=readdir(d)) != NULL) {
+        if (!strcmp(e->d_name,".") || !strcmp(e->d_name,"..")) continue;
+        if (plum_join(child,sizeof(child),path,e->d_name) == 0) bytes+=plum_cache_tree_bytes(child);
+    }
+    closedir(d); return bytes;
+}
+
+static int plum_cache_owner_gone(const char *path) {
+    char owner[PLUM_PATH_MAX]; long pid=0;
+    if (plum_join(owner,sizeof(owner),path,".owner") != 0) return 0;
+    FILE *f=fopen(owner,"r"); if (!f) return 0;
+    int parsed=fscanf(f,"%ld",&pid); fclose(f);
+    if (parsed != 1 || pid <= 0 || pid > 2147483647L) return 0;
+#if defined(_WIN32)
+    HANDLE process=OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION,FALSE,(DWORD)pid);
+    if (!process) return GetLastError() == ERROR_INVALID_PARAMETER;
+    DWORD code=STILL_ACTIVE;
+    int gone=GetExitCodeProcess(process,&code) && code != STILL_ACTIVE;
+    CloseHandle(process); return gone;
+#else
+    return kill((pid_t)pid,0) != 0 && errno == ESRCH;
+#endif
+}
+
+static int plum_cache_oldest(const void *a, const void *b) {
+    const plum_cache_entry *x=a, *y=b;
+    if (x->age != y->age) return x->age < y->age ? -1 : 1;
+    return strcmp(x->path,y->path);
+}
+
+long long plum_cache_prune(const char *root, long long limit) {
+    if (limit < 0) return 0;
+    const char *kinds[]={"ir","obj","shims"};
+    plum_cache_entry *entries=NULL; size_t count=0, capacity=0;
+    uint64_t total=0; long long removed=0; time_t now=time(NULL);
+    char parent[PLUM_PATH_MAX], path[PLUM_PATH_MAX]; struct stat st;
+    for (size_t k=0;k<3;k++) {
+        if (plum_join(parent,sizeof(parent),root,kinds[k]) != 0
+            || plum_cache_stat_private(parent,&st) != 0 || !S_ISDIR(st.st_mode)) continue;
+        DIR *d=opendir(parent); if (!d) continue;
+        struct dirent *e;
+        while ((e=readdir(d)) != NULL) {
+            if (plum_join(path,sizeof(path),parent,e->d_name) != 0
+                || plum_cache_stat_private(path,&st) != 0 || !S_ISDIR(st.st_mode)) continue;
+            // Windows GetTempFileName uses pcb*.tmp; POSIX uses .partial-*.
+            if (!strncmp(e->d_name,".partial-",9) || !strncmp(e->d_name,"pcb",3)) {
+                if (now > st.st_mtime && now-st.st_mtime > 86400 && plum_cache_owner_gone(path)) {
+                    if (plum_remove_tree(path) == 0) removed++;
+                }
+                continue;
+            }
+            if (strlen(e->d_name) != 64) continue;
+            int hex=1;
+            for (size_t i=0;i<64;i++) {
+                if (!((e->d_name[i]>='0' && e->d_name[i]<='9')
+                    || (e->d_name[i]>='a' && e->d_name[i]<='f'))) { hex=0; break; }
+            }
+            if (!hex) continue;
+            if (count == capacity) {
+                size_t next=capacity ? capacity*2 : 32;
+                plum_cache_entry *grown=realloc(entries,next*sizeof(*entries));
+                if (!grown) break;
+                entries=grown; capacity=next;
+            }
+            char *saved=strdup(path); if (!saved) break;
+            uint64_t bytes=plum_cache_tree_bytes(path);
+            entries[count++]=(plum_cache_entry){saved,bytes,st.st_mtime}; total+=bytes;
+        }
+        closedir(d);
+    }
+    if (count > 1) qsort(entries,count,sizeof(*entries),plum_cache_oldest);
+    for (size_t i=0;i<count;i++) {
+        if (total > (uint64_t)limit && plum_remove_tree(entries[i].path) == 0) {
+            total=total >= entries[i].bytes ? total-entries[i].bytes : 0; removed++;
+        }
+        free(entries[i].path);
+    }
+    free(entries); return removed;
+}
 
 // Three-way, and the third case is the point: 1 present, 0 absent, -1
 // CANNOT SAY.

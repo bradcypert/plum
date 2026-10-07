@@ -44,15 +44,29 @@ PLUM_NO_BUILD_CACHE=1 plum run myapp  # bypass all build artifacts
 PLUM_NO_OBJECT_CACHE=1 plum run myapp # reuse IR, compile native inputs
 PLUM_CACHE_TRACE=1 plum run myapp     # cache decisions on stderr
 PLUM_PROFILE=1 plum run myapp         # phase timings/counts on stderr
+PLUM_BUILD_CACHE_MAX_BYTES=536870912 plum run myapp  # 512 MiB budget
 plum cache list build
 plum cache clean build
 ```
 
-Build artifacts use manual retention: old input identities remain until
-`plum cache clean build`. These commands leave fetched packages alone;
-the existing `plum cache list` and `plum cache clean` continue to manage
+Build artifacts have a default 1 GiB budget. After cached compilation,
+oldest-published IR, object and shim entries are removed until the cache
+fits the budget. Set `PLUM_BUILD_CACHE_MAX_BYTES` to a nonnegative byte
+limit to override it; zero retains no completed entries. Invalid values
+use the default. Cleanup is best effort: concurrent publishers can
+briefly exceed the budget, and cache I/O errors never fail a build.
+Staging directories older than 24 hours are removed only when their
+recorded owner process has exited; live or unknown owners are preserved.
+`plum cache clean build` removes the entire build cache immediately.
+These commands leave fetched packages alone; the existing `plum cache list` and `plum cache clean` continue to manage
 packages. Generated C shim sources also live in the build cache so their
 paths stay stable between object builds. No executable runs from the cache.
+
+Use a cache directory trusted by your user on this machine. Shared writable
+or network cache roots are unsupported: integrity hashes detect corruption,
+but do not authenticate artifacts against another writer. Cached LLVM IR
+can retain earlier `@embed_file` contents until eviction or explicit cleaning.
+
 Shared shims are verified and published as complete directories, so
 concurrent builds cannot read another writer's partially extracted header.
 

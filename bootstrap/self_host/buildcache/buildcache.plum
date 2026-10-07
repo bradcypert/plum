@@ -10,6 +10,7 @@ extern "C" {
     fn plum_cache_hash_file_hex(path: CStr) -> CStr;
     fn plum_cache_copy(src: CStr, dst: CStr, digest: CStr) -> Int;
     fn plum_cache_temp(root: CStr) -> CStr;
+    fn plum_cache_prune(root: CStr, limit: Int) -> Int;
     fn plum_cache_tool(name: CStr) -> CStr;
 }
 
@@ -215,4 +216,12 @@ pub let test_cache_saved_path_rejects_malformed (): Unit = {
     assert_eq(saved_path_hash("0"), "");
     assert_eq(saved_path_hash("gg"), "");
     assert_eq(saved_path_hash("610062"), "")
+}
+
+// Invalid settings retain the default budget. Zero keeps no completed entries.
+pub let prune (): Unit = {
+    let limit = Result.unwrap_or(String.parse_int(env("PLUM_BUILD_CACHE_MAX_BYTES")), 1073741824);
+    let budget = if limit < 0 { 1073741824 } else { limit };
+    let removed = unsafe { plum_cache_prune(root(()).as_cstr(), budget) };
+    if removed > 0 { diagnostic("pruned ${removed.to_string()} entries") } else { () }
 }

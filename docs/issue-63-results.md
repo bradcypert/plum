@@ -44,8 +44,11 @@ published as complete directories by same-filesystem rename. Concurrent
 writers may duplicate work; readers capture verified IR or private object
 copies before linking. A concurrent cleaner or failed cache extraction
 recovers through private compilation, including IR-only reuse. Cache
-retention is explicitly manual via `plum cache clean build`; existing
-package-cache commands retain their scope.
+retention uses a default 1 GiB budget with oldest-published eviction after
+cached compilation, configurable through `PLUM_BUILD_CACHE_MAX_BYTES`.
+Abandoned staging directories older than 24 hours are cleaned only when
+the recorded owner process is gone. Explicit `plum cache clean build` and
+existing package-cache commands retain their scope.
 
 Cold compilation improves through two measured changes: parser source
 characters are decoded once for documentation extraction, and equality/
@@ -149,8 +152,9 @@ suite and targeted final reruns. Performance measurements are separate.
   when the provider or cross-sysroot header is unavailable.
 
 Actual macOS/Windows runtime cache checks and native Linux arm64 cache
-checks are added to their existing CI jobs. Those runners were not available
-locally; cross-linking is not a substitute for their runtime results.
+checks passed in the corrected PR CI run:
+https://github.com/bradcypert/plum/actions/runs/37498631558.
+Native Windows console attachment remains outside the Unix PTY checks.
 
 ### Windows CI follow-up
 
@@ -222,3 +226,26 @@ bootstrap/cross-check
 
 The measurement harness uses isolated temporary caches and checks output
 and IR equivalence. No timing threshold is added to correctness CI.
+
+### Cache follow-up acceptance
+
+A dedicated Ubuntu 24.04 / Clang 18 CI job requires native object hits;
+portable jobs still exercise conservative adapter fallback. Linux cache
+checks resolve actual linked Plum and C source locations after both cold
+and warm runs, then repeat after editing both sources. Retention checks
+cover budget eviction, zero/invalid budgets, live/abandoned staging,
+symlink boundaries and concurrent eviction.
+
+Local follow-up validation on 2026-10-07 passed all 403 cache assertions
+with `--require-objects`, the maintenance suite (including 190 sanitizer/
+rejection fixtures), compiler unit/format checks, seed bootstrap,
+self-compilation and self-sufficiency. Emission/check RSS remains 109/41 MB.
+All four cross-compilation targets pass, with Linux arm64 running under
+QEMU. The refreshed compiler emits LLVM byte-identical to the refreshed
+seed. The new Clang 18 CI job and native Windows junction assertion still
+require CI execution after these follow-up changes are pushed.
+
+The performance acceptance gate remains a separate realistic edit–run
+benchmark comparing full caching, IR-only caching and uncached execution,
+including the gh-dash/TUI workload and compiler upgrades. The default
+cache mode is unchanged; existing measurements do not cover that session.

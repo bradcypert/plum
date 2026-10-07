@@ -14,7 +14,9 @@ import tempfile
 import time
 
 ROOT = Path(__file__).resolve().parent.parent
-COMPILER = Path(sys.argv[1] if len(sys.argv) > 1 else ROOT / "sh").resolve()
+REQUIRE_OBJECTS = "--require-objects" in sys.argv[1:]
+compiler_args = [arg for arg in sys.argv[1:] if arg != "--require-objects"]
+COMPILER = Path(compiler_args[0] if compiler_args else ROOT / "sh").resolve()
 # MSYS/Cygwin Python exposes POSIX APIs while the compiler is a native
 # Windows executable. Unix PTYs, symlinks and executable paths cannot be
 # assumed to have the same meaning to both processes.
@@ -39,6 +41,7 @@ with tempfile.TemporaryDirectory(prefix="plum-cache-check-") as tmp:
     env.pop("PLUM_NO_BUILD_CACHE", None)
     env.pop("PLUM_NO_OBJECT_CACHE", None)
     env.pop("PLUM_CC", None)
+    env.pop("PLUM_BUILD_CACHE_MAX_BYTES", None)
 
     def invoke(*args, overlay=None, ok=True):
         result = subprocess.run([str(COMPILER), *map(str, args)], env=env | (overlay or {}),
@@ -60,6 +63,9 @@ with tempfile.TemporaryDirectory(prefix="plum-cache-check-") as tmp:
     src.write_text('let main (): Unit = println("one")\n')
     run("one\n", "miss")
     hit = run("one\n", "hit")
+    if REQUIRE_OBJECTS:
+        require(sys.platform.startswith("linux"), "required object cache needs Linux")
+        require("objects bypass" not in hit.stderr, "required object cache was bypassed: " + hit.stderr)
     if sys.platform.startswith("linux") and "objects bypass" not in hit.stderr:
         require("cache: object hit 0" in hit.stderr, "LLVM object was recompiled")
         require("cache: object miss" not in hit.stderr, "unchanged generated C was recompiled")
@@ -433,5 +439,130 @@ raise SystemExit(subprocess.call(["clang", *sys.argv[1:]]))
     invoke("cache", "clean", "build")
     require(not (cache / "build" / "v1").exists(), "build cache clean left artifacts")
     run("file\n", "miss", target=src)
+
+    # Retention removes complete entries, protects live publishers, and
+    # removes abandoned publishers without following directory symlinks.
+    retention = work / "retention"
+    retained_root = retention / "build" / "v1"
+    entries = retained_root / "ir"
+    run("file\n", "miss", target=src, overlay={"PLUM_CACHE": str(retention)})
+    existing_bytes = sum(f.stat().st_size for f in retained_root.rglob("*") if f.is_file())
+    old = entries / ("a" * 64)
+    recent = entries / ("b" * 64)
+    for entry in (old, recent):
+        entry.mkdir()
+        (entry / "data").write_bytes(b"x" * 4096)
+    os.utime(old, (1, 1))
+    os.utime(recent, (2, 2))
+    live = entries / ".partial-live"
+    dead = entries / ".partial-dead"
+    unknown = entries / ".partial-unknown"
+    fresh = entries / ".partial-fresh"
+    for entry in (live, dead, unknown, fresh):
+        entry.mkdir()
+    (live / ".owner").write_text(str(os.getpid()))
+    # Obtain a real exited PID rather than assuming a large PID is unused.
+    child = subprocess.Popen([sys.executable, "-c", "pass"])
+    child.wait()
+    (dead / ".owner").write_text(str(child.pid))
+    (fresh / ".owner").write_text(str(child.pid))
+    for entry in (live, dead, unknown):
+        os.utime(entry, (1, 1))
+    # Exactly one synthetic entry fits alongside the real, newer artifacts.
+    run("file\n", "hit", target=src, overlay={"PLUM_CACHE": str(retention),
+        "PLUM_BUILD_CACHE_MAX_BYTES": str(existing_bytes + 4096)})
+    require(not old.exists() and recent.exists(), "retention did not evict oldest first")
+    # MSYS/Cygwin Python PIDs are not native Windows process IDs.
+    if not WINDOWS_HOST or os.name == "nt":
+        require(live.exists(), "retention removed a live publisher")
+        require(not dead.exists(), "retention kept an abandoned publisher")
+    require(unknown.exists(), "retention removed a stage with unknown ownership")
+    require(fresh.exists(), "retention removed a recent stage")
+    run("file\n", "hit", target=src, overlay={"PLUM_CACHE": str(retention),
+        "PLUM_BUILD_CACHE_MAX_BYTES": "0"})
+    for kind in ("ir", "obj", "shims"):
+        require(not list((retained_root / kind).glob("[0-9a-f]" * 64)),
+                "zero budget retained completed " + kind)
+    if not WINDOWS_HOST:
+        outside = work / "outside-retention"
+        outside.mkdir()
+        sentinel = outside / "keep"
+        sentinel.write_text("preserved")
+        alias = entries / ("c" * 64)
+        alias.symlink_to(outside, target_is_directory=True)
+        nested = entries / ("d" * 64)
+        nested.mkdir()
+        (nested / "data").write_text("evict")
+        (nested / "link").symlink_to(outside, target_is_directory=True)
+        run("file\n", "miss", target=src, overlay={"PLUM_CACHE": str(retention),
+            "PLUM_BUILD_CACHE_MAX_BYTES": "0"})
+        require(sentinel.read_text() == "preserved", "pruning followed a directory symlink")
+        require(alias.is_symlink() and not nested.exists(), "symlink pruning boundaries changed")
+    if os.name == "nt":
+        outside = work / "outside-retention"
+        outside.mkdir()
+        sentinel = outside / "keep"
+        sentinel.write_text("preserved")
+        nested = entries / ("d" * 64)
+        nested.mkdir()
+        (nested / "data").write_text("evict")
+        subprocess.run(["cmd", "/c", "mklink", "/J", str(nested / "link"), str(outside)],
+                       check=True, capture_output=True)
+        run("file\n", "miss", target=src, overlay={"PLUM_CACHE": str(retention),
+            "PLUM_BUILD_CACHE_MAX_BYTES": "0"})
+        require(sentinel.read_text() == "preserved" and not nested.exists(),
+                "pruning followed a Windows directory junction")
+    # Forced eviction during publication/linking must remain recoverable.
+    eviction_env = env | {"PLUM_CACHE": str(retention), "PLUM_BUILD_CACHE_MAX_BYTES": "0"}
+    publishers = [subprocess.Popen([str(COMPILER), "run", str(src)], env=eviction_env,
+                  stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, cwd=work)
+                  for _ in range(2)]
+    for process in publishers:
+        stdout, stderr = process.communicate(timeout=180)
+        require(process.returncode == 0 and stdout == "file\n", "concurrent eviction broke execution: " + stderr)
+    run("file\n", "miss", target=src, overlay={"PLUM_CACHE": str(retention),
+        "PLUM_BUILD_CACHE_MAX_BYTES": "invalid"})
+    run("file\n", "hit", target=src, overlay={"PLUM_CACHE": str(retention),
+        "PLUM_BUILD_CACHE_MAX_BYTES": "invalid"})
+
+    # Check real linked debug locations through the object-hit path.
+    if sys.platform.startswith("linux") and "objects bypass" not in hit.stderr:
+        require(shutil.which("nm") and shutil.which("addr2line"), "Linux cached debug checks need binutils")
+        debug = work / "debug"
+        (debug / "native").mkdir(parents=True)
+        plum = debug / "main.plum"
+        native = debug / "native" / "location.c"
+        program = ('use Os;\nextern "C" { fn native_location() -> Int; '
+                   'fn plum_cache_copy(src: CStr, dst: CStr, digest: CStr) -> Int; }\n'
+                   'let top (n: Int): Int = n + 1\n'
+                   'let main (): Unit = { println(top(unsafe { native_location() }).to_string()); '
+                   'let copied = unsafe { plum_cache_copy(Os.self_exe(()).unwrap_or("").as_cstr(), '
+                   'args()[0].as_cstr(), "".as_cstr()) }; assert_eq(copied, 0); }\n')
+        c_program = '// source location fixture\n__attribute__((noinline)) long long native_location(void) { return 7; }\n'
+        def check_locations(binary, plum_line, native_line):
+            symbols = subprocess.check_output(["nm", str(binary)], text=True)
+            for name, path, line in (("plum_top", plum, plum_line),
+                                     ("native_location", native, native_line)):
+                matches = [row.split()[0] for row in symbols.splitlines()
+                           if row.split()[-1:] == [name]]
+                require(len(matches) == 1, "missing debug fixture symbol: " + name)
+                location = subprocess.check_output(["addr2line", "-e", str(binary),
+                    "0x" + matches[0]], text=True).strip()
+                require(location == f"{path}:{line}", f"{name} debug location: {location}")
+        for edit in (0, 1):
+            plum.write_text("// edited\n" * edit + program)
+            native.write_text("// edited\n" * edit + c_program)
+            for event in ("miss", "hit"):
+                binary = work / f"debug-{edit}-{event}"
+                result = run("8\n", event, binary, target=debug)
+                if event == "hit":
+                    require("objects bypass" not in result.stderr and "object miss" not in result.stderr,
+                            "debug fixture did not reuse objects: " + result.stderr)
+                    require("object hit 0" in result.stderr, "debug LLVM object was not reused")
+                    events = [line for line in result.stderr.splitlines()
+                              if line.startswith("cache: object ")]
+                    require(events[-1].startswith("cache: object hit "),
+                            "debug native fixture object was not reused")
+                check_locations(binary, 3 + edit, 2 + edit)
 
 print(f"build-cache-check: {passed} checks pass")

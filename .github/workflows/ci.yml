@@ -163,12 +163,34 @@ jobs:
       - name: plum help is a real command
         run: ./bootstrap/help-check
 
+  cache_objects:
+    name: Linux required object cache and debug locations
+    needs: build
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v5
+      - name: install supported Clang major and debug tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y clang-18 binutils
+          mkdir -p "$RUNNER_TEMP/cache-clang"
+          ln -s /usr/bin/clang-18 "$RUNNER_TEMP/cache-clang/clang"
+          echo "$RUNNER_TEMP/cache-clang" >> "$GITHUB_PATH"
+      - uses: actions/download-artifact@v4
+        with:
+          name: plum-linux-compiler
+      - name: restore freshly built compiler
+        run: tar -xzf plum-linux-compiler.tar.gz
+      - name: supported adapter must reuse objects
+        run: ./bootstrap/build-cache-check --require-objects
+
   # Preserve the existing Linux check name for branch protection. A failed
   # or skipped dependency must fail this check, rather than appear green.
   bootstrap:
     name: build from seed and validate
     if: ${{ always() }}
-    needs: [build, bootstrap_proofs, corpus, checks]
+    needs: [build, bootstrap_proofs, corpus, checks, cache_objects]
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
@@ -178,6 +200,7 @@ jobs:
           test "${{ needs.bootstrap_proofs.result }}" = success
           test "${{ needs.corpus.result }}" = success
           test "${{ needs.checks.result }}" = success
+          test "${{ needs.cache_objects.result }}" = success
 
   # Does the compiler work somewhere that is not the developer's Linux
   # box? Only `bootstrap/platform-smoke` runs here, deliberately -- see

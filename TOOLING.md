@@ -2,6 +2,11 @@
 
 ## Build-cache diagnostics
 
+`bootstrap/build-cache-check --require-objects` requires certified Linux
+object reuse rather than allowing adapter fallback. The pinned Clang 18 CI
+job uses it and verifies linked Plum/C debug locations on cold and warm runs
+before and after edits. Ordinary platform runs continue to test fallback.
+
 `PLUM_CACHE_TRACE=1 plum run <project>` reports IR/object hits, misses and
 conservative fallbacks on stderr. `PLUM_PROFILE=1` reports compiler phase
 timings in microseconds and emission counts. Neither changes the program's
