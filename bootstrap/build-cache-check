@@ -446,6 +446,16 @@ raise SystemExit(subprocess.call(["clang", *sys.argv[1:]]))
     retained_root = retention / "build" / "v1"
     entries = retained_root / "ir"
     run("file\n", "miss", target=src, overlay={"PLUM_CACHE": str(retention)})
+    if sys.platform.startswith("linux"):
+        # glibc's freed-memory poisoning reproduces Darwin's allocator exposing
+        # a CStr borrowed from a temporary root String. Disable tcache so free
+        # actually poisons the bytes; correctness must not depend on them.
+        run("file\n", "hit", target=src, overlay={"PLUM_CACHE": str(retention),
+            "PLUM_BUILD_CACHE_MAX_BYTES": "0", "MALLOC_PERTURB_": "165",
+            "GLIBC_TUNABLES": "glibc.malloc.tcache_count=0"})
+        require(not list(entries.glob("[0-9a-f]" * 64)),
+                "pruning lost its cache root with freed-memory poisoning")
+        run("file\n", "miss", target=src, overlay={"PLUM_CACHE": str(retention)})
     existing_bytes = sum(f.stat().st_size for f in retained_root.rglob("*") if f.is_file())
     old = entries / ("a" * 64)
     recent = entries / ("b" * 64)
@@ -547,8 +557,9 @@ raise SystemExit(subprocess.call(["clang", *sys.argv[1:]]))
                    'fn plum_cache_copy(src: CStr, dst: CStr, digest: CStr) -> Int; }\n'
                    'let top (n: Int): Int = n + 1\n'
                    'let main (): Unit = { println(top(unsafe { native_location() }).to_string()); '
-                   'let copied = unsafe { plum_cache_copy(Os.self_exe(()).unwrap_or("").as_cstr(), '
-                   'args()[0].as_cstr(), "".as_cstr()) }; assert_eq(copied, 0); }\n')
+                   'let executable = Os.self_exe(()).unwrap_or(""); let saved = args()[0]; '
+                   'let copied = unsafe { plum_cache_copy(executable.as_cstr(), '
+                   'saved.as_cstr(), "".as_cstr()) }; assert_eq(copied, 0); }\n')
         c_program = '// source location fixture\n__attribute__((noinline)) long long native_location(void) { return 7; }\n'
         def check_locations(binary, plum_line, native_line):
             symbols = subprocess.check_output(["nm", str(binary)], text=True)

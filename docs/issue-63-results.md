@@ -249,3 +249,20 @@ The performance acceptance gate remains a separate realistic edit–run
 benchmark comparing full caching, IR-only caching and uncached execution,
 including the gh-dash/TUI workload and compiler upgrades. The default
 cache mode is unchanged; existing measurements do not cover that session.
+
+### macOS retention correction (2026-10-09)
+
+The macOS follow-up CI run exposed a dangling `CStr` in pruning: the
+cache-root String temporary was released before the native helper read
+its bytes. Eviction and abandoned-stage cleanup silently did nothing on
+Darwin; Linux and Windows allocators happened to preserve the bytes.
+The pruning wrapper now binds the owning String through the native call.
+The linked-debug fixture also binds its executable path before borrowing
+it for native copying.
+
+The Linux retention regression disables glibc tcache and poisons freed
+memory. It fails against the previous compiler and passes with the root
+owner bound, exercising the same failure without requiring a Mac.
+Eviction failures now report entry sizes, timestamps, the configured
+budget and the compiler trace. The existing seed can bootstrap this
+source change; a seed refresh is unnecessary if `check-seed` passes.
