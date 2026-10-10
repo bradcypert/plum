@@ -1,0 +1,109 @@
+use Process;
+
+extern "C" {
+    fn plum_cache_safe_ast(ast: CStr) -> Int;
+    fn plum_cache_safe_ir(ir: CStr) -> Int;
+}
+
+pub let safe_ast (ast: String): Bool = unsafe { plum_cache_safe_ast(ast.as_cstr()) == 1 }
+pub let safe_ir (ir: String): Bool = unsafe { plum_cache_safe_ir(ir.as_cstr()) == 1 }
+pub let c_snapshot_safe (program: String) (flags: Array[String]) (input: String): Bool =
+    match Process.run(Process.Options { program: program,
+        args: Array.concat(flags, ["-Xclang", "-ast-dump=json", "-fsyntax-only", input]), env: [], stdin: None }) {
+            Err(_) => false,
+            Ok(r) => r.exit_code == 0 && safe_ast(r.stdout),
+        }
+
+let SIGNATURES: Ref[Map[String, String]] = ref(empty_signatures(()))
+let empty_signatures (): Map[String, String] = Map.new(())
+
+// Clang's default configuration is selected by driver/triple, not input
+// contents. Certify the effective in-process command once per input language
+// and flags in this invocation, then restore each input's path/name in the
+// identity. This avoids two extra Clang startups for every generated shim.
+pub let compile_signature (program: String) (flags: Array[String]) (input: String) (out: String): String = {
+    let language = if input.ends_with(".ll") { ".ll" } else { ".i" };
+    let memo_key = frame(program).concat(frame(Array.join(flags, "\n"))).concat(language);
+    let existing = SIGNATURES.get().get(memo_key);
+    let signature = match existing {
+        Some(s) => s,
+        None => {
+            let args = Array.concat(flags, ["-c", input, "-o", out]);
+            let a = Process.run(Process.Options { program: program, args: Array.concat(["-###"], args), env: [], stdin: None });
+            let b = Process.run(Process.Options { program: program, args: Array.concat(["--no-default-config", "-###"], args), env: [], stdin: None });
+            let result = match a {
+                Err(_) => "",
+                Ok(r) => match b {
+                    Err(_) => "",
+                    Ok(plain) => if r.exit_code != 0 || plain.exit_code != 0 || r.stderr != plain.stderr
+                        || !r.stderr.contains("(in-process)") || r.stderr.contains("-load")
+                        || r.stderr.contains("-fprofile") || r.stderr.contains("-include-pch") { "" }
+                        else { r.stderr.replace(input, "<input>").replace(out, "<output>")
+                            .replace("\"".concat(Path.basename(input)).concat("\""), "\"<name>\"") },
+                },
+            };
+            SIGNATURES.set(SIGNATURES.get().insert(memo_key, result));
+            result
+        },
+    };
+    if signature == "" { "" } else { signature.concat(frame(Path.basename(input))) }
+}
+
+// Linux adapter: fingerprint every shared dependency selected by the loader,
+// as well as the compiler itself. Other hosts and opaque drivers reuse only
+// Plum IR. No version-string or mtime shortcut for executable code.
+pub let native_fingerprint (): String = {
+    if Os.platform(()) != "linux" || env("PLUM_CC") != ""
+        || env("LD_PRELOAD") != "" || env("LD_LIBRARY_PATH") != "" || env("LD_AUDIT") != ""
+        || env("CCC_OVERRIDE_OPTIONS") != "" || env("CLANG_SPAWN_CC1") != ""
+        || env("LD_DEBUG") != "" || env("LD_PROFILE") != "" { "" }
+    else {
+        let tool = tool_path("clang");
+        let digest = file_hash(tool);
+        if tool == "" || digest == "" { "" }
+        else { match Process.run(Process.Options { program: "ldd", args: [tool], env: [], stdin: None }) {
+            Err(_) => "",
+            Ok(r) => if r.exit_code != 0 { "" }
+                else { loader_fingerprint(r.stdout.split("\n"), 0, [frame(tool), digest]) },
+        } }
+    }
+}
+
+let loader_fingerprint (lines: Array[String]) (i: Int) (parts: Array[String]): String =
+    if i >= lines.len() { hash(Array.concat_all(parts)) }
+    else {
+        let line = lines[i].trim();
+        if line == "" || line.starts_with("linux-vdso.") || line.starts_with("linux-gate.") {
+            loader_fingerprint(lines, i + 1, parts)
+        } else {
+            let split = line.split("=>");
+            let tail = split[split.len() - 1].trim();
+            let path = tail.split(" (")[0].trim();
+            if !path.starts_with("/") { "" }
+            else {
+                let digest = file_hash(path);
+                if digest == "" { "" }
+                else { loader_fingerprint(lines, i + 1, parts.push(frame(path)).push(digest)) }
+            }
+        }
+    }
+
+pub let test_loader_fingerprint_rejects_unresolved (): Unit = {
+    assert_eq(loader_fingerprint(["libmissing.so => not found"], 0, []), "");
+    assert_eq(loader_fingerprint(["unexpected output"], 0, []), "")
+}
+
+pub let test_assembly_ast_classification (): Unit = {
+    assert(safe_ast("{\"kind\": \"TranslationUnitDecl\", \"inner\": [{\"kind\": \"AsmLabelAttr\"}, {\"mangledName\": \"__xpg_symbol\"}]}"));
+    assert(!safe_ast("{\"kind\": \"TranslationUnitDecl\", \"inner\": [{\"kind\": \"GCCAsmStmt\"}]}"));
+    assert(!safe_ast("{\"kind\": \"TranslationUnitDecl\", \"inner\": [{\"kind\": \"FileScopeAsmDecl\"}]}"));
+    assert(!safe_ast("{\"kind\": \"TranslationUnitDecl\", \"mangledName\": \"unsafe\\nname\"}"));
+    assert(!safe_ast("unexpected output"))
+}
+
+pub let test_assembly_ir_classification (): Unit = {
+    assert(safe_ir("; module asm is a comment\n@asm = constant [4 x i8] c\"asm\\00\"\n"));
+    assert(safe_ir("@name = constant [12 x i8] c\"module asm\\00\"\n"));
+    assert(!safe_ir("module\tasm\t\"encoded contents\"\n"));
+    assert(!safe_ir("call void asm sideeffect \"\\2eincbin\\20file\", \"\"()\n"))
+}

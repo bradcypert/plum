@@ -144,6 +144,8 @@ jobs:
         run: ./bootstrap/check-build-modes
       - name: the user-facing commands work
         run: ./bootstrap/cli-smoke
+      - name: build cache preserves program behavior
+        run: ./bootstrap/build-cache-check
       - name: packages resolve and manifests stay data
         run: ./bootstrap/pkg-check
       - name: allocations have not risen
@@ -161,12 +163,34 @@ jobs:
       - name: plum help is a real command
         run: ./bootstrap/help-check
 
+  cache_objects:
+    name: Linux required object cache and debug locations
+    needs: build
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v5
+      - name: install supported Clang major and debug tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y clang-18 binutils
+          mkdir -p "$RUNNER_TEMP/cache-clang"
+          ln -s /usr/bin/clang-18 "$RUNNER_TEMP/cache-clang/clang"
+          echo "$RUNNER_TEMP/cache-clang" >> "$GITHUB_PATH"
+      - uses: actions/download-artifact@v4
+        with:
+          name: plum-linux-compiler
+      - name: restore freshly built compiler
+        run: tar -xzf plum-linux-compiler.tar.gz
+      - name: supported adapter must reuse objects
+        run: ./bootstrap/build-cache-check --require-objects
+
   # Preserve the existing Linux check name for branch protection. A failed
   # or skipped dependency must fail this check, rather than appear green.
   bootstrap:
     name: build from seed and validate
     if: ${{ always() }}
-    needs: [build, bootstrap_proofs, corpus, checks]
+    needs: [build, bootstrap_proofs, corpus, checks, cache_objects]
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
@@ -176,6 +200,7 @@ jobs:
           test "${{ needs.bootstrap_proofs.result }}" = success
           test "${{ needs.corpus.result }}" = success
           test "${{ needs.checks.result }}" = success
+          test "${{ needs.cache_objects.result }}" = success
 
   # Does the compiler work somewhere that is not the developer's Linux
   # box? Only `bootstrap/platform-smoke` runs here, deliberately -- see
@@ -251,6 +276,8 @@ jobs:
         run: tar -xzf plum-macos-compiler.tar.gz
       - name: real programs work on macOS
         run: ./bootstrap/platform-smoke ./sh.real
+      - name: build cache preserves program behavior
+        run: ./bootstrap/build-cache-check ./sh.real
 
   platforms-memory-and-debug:
     name: macOS memory and debug checks
@@ -368,6 +395,9 @@ jobs:
       - name: the compiler it built works
         run: ./bootstrap/platform-smoke ./sh.real
 
+      - name: build cache preserves program behavior
+        run: ./bootstrap/build-cache-check ./sh.real
+
       - name: the language server answers a real session
         run: ./bootstrap/lsp-smoke ./sh.real
 
@@ -456,6 +486,8 @@ jobs:
         run: tar -xzf plum-windows-compiler.tar.gz
       - name: real programs work on Windows
         run: ./bootstrap/platform-smoke ./sh.real
+      - name: build cache preserves program behavior
+        run: ./bootstrap/build-cache-check ./sh.real
 
   windows-lsp:
     name: Windows language server smoke

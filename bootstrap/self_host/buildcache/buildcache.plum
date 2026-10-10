@@ -1,0 +1,229 @@
+// Validated compiler artifacts. Link resolution is deliberately fresh on
+// every run; this store contains IR and objects, never executable programs.
+use Os;
+use Path;
+use Time;
+
+extern "C" {
+    fn plum_cache_hash_text(text: CStr, size: Int) -> CStr;
+    fn plum_cache_hash_file(path: CStr) -> CStr;
+    fn plum_cache_hash_file_hex(path: CStr) -> CStr;
+    fn plum_cache_copy(src: CStr, dst: CStr, digest: CStr) -> Int;
+    fn plum_cache_temp(root: CStr) -> CStr;
+    fn plum_cache_prune(root: CStr, limit: Int) -> Int;
+    fn plum_cache_tool(name: CStr) -> CStr;
+}
+
+pub let hash (text: String): String = unsafe { plum_cache_hash_text(text.as_cstr(), text.len()).as_string() }
+pub let file_hash (path: String): String = unsafe { plum_cache_hash_file(path.as_cstr()).as_string() }
+let saved_path_hash (path: String): String = unsafe { plum_cache_hash_file_hex(path.as_cstr()).as_string() }
+pub let tool_path (name: String): String = unsafe { plum_cache_tool(name.as_cstr()).as_string() }
+pub let temp (root: String): String = unsafe { plum_cache_temp(root.as_cstr()).as_string() }
+pub let copy (src: String) (dst: String) (digest: String): Bool = unsafe {
+    plum_cache_copy(src.as_cstr(), dst.as_cstr(), digest.as_cstr()) == 0
+}
+pub let frame (text: String): String = "${text.len().to_string()}:${text}"
+pub let env (name: String): String = Option.unwrap_or(Os.env_var(name), "")
+pub let diagnostic (text: String): Unit =
+    if env("PLUM_CACHE_TRACE") == "1" { Os.write_stderr("cache: ${text}\n") } else { () }
+
+let PROFILE: Ref[Bool] = ref(false)
+pub let configure_profile (): Unit = PROFILE.set(env("PLUM_PROFILE") == "1")
+pub let start (): Time.Instant = Time.instant(())
+pub let finish (name: String) (t: Time.Instant): Unit =
+    if PROFILE.get() {
+        Os.write_stderr("profile: ${name} ${Time.since(t).as_micros().to_string()} us\n")
+    } else { () }
+pub let count (name: String) (n: Int): Unit =
+    if PROFILE.get() { Os.write_stderr("profile: ${name} ${n.to_string()}\n") } else { () }
+
+// Cache creation failures are optional failures; required source failures
+// are diagnosed by the ordinary compiler. Never turn an unreadable file
+// into an empty-file fingerprint.
+pub let make_dirs (path: String): Bool =
+    if path == "" || path == "." { true }
+    else { match Os.is_directory(path) {
+        Ok(true) => true,
+        _ => {
+            let parent = Path.dirname(path);
+            if parent == path { false }
+            else if !make_dirs(parent) { false }
+            else { match Os.make_dir(path) {
+                Ok(_) => true,
+                Err(_) => Result.unwrap_or(Os.is_directory(path), false),
+            } }
+        },
+    } }
+
+pub let root (): String = {
+    let base = if env("PLUM_CACHE") != "" { env("PLUM_CACHE") }
+        else if env("XDG_CACHE_HOME") != "" { Path.join(env("XDG_CACHE_HOME"), "plum") }
+        else { match Os.home_dir(()) { Some(h) => Path.join(h, ".cache/plum"), None => "" } };
+    if base == "" { "" } else { Path.join(base, "build/v1") }
+}
+pub let enabled (): Bool = env("PLUM_NO_BUILD_CACHE") != "1" && root(()) != ""
+
+pub struct ReadInput { pub path: String, pub digest: String }
+let READS: Ref[Array[ReadInput]] = ref(no_reads(()))
+let TRACK: Ref[Bool] = ref(false)
+let no_reads (): Array[ReadInput] = []
+pub let begin_reads (on: Bool): Unit = { TRACK.set(on); READS.set(no_reads(())) }
+pub let observe (path: String) (text: String): Unit =
+    if TRACK.get() {
+        READS.set(READS.get().push(ReadInput { path: path, digest: hash(text) }))
+    } else { () }
+pub let read_manifest (): String = {
+    let reads = READS.get();
+    let mut lines = [];
+    for r in reads {
+        lines = lines.push(Bytes.to_hex(r.path.as_bytes()));
+        lines = lines.push(r.digest);
+    };
+    Array.join(lines, "\n")
+}
+let valid_reads (lines: Array[String]) (i: Int): Bool =
+    if i >= lines.len() { true }
+    else if i + 1 >= lines.len() { false }
+    else if lines[i + 1].len() != 64 { false }
+    else if saved_path_hash(lines[i]) != lines[i + 1] { false }
+    else { valid_reads(lines, i + 2) }
+pub let unchanged (manifest: String): Bool =
+    if manifest == "" { true } else { valid_reads(manifest.split("\n"), 0) }
+
+let entry (kind: String) (key: String): String = Path.join(Path.join(root(()), kind), key)
+// The metadata seal catches truncation/corruption before interpreting paths.
+let metadata (kind: String) (key: String): Option[Array[String]] = {
+    let dir = entry(kind, key);
+    match Os.read_file(Path.join(dir, "meta")) {
+        Err(_) => None,
+        Ok(meta) => if Result.unwrap_or(Os.read_file(Path.join(dir, "seal")), "") != hash(meta) { None }
+        else {
+            let rows = meta.split("\n");
+            if rows.len() < 2 { None }
+            else if rows[0] != key || rows[1].len() != 64 { None }
+            else { Some(rows) }
+        },
+    }
+}
+pub let load_ir (key: String): Option[String] =
+    match metadata("ir", key) {
+        None => None,
+        Some(rows) => {
+            let reads = Array.join(Array.slice(rows, 2, rows.len()), "\n");
+            if !unchanged(reads) { None }
+            else { match Os.read_file(Path.join(entry("ir", key), "data")) {
+                Err(_) => None,
+                Ok(ir) => if hash(ir) == rows[1] { Some(ir) } else { None },
+            } }
+        },
+    }
+pub let load_object (key: String) (out: String): Bool =
+    match metadata("obj", key) {
+        None => false,
+        Some(rows) => copy(Path.join(entry("obj", key), "data"), out, rows[1]),
+    }
+
+// A unique directory on the destination filesystem; rename publishes all
+// files together. A losing concurrent writer removes only its own staging
+// directory. Readers copy/verify objects before the linker uses them.
+pub let store (kind: String) (key: String) (file: String) (reads: String): Unit = {
+    let parent = Path.join(root(()), kind);
+    if !make_dirs(parent) { diagnostic("store unavailable") }
+    else {
+        let stage = temp(parent);
+        if stage == "" { diagnostic("staging unavailable") }
+        else {
+            let digest = file_hash(file);
+            let meta = key.concat("\n").concat(digest).concat(if reads == "" { "" } else { "\n".concat(reads) });
+            let ok = digest != "" && copy(file, Path.join(stage, "data"), digest)
+                && Result.is_ok(Os.write_file(Path.join(stage, "meta"), meta))
+                && Result.is_ok(Os.write_file(Path.join(stage, "seal"), hash(meta)));
+            if ok {
+                let dest = entry(kind, key);
+                // Remove an invalid old entry to allow recovery. A valid
+                // reader has already captured IR or copied its object.
+                let valid = match metadata(kind, key) {
+                    Some(rows) => file_hash(Path.join(dest, "data")) == rows[1]
+                        && (kind != "ir" || unchanged(Array.join(Array.slice(rows, 2, rows.len()), "\n"))),
+                    None => false,
+                };
+                if !valid { let removed = Os.remove_tree(dest); () } else { () };
+                let published = Os.rename_file(stage, dest);
+                if Result.is_err(published) { diagnostic("store raced or unavailable") } else { () }
+            } else { diagnostic("store failed") };
+            let cleaned = Os.remove_tree(stage);
+            ()
+        }
+    }
+}
+
+let STATE: Ref[String] = ref("")
+pub let compiler_hash (): String = {
+    let saved = STATE.get();
+    if saved != "" { saved }
+    else {
+        let digest = match Os.self_exe(()) { Ok(p) => file_hash(p), Err(_) => "" };
+        STATE.set(digest);
+        digest
+    }
+}
+
+pub let list_cache (): Unit = {
+    let dir = root(());
+    if dir == "" { println("build cache: unavailable") }
+    else { println("build cache: ${dir}"); report_entries(dir, 0) }
+}
+let report_entries (dir: String) (depth: Int): Unit = {
+    let names = Array.sort_string(Result.unwrap_or(Os.list_dir(dir), []));
+    for name in names {
+        if !name.starts_with(".") {
+            let path = Path.join(dir, name);
+            if depth == 0 && Result.unwrap_or(Os.is_directory(path), false) { report_entries(path, 1) }
+            else { println("  ${path}  ${tree_size(path).to_string()} bytes") }
+        } else { () };
+    }
+}
+let tree_size (path: String): Int =
+    match Os.stat(path) {
+        Err(_) => 0,
+        Ok(st) => if !st.is_directory { st.size }
+            else {
+                let mut size = 0;
+                for name in Result.unwrap_or(Os.list_dir(path), []) {
+                    if name != "." && name != ".." { size = size + tree_size(Path.join(path, name)); } else { () };
+                };
+                size
+            },
+    }
+pub let clean_cache (): Unit = {
+    let dir = root(());
+    if dir == "" { println("build cache: unavailable") }
+    else if !Result.unwrap_or(Os.exists(dir), false) { println("build cache: empty") }
+    else { match Os.remove_tree(dir) {
+        Ok(_) => println("build cache: removed ${dir}"),
+        Err(e) => { Os.write_stderr(e.concat("\n")); Os.exit_with(1) },
+    } }
+}
+
+pub let test_cache_hash_vectors (): Unit = {
+    assert_eq(hash(""), "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855");
+    assert_eq(hash("abc"), "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad");
+    assert_eq(hash("abcdbcdecdefdefgefghfghighijhijkijkljklmklmnlmnomnopnopq"), "248d6a61d20638b8e5c026930c3e6039a33ce45964ff2167f6ecedd419db06c1")
+}
+
+pub let test_cache_saved_path_rejects_malformed (): Unit = {
+    assert_eq(saved_path_hash(""), "");
+    assert_eq(saved_path_hash("0"), "");
+    assert_eq(saved_path_hash("gg"), "");
+    assert_eq(saved_path_hash("610062"), "")
+}
+
+// Invalid settings retain the default budget. Zero keeps no completed entries.
+pub let prune (): Unit = {
+    let limit = Result.unwrap_or(String.parse_int(env("PLUM_BUILD_CACHE_MAX_BYTES")), 1073741824);
+    let budget = if limit < 0 { 1073741824 } else { limit };
+    // CStr borrows its String. Keep the owner alive through the native call.
+    let cache_root = root(());
+    let removed = unsafe { plum_cache_prune(cache_root.as_cstr(), budget) };
+    if removed > 0 { diagnostic("pruned ${removed.to_string()} entries") } else { () }
+}

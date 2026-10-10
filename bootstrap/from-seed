@@ -46,6 +46,7 @@ clang -O2 -Wno-override-module "$seed" \
     native_stdlib/os_shim.c \
     native_stdlib/process_shim.c \
     native_stdlib/thread_shim.c \
+    native_stdlib/time_shim.c \
     $libs -o "$out"
 
 echo "built $out from the seed -- no Rust compiler involved"

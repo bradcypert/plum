@@ -33,6 +33,10 @@
 #include <string.h>
 #include <sys/stat.h>
 #include <dirent.h>
+#include <stdint.h>
+#include <ctype.h>
+#include <errno.h>
+#include <time.h>
 
 #if defined(_WIN32)
 #include <windows.h>
@@ -42,6 +46,7 @@
 #define PLUM_RMDIR(p) _rmdir(p)
 #else
 #include <unistd.h>
+#include <signal.h>
 #define PLUM_MKDIR(p) mkdir((p), 0700)
 #define PLUM_RMDIR(p) rmdir(p)
 #endif
@@ -50,9 +55,320 @@
 #include <mach-o/dyld.h>
 #endif
 
+#if defined(__linux__) && defined(__has_include)
+#if __has_include(<linux/if_alg.h>)
+#define PLUM_CACHE_AF_ALG 1
+#include <sys/socket.h>
+#include <linux/if_alg.h>
+#endif
+#endif
+
 #define PLUM_PATH_MAX 4096
 
 static char plum_os_buf[PLUM_PATH_MAX];
+
+// Compiler artifact support. Hash files in bounded memory: materializing the
+// compiler executable as an Array[Int] just to fingerprint it would dominate
+// a warm run. SHA-256 uses unsigned 32-bit arithmetic (FIPS 180-4).
+typedef struct {
+    uint32_t h[8];
+    uint64_t bytes;
+    unsigned char block[64];
+    size_t used;
+} plum_cache_sha;
+
+static uint32_t plum_cache_rotr(uint32_t x, unsigned n) {
+    return (x >> n) | (x << (32 - n));
+}
+
+static void plum_cache_block(plum_cache_sha *s, const unsigned char *p) {
+    static const uint32_t k[64] = {
+        0x428a2f98,0x71374491,0xb5c0fbcf,0xe9b5dba5,0x3956c25b,0x59f111f1,0x923f82a4,0xab1c5ed5,
+        0xd807aa98,0x12835b01,0x243185be,0x550c7dc3,0x72be5d74,0x80deb1fe,0x9bdc06a7,0xc19bf174,
+        0xe49b69c1,0xefbe4786,0x0fc19dc6,0x240ca1cc,0x2de92c6f,0x4a7484aa,0x5cb0a9dc,0x76f988da,
+        0x983e5152,0xa831c66d,0xb00327c8,0xbf597fc7,0xc6e00bf3,0xd5a79147,0x06ca6351,0x14292967,
+        0x27b70a85,0x2e1b2138,0x4d2c6dfc,0x53380d13,0x650a7354,0x766a0abb,0x81c2c92e,0x92722c85,
+        0xa2bfe8a1,0xa81a664b,0xc24b8b70,0xc76c51a3,0xd192e819,0xd6990624,0xf40e3585,0x106aa070,
+        0x19a4c116,0x1e376c08,0x2748774c,0x34b0bcb5,0x391c0cb3,0x4ed8aa4a,0x5b9cca4f,0x682e6ff3,
+        0x748f82ee,0x78a5636f,0x84c87814,0x8cc70208,0x90befffa,0xa4506ceb,0xbef9a3f7,0xc67178f2
+    };
+    uint32_t w[64], a,b,c,d,e,f,g,h;
+    for (unsigned i = 0; i < 16; i++)
+        w[i] = ((uint32_t)p[i*4] << 24) | ((uint32_t)p[i*4+1] << 16)
+             | ((uint32_t)p[i*4+2] << 8) | p[i*4+3];
+    for (unsigned i = 16; i < 64; i++) {
+        uint32_t x = w[i-15], y = w[i-2];
+        w[i] = w[i-16] + (plum_cache_rotr(x,7)^plum_cache_rotr(x,18)^(x>>3))
+             + w[i-7] + (plum_cache_rotr(y,17)^plum_cache_rotr(y,19)^(y>>10));
+    }
+    a=s->h[0]; b=s->h[1]; c=s->h[2]; d=s->h[3];
+    e=s->h[4]; f=s->h[5]; g=s->h[6]; h=s->h[7];
+    for (unsigned i = 0; i < 64; i++) {
+        uint32_t t1 = h + (plum_cache_rotr(e,6)^plum_cache_rotr(e,11)^plum_cache_rotr(e,25))
+                    + ((e&f)^((~e)&g)) + k[i] + w[i];
+        uint32_t t2 = (plum_cache_rotr(a,2)^plum_cache_rotr(a,13)^plum_cache_rotr(a,22))
+                    + ((a&b)^(a&c)^(b&c));
+        h=g; g=f; f=e; e=d+t1; d=c; c=b; b=a; a=t1+t2;
+    }
+    s->h[0]+=a; s->h[1]+=b; s->h[2]+=c; s->h[3]+=d;
+    s->h[4]+=e; s->h[5]+=f; s->h[6]+=g; s->h[7]+=h;
+}
+
+static void plum_cache_init(plum_cache_sha *s) {
+    static const uint32_t h[8] = {0x6a09e667,0xbb67ae85,0x3c6ef372,0xa54ff53a,
+                                  0x510e527f,0x9b05688c,0x1f83d9ab,0x5be0cd19};
+    memcpy(s->h,h,sizeof(h)); s->bytes=0; s->used=0;
+}
+
+static void plum_cache_update(plum_cache_sha *s, const unsigned char *p, size_t n) {
+    s->bytes += n;
+    while (n) {
+        size_t take = 64 - s->used;
+        if (take > n) take = n;
+        memcpy(s->block+s->used,p,take); s->used+=take; p+=take; n-=take;
+        if (s->used == 64) { plum_cache_block(s,s->block); s->used=0; }
+    }
+}
+
+static void plum_cache_final(plum_cache_sha *s, char out[65]) {
+    uint64_t bits = s->bytes * 8;
+    unsigned char pad[128] = {0x80};
+    size_t n = s->used < 56 ? 56-s->used : 120-s->used;
+    for (unsigned i = 0; i < 8; i++) pad[n+i]=(unsigned char)(bits >> ((7-i)*8));
+    plum_cache_update(s,pad,n+8);
+    for (unsigned i = 0; i < 8; i++) snprintf(out+i*8,9,"%08x",(unsigned)s->h[i]);
+    out[64]='\0';
+}
+
+const char *plum_cache_hash_text(const char *p, long long n) {
+    static char out[65];
+    if (n < 0) { out[0]='\0'; return out; }
+    plum_cache_sha s; plum_cache_init(&s);
+    plum_cache_update(&s,(const unsigned char *)p,(size_t)n);
+    plum_cache_final(&s,out); return out;
+}
+
+// Linux's optional kernel SHA provider uses CPU acceleration when available.
+// No new library/tool dependency; an unavailable provider falls back to the
+// portable implementation. Cache correctness is independent of the provider.
+static int plum_cache_kernel_hash(const char *path, char out[65]) {
+#if defined(PLUM_CACHE_AF_ALG)
+    struct sockaddr_alg sa;
+    memset(&sa,0,sizeof(sa)); sa.salg_family=AF_ALG;
+    memcpy(sa.salg_type,"hash",5); memcpy(sa.salg_name,"sha256",7);
+    int parent=socket(AF_ALG,SOCK_SEQPACKET,0);
+    if (parent < 0) return 0;
+    if (bind(parent,(struct sockaddr *)&sa,sizeof(sa)) != 0) { close(parent); return 0; }
+    int fd=accept(parent,NULL,NULL); close(parent);
+    if (fd < 0) return 0;
+    FILE *f=fopen(path,"rb");
+    if (!f) { close(fd); return 0; }
+    unsigned char buf[65536], digest[32]; size_t n; int bad=0;
+    while ((n=fread(buf,1,sizeof(buf),f)) != 0) {
+        size_t at=0;
+        while (at < n) {
+            ssize_t sent=send(fd,buf+at,n-at,MSG_MORE);
+            if (sent <= 0) { bad=1; break; }
+            at+=(size_t)sent;
+        }
+        if (bad) break;
+    }
+    if (ferror(f)) bad=1;
+    if (fclose(f) != 0) bad=1;
+    if (!bad && send(fd,NULL,0,0) != 0) bad=1;
+    if (!bad && recv(fd,digest,sizeof(digest),0) != (ssize_t)sizeof(digest)) bad=1;
+    close(fd);
+    if (bad) return 0;
+    for (unsigned i=0;i<32;i++) snprintf(out+i*2,3,"%02x",(unsigned)digest[i]);
+    out[64]='\0'; return 1;
+#else
+    (void)path; (void)out; return 0;
+#endif
+}
+
+const char *plum_cache_hash_file(const char *path) {
+    static char out[65];
+    unsigned char buf[32768]; size_t n;
+    out[0]='\0';
+    struct stat st;
+    if (stat(path,&st) == 0 && S_ISREG(st.st_mode) && st.st_size > 1048576
+        && plum_cache_kernel_hash(path,out)) return out;
+    FILE *f=fopen(path,"rb");
+    if (!f) return out;
+    plum_cache_sha s; plum_cache_init(&s);
+    while ((n=fread(buf,1,sizeof(buf),f)) != 0) plum_cache_update(&s,buf,n);
+    int bad=ferror(f); if (fclose(f) != 0) bad=1;
+    if (!bad) plum_cache_final(&s,out);
+    return out;
+}
+
+// Saved input paths are byte strings, just like fopen's paths. Windows
+// argv uses the active ANSI code page, and POSIX filenames need not be
+// UTF-8 either. Decode the hex envelope without treating it as Unicode.
+static int plum_cache_hex_digit(unsigned char c) {
+    if (c >= '0' && c <= '9') return c - '0';
+    if (c >= 'a' && c <= 'f') return c - 'a' + 10;
+    if (c >= 'A' && c <= 'F') return c - 'A' + 10;
+    return -1;
+}
+
+const char *plum_cache_hash_file_hex(const char *hex) {
+    size_t n = strlen(hex);
+    if (n == 0 || n % 2 != 0) return "";
+    char *path = malloc(n / 2 + 1);
+    if (!path) return "";
+    for (size_t i = 0; i < n; i += 2) {
+        int a = plum_cache_hex_digit((unsigned char)hex[i]);
+        int b = plum_cache_hex_digit((unsigned char)hex[i + 1]);
+        // Embedded NUL must not truncate a corrupt manifest's path.
+        if (a < 0 || b < 0 || (a == 0 && b == 0)) {
+            free(path); return "";
+        }
+        path[i / 2] = (char)((a << 4) | b);
+    }
+    path[n / 2] = '\0';
+    const char *digest = plum_cache_hash_file(path);
+    free(path);
+    return digest;
+}
+
+// Verify the bytes actually copied, not a prior read of the source path.
+// A concurrent cleaner can remove an entry at any point; that is a miss.
+long long plum_cache_copy(const char *src, const char *dst, const char *digest) {
+    FILE *in=fopen(src,"rb"); if (!in) return -1;
+    FILE *out=fopen(dst,"wb"); if (!out) { fclose(in); return -1; }
+    unsigned char buf[32768]; size_t n; int bad=0; char got[65];
+    plum_cache_sha s; plum_cache_init(&s);
+    while ((n=fread(buf,1,sizeof(buf),in)) != 0) {
+        plum_cache_update(&s,buf,n);
+        if (fwrite(buf,1,n,out) != n) { bad=1; break; }
+    }
+    if (ferror(in)) bad=1;
+    if (fclose(in) != 0) bad=1;
+    if (fclose(out) != 0) bad=1;
+    plum_cache_final(&s,got);
+    if (digest[0] && strcmp(got,digest) != 0) bad=1;
+    if (bad) remove(dst);
+    return bad ? -1 : 0;
+}
+
+const char *plum_cache_temp(const char *root) {
+#if defined(_WIN32)
+    if (GetTempFileNameA(root,"pcb",0,plum_os_buf) == 0) { plum_os_buf[0]='\0'; return plum_os_buf; }
+    DeleteFileA(plum_os_buf);
+    if (PLUM_MKDIR(plum_os_buf) != 0) plum_os_buf[0]='\0';
+#else
+    if (snprintf(plum_os_buf,sizeof(plum_os_buf),"%s/.partial-XXXXXX",root) >= (int)sizeof(plum_os_buf)
+        || mkdtemp(plum_os_buf) == NULL) plum_os_buf[0]='\0';
+#endif
+    if (plum_os_buf[0]) {
+        char owner[PLUM_PATH_MAX];
+        if (snprintf(owner,sizeof(owner),"%s/.owner",plum_os_buf) < (int)sizeof(owner)) {
+            FILE *f=fopen(owner,"w");
+            if (f) {
+#if defined(_WIN32)
+                fprintf(f,"%lu",(unsigned long)GetCurrentProcessId());
+#else
+                fprintf(f,"%ld",(long)getpid());
+#endif
+                fclose(f);
+            }
+        }
+    }
+    return plum_os_buf;
+}
+
+const char *plum_cache_tool(const char *name) {
+    plum_os_buf[0]='\0';
+#if defined(_WIN32)
+    DWORD n=SearchPathA(NULL,name,".exe",sizeof(plum_os_buf),plum_os_buf,NULL);
+    if (n == 0 || n >= sizeof(plum_os_buf)) plum_os_buf[0]='\0';
+#else
+    if (strchr(name,'/')) {
+        if (!realpath(name,plum_os_buf)) plum_os_buf[0]='\0';
+    } else {
+        const char *env=getenv("PATH"); if (!env) return plum_os_buf;
+        char *paths=strdup(env); if (!paths) return plum_os_buf;
+        char *p=paths;
+        while (p) {
+            char *next=strchr(p,':'); if (next) *next++='\0';
+            char candidate[PLUM_PATH_MAX];
+            int n=snprintf(candidate,sizeof(candidate),"%s/%s",*p ? p : ".",name);
+            if (n >= 0 && n < (int)sizeof(candidate) && access(candidate,X_OK) == 0
+                && realpath(candidate,plum_os_buf)) break;
+            p=next;
+        }
+        free(paths);
+    }
+#endif
+    return plum_os_buf;
+}
+
+// Inspect trusted Clang JSON AST output, not C source spellings: adjacent
+// literals and escapes can conceal assembler file-reading directives.
+// Ordinary asm symbol labels are safe only when their emitted names have
+// no quoting/whitespace/control characters that could inject assembly.
+static const char *plum_cache_json_value(const char *p) {
+    while (*p && isspace((unsigned char)*p)) p++;
+    if (*p++ != ':') return NULL;
+    while (*p && isspace((unsigned char)*p)) p++;
+    return *p == '"' ? p+1 : NULL;
+}
+long long plum_cache_safe_ast(const char *ast) {
+    if (*ast != '{' || !strstr(ast,"\"TranslationUnitDecl\"")) return 0;
+    const char *p=ast;
+    while ((p=strstr(p,"\"kind\"")) != NULL) {
+        p+=6; const char *value=plum_cache_json_value(p);
+        if (!value) continue;
+        const char *end=strchr(value,'"'); if (!end) return 0;
+        size_t size=(size_t)(end-value);
+        for (size_t i=0; i+3<=size; i++) {
+            if (!memcmp(value+i,"Asm",3)
+                && !(size == 12 && !memcmp(value,"AsmLabelAttr",12))) return 0;
+        }
+        p=end+1;
+    }
+    p=ast;
+    while ((p=strstr(p,"\"mangledName\"")) != NULL) {
+        p+=13; const char *value=plum_cache_json_value(p);
+        if (!value) return 0;
+        for (; *value && *value != '"'; value++) {
+            unsigned char c=(unsigned char)*value;
+            if (!((c>='a' && c<='z') || (c>='A' && c<='Z')
+                || (c>='0' && c<='9') || c=='_' || c=='.' || c=='$')) return 0;
+        }
+        if (*value != '"') return 0;
+    }
+    return 1;
+}
+
+// Generated LLVM contains quoted IR strings and identifiers, and comments.
+// Only a bare `asm` token can introduce assembly. Do not mistake embedded
+// C source or an application's string data for an LLVM assembly operand.
+static int plum_cache_ir_word(unsigned char c) {
+    return (c>='a' && c<='z') || (c>='A' && c<='Z') || (c>='0' && c<='9')
+        || c=='_' || c=='.' || c=='$' || c=='-' || c=='@' || c=='%' || c=='!';
+}
+long long plum_cache_safe_ir(const char *ir) {
+    const char *p=ir;
+    while (*p) {
+        if (*p == ';') { while (*p && *p!='\n') p++; }
+        else if (*p == '"') {
+            p++;
+            while (*p && *p!='"') {
+                if (*p=='\\') { p++; if (!*p) return 0; }
+                p++;
+            }
+            if (!*p) return 0;
+            p++;
+        } else if (plum_cache_ir_word((unsigned char)*p)) {
+            const char *start=p;
+            while (plum_cache_ir_word((unsigned char)*p)) p++;
+            if (p-start == 3 && !memcmp(start,"asm",3)) return 0;
+        } else { p++; }
+    }
+    return 1;
+}
 
 // Creates a fresh, empty, private directory and returns its path.
 // Returns "" -- an empty, non-null CStr -- on failure, because a null
@@ -155,6 +471,12 @@ static int plum_remove_tree(const char *path) {
     if (lstat(path, &st) != 0) return -1;
     if (!S_ISDIR(st.st_mode)) return remove(path) == 0 ? 0 : -1;
 #else
+    DWORD attrs=GetFileAttributesA(path);
+    if (attrs == INVALID_FILE_ATTRIBUTES) return -1;
+    if (attrs & FILE_ATTRIBUTE_REPARSE_POINT) {
+        if (attrs & FILE_ATTRIBUTE_DIRECTORY) return RemoveDirectoryA(path) ? 0 : -1;
+        return remove(path) == 0 ? 0 : -1;
+    }
     if (!plum_is_dir(path)) return remove(path) == 0 ? 0 : -1;
 #endif
 
@@ -286,6 +608,108 @@ long long os_stat_load(const char *path) {
 long long os_stat_size(void) { return stat_size; }
 long long os_stat_mtime(void) { return stat_mtime; }
 long long os_stat_is_dir(void) { return stat_is_dir; }
+
+// Retention is best effort and runs after compilation. Only complete hash
+// entries are eviction candidates; staging is protected by its live owner.
+// Cache roots must be private to this host/user (not a shared network store).
+typedef struct { char *path; uint64_t bytes; time_t age; } plum_cache_entry;
+
+static int plum_cache_stat_private(const char *path, struct stat *st) {
+#if defined(_WIN32)
+    DWORD attrs=GetFileAttributesA(path);
+    if (attrs == INVALID_FILE_ATTRIBUTES || (attrs & FILE_ATTRIBUTE_REPARSE_POINT)) return -1;
+    return stat(path,st);
+#else
+    return lstat(path,st);
+#endif
+}
+
+static uint64_t plum_cache_tree_bytes(const char *path) {
+    struct stat st;
+    if (plum_cache_stat_private(path,&st) != 0) return 0;
+    if (S_ISREG(st.st_mode)) return st.st_size > 0 ? (uint64_t)st.st_size : 0;
+    if (!S_ISDIR(st.st_mode)) return 0;
+    DIR *d=opendir(path); if (!d) return 0;
+    uint64_t bytes=0; struct dirent *e; char child[PLUM_PATH_MAX];
+    while ((e=readdir(d)) != NULL) {
+        if (!strcmp(e->d_name,".") || !strcmp(e->d_name,"..")) continue;
+        if (plum_join(child,sizeof(child),path,e->d_name) == 0) bytes+=plum_cache_tree_bytes(child);
+    }
+    closedir(d); return bytes;
+}
+
+static int plum_cache_owner_gone(const char *path) {
+    char owner[PLUM_PATH_MAX]; long pid=0;
+    if (plum_join(owner,sizeof(owner),path,".owner") != 0) return 0;
+    FILE *f=fopen(owner,"r"); if (!f) return 0;
+    int parsed=fscanf(f,"%ld",&pid); fclose(f);
+    if (parsed != 1 || pid <= 0 || pid > 2147483647L) return 0;
+#if defined(_WIN32)
+    HANDLE process=OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION,FALSE,(DWORD)pid);
+    if (!process) return GetLastError() == ERROR_INVALID_PARAMETER;
+    DWORD code=STILL_ACTIVE;
+    int gone=GetExitCodeProcess(process,&code) && code != STILL_ACTIVE;
+    CloseHandle(process); return gone;
+#else
+    return kill((pid_t)pid,0) != 0 && errno == ESRCH;
+#endif
+}
+
+static int plum_cache_oldest(const void *a, const void *b) {
+    const plum_cache_entry *x=a, *y=b;
+    if (x->age != y->age) return x->age < y->age ? -1 : 1;
+    return strcmp(x->path,y->path);
+}
+
+long long plum_cache_prune(const char *root, long long limit) {
+    if (limit < 0) return 0;
+    const char *kinds[]={"ir","obj","shims"};
+    plum_cache_entry *entries=NULL; size_t count=0, capacity=0;
+    uint64_t total=0; long long removed=0; time_t now=time(NULL);
+    char parent[PLUM_PATH_MAX], path[PLUM_PATH_MAX]; struct stat st;
+    for (size_t k=0;k<3;k++) {
+        if (plum_join(parent,sizeof(parent),root,kinds[k]) != 0
+            || plum_cache_stat_private(parent,&st) != 0 || !S_ISDIR(st.st_mode)) continue;
+        DIR *d=opendir(parent); if (!d) continue;
+        struct dirent *e;
+        while ((e=readdir(d)) != NULL) {
+            if (plum_join(path,sizeof(path),parent,e->d_name) != 0
+                || plum_cache_stat_private(path,&st) != 0 || !S_ISDIR(st.st_mode)) continue;
+            // Windows GetTempFileName uses pcb*.tmp; POSIX uses .partial-*.
+            if (!strncmp(e->d_name,".partial-",9) || !strncmp(e->d_name,"pcb",3)) {
+                if (now > st.st_mtime && now-st.st_mtime > 86400 && plum_cache_owner_gone(path)) {
+                    if (plum_remove_tree(path) == 0) removed++;
+                }
+                continue;
+            }
+            if (strlen(e->d_name) != 64) continue;
+            int hex=1;
+            for (size_t i=0;i<64;i++) {
+                if (!((e->d_name[i]>='0' && e->d_name[i]<='9')
+                    || (e->d_name[i]>='a' && e->d_name[i]<='f'))) { hex=0; break; }
+            }
+            if (!hex) continue;
+            if (count == capacity) {
+                size_t next=capacity ? capacity*2 : 32;
+                plum_cache_entry *grown=realloc(entries,next*sizeof(*entries));
+                if (!grown) break;
+                entries=grown; capacity=next;
+            }
+            char *saved=strdup(path); if (!saved) break;
+            uint64_t bytes=plum_cache_tree_bytes(path);
+            entries[count++]=(plum_cache_entry){saved,bytes,st.st_mtime}; total+=bytes;
+        }
+        closedir(d);
+    }
+    if (count > 1) qsort(entries,count,sizeof(*entries),plum_cache_oldest);
+    for (size_t i=0;i<count;i++) {
+        if (total > (uint64_t)limit && plum_remove_tree(entries[i].path) == 0) {
+            total=total >= entries[i].bytes ? total-entries[i].bytes : 0; removed++;
+        }
+        free(entries[i].path);
+    }
+    free(entries); return removed;
+}
 
 // Three-way, and the third case is the point: 1 present, 0 absent, -1
 // CANNOT SAY.

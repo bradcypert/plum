@@ -25,9 +25,64 @@ Compile and run it in one step:
 plum run myapp
 ```
 
-(The bare `plum myapp` form, with no `run`, still works too, for backward
-compatibility; `plum run` is the recommended, explicit spelling,
-symmetric with `plum build`.)
+`run` caches validated LLVM IR. On Linux with the default Clang driver,
+it also caches compiled objects when it can fingerprint the compiler and
+its loaded libraries. C inputs are preprocessed again so header edits and
+changes in include search paths are reflected. Every run links a fresh
+temporary executable and inherits your arguments, working directory and
+terminal streams. Other platforms and custom `PLUM_CC` commands reuse IR
+and compile native inputs normally.
+
+The cache is under `PLUM_CACHE/build/v1`, or the same default cache root
+used for packages (`XDG_CACHE_HOME/plum`, then `~/.cache/plum`). Source
+contents, discovered files, dependencies, compile-time embeds, compiler
+contents and build modes determine reuse. A failed edit never runs the
+previous successful program. Cache I/O failures fall back to compilation.
+
+```sh
+PLUM_NO_BUILD_CACHE=1 plum run myapp  # bypass all build artifacts
+PLUM_NO_OBJECT_CACHE=1 plum run myapp # reuse IR, compile native inputs
+PLUM_CACHE_TRACE=1 plum run myapp     # cache decisions on stderr
+PLUM_PROFILE=1 plum run myapp         # phase timings/counts on stderr
+PLUM_BUILD_CACHE_MAX_BYTES=536870912 plum run myapp  # 512 MiB budget
+plum cache list build
+plum cache clean build
+```
+
+Build artifacts have a default 1 GiB budget. After cached compilation,
+oldest-published IR, object and shim entries are removed until the cache
+fits the budget. Set `PLUM_BUILD_CACHE_MAX_BYTES` to a nonnegative byte
+limit to override it; zero retains no completed entries. Invalid values
+use the default. Cleanup is best effort: concurrent publishers can
+briefly exceed the budget, and cache I/O errors never fail a build.
+Staging directories older than 24 hours are removed only when their
+recorded owner process has exited; live or unknown owners are preserved.
+`plum cache clean build` removes the entire build cache immediately.
+These commands leave fetched packages alone; the existing `plum cache list` and `plum cache clean` continue to manage
+packages. Generated C shim sources also live in the build cache so their
+paths stay stable between object builds. No executable runs from the cache.
+
+Use a cache directory trusted by your user on this machine. Shared writable
+or network cache roots are unsupported: integrity hashes detect corruption,
+but do not authenticate artifacts against another writer. Cached LLVM IR
+can retain earlier `@embed_file` contents until eviction or explicit cleaning.
+
+Shared shims are verified and published as complete directories, so
+concurrent builds cannot read another writer's partially extracted header.
+
+Object validation has a cost: it hashes the native toolchain and runs C
+preprocessing even on a hit. Initial cache population can be slower than
+an uncached run. `PLUM_NO_OBJECT_CACHE=1` keeps IR reuse while avoiding
+native-object validation/population. See the
+[measured results](docs/issue-63-results.md) for the local tradeoff.
+
+Build inputs and the toolchain must remain stable during one compilation,
+as they must for an ordinary build. Observed source changes prevent cache
+publication. Corrupt entries are treated as misses and repaired.
+
+Use `plum run myapp/main.plum` to run a single file. Both file and project
+forms use the build cache. The self-hosted compiler requires the `run`
+subcommand; a bare `plum myapp` invocation prints usage.
 
 Or keep the binary:
 

@@ -1,0 +1,590 @@
+#!/usr/bin/env python3
+"""Exercise compiler artifact invalidation with an isolated cache and tree.
+
+Assertions use cache events/phase observations and program behavior, not
+elapsed-time thresholds. Native validation may conservatively bypass objects
+on an unsupported host; IR reuse is required on every supported host.
+"""
+import os
+from pathlib import Path
+import shutil
+import subprocess
+import sys
+import tempfile
+import time
+
+ROOT = Path(__file__).resolve().parent.parent
+REQUIRE_OBJECTS = "--require-objects" in sys.argv[1:]
+compiler_args = [arg for arg in sys.argv[1:] if arg != "--require-objects"]
+COMPILER = Path(compiler_args[0] if compiler_args else ROOT / "sh").resolve()
+# MSYS/Cygwin Python exposes POSIX APIs while the compiler is a native
+# Windows executable. Unix PTYs, symlinks and executable paths cannot be
+# assumed to have the same meaning to both processes.
+WINDOWS_HOST = os.name == "nt" or sys.platform.startswith(("msys", "cygwin"))
+passed = 0
+
+
+def require(condition, message):
+    global passed
+    if not condition:
+        raise AssertionError(message)
+    passed += 1
+
+
+with tempfile.TemporaryDirectory(prefix="plum-cache-check-") as tmp:
+    work = Path(tmp)
+    app = work / "app"
+    app.mkdir()
+    cache = work / "cache"
+    env = dict(os.environ, PLUM_CACHE=str(cache), PLUM_CACHE_TRACE="1",
+               PLUM_PROFILE="1", SH_TIMEOUT="180", SH_MEM="1G")
+    env.pop("PLUM_NO_BUILD_CACHE", None)
+    env.pop("PLUM_NO_OBJECT_CACHE", None)
+    env.pop("PLUM_CC", None)
+    env.pop("PLUM_BUILD_CACHE_MAX_BYTES", None)
+
+    def invoke(*args, overlay=None, ok=True):
+        result = subprocess.run([str(COMPILER), *map(str, args)], env=env | (overlay or {}),
+                                capture_output=True, text=True, timeout=180, cwd=work)
+        require((result.returncode == 0) == ok,
+                f"unexpected status for {args}: {result.returncode}\n{result.stdout}\n{result.stderr}")
+        return result
+
+    def run(want, event, *args, overlay=None, target=app):
+        result = invoke("run", target, *args, overlay=overlay)
+        require(result.stdout == want, f"wrong output: {result.stdout!r}; want {want!r}")
+        require(f"cache: IR {event}" in result.stderr, f"no IR {event}: {result.stderr}")
+        if event == "hit":
+            require("profile: type checking" not in result.stderr, "IR hit rechecked source")
+            require("profile: function emission" not in result.stderr, "IR hit emitted code")
+        return result
+
+    src = app / "main.plum"
+    src.write_text('let main (): Unit = println("one")\n')
+    run("one\n", "miss")
+    hit = run("one\n", "hit")
+    if REQUIRE_OBJECTS:
+        require(sys.platform.startswith("linux"), "required object cache needs Linux")
+        require("objects bypass" not in hit.stderr, "required object cache was bypassed: " + hit.stderr)
+    if sys.platform.startswith("linux") and "objects bypass" not in hit.stderr:
+        require("cache: object hit 0" in hit.stderr, "LLVM object was recompiled")
+        require("cache: object miss" not in hit.stderr, "unchanged generated C was recompiled")
+        require("profile: link " in hit.stderr, "cached objects did not get a fresh link")
+
+    # Same length and timestamp, different bytes.
+    st = src.stat()
+    src.write_text('let main (): Unit = println("two")\n')
+    os.utime(src, ns=(st.st_atime_ns, st.st_mtime_ns))
+    run("two\n", "miss")
+    run("two\n", "hit", overlay={"PLUM_CACHE_TRACE": "1", "AN_APPLICATION_VARIABLE": "new"})
+    run("two\n", "bypass", overlay={"PLUM_NO_BUILD_CACHE": "1"})
+    run("two\n", "hit")
+
+    added = app / "extra.plum"
+    added.write_text("let extra (): Int = 1\n")
+    run("two\n", "miss")
+    added.rename(app / "renamed.plum")
+    run("two\n", "miss")
+    (app / "renamed.plum").unlink()
+    run("two\n", "hit")  # returns to an already-built input identity
+    (app / ".hidden.plum").write_bytes(b"\0")
+    run("two\n", "hit")
+
+    # Source edits that fail may never run the last successful artifact.
+    src.write_text("let main (): Int = true\n")
+    failure = invoke("run", app, ok=False)
+    require("two\n" not in failure.stdout, "failed edit ran a stale executable")
+    require("IR hit" not in failure.stderr, "ill-typed edit got a hit")
+    src.write_text('let main (): Unit = println(@embed_file("../payload"))\n')
+    payload = work / "payload"
+    payload.write_text("first")
+    run("first\n", "miss")
+    run("first\n", "hit")
+    payload.write_text("other")
+    run("other\n", "miss")
+    payload.unlink()
+    invoke("run", app, ok=False)
+    payload.write_text("other")
+    run("other\n", "hit")
+
+    # Dependencies are resolved/verified before considering the artifact.
+    dep = work / "dep"
+    (dep / "greet").mkdir(parents=True)
+    (dep / "plum.pkg").write_text('Package { name: "dep" }\n')
+    (dep / "greet" / "greet.plum").write_text('pub let word (): String = "hello"\n')
+    (app / "plum.pkg").write_text('Package { name: "app", deps: [ Dep { name: "dep", path: "../dep" } ] }\n')
+    src.write_text('use dep.greet;\nlet main (): Unit = println(dep.greet.word())\n')
+    run("hello\n", "miss")
+    run("hello\n", "hit")
+    (dep / "greet" / "greet.plum").write_text('pub let word (): String = "world"\n')
+    run("world\n", "miss")
+    (dep / "bad.plum").write_text("let bad (): Unit = ()\n")
+    invoke("run", app, ok=False)
+    (dep / "bad.plum").unlink()
+    run("world\n", "hit")
+    (dep / "plum.pkg").write_text('Package { name: "dep", deps: [ Dep { name: "missing", path: "../absent" } ] }\n')
+    invoke("run", app, ok=False)
+    (dep / "plum.pkg").write_text('Package { name: "dep" }\n')
+    run("world\n", "hit")
+    (app / "plum.pkg").unlink()
+
+    # Adjacent packages can have the same manifest name but distinct paths.
+    # Their module namespaces still clash, rather than merging into one
+    # source group merely because the names happen to match.
+    one = work / "one"
+    shared_a = work / "shared-a"
+    shared_b = work / "shared-b"
+    one.mkdir()
+    for package in (shared_a, shared_b):
+        (package / "util").mkdir(parents=True)
+        (package / "plum.pkg").write_text('Package { name: "shared" }\n')
+    (shared_a / "util" / "a.plum").write_text('pub let a (): Int = 1\n')
+    (shared_b / "util" / "b.plum").write_text('pub let b (): Int = 2\n')
+    (one / "plum.pkg").write_text('Package { name: "one", deps: [ Dep { name: "shared", path: "../shared-a" } ] }\n')
+    (app / "plum.pkg").write_text('Package { name: "app", deps: [ Dep { name: "one", path: "../one" }, Dep { name: "shared", path: "../shared-b" } ] }\n')
+    src.write_text('let main (): Unit = println("clash")\n')
+    clash = invoke("run", app, ok=False)
+    require("both one of your modules" in clash.stdout + clash.stderr,
+            "distinct package groups lost their conflict diagnostic: " + clash.stdout + clash.stderr)
+    (app / "plum.pkg").unlink()
+
+    # Single-file dispatch must bypass eager lexing on a valid IR hit.
+    src.write_text('let main (): Unit = println("file")\n')
+    run("file\n", "miss", target=src)
+    run("file\n", "hit", target=src)
+
+    # Preserve explicit hidden files and path spellings.
+    named = work / "space and ünicode"
+    named.mkdir()
+    hidden = named / ".explicit.plum"
+    hidden.write_text('let main (): Unit = println("hidden")\n')
+    run("hidden\n", "miss", target=hidden)
+    run("hidden\n", "hit", target=hidden)
+    # Native Windows argv can contain ANSI bytes rather than UTF-8. A
+    # POSIX byte filename reproduces that manifest round-trip locally.
+    if os.name == "posix" and sys.platform.startswith("linux"):
+        byte_path = Path(os.fsdecode(os.fsencode(work) + b"/source-\xfc.plum"))
+        byte_path.write_text('let main (): Unit = println("bytes")\n')
+        run("bytes\n", "miss", target=byte_path)
+        run("bytes\n", "hit", target=byte_path)
+        byte_path.write_text('let main (): Unit = println("edit")\n')
+        run("edit\n", "miss", target=byte_path)
+        run("edit\n", "hit", target=byte_path)
+    if not WINDOWS_HOST:
+        alias = work / "source-link.plum"
+        alias.symlink_to(src)
+        run("file\n", "miss", target=alias)
+        run("file\n", "hit", target=alias)
+
+    # Hash the executable bytes, rather than trusting its path/version.
+    if sys.platform.startswith("linux"):
+        copied = work / "compiler"
+        shutil.copy2(ROOT / "sh.real" if COMPILER == ROOT / "sh" else COMPILER, copied)
+        with copied.open("ab") as binary:
+            binary.write(b"cache compiler identity test")
+        replacement = subprocess.run([str(copied), "run", str(src)], env=env,
+                                     capture_output=True, text=True, timeout=180, cwd=work)
+        require(replacement.returncode == 0 and replacement.stdout == "file\n", replacement.stderr)
+        require("IR miss" in replacement.stderr, "compiler content change reused old IR")
+
+    # Shared embedded C extraction is verified and repaired too.
+    for shim in (cache / "build" / "v1" / "shims").glob("*/os_shim.c"):
+        shim.write_text("corrupt shim")
+    run("file\n", "hit", target=src)
+    run("file\n", "miss", "--release", target=src)
+    run("file\n", "hit", "--release", target=src)
+    run("file\n", "miss", "--trace", target=src)
+    run("file\n", "hit", "--trace", target=src)
+
+    # Validate IR data and metadata before reuse, and recover the entry.
+    for entry in (cache / "build" / "v1" / "ir").iterdir():
+        if entry.is_dir():
+            (entry / "data").write_text("corrupted IR")
+    run("file\n", "miss", target=src)
+    run("file\n", "hit", target=src)
+    for entry in (cache / "build" / "v1" / "ir").iterdir():
+        if entry.is_dir():
+            (entry / "meta").write_text("truncated")
+    run("file\n", "miss", target=src)
+    run("file\n", "hit", target=src)
+    for entry in (cache / "build" / "v1" / "obj").glob("*"):
+        if entry.is_dir():
+            (entry / "data").write_bytes(b"not an object")
+    result = run("file\n", "hit", target=src)
+    require("object hit" not in result.stderr, "corrupt objects were reused")
+    run("file\n", "hit", target=src)
+
+    # Runtime arguments/streams and working directory are inherited on hits.
+    src.write_text('use Os;\nlet main (): Unit = { println(args()[0]); println(Os.read_stdin_line().unwrap_or(None).unwrap_or("missing")); }\n')
+    def interactive_run(word, event):
+        result = subprocess.run([str(COMPILER), "run", str(src), word], env=env,
+                                input="input\n", capture_output=True, text=True,
+                                timeout=180, cwd=work)
+        require(result.returncode == 0, result.stderr + result.stdout)
+        require(result.stdout == word + "\ninput\n", "cached run lost arguments or stdin")
+        require(f"cache: IR {event}" in result.stderr, result.stderr)
+    interactive_run("first", "miss")
+    interactive_run("second", "hit")
+    (work / "relative-input").write_text("inherited cwd")
+    src.write_text('use Os;\nlet main (): Unit = println(Os.read_file("relative-input").unwrap_or("wrong cwd"))\n')
+    run("inherited cwd\n", "miss", target=src)
+    run("inherited cwd\n", "hit", target=src)
+    src.write_text('use Os;\nlet main (): Unit = Os.exit_with(7)\n')
+    reference = invoke("run", src, overlay={"PLUM_NO_BUILD_CACHE": "1"}, ok=False)
+    for event in ("miss", "hit"):
+        failure = invoke("run", src, ok=False)
+        require(f"cache: IR {event}" in failure.stderr, failure.stderr)
+        require(failure.returncode == reference.returncode and failure.stdout == reference.stdout,
+                "cached run changed nonzero child status handling")
+
+    if not WINDOWS_HOST:
+        import fcntl
+        import pty
+        import select
+        import signal
+        import struct
+        import termios
+        src.write_text('use Terminal;\nlet main (): Unit = { println("streams=${Terminal.is_tty(Stdin)},${Terminal.is_tty(Stdout)},${Terminal.is_tty(Stderr)}"); println(match Terminal.size() { Ok(s) => "size=${s.cols}x${s.rows}", Err(_) => "no terminal" }); }\n')
+        for event in ("miss", "hit"):
+            pid, fd = pty.fork()
+            if pid == 0:
+                os.chdir(work)
+                os.execve(COMPILER, [str(COMPILER), "run", str(src)], env)
+            fcntl.ioctl(fd, termios.TIOCSWINSZ, struct.pack("HHHH", 42, 137, 0, 0))
+            output = bytearray()
+            deadline = time.monotonic() + 180
+            while True:
+                if time.monotonic() > deadline:
+                    os.kill(pid, signal.SIGKILL)
+                    raise AssertionError("cached terminal run timed out")
+                if not select.select([fd], [], [], 1)[0]:
+                    continue
+                try:
+                    chunk = os.read(fd, 4096)
+                except OSError:
+                    break
+                if not chunk:
+                    break
+                output.extend(chunk)
+            os.close(fd)
+            _, status = os.waitpid(pid, 0)
+            transcript = output.decode(errors="replace")
+            require(status == 0, transcript)
+            require("streams=true,true,true" in transcript and "size=137x42" in transcript,
+                    "cached execution lost its terminal: " + transcript)
+            require(f"cache: IR {event}" in transcript, transcript)
+
+    # Driver commands are opaque; IR can still be reused without pretending
+    # that the custom driver's native products have been fingerprinted.
+    src.write_text('let main (): Unit = println("driver")\n')
+    run("driver\n", "miss", target=src)
+    result = run("driver\n", "hit", target=src, overlay={"PLUM_CC": "clang"})
+    require("objects bypass" in result.stderr, "opaque driver reused native objects")
+    result = run("driver\n", "hit", target=src, overlay={"PLUM_NO_OBJECT_CACHE": "1"})
+    require("object hit" not in result.stderr, "object bypass control was ignored")
+    if sys.platform.startswith("linux"):
+        result = run("driver\n", "hit", target=src, overlay={"LD_LIBRARY_PATH": str(work)})
+        require("objects bypass" in result.stderr, "custom loader environment reused native objects")
+
+        # An isolated real Clang with a default configuration is still the
+        # default driver, not PLUM_CC. Reject its uncertified object path
+        # and invoke the ordinary source compile/link operation instead.
+        toolchain = work / "configured-clang"
+        (toolchain / "bin").mkdir(parents=True)
+        original_clang = Path(shutil.which("clang")).resolve()
+        shutil.copy2(original_clang, toolchain / "bin" / "clang")
+        (toolchain / "lib").symlink_to(original_clang.parent.parent / "lib", target_is_directory=True)
+        (toolchain / "bin" / "clang.cfg").write_text("-D CACHE_CC_CONFIG=1\n")
+        configured_env = {"PATH": str(toolchain / "bin") + os.pathsep + env["PATH"]}
+        result = run("driver\n", "hit", target=src, overlay=configured_env)
+        require("objects bypass" in result.stderr, "default compiler configuration reused objects")
+        if "unsupported driver or loader" not in result.stderr:
+            require("uncertified compiler configuration" in result.stderr, result.stderr)
+        require("profile: native compile/link" in result.stderr,
+                "uncertified configuration did not use the ordinary native invocation")
+
+    # Native headers and include-search shadowing are independently
+    # invalidated even while the unchanged Plum program hits its IR entry.
+    native = app / "native"
+    native.mkdir()
+    low = work / "include-low"
+    high = work / "include-high"
+    low.mkdir()
+    high.mkdir()
+    (low / "cache_value.h").write_text('#define CACHE_WORD "low"\n')
+    (native / "word.c").write_text('#include <cache_value.h>\nconst char *cache_word(void) { return CACHE_WORD; }\n')
+    src.write_text('extern "C" { fn cache_word() -> CStr; }\nlet main (): Unit = unsafe { println(cache_word().as_string()) }\n')
+    include_env = {"CPATH": os.pathsep.join([str(high), str(low)])}
+    run("low\n", "miss", overlay=include_env)
+    run("low\n", "hit", overlay=include_env)
+    (low / "cache_value.h").write_text('#define CACHE_WORD "edit"\n')
+    run("edit\n", "hit", overlay=include_env)
+    (high / "cache_value.h").write_text('#define CACHE_WORD "shadow"\n')
+    run("shadow\n", "hit", overlay=include_env)
+    (high / "cache_value.h").unlink()
+    (low / "cache_value.h").unlink()
+    invoke("run", app, overlay=include_env, ok=False)
+    shutil.rmtree(native)
+
+    # Library bytes and newly shadowing search candidates are resolved at
+    # every fresh link, even when the IR and compiled objects all hit.
+    if not WINDOWS_HOST and shutil.which("ar"):
+        def archive(directory, word):
+            source = work / "library.c"
+            source.write_text(f'const char *cache_word(void) {{ return "{word}"; }}\n')
+            obj = work / "library.o"
+            subprocess.run(["clang", "-c", str(source), "-o", str(obj)], env=env,
+                           check=True, capture_output=True, timeout=180)
+            subprocess.run(["ar", "rcs", str(directory / "libcacheword.a"), str(obj)], env=env,
+                           check=True, capture_output=True, timeout=180)
+        library_env = {"LIBRARY_PATH": os.pathsep.join([str(high), str(low)])}
+        archive(low, "library")
+        run("library\n", "hit", "--link-lib", "cacheword", overlay=library_env)
+        archive(low, "replacement")
+        run("replacement\n", "hit", "--link-lib", "cacheword", overlay=library_env)
+        archive(high, "earlier library")
+        run("earlier library\n", "hit", "--link-lib", "cacheword", overlay=library_env)
+        (high / "libcacheword.a").unlink()
+        (low / "libcacheword.a").unlink()
+        invoke("run", app, "--link-lib", "cacheword", overlay=library_env, ok=False)
+
+    if sys.platform.startswith("linux"):
+        # Assembly can read files outside the preprocessor's include graph.
+        # Concatenated literals deliberately conceal the directive from a
+        # text search; Clang's parsed assembly node must prevent reuse.
+        native.mkdir()
+        asset = work / "assembler-payload"
+        asset.write_text("assembly first")
+        (native / "word.c").write_text(
+            '__asm__(".section .rodata\\n.globl cache_blob\\ncache_blob:\\n" '
+            '".in" "cbin \\"' + str(asset) + '\\"\\n.byte 0\\n.text\\n");\n'
+            'extern const char cache_blob[];\n'
+            'const char *cache_word(void) { return cache_blob; }\n')
+        # The IR is already cached from the earlier native-header fixture.
+        run("assembly first\n", "hit")
+        asset.write_text("assembly other")
+        run("assembly other\n", "hit")
+        asset.unlink()
+        invoke("run", app, ok=False)
+        shutil.rmtree(native)
+    src.write_text('let main (): Unit = println("file")\n')
+
+    # Two cold writers publish complete entries; losing a race is harmless.
+    invoke("cache", "clean", "build")
+    commands = [[str(COMPILER), "run", str(src)]] * 2
+    processes = [subprocess.Popen(command, env=env, stdout=subprocess.PIPE,
+                                  stderr=subprocess.PIPE, text=True, cwd=work) for command in commands]
+    for process in processes:
+        stdout, stderr = process.communicate(timeout=180)
+        require(process.returncode == 0 and stdout == "file\n", "concurrent build failed: " + stderr)
+    run("file\n", "hit", target=src)
+
+    # A concurrent cleaner may remove shared inputs during fingerprinting
+    # or native compilation. Both object reuse and IR-only reuse recover
+    # through private extraction, without failing an otherwise valid run.
+    for overlay in ({}, {"PLUM_NO_OBJECT_CACHE": "1"}):
+        run("file\n", "hit", target=src)
+        process = subprocess.Popen([str(COMPILER), "run", str(src)], env=env | overlay,
+                                   stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                                   text=True, cwd=work)
+        time.sleep(0.05)
+        invoke("cache", "clean", "build")
+        stdout, stderr = process.communicate(timeout=180)
+        require(process.returncode == 0 and stdout == "file\n", "concurrent clean broke execution: " + stderr)
+        after_clean = invoke("run", src)
+        require(after_clean.stdout == "file\n", "concurrent publication left an unusable cache")
+
+    # Also force the native-input disappearance deterministically. This
+    # opaque driver blocks before Clang reads shared C inputs; after clean
+    # it fails that compilation, and the private retry must succeed.
+    if not WINDOWS_HOST:
+        driver = work / "blocking-driver.py"
+        driver.write_text('''import os, pathlib, subprocess, sys, time
+ready = pathlib.Path(os.environ["CACHE_TEST_READY"])
+release = pathlib.Path(os.environ["CACHE_TEST_RELEASE"])
+if not release.exists():
+    ready.touch()
+    deadline = time.monotonic() + 120
+    while not release.exists():
+        if time.monotonic() > deadline:
+            raise SystemExit("driver barrier timed out")
+        time.sleep(0.01)
+raise SystemExit(subprocess.call(["clang", *sys.argv[1:]]))
+''')
+        for index, object_control in enumerate(({}, {"PLUM_NO_OBJECT_CACHE": "1"})):
+            ready = work / f"ready-{index}"
+            release = work / f"release-{index}"
+            overlay = object_control | {"PLUM_CC": f"{sys.executable} {driver}",
+                                        "CACHE_TEST_READY": str(ready), "CACHE_TEST_RELEASE": str(release)}
+            process = subprocess.Popen([str(COMPILER), "run", str(src)], env=env | overlay,
+                                       stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                                       text=True, cwd=work)
+            deadline = time.monotonic() + 120
+            while not ready.exists() and process.poll() is None and time.monotonic() < deadline:
+                time.sleep(0.01)
+            require(ready.exists(), "native driver never reached its input-read barrier")
+            invoke("cache", "clean", "build")
+            release.touch()
+            stdout, stderr = process.communicate(timeout=180)
+            require(process.returncode == 0 and stdout == "file\n", "private recovery failed: " + stderr)
+            require("retrying uncached" in stderr, "forced shared-input removal did not exercise recovery")
+            invoke("run", src)
+
+    # Cache I/O failure is optional; compiling/running is still possible.
+    blocked = work / "not-a-directory"
+    blocked.write_text("occupied")
+    run("file\n", "miss", target=src, overlay={"PLUM_CACHE": str(blocked)})
+    invoke("cache", "list", "build")
+    require(cache.exists(), "cache disappeared while listing")
+    invoke("cache", "clean", "build")
+    require(not (cache / "build" / "v1").exists(), "build cache clean left artifacts")
+    run("file\n", "miss", target=src)
+
+    # Retention removes complete entries, protects live publishers, and
+    # removes abandoned publishers without following directory symlinks.
+    retention = work / "retention"
+    retained_root = retention / "build" / "v1"
+    entries = retained_root / "ir"
+    run("file\n", "miss", target=src, overlay={"PLUM_CACHE": str(retention)})
+    if sys.platform.startswith("linux"):
+        # glibc's freed-memory poisoning reproduces Darwin's allocator exposing
+        # a CStr borrowed from a temporary root String. Disable tcache so free
+        # actually poisons the bytes; correctness must not depend on them.
+        run("file\n", "hit", target=src, overlay={"PLUM_CACHE": str(retention),
+            "PLUM_BUILD_CACHE_MAX_BYTES": "0", "MALLOC_PERTURB_": "165",
+            "GLIBC_TUNABLES": "glibc.malloc.tcache_count=0"})
+        require(not list(entries.glob("[0-9a-f]" * 64)),
+                "pruning lost its cache root with freed-memory poisoning")
+        run("file\n", "miss", target=src, overlay={"PLUM_CACHE": str(retention)})
+    existing_bytes = sum(f.stat().st_size for f in retained_root.rglob("*") if f.is_file())
+    old = entries / ("a" * 64)
+    recent = entries / ("b" * 64)
+    for entry in (old, recent):
+        entry.mkdir()
+        (entry / "data").write_bytes(b"x" * 4096)
+    os.utime(old, (1, 1))
+    os.utime(recent, (2, 2))
+    live = entries / ".partial-live"
+    dead = entries / ".partial-dead"
+    unknown = entries / ".partial-unknown"
+    fresh = entries / ".partial-fresh"
+    for entry in (live, dead, unknown, fresh):
+        entry.mkdir()
+    (live / ".owner").write_text(str(os.getpid()))
+    # Obtain a real exited PID rather than assuming a large PID is unused.
+    child = subprocess.Popen([sys.executable, "-c", "pass"])
+    child.wait()
+    (dead / ".owner").write_text(str(child.pid))
+    (fresh / ".owner").write_text(str(child.pid))
+    for entry in (live, dead, unknown):
+        os.utime(entry, (1, 1))
+    # Exactly one synthetic entry fits alongside the real, newer artifacts.
+    eviction = run("file\n", "hit", target=src, overlay={"PLUM_CACHE": str(retention),
+        "PLUM_BUILD_CACHE_MAX_BYTES": str(existing_bytes + 4096)})
+    def retention_snapshot():
+        rows = []
+        for kind in ("ir", "obj", "shims"):
+            for entry in sorted((retained_root / kind).glob("*")):
+                if entry.is_dir():
+                    size = sum(f.stat().st_size for f in entry.rglob("*") if f.is_file())
+                    rows.append(f"{kind}/{entry.name}: {size} bytes, mtime={entry.stat().st_mtime}")
+        return "\n".join(rows)
+    require(not old.exists() and recent.exists(),
+            f"retention did not evict oldest first; budget={existing_bytes + 4096}, "
+            f"old={old.exists()}, recent={recent.exists()}\n"
+            + retention_snapshot() + "\n" + eviction.stderr)
+    # MSYS/Cygwin Python PIDs are not native Windows process IDs.
+    if not WINDOWS_HOST or os.name == "nt":
+        require(live.exists(), "retention removed a live publisher")
+        require(not dead.exists(), "retention kept an abandoned publisher")
+    require(unknown.exists(), "retention removed a stage with unknown ownership")
+    require(fresh.exists(), "retention removed a recent stage")
+    run("file\n", "hit", target=src, overlay={"PLUM_CACHE": str(retention),
+        "PLUM_BUILD_CACHE_MAX_BYTES": "0"})
+    for kind in ("ir", "obj", "shims"):
+        require(not list((retained_root / kind).glob("[0-9a-f]" * 64)),
+                "zero budget retained completed " + kind)
+    if not WINDOWS_HOST:
+        outside = work / "outside-retention"
+        outside.mkdir()
+        sentinel = outside / "keep"
+        sentinel.write_text("preserved")
+        alias = entries / ("c" * 64)
+        alias.symlink_to(outside, target_is_directory=True)
+        nested = entries / ("d" * 64)
+        nested.mkdir()
+        (nested / "data").write_text("evict")
+        (nested / "link").symlink_to(outside, target_is_directory=True)
+        run("file\n", "miss", target=src, overlay={"PLUM_CACHE": str(retention),
+            "PLUM_BUILD_CACHE_MAX_BYTES": "0"})
+        require(sentinel.read_text() == "preserved", "pruning followed a directory symlink")
+        require(alias.is_symlink() and not nested.exists(), "symlink pruning boundaries changed")
+    if os.name == "nt":
+        outside = work / "outside-retention"
+        outside.mkdir()
+        sentinel = outside / "keep"
+        sentinel.write_text("preserved")
+        nested = entries / ("d" * 64)
+        nested.mkdir()
+        (nested / "data").write_text("evict")
+        subprocess.run(["cmd", "/c", "mklink", "/J", str(nested / "link"), str(outside)],
+                       check=True, capture_output=True)
+        run("file\n", "miss", target=src, overlay={"PLUM_CACHE": str(retention),
+            "PLUM_BUILD_CACHE_MAX_BYTES": "0"})
+        require(sentinel.read_text() == "preserved" and not nested.exists(),
+                "pruning followed a Windows directory junction")
+    # Forced eviction during publication/linking must remain recoverable.
+    eviction_env = env | {"PLUM_CACHE": str(retention), "PLUM_BUILD_CACHE_MAX_BYTES": "0"}
+    publishers = [subprocess.Popen([str(COMPILER), "run", str(src)], env=eviction_env,
+                  stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, cwd=work)
+                  for _ in range(2)]
+    for process in publishers:
+        stdout, stderr = process.communicate(timeout=180)
+        require(process.returncode == 0 and stdout == "file\n", "concurrent eviction broke execution: " + stderr)
+    run("file\n", "miss", target=src, overlay={"PLUM_CACHE": str(retention),
+        "PLUM_BUILD_CACHE_MAX_BYTES": "invalid"})
+    run("file\n", "hit", target=src, overlay={"PLUM_CACHE": str(retention),
+        "PLUM_BUILD_CACHE_MAX_BYTES": "invalid"})
+
+    # Check real linked debug locations through the object-hit path.
+    if sys.platform.startswith("linux") and "objects bypass" not in hit.stderr:
+        require(shutil.which("nm") and shutil.which("addr2line"), "Linux cached debug checks need binutils")
+        debug = work / "debug"
+        (debug / "native").mkdir(parents=True)
+        plum = debug / "main.plum"
+        native = debug / "native" / "location.c"
+        program = ('use Os;\nextern "C" { fn native_location() -> Int; '
+                   'fn plum_cache_copy(src: CStr, dst: CStr, digest: CStr) -> Int; }\n'
+                   'let top (n: Int): Int = n + 1\n'
+                   'let main (): Unit = { println(top(unsafe { native_location() }).to_string()); '
+                   'let executable = Os.self_exe(()).unwrap_or(""); let saved = args()[0]; '
+                   'let copied = unsafe { plum_cache_copy(executable.as_cstr(), '
+                   'saved.as_cstr(), "".as_cstr()) }; assert_eq(copied, 0); }\n')
+        c_program = '// source location fixture\n__attribute__((noinline)) long long native_location(void) { return 7; }\n'
+        def check_locations(binary, plum_line, native_line):
+            symbols = subprocess.check_output(["nm", str(binary)], text=True)
+            for name, path, line in (("plum_top", plum, plum_line),
+                                     ("native_location", native, native_line)):
+                matches = [row.split()[0] for row in symbols.splitlines()
+                           if row.split()[-1:] == [name]]
+                require(len(matches) == 1, "missing debug fixture symbol: " + name)
+                location = subprocess.check_output(["addr2line", "-e", str(binary),
+                    "0x" + matches[0]], text=True).strip()
+                require(location == f"{path}:{line}", f"{name} debug location: {location}")
+        for edit in (0, 1):
+            plum.write_text("// edited\n" * edit + program)
+            native.write_text("// edited\n" * edit + c_program)
+            for event in ("miss", "hit"):
+                binary = work / f"debug-{edit}-{event}"
+                result = run("8\n", event, binary, target=debug)
+                if event == "hit":
+                    require("objects bypass" not in result.stderr and "object miss" not in result.stderr,
+                            "debug fixture did not reuse objects: " + result.stderr)
+                    require("object hit 0" in result.stderr, "debug LLVM object was not reused")
+                    events = [line for line in result.stderr.splitlines()
+                              if line.startswith("cache: object ")]
+                    require(events[-1].startswith("cache: object hit "),
+                            "debug native fixture object was not reused")
+                check_locations(binary, 3 + edit, 2 + edit)
+
+print(f"build-cache-check: {passed} checks pass")

@@ -36,6 +36,7 @@
 use Os;
 use Path;
 use lexer;
+use buildcache;
 
 // --- AST ---
 
@@ -318,12 +319,12 @@ let fail (msg: String): Unit = panic_raw(msg)
 // When it is unset -- a unit test, a caller that never set it -- the
 // message falls back to exactly what it printed before, so nothing
 // depends on this having been done.
-pub struct SourceContext { pub path: String, pub source: String, pub starts: Array[Int], pub ends: Array[Int] }
+pub struct SourceContext { pub path: String, pub source: String, pub chars: Array[String], pub starts: Array[Int], pub ends: Array[Int] }
 
-let CTX: Ref[SourceContext] = ref(SourceContext { path: "", source: "", starts: [], ends: [] })
+let CTX: Ref[SourceContext] = ref(SourceContext { path: "", source: "", chars: [], starts: [], ends: [] })
 
 pub let set_source_context (path: String) (source: String) (starts: Array[Int]) (ends: Array[Int]): Unit =
-    CTX.set(SourceContext { path: path, source: source, starts: starts, ends: ends })
+    CTX.set(SourceContext { path: path, source: source, chars: chars_of(source), starts: starts, ends: ends })
 
 // The `///` block immediately above the token at `pos`.
 //
@@ -343,7 +344,10 @@ pub let doc_before (pos: Int): String = {
         // a file happened to declare first -- and a module's first
         // declaration is exactly the one most likely to carry it.
         let from = if pos == 0 { 0 } else { ctx.ends[pos - 1] };
-        doc_lines_of(String.lines(String.slice(ctx.source, from, ctx.starts[pos])))
+        // String.slice decodes the whole string to characters. Doing that
+        // for every declaration made documentation extraction quadratic in
+        // source size, including the prelude on every cold compilation.
+        doc_lines_of(String.lines(Array.concat_all(Array.slice(ctx.chars, from, ctx.starts[pos]))))
     }
 }
 
@@ -1419,7 +1423,7 @@ let embed_file_expr (args: Array[PExpr]) (pos: Int): PExpr =
 
 let embed_read (full: String) (pos: Int): PExpr =
     match Os.read_file(full) {
-        Ok(text) => EStr(text),
+        Ok(text) => { buildcache.observe(full, text); EStr(text) },
         Err(e) => {
             // `e` already names the path, so this does not repeat it.
             fail_at(pos, "@embed_file: ".concat(e));

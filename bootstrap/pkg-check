@@ -547,6 +547,14 @@ EOF
         fail=$((fail + 1))
     fi
     expect_c "a vendored dependency still runs" "hello, world" "$plum" run "$work/consumer"
+    expect_c "a vendored dependency runs warm" "hello, world" "$plum" run "$work/consumer"
+    # A non-source asset does not change the Plum IR key. Verification of
+    # the package pin must nevertheless happen before a warm artifact hit.
+    vendored_greet="$(find "$work/consumer/vendor" -type f -path '*/greet/greet.plum' -print -quit)"
+    vendored_greeter="${vendored_greet%/greet/greet.plum}"
+    printf 'tampered asset\n' > "$vendored_greeter/cache-integrity-test.txt"
+    expect_c_err "warm run verifies vendored assets" "does not match its \`sha256\`" "$plum" run "$work/consumer"
+    rm "$vendored_greeter/cache-integrity-test.txt"
     # The offline proof gets its OWN consumer copy and temporarily hides
     # the cache rather than deleting it: later checks deliberately need
     # two cache revisions to coexist. A vendored build must not inspect
@@ -561,6 +569,7 @@ EOF
     # that verifies bytes nobody just downloaded.
     git_manifest ', sha256: "0000000000000000000000000000000000000000000000000000000000000000"'
     expect_c_err "a wrong hash stops the build" "does not match its \`sha256\`" "$plum" check "$work/consumer"
+    expect_c_err "a wrong hash stops run" "does not match its \`sha256\`" "$plum" run "$work/consumer"
 
     # Two commits of one repository are two cache entries, alongside the
     # already-fetched transitive dependency. This is the property a global

@@ -1,0 +1,126 @@
+#!/usr/bin/env python3
+"""Sequential performance measurements; requires an original compiler binary.
+
+Not a correctness gate or a universal timing threshold. Run on an idle host.
+Both compilers process the same current source tree and copied example input.
+"""
+import argparse
+import hashlib
+import json
+import os
+from pathlib import Path
+import platform
+import statistics
+import subprocess
+import tempfile
+import time
+
+ROOT = Path(__file__).resolve().parent.parent
+parser = argparse.ArgumentParser(description=__doc__)
+parser.add_argument("--baseline", type=Path, required=True)
+parser.add_argument("--candidate", type=Path, default=ROOT / "sh.real")
+parser.add_argument("--samples", type=int, default=3)
+parser.add_argument("--out", type=Path, required=True)
+args = parser.parse_args()
+if args.samples < 1:
+    parser.error("--samples must be positive")
+baseline, candidate = args.baseline.resolve(), args.candidate.resolve()
+
+def digest(path):
+    hasher = hashlib.sha256()
+    with path.open("rb") as source:
+        for block in iter(lambda: source.read(1024 * 1024), b""):
+            hasher.update(block)
+    return hasher.hexdigest()
+
+report = {
+    "platform": platform.platform(), "architecture": platform.machine(),
+    "clang": subprocess.check_output(["clang", "--version"], text=True),
+    "source_base": subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=ROOT, text=True).strip(),
+    "source_note": "Both binaries compile the modified current working tree; source_base identifies its parent revision.",
+    "baseline_sha256": digest(baseline), "candidate_sha256": digest(candidate),
+    "samples": args.samples, "results": {}, "profiles": {},
+}
+env = dict(os.environ)
+for name in ("PLUM_PROFILE", "PLUM_CACHE_TRACE", "PLUM_NO_BUILD_CACHE", "PLUM_NO_OBJECT_CACHE", "PLUM_CC"):
+    env.pop(name, None)
+
+with tempfile.TemporaryDirectory(prefix="plum-cache-measure-") as temp:
+    work = Path(temp)
+    env["TMPDIR"] = str(work)
+    env["PLUM_CACHE"] = str(work / "cache")
+
+    def invoke(compiler, command, overlay=None, llvm=None):
+        started = time.perf_counter()
+        if llvm is None:
+            result = subprocess.run([str(compiler), *map(str, command)], cwd=work,
+                                    env=env | (overlay or {}), capture_output=True,
+                                    timeout=240)
+        else:
+            with llvm.open("wb") as stream:
+                result = subprocess.run([str(compiler), *map(str, command)], cwd=work,
+                                        env=env | (overlay or {}), stdout=stream,
+                                        stderr=subprocess.PIPE, timeout=240)
+        elapsed = time.perf_counter() - started
+        if result.returncode:
+            raise RuntimeError(f"{command}: {result.stdout!r}\n{result.stderr.decode(errors='replace')}")
+        return elapsed, result.stdout, result.stderr.decode(errors="replace")
+
+    def measured(name, fn):
+        values = [fn(i) for i in range(args.samples)]
+        report["results"][name] = {"seconds": values, "median": statistics.median(values),
+                                   "min": min(values), "max": max(values)}
+        print(f"{name}: {statistics.median(values):.4f}s", flush=True)
+
+    for fixture in ("hello", "json"):
+        project = work / fixture
+        project.mkdir()
+        source = project / "main.plum"
+        original = ('let main (): Unit = println("hello")\n' if fixture == "hello"
+                    else (ROOT / "examples/json_and_files/main.plum").read_text())
+        source.write_text(original)
+        expected = invoke(baseline, ["run", project])[1]
+
+        def run(compiler, overlay=None):
+            elapsed, output, _ = invoke(compiler, ["run", project], overlay)
+            assert output == expected, f"{fixture}: changed output"
+            return elapsed
+
+        measured(f"{fixture}/baseline-run", lambda _: run(baseline))
+        measured(f"{fixture}/candidate-uncached-run", lambda _: run(candidate, {"PLUM_NO_BUILD_CACHE": "1"}))
+        def cold(i):
+            return run(candidate, {"PLUM_CACHE": str(work / f"cold-{fixture}-{i}")})
+        measured(f"{fixture}/candidate-empty-cache-run", cold)
+        run(candidate)
+        measured(f"{fixture}/candidate-warm-run", lambda _: run(candidate))
+        _, _, profile = invoke(candidate, ["run", project], {"PLUM_PROFILE": "1", "PLUM_CACHE_TRACE": "1"})
+        assert "cache: IR hit" in profile and "profile: type checking" not in profile
+        report["profiles"][f"{fixture}/warm"] = profile
+
+        def edit(i):
+            changed = original.replace('"hello"', f'"edit{i}"') if fixture == "hello" else original.replace('JsonString("json")', f'JsonString("edit{i}")')
+            source.write_text(changed)
+            elapsed, output, _ = invoke(candidate, ["run", project])
+            assert output != expected
+            return elapsed
+        measured(f"{fixture}/candidate-edit-run", edit)
+        source.write_text(original)
+        for label, compiler in (("baseline", baseline), ("candidate", candidate)):
+            measured(f"{fixture}/{label}-check", lambda _: invoke(compiler, ["check", project])[0])
+            measured(f"{fixture}/{label}-emit", lambda _: invoke(compiler, ["emit-llvm", project], llvm=work / f"{label}.ll")[0])
+        assert (work / "baseline.ll").read_bytes() == (work / "candidate.ll").read_bytes()
+        report[f"{fixture}_identical_ir"] = True
+
+    compiler_source = ROOT / "bootstrap/self_host"
+    for label, compiler in (("baseline", baseline), ("candidate", candidate)):
+        measured(f"compiler/{label}-check", lambda _: invoke(compiler, ["check", compiler_source])[0])
+        measured(f"compiler/{label}-emit", lambda _: invoke(compiler, ["emit-llvm", compiler_source], llvm=work / f"{label}.ll")[0])
+    assert (work / "baseline.ll").read_bytes() == (work / "candidate.ll").read_bytes(), "compiler IR changed"
+    report["compiler_identical_ir"] = True
+    _, _, profile = invoke(candidate, ["emit-llvm", compiler_source], {"PLUM_PROFILE": "1"}, llvm=work / "profile.ll")
+    report["profiles"]["compiler/emit"] = profile
+    measured("json/candidate-profiled-emit", lambda _: invoke(candidate, ["emit-llvm", work / "json"], {"PLUM_PROFILE": "1"}, llvm=work / "profile.ll")[0])
+
+args.out.parent.mkdir(parents=True, exist_ok=True)
+args.out.write_text(json.dumps(report, indent=2) + "\n")
+print(f"wrote {args.out}")
