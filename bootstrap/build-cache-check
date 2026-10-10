@@ -469,9 +469,20 @@ raise SystemExit(subprocess.call(["clang", *sys.argv[1:]]))
     for entry in (live, dead, unknown):
         os.utime(entry, (1, 1))
     # Exactly one synthetic entry fits alongside the real, newer artifacts.
-    run("file\n", "hit", target=src, overlay={"PLUM_CACHE": str(retention),
+    eviction = run("file\n", "hit", target=src, overlay={"PLUM_CACHE": str(retention),
         "PLUM_BUILD_CACHE_MAX_BYTES": str(existing_bytes + 4096)})
-    require(not old.exists() and recent.exists(), "retention did not evict oldest first")
+    def retention_snapshot():
+        rows = []
+        for kind in ("ir", "obj", "shims"):
+            for entry in sorted((retained_root / kind).glob("*")):
+                if entry.is_dir():
+                    size = sum(f.stat().st_size for f in entry.rglob("*") if f.is_file())
+                    rows.append(f"{kind}/{entry.name}: {size} bytes, mtime={entry.stat().st_mtime}")
+        return "\n".join(rows)
+    require(not old.exists() and recent.exists(),
+            f"retention did not evict oldest first; budget={existing_bytes + 4096}, "
+            f"old={old.exists()}, recent={recent.exists()}\n"
+            + retention_snapshot() + "\n" + eviction.stderr)
     # MSYS/Cygwin Python PIDs are not native Windows process IDs.
     if not WINDOWS_HOST or os.name == "nt":
         require(live.exists(), "retention removed a live publisher")
