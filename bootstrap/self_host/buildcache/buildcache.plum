@@ -199,10 +199,29 @@ pub let clean_cache (): Unit = {
     let dir = root(());
     if dir == "" { println("build cache: unavailable") }
     else if !Result.unwrap_or(Os.exists(dir), false) { println("build cache: empty") }
-    else { match Os.remove_tree(dir) {
-        Ok(_) => println("build cache: removed ${dir}"),
-        Err(e) => { Os.write_stderr(e.concat("\n")); Os.exit_with(1) },
-    } }
+    else {
+        // Detach on the same filesystem before traversing. Writers and other
+        // cleaners may still use the live path, but cannot mutate our snapshot.
+        // A new run may populate a new cache after this rename completes.
+        let stage = temp(Path.dirname(dir));
+        if stage == "" {
+            Os.write_stderr("build cache: could not stage cleaning ${dir}\n");
+            Os.exit_with(1)
+        } else {
+            let detached = Path.join(stage, "removed");
+            let moved = Os.rename_file(dir, detached);
+            let cleaned = Os.remove_tree(stage);
+            match moved {
+                Ok(_) => match cleaned {
+                    Ok(_) => println("build cache: removed ${dir}"),
+                    Err(e) => { Os.write_stderr(e.concat("\n")); Os.exit_with(1) },
+                },
+                Err(e) => if !Result.unwrap_or(Os.exists(dir), true) {
+                    println("build cache: empty")
+                } else { Os.write_stderr(e.concat("\n")); Os.exit_with(1) },
+            }
+        }
+    }
 }
 
 pub let test_cache_hash_vectors (): Unit = {

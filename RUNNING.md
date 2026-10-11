@@ -57,7 +57,8 @@ use the default. Cleanup is best effort: concurrent publishers can
 briefly exceed the budget, and cache I/O errors never fail a build.
 Staging directories older than 24 hours are removed only when their
 recorded owner process has exited; live or unknown owners are preserved.
-`plum cache clean build` removes the entire build cache immediately.
+`plum cache clean build` atomically moves the existing build cache aside,
+then deletes it. Runs started concurrently may populate a new cache.
 These commands leave fetched packages alone; the existing `plum cache list` and `plum cache clean` continue to manage
 packages. Generated C shim sources also live in the build cache so their
 paths stay stable between object builds. No executable runs from the cache.

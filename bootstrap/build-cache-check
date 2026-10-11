@@ -369,6 +369,26 @@ with tempfile.TemporaryDirectory(prefix="plum-cache-check-") as tmp:
         shutil.rmtree(native)
     src.write_text('let main (): Unit = println("file")\n')
 
+    # Cleaners must detach the cache before traversing it. Otherwise two
+    # cleaners enumerate/delete each other's entries and report spurious I/O
+    # failures. A large tree makes the overlapping traversal reproducible.
+    invoke("cache", "clean", "build")
+    for attempt in range(3):
+        cleaning_root = cache / "build" / "v1"
+        cleaning_root.mkdir(parents=True)
+        for index in range(3000):
+            (cleaning_root / str(index)).write_text("entry")
+        cleaners = [subprocess.Popen([str(COMPILER), "cache", "clean", "build"],
+                                    env=env, stdout=subprocess.PIPE,
+                                    stderr=subprocess.PIPE, text=True, cwd=work)
+                    for _ in range(8)]
+        for cleaner in cleaners:
+            stdout, stderr = cleaner.communicate(timeout=180)
+            require(cleaner.returncode == 0, "concurrent cleaner failed: " + stderr)
+        require(not cleaning_root.exists(), "concurrent cleaners left the old cache")
+        require(not list((cache / "build").iterdir()),
+                "concurrent cleaners left detached cache staging")
+
     # Two cold writers publish complete entries; losing a race is harmless.
     invoke("cache", "clean", "build")
     commands = [[str(COMPILER), "run", str(src)]] * 2
