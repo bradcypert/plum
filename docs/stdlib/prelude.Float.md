@@ -23,7 +23,10 @@ The larger of two. See `Float.min` on NaN.
 
 ## `let Float.to_fixed (x: Float) (decimals: Int): String`
 
-Exactly `decimals` places after the point, rounded HALF TO EVEN.
+`decimals` places after the point, rounded HALF TO EVEN. Precision is
+clamped to 0..17: negative values act as 0, and values above 17 act as 17.
+The limit leaves one guard digit for deterministic tie handling while
+staying within the precision of a `Float`.
 
 --- Why the rounding is done here and not by the C library ---
 
