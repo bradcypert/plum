@@ -21,6 +21,8 @@ Up to `max_len` bytes. An empty result is END OF FILE, not a
 failure: the same three-way split `Net.read_bytes` makes, and
 for the same reason: a reader looping until the end needs to tell
 "nothing left" from "something broke".
+`max_len` must be positive; zero or negative sizes return `Err`
+without consuming input, even at end of file.
 
 ## `let File.write (f: File) (data: Bytes): Result[Int, String]`
 

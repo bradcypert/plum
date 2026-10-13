@@ -46,6 +46,10 @@ let main (): Unit = match Os.temp_dir() {
         match Os.open(path, Mode.Read) {
             Err(e) => println("open read: ".concat(e)),
             Ok(f) => {
+                // Invalid chunk sizes must not masquerade as EOF or
+                // consume any of the binary payload (issue #195).
+                show("zero size", f.read(0));
+                show("negative size", f.read(-1));
                 show("first 3", f.read(3));
                 show("rest", f.read(100));
                 // An empty read is END OF FILE, not a failure. The same
@@ -54,6 +58,8 @@ let main (): Unit = match Os.temp_dir() {
                     Ok(b) => println("at eof: ".concat(b.is_empty().to_string())),
                     Err(e) => println("at eof: ".concat(e)),
                 };
+                show("zero size at eof", f.read(0));
+                show("negative size at eof", f.read(-1));
                 match f.seek(1, Seek.Start) {
                     Ok(pos) => println("seek to ".concat(pos.to_string())),
                     Err(e) => println(e),

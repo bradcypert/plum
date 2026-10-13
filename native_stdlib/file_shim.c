@@ -128,7 +128,9 @@ static int read_ensure(size_t need) {
 long long file_read_n(long long h, long long max_len) {
     int i = slot_of(h);
     if (i < 0) return -1;
-    if (max_len < 0) max_len = 0;
+    // Only a positive request can report zero bytes as end of file.
+    // Reject invalid sizes before allocating or touching the stream.
+    if (max_len <= 0) return -1;
     if (!read_ensure((size_t)max_len + 1)) return -1;
     size_t got = fread(read_buf, 1, (size_t)max_len, slots[i]);
     if (got == 0 && ferror(slots[i])) return -1;
