@@ -1082,7 +1082,11 @@ pub let test_format_laws (): Unit = {
     // 2.674999..., which a scale-and-round implementation gets wrong.
     check_eq("rounds from the exact value", "2.675", Float.to_fixed(2.675, 2), "2.67");
     check_eq("a negative that rounds to zero keeps its sign", "-0.001",
-        Float.to_fixed(0.0 - 0.001, 2), "-0.00")
+        Float.to_fixed(0.0 - 0.001, 2), "-0.00");
+    check_eq("precision clamps at 17", "1.0", Float.to_fixed(1.0, 18),
+        Float.to_fixed(1.0, 17));
+    check_eq("negative precision clamps at zero", "1.5", Float.to_fixed(1.5, 0 - 1),
+        Float.to_fixed(1.5, 0))
 }
 
 // --- Wrapping arithmetic ---
