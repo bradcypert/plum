@@ -1,9 +1,13 @@
 wrote 6
 close: ok
 close again: ok
+zero size: File.read: read failed
+negative size: File.read: read failed
 first 3: 00ff41
 rest: 420a43
 at eof: true
+zero size at eof: File.read: read failed
+negative size at eof: File.read: read failed
 seek to 1
 after seek: ff41
 appended
