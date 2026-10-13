@@ -2919,6 +2919,7 @@ let cg_runtime_fn (name: String): Option[String] =
     else if name == "wrapping_add_raw" { Some("@plum_wrapping_add") }
     else if name == "wrapping_sub_raw" { Some("@plum_wrapping_sub") }
     else if name == "wrapping_mul_raw" { Some("@plum_wrapping_mul") }
+    else if name == "abs_raw" { Some("@plum_abs_raw") }
     else if name == "sqrt_raw" { Some("@plum_sqrt_raw") }
     else if name == "pow_raw" { Some("@plum_pow_raw") }
     else if name == "float_fixed_raw" { Some("@plum_float_fixed_raw") }

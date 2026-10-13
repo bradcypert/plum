@@ -351,6 +351,10 @@ let float_laws (seed: Int) (left: Int): Unit =
 
 pub let test_float_laws (): Unit = float_laws(2718, 150)
 
+pub let test_float_abs_negative_zero (): Unit =
+    check_eq("absolute value clears negative zero sign", "-0.0",
+        Float.abs(parse_float_raw("-0.0")).to_string(), "0.0")
+
 // --- String ordering ---
 
 // The trichotomy and its consequences: for any two strings exactly one
