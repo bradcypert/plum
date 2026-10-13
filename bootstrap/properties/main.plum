@@ -209,6 +209,80 @@ let sort_props (seed: Int) (left: Int): Unit =
 
 pub let test_sorting (): Unit = sort_props(777, 120)
 
+// Unique positions expose lost elements and reordered ties even when
+// the keys are equal. String payloads also exercise owned heap values.
+struct SortItem { key: Int, position: Int, payload: String }
+
+let sort_items (xs: Array[Int]) (i: Int) (acc: Array[SortItem]): Array[SortItem] =
+    if i >= xs.len() { acc }
+    else { sort_items(xs, i + 1, acc.push(SortItem { key: xs[i], position: i, payload: i.to_string() })) }
+
+let sort_items_stable (xs: Array[SortItem]) (i: Int): Bool =
+    if i + 1 >= xs.len() { true }
+    else if xs[i].key > xs[i + 1].key { false }
+    else if xs[i].key == xs[i + 1].key && xs[i].position >= xs[i + 1].position { false }
+    else { sort_items_stable(xs, i + 1) }
+
+let stable_sort_props (seed: Int) (left: Int): Unit =
+    if left <= 0 { () } else {
+        let xs = int_array(seed, rand_between(seed, 0, 65), []);
+        let items = sort_items(xs, 0, []);
+        let before = items.to_string();
+        let sorted = Array.sort_by(items, |a: SortItem, b: SortItem| a.key <= b.key);
+        check_eq("sort preserves input", xs.to_string(), items.to_string(), before);
+        check_eq("sort orders keys and preserves tie order", xs.to_string(),
+            sort_items_stable(sorted, 0).to_string(), "true");
+        check_eq("sort preserves every item", xs.to_string(),
+            Array.sort_int(sorted.map(|p: SortItem| p.position)).to_string(),
+            sort_sequence(xs.len(), 0, []).to_string());
+        check_eq("sort preserves item keys", xs.to_string(),
+            sorted.map(|p: SortItem| p.key).to_string(),
+            sorted.map(|p: SortItem| xs[p.position]).to_string());
+        check_eq("sort preserves heap payloads", xs.to_string(),
+            sorted.map(|p: SortItem| p.payload).to_string(),
+            sorted.map(|p: SortItem| p.position.to_string()).to_string());
+        stable_sort_props(next_seed(seed), left - 1)
+    }
+
+pub let test_sorting_stability (): Unit = stable_sort_props(217, 120)
+
+let sort_sequence (n: Int) (i: Int) (acc: Array[Int]): Array[Int] =
+    if i >= n { acc } else { sort_sequence(n, i + 1, acc.push(i)) }
+
+let sort_log_bound (n: Int) (width: Int) (levels: Int): Int =
+    if width >= n { n * levels } else { sort_log_bound(n, width * 2, levels + 1) }
+
+let sort_comparison_check (xs: Array[Int]): Unit = {
+    let calls = ref(0);
+    let sorted = Array.sort_by(xs, |a: Int, b: Int| {
+        calls.set(calls.get() + 1);
+        a <= b
+    });
+    check_eq("sort orders large inputs", xs.len().to_string(), is_sorted(sorted, 0).to_string(), "true");
+    check_eq("sort keeps every large input element", xs.len().to_string(),
+        sorted.to_string(), sort_sequence(xs.len(), 0, []).to_string());
+    check_eq("sort uses at most n * ceil(log2(n)) comparisons", xs.len().to_string(),
+        (calls.get() <= sort_log_bound(xs.len(), 1, 0)).to_string(), "true")
+}
+
+pub let test_sorting_comparison_bound (): Unit =
+    Array.fold([0, 1, 2, 3, 15, 16, 17, 255, 256, 257, 4096], (), |u: Unit, n: Int| {
+        let xs = sort_sequence(n, 0, []);
+        sort_comparison_check(xs);
+        sort_comparison_check(Array.reverse(xs));
+        let (_, shuffled) = Rng.shuffle(Rng.from_seed(217), xs);
+        sort_comparison_check(shuffled);
+        let calls = ref(0);
+        let ties = Array.map(xs, |i: Int| 0);
+        check_eq("all equal elements survive", n.to_string(),
+            Array.sort_by(ties, |a: Int, b: Int| {
+                calls.set(calls.get() + 1);
+                a <= b
+            }).to_string(), ties.to_string());
+        check_eq("equal keys stay within comparison bound", n.to_string(),
+            (calls.get() <= sort_log_bound(n, 1, 0)).to_string(), "true")
+    })
+
 // --- Arithmetic ---
 
 // Identities that must hold whenever no operand overflows. `Int` is
