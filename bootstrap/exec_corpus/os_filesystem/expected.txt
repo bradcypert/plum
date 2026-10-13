@@ -1,6 +1,10 @@
 make_dir: ok
 make_dir nested: ok
 write: ok
+copy_tree self rejected: yes
+copy_tree into child rejected: yes
+copy_tree into parent rejected: yes
+source after rejected copies: contents
 make_dir dst: ok
 copy_tree: ok
 copied file: contents

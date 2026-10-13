@@ -519,6 +519,55 @@ static int plum_copy_file(const char *src, const char *dst) {
     return rc;
 }
 
+// Resolve an existing directory to its filesystem path. Resolving the
+// directory itself (rather than only normalising its spelling) catches
+// aliases such as `.` and symlinks before a copy can write through them.
+static int plum_resolve_dir(const char *path, char *out, size_t cap) {
+#if defined(_WIN32)
+    HANDLE h = CreateFileA(path, FILE_READ_ATTRIBUTES,
+                           FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+                           NULL, OPEN_EXISTING, FILE_FLAG_BACKUP_SEMANTICS, NULL);
+    DWORD n;
+    if (h == INVALID_HANDLE_VALUE) return -1;
+    n = GetFinalPathNameByHandleA(h, out, (DWORD)cap, FILE_NAME_NORMALIZED | VOLUME_NAME_DOS);
+    CloseHandle(h);
+    if (n == 0 || n >= cap) return -1;
+    for (char *p = out; *p; p++) {
+        if (*p == '\\') *p = '/';
+        *p = (char)tolower((unsigned char)*p);
+    }
+    return 0;
+#else
+    return realpath(path, out) != NULL ? 0 : -1;
+#endif
+}
+
+// Directories overlap when either is the other or an ancestor of it.
+// The separators at the prefix boundary avoid confusing `/a/bc` with `/a/b`.
+static int plum_paths_overlap(const char *a, const char *b) {
+    char resolved_a[PLUM_PATH_MAX];
+    char resolved_b[PLUM_PATH_MAX];
+    size_t a_len, b_len;
+    if (plum_resolve_dir(a, resolved_a, sizeof(resolved_a)) != 0 ||
+        plum_resolve_dir(b, resolved_b, sizeof(resolved_b)) != 0) return -1;
+    a_len = strlen(resolved_a);
+    b_len = strlen(resolved_b);
+#if defined(_WIN32)
+    int same = _stricmp(resolved_a, resolved_b) == 0;
+    int a_prefix = _strnicmp(resolved_a, resolved_b, a_len) == 0 &&
+                   (resolved_b[a_len] == '\0' || resolved_a[a_len - 1] == '/' || resolved_b[a_len] == '/');
+    int b_prefix = _strnicmp(resolved_b, resolved_a, b_len) == 0 &&
+                   (resolved_a[b_len] == '\0' || resolved_b[b_len - 1] == '/' || resolved_a[b_len] == '/');
+#else
+    int same = strcmp(resolved_a, resolved_b) == 0;
+    int a_prefix = strncmp(resolved_a, resolved_b, a_len) == 0 &&
+                   (resolved_b[a_len] == '\0' || resolved_a[a_len - 1] == '/' || resolved_b[a_len] == '/');
+    int b_prefix = strncmp(resolved_b, resolved_a, b_len) == 0 &&
+                   (resolved_a[b_len] == '\0' || resolved_b[b_len - 1] == '/' || resolved_a[b_len] == '/');
+#endif
+    return same || a_prefix || b_prefix;
+}
+
 // Copies the CONTENTS of `src` into `dst`, which must already exist --
 // the semantics of `cp -r src/. dst`, which is what this replaced, and
 // deliberately not `cp -r src dst` (that would nest a directory).
@@ -533,6 +582,11 @@ static int plum_copy_tree(const char *src, const char *dst) {
     char *s;
     char *t;
     int rc = 0;
+
+    // Refuse self-copy and either direction of overlap before reading or
+    // creating any destination entry. Otherwise recursion can be unbounded,
+    // and a file copied onto itself is truncated by fopen("wb").
+    if (plum_paths_overlap(src, dst) != 0) return -1;
 
     d = opendir(src);
     if (d == NULL) return -1;

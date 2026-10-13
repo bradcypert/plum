@@ -28,6 +28,24 @@ let main (): Unit =
             report("make_dir nested", Os.make_dir(src.concat("/inner")));
             report("write", Os.write_file(src.concat("/inner/a.txt"), "contents"));
 
+            // Reject identical and nested paths before touching any entry.
+            match Os.copy_tree(src, src) {
+                Err(_) => println("copy_tree self rejected: yes"),
+                Ok(_) => println("copy_tree self rejected: no"),
+            };
+            match Os.copy_tree(src, src.concat("/inner")) {
+                Err(_) => println("copy_tree into child rejected: yes"),
+                Ok(_) => println("copy_tree into child rejected: no"),
+            };
+            match Os.copy_tree(src.concat("/inner"), src) {
+                Err(_) => println("copy_tree into parent rejected: yes"),
+                Ok(_) => println("copy_tree into parent rejected: no"),
+            };
+            match Os.read_file(src.concat("/inner/a.txt")) {
+                Err(e) => println("source after rejected copies: ".concat(e)),
+                Ok(text) => println("source after rejected copies: ".concat(text)),
+            };
+
             // `copy_tree` copies the CONTENTS of src into dst, so
             // `inner/a.txt` lands at `dst/inner/a.txt` and NOT at
             // `dst/src/inner/a.txt`. Module paths depend on that, so it

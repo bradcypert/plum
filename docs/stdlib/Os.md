@@ -53,8 +53,8 @@ never followed into.
 ## `let copy_tree (src: String) (dst: String): Result[Unit, String]`
 
 Copies the CONTENTS of `src` into `dst`, which must already exist
-the semantics of `cp -r src/. dst`. File modes are not
-preserved.
+and must not overlap `src`. Returns `Err` for identical or nested
+directories before changing `dst`. File modes are not preserved.
 
 ## `let exit_with (code: Int): Unit`
 
