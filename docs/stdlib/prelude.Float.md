@@ -6,7 +6,8 @@ Part of [`prelude`](prelude.md).
 
 ## `let Float.abs (a: Float): Float`
 
-The absolute value. `abs` of NaN is NaN.
+The absolute value, clearing the sign bit (including on negative zero).
+NaN remains NaN.
 
 ## `let Float.min (a: Float) (b: Float): Float`
 
