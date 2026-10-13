@@ -855,30 +855,42 @@ pub let String.parse_float (s: String): Result[Float, String] = {
 
 // --- Sorting ---
 
-/// Insertion sort. Quadratic and deliberately so: it is stable, it is
-/// obviously correct by reading, and every array this compiler sorts
-/// is small.
-///
-/// Insert before the first element that is STRICTLY greater
-/// (`!le(sorted[i], x)`), not the first that `le` considers `x`
-/// smaller-or-equal. With a `<=` predicate the latter reversed ties
-/// (issue #55); going after equals is what makes `le` stable.
-let plum__array_sort_insert_acc[T] (sorted: Array[T]) (x: T) (le: (T, T) -> Bool) (i: Int): Array[T] =
-    if i >= sorted.len() { sorted.push(x) }
-    else if !le(sorted[i], x) { Array.concat(Array.take(sorted, i).push(x), Array.drop(sorted, i)) }
-    else { plum__array_sort_insert_acc(sorted, x, le, i + 1) }
+// Merge into a fresh, uniquely owned accumulator. Tail calls move it
+// into the next push, so growth is amortized O(1) per element. Taking
+// the left element on equality preserves the original order of ties.
+let plum__array_sort_merge_acc[T] (left: Array[T]) (right: Array[T]) (le: (T, T) -> Bool) (i: Int) (j: Int) (acc: Array[T]): Array[T] =
+    if i >= left.len() {
+        if j >= right.len() { acc }
+        else { plum__array_sort_merge_acc(left, right, le, i, j + 1, acc.push(right[j])) }
+    } else if j >= right.len() {
+        plum__array_sort_merge_acc(left, right, le, i + 1, j, acc.push(left[i]))
+    } else if le(left[i], right[j]) {
+        plum__array_sort_merge_acc(left, right, le, i + 1, j, acc.push(left[i]))
+    } else {
+        plum__array_sort_merge_acc(left, right, le, i, j + 1, acc.push(right[j]))
+    }
 
-let plum__array_sort_insert[T] (sorted: Array[T]) (x: T) (le: (T, T) -> Bool): Array[T] = plum__array_sort_insert_acc(sorted, x, le, 0)
-
-let plum__array_sort_by_acc[T] (arr: Array[T]) (le: (T, T) -> Bool) (i: Int) (acc: Array[T]): Array[T] =
-    if i >= arr.len() { acc } else { plum__array_sort_by_acc(arr, le, i + 1, plum__array_sort_insert(acc, arr[i], le)) }
+// Split index ranges rather than copying slices of the input. Only
+// the sorted runs and merge output allocate, with O(n) peak storage
+// and O(log n) stack depth for the recursive splits.
+let plum__array_sort_range[T] (arr: Array[T]) (le: (T, T) -> Bool) (lo: Int) (hi: Int): Array[T] =
+    if hi <= lo { [] }
+    else if hi - lo == 1 { [arr[lo]] }
+    else {
+        let mid = lo + (hi - lo) / 2;
+        let left = plum__array_sort_range(arr, le, lo, mid);
+        let right = plum__array_sort_range(arr, le, mid, hi);
+        plum__array_sort_merge_acc(left, right, le, 0, 0, [])
+    }
 
 /// Sorted by a \"less than or equal\" predicate.
 ///
 /// STABLE: elements `le` considers equivalent keep their original
 /// order, which is what makes sorting by one key and then another
 /// produce the ordering people expect.
-pub let Array.sort_by[T] (arr: Array[T]) (le: (T, T) -> Bool): Array[T] = plum__array_sort_by_acc(arr, le, 0, [])
+///
+/// Merge sort with O(n log n) comparisons and O(n) auxiliary storage.
+pub let Array.sort_by[T] (arr: Array[T]) (le: (T, T) -> Bool): Array[T] = plum__array_sort_range(arr, le, 0, arr.len())
 
 /// Sorted ascending.
 pub let Array.sort_int (arr: Array[Int]): Array[Int] = Array.sort_by(arr, |a: Int, b: Int| a <= b)

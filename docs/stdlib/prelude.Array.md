@@ -97,6 +97,8 @@ STABLE: elements `le` considers equivalent keep their original
 order, which is what makes sorting by one key and then another
 produce the ordering people expect.
 
+Merge sort with O(n log n) comparisons and O(n) auxiliary storage.
+
 ## `let Array.sort_int (arr: Array[Int]): Array[Int]`
 
 Sorted ascending.
