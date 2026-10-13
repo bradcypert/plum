@@ -181,8 +181,9 @@ let plum__popcount (x: Int) (i: Int) (acc: Int): Int =
 
 let PLUM_NIBBLE_ONES: Array[Int] = [0, 1, 1, 2, 1, 2, 2, 3, 1, 2, 2, 3, 2, 3, 3, 4]
 
-/// The absolute value. `abs` of NaN is NaN.
-pub let Float.abs (a: Float): Float = if a < 0.0 { 0.0 - a } else { a }
+/// The absolute value, clearing the sign bit (including on negative zero).
+/// NaN remains NaN.
+pub let Float.abs (a: Float): Float = abs_raw(a)
 /// The smaller of two. NaN does not compare, so a NaN argument gives
 /// an answer that is not meaningful.
 pub let Float.min (a: Float) (b: Float): Float = if a < b { a } else { b }
@@ -924,9 +925,11 @@ pub let String.lines (s: String): Array[String] = s.split("\n")
 
 // --- Numbers that need the runtime ---
 
-/// The real prelude writes these as `unsafe { sqrt(x) }` and friends.
+/// The real prelude writes these as `unsafe { fabs(x) }`,
+/// `unsafe { sqrt(x) }` and friends.
 /// This backend has no `extern "C"`/`unsafe` support, so they reach the
 /// same libm functions as runtime primitives instead.
+let abs_raw (x: Float): Float = 0.0
 let sqrt_raw (x: Float): Float = 0.0
 let pow_raw (b: Float) (e: Float): Float = 0.0
 let floor_raw (x: Float): Float = 0.0
