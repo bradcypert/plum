@@ -68,8 +68,8 @@ pub let remove_tree (path: String): Result[Unit, String] =
     else { Err("Os.remove_tree: could not remove ".concat(path)) }
 
 /// Copies the CONTENTS of `src` into `dst`, which must already exist
-/// the semantics of `cp -r src/. dst`. File modes are not
-/// preserved.
+/// and must not overlap `src`. Returns `Err` for identical or nested
+/// directories before changing `dst`. File modes are not preserved.
 pub let copy_tree (src: String) (dst: String): Result[Unit, String] =
     if os_copy_tree_raw(src, dst) == 0 { Ok(()) }
     else { Err("Os.copy_tree: could not copy ".concat(src).concat(" to ").concat(dst)) }
