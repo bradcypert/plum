@@ -1,0 +1,40 @@
+use Json;
+
+let show (text: String): Unit =
+    println(text.concat(" => ").concat(match Json.decode_string(Json.int(), text) {
+        Ok(n) => n.to_string(),
+        Err(e) => "ERR ".concat(e),
+    }))
+
+let main (): Unit = {
+    show("0");
+    show("-0.0");
+    show("41.0");
+    show("4.1e1");
+    show("41.5");
+    show("9007199254740991");
+    show("-9007199254740991");
+    show("9007199254740992");
+    show("9007199254740993");
+    show("-9007199254740992");
+    show("-9007199254740993");
+    show("9223372036854775807");
+    show("-9223372036854775808");
+    show("9223372036854775808");
+    show("-9223372036854775809");
+    show("9.007199254740993e15");
+    show("1e309");
+    show("-1e309");
+    println(match Json.decode_string(Json.field("ids", Json.list(Json.int())), "{\"ids\":[1,9007199254740993]}") {
+        Ok(_) => "unexpected success",
+        Err(e) => e,
+    });
+    println(match Json.decode(Json.int(), JsonNumber(9007199254740992.0)) {
+        Ok(_) => "unexpected success",
+        Err(e) => e,
+    });
+    println(match Json.decode_string(Json.float(), "9007199254740993") {
+        Ok(n) => if n == 9007199254740992.0 { "Float accepts rounded numbers" } else { "unexpected Float" },
+        Err(e) => e,
+    })
+}

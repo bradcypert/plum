@@ -37,6 +37,13 @@ where a count was expected is a disagreement about the document, and
 silently producing 41 hides it until something downstream is wrong
 for a reason nobody can trace back to here.
 
+Numbers are parsed as binary64 `Float`s. Only whole values in
+[-9007199254740991, 9007199254740991] are accepted: outside this
+safe integer range, distinct JSON integers can round to the same
+value. Larger identifiers should be sent as strings and decoded
+with `String.parse_int`. Decimal and exponent notation still use
+floating-point parsing and rounding.
+
 ## `let null_as (fallback: T): Decoder[T]`
 
 Decodes JSON `null` as a value of your choosing. For a field whose

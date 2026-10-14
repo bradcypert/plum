@@ -3,6 +3,7 @@ use Os;
 use Encoding;
 use Url;
 use Path;
+use Json;
 
 // Property tests: invariants that must hold for MANY inputs, checked
 // against values generated here rather than against answers recorded
@@ -94,6 +95,39 @@ pub let test_int_roundtrip (): Unit = {
     check_eq("int edge", "0", parsed_int("0"), "0");
     check_eq("int edge", "max", parsed_int("9223372036854775807"), "9223372036854775807");
     check_eq("int edge", "min", parsed_int("-9223372036854775808"), "-9223372036854775808")
+}
+
+// --- JSON safe integer round trip ---
+
+let decoded_json_int (text: String): String =
+    match Json.decode_string(Json.int(), text) {
+        Ok(n) => n.to_string(),
+        Err(e) => "ERR ".concat(e),
+    }
+
+let json_int_roundtrip (seed: Int) (left: Int): Unit =
+    if left <= 0 { () } else {
+        let n = rand_between(seed, -9007199254740991, 9007199254740991);
+        let text = n.to_string();
+        check_eq("JSON safe integer round trip", text, decoded_json_int(text), text);
+        json_int_roundtrip(next_seed(seed), left - 1)
+    }
+
+let json_unsafe_ints (seed: Int) (left: Int): Unit =
+    if left <= 0 { () } else {
+        let n = rand_between(seed, 9007199254740992, 9223372036854775807);
+        let text = n.to_string();
+        let error = "ERR expected a Number in the safe integer range at the root";
+        check_eq("JSON unsafe integer", text, decoded_json_int(text), error);
+        check_eq("JSON unsafe negative integer", text, decoded_json_int("-".concat(text)), error);
+        json_unsafe_ints(next_seed(seed), left - 1)
+    }
+
+pub let test_json_int_precision (): Unit = {
+    json_int_roundtrip(157, 300);
+    json_unsafe_ints(157, 300);
+    check_eq("JSON integer edge", "max safe", decoded_json_int("9007199254740991"), "9007199254740991");
+    check_eq("JSON integer edge", "min safe", decoded_json_int("-9007199254740991"), "-9007199254740991")
 }
 
 // --- Float round trip ---
