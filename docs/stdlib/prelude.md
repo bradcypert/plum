@@ -70,9 +70,9 @@ rather than by inspection.
 
 A parsed JSON document.
 
-Faithful to what was written: numbers are all `Float`, since JSON
-has one number type. `use Json;` brings in decoders that turn one
-of these into your own types.
+Numbers are binary64 `Float`s and may lose precision when parsed.
+`use Json;` brings in decoders that turn one of these into your own
+types; `Json.int` rejects values outside the safe integer range.
 
 ## `struct ParseResult`
 

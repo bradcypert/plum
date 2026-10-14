@@ -1398,9 +1398,9 @@ pub let Set.from_array[T: Eq] (arr: Array[T]): Set[T] = set_from_array_acc(arr, 
 pub struct JsonEntry { pub key: String, pub value: JsonValue }
 /// A parsed JSON document.
 ///
-/// Faithful to what was written: numbers are all `Float`, since JSON
-/// has one number type. `use Json;` brings in decoders that turn one
-/// of these into your own types.
+/// Numbers are binary64 `Float`s and may lose precision when parsed.
+/// `use Json;` brings in decoders that turn one of these into your own
+/// types; `Json.int` rejects values outside the safe integer range.
 pub enum JsonValue {
     JsonNull,
     JsonBool(Bool),

@@ -1,0 +1,21 @@
+0 => 0
+-0.0 => 0
+41.0 => 41
+4.1e1 => 41
+41.5 => ERR expected a whole Number at the root
+9007199254740991 => 9007199254740991
+-9007199254740991 => -9007199254740991
+9007199254740992 => ERR expected a Number in the safe integer range at the root
+9007199254740993 => ERR expected a Number in the safe integer range at the root
+-9007199254740992 => ERR expected a Number in the safe integer range at the root
+-9007199254740993 => ERR expected a Number in the safe integer range at the root
+9223372036854775807 => ERR expected a Number in the safe integer range at the root
+-9223372036854775808 => ERR expected a Number in the safe integer range at the root
+9223372036854775808 => ERR expected a Number in the safe integer range at the root
+-9223372036854775809 => ERR expected a Number in the safe integer range at the root
+9.007199254740993e15 => ERR expected a Number in the safe integer range at the root
+1e309 => ERR expected a Number in the safe integer range at the root
+-1e309 => ERR expected a Number in the safe integer range at the root
+expected a Number in the safe integer range at ids[1]
+expected a Number in the safe integer range at the root
+Float accepts rounded numbers
