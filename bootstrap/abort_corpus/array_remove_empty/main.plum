@@ -1,0 +1,7 @@
+let main (): Unit = {
+    let xs: Array[String] = [];
+    println("before");
+    let ys = Array.remove(xs, 0);
+    println(ys.len().to_string());
+    println("unreachable")
+}

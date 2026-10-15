@@ -3414,39 +3414,20 @@ let cg_array_store_elems (p: CgProgram) (env: Array[CgSlot]) (n: Int) (cell: Str
         cg_array_store_elems(p, env, r.n + 1, cell, elems, i + 1, code.concat(r.code).concat(line), allocas.concat(r.allocas), releases.concat(r.releases), globals.concat(r.globals))
     }
 
-// BOUNDS-CHECKED, like the real backend. An unchecked index was a
-// deliberate v1 cut and a genuinely unsafe one — an out-of-range read
-// returned whatever followed the cell, which with reference counting
-// then got INCREMENTED, writing through a pointer made of arbitrary
-// bytes. The check costs a compare and a never-taken branch.
-//
-// The failure message is the real backend's, verbatim, so a program
-// that indexes past the end behaves identically under both.
+// Indexing and mutation share the runtime bounds check. It returns the
+// array length so callers that copy the array can reuse it.
 let cg_index (p: CgProgram) (env: Array[CgSlot]) (n: Int) (base: typecheck.TExpr) (idx: typecheck.TExpr) (elem: CgTy): Emit = {
     let b = cg_borrow(p, env, n, base);
     let i = cg_expr(p, env, b.n, idx);
     let len = cg_reg(i.n);
-    let lo = cg_reg(i.n + 1);
-    let hi = cg_reg(i.n + 2);
-    let ok = cg_reg(i.n + 3);
-    let ok_label = cg_label(i.n + 4);
-    let fail_label = cg_label(i.n + 5);
-    let out = cg_reg(i.n + 9);
+    let out = cg_reg(i.n + 4);
     let code = b.code.concat(i.code)
-        .concat("  ").concat(len).concat(" = call i64 @plum_array_len(ptr ").concat(b.val).concat(")\n")
-        .concat("  ").concat(lo).concat(" = icmp sge i64 ").concat(i.val).concat(", 0\n")
-        .concat("  ").concat(hi).concat(" = icmp slt i64 ").concat(i.val).concat(", ").concat(len).concat("\n")
-        .concat("  ").concat(ok).concat(" = and i1 ").concat(lo).concat(", ").concat(hi).concat("\n")
-        .concat("  br i1 ").concat(ok).concat(", label %").concat(ok_label).concat(", label %").concat(fail_label).concat("\n")
-        .concat(fail_label).concat(":\n")
-        .concat("  call void @plum_bounds_fail()\n")
-        .concat("  br label %").concat(ok_label).concat("\n")
-        .concat(ok_label).concat(":\n")
-        .concat(cg_elem_ptr_lines(b.val, i.val, i.n + 6))
-        .concat("  ").concat(out).concat(" = load ").concat(cg_llvm_ty(elem)).concat(", ptr ").concat(cg_elem_ptr_reg(i.n + 6)).concat("\n")
+        .concat("  ${len} = call i64 @plum_array_check_index(ptr ${b.val}, i64 ${i.val})\n")
+        .concat(cg_elem_ptr_lines(b.val, i.val, i.n + 1))
+        .concat("  ").concat(out).concat(" = load ").concat(cg_llvm_ty(elem)).concat(", ptr ").concat(cg_elem_ptr_reg(i.n + 1)).concat("\n")
         .concat(cg_inc(elem, out))
         .concat(b.drop);
-    Emit { code: code, allocas: b.allocas.concat(i.allocas), releases: b.releases.concat(i.releases), globals: b.globals.concat(i.globals), val: out, ty: elem, n: i.n + 10 }
+    Emit { code: code, allocas: b.allocas.concat(i.allocas), releases: b.releases.concat(i.releases), globals: b.globals.concat(i.globals), val: out, ty: elem, n: i.n + 5 }
 }
 
 // The array counterpart of `cg_concat`, and the same story:
@@ -3486,7 +3467,7 @@ let cg_array_set (p: CgProgram) (env: Array[CgSlot]) (n: Int) (base: typecheck.T
     let cell = cg_reg(v.n + 1);
     let copied = cg_reg(v.n + 2);
     let code = b.code.concat(i.code).concat(v.code)
-        .concat("  ").concat(len).concat(" = call i64 @plum_array_len(ptr ").concat(b.val).concat(")\n")
+        .concat("  ${len} = call i64 @plum_array_check_index(ptr ${b.val}, i64 ${i.val})\n")
         .concat("  ").concat(cell).concat(" = call ptr @plum_array_new(i64 ").concat(len).concat(")\n")
         .concat("  ").concat(copied).concat(" = call i1 @plum_array_copy(ptr ").concat(cell).concat(", ptr ").concat(b.val).concat(", i64 ").concat(len).concat(")\n")
         .concat(cg_inc_elems(v.ty, cell, len, cell.concat("_ie")))
