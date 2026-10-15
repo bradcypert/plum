@@ -1583,7 +1583,8 @@ let parse_object_entries (chars: Array[String]) (pos: Int) (acc: Array[JsonEntry
         Err(e) => Err(e),
         Ok(key_r) => {
             let p1 = skip_ws(chars, key_r.next_pos);
-            if p1 >= chars.len() || chars[p1] != ":" { Err("expected ':'") }
+            if Array.any(acc, |entry: JsonEntry| entry.key == key_r.value) { Err("duplicate object member name") }
+            else if p1 >= chars.len() || chars[p1] != ":" { Err("expected ':'") }
             else {
                 let p2 = skip_ws(chars, p1 + 1);
                 match parse_value(chars, p2) {
@@ -1603,7 +1604,9 @@ let parse_object_entries (chars: Array[String]) (pos: Int) (acc: Array[JsonEntry
 /// Parses JSON text.
 ///
 /// `Err` with a message naming what was expected. Accepts one complete
-/// value and rejects trailing text after it.
+/// value and rejects trailing text after it. Object member names must
+/// be unique within each object, compared after decoding escapes;
+/// duplicate names return `Err("duplicate object member name")`.
 pub let json_parse (s: String): Result[JsonValue, String] = {
     let chars = chars_of(s);
     let start = skip_ws(chars, 0);
