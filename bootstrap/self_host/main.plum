@@ -3807,6 +3807,7 @@ let add_deps (dir: String) (deps: Array[pkg.Dep]) (i: Int) (scan: DepScan): DepS
     if i >= deps.len() { scan }
     else {
         let resolved = resolve_dep(dir, deps[i], scan.root, scan.fetch);
+        reject_dep_namespace(scan.found, resolved, 0);
         if Array.contains(scan.visited, resolved.path) { add_deps(dir, deps, i + 1, scan) }
         else {
             if !Result.unwrap_or(Os.is_directory(resolved.path), false) {
@@ -3825,6 +3826,17 @@ let add_deps (dir: String) (deps: Array[pkg.Dep]) (i: Int) (scan: DepScan): DepS
             let next = DepScan { root: scan.root, visited: scan.visited.push(resolved.path), found: scan.found.push(resolved), fetch: scan.fetch };
             add_deps(dir, deps, i + 1, add_deps(resolved.path, manifest.deps, 0, next))
         }
+    }
+
+// A shared transitive dependency is fine; two directories contributing to
+// the same package namespace are ambiguous even when their modules differ.
+let reject_dep_namespace (found: Array[pkg.Dep]) (dep: pkg.Dep) (i: Int): Unit =
+    if i >= found.len() { () }
+    else {
+        if found[i].name == dep.name && found[i].path != dep.path {
+            panic_raw("duplicate dependency namespace `${dep.name}`: ${found[i].path} and ${dep.path}\n  Each dependency namespace must refer to one package directory.")
+        };
+        reject_dep_namespace(found, dep, i + 1)
     }
 
 // A declared dependency, with its `path` filled in to where the code

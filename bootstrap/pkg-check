@@ -303,12 +303,16 @@ expect_err() {
         printf 'FAIL  %-44s accepted, and must not be\n' "$label"
         fail=$((fail + 1)); return
     fi
-    case "$got" in
-        *"$want"*) pass=$((pass + 1)) ;;
-        *) printf 'FAIL  %-44s\n        want to see: %s\n        got:         %s\n' \
-               "$label" "$want" "$(printf '%s' "$got" | head -n 2)"
-           fail=$((fail + 1)) ;;
-    esac
+    shift 3
+    for want in "$want" "$@"; do
+        case "$got" in
+            *"$want"*) ;;
+            *) printf 'FAIL  %-44s\n        want to see: %s\n        got:         %s\n' \
+                   "$label" "$want" "$got"
+               fail=$((fail + 1)); return ;;
+        esac
+    done
+    pass=$((pass + 1))
 }
 
 not_data="a manifest is data, not a program"
@@ -347,6 +351,62 @@ expect_err "a keyword is not a package name" 'cannot be a package name' \
     'Package { name: "app", deps: [ Dep { name: "match", path: "../parsec" } ] }'
 expect_err "a missing directory"       'is not a directory' \
     'Package { name: "app", deps: [ Dep { name: "nope", path: "../nope" } ] }'
+
+# Every manifest field must be unique, including optional fields whose
+# later values used to be silently ignored. Assert both source positions.
+for field in name version deps link link_linux link_macos link_windows link_posix; do
+    required='name: "app",'
+    case "$field" in
+        name) value='"app"'; required='' ;;
+        version) value='"0.1.0"' ;;
+        *) value='[]' ;;
+    esac
+    expect_err "duplicate Package.$field" "duplicate field \`$field\`" \
+        "Package {
+    $field: $value,
+    $field: $value,
+    $required
+}" "$work/app/plum.pkg:3:5" "$work/app/plum.pkg:2:5" "first field \`$field\` is here"
+done
+
+for field in name path git rev sha256; do
+    required='name: "parsec", path: "../parsec",'
+    case "$field" in
+        name) value='"parsec"'; required='path: "../parsec",' ;;
+        path) value='"../parsec"'; required='name: "parsec",' ;;
+        git) value='"https://example.invalid/repo.git"' ;;
+        rev) value='"0123456789012345678901234567890123456789"' ;;
+        sha256) value='"0000000000000000000000000000000000000000000000000000000000000000"' ;;
+    esac
+    expect_err "duplicate Dep.$field" "duplicate field \`$field\`" \
+        "Package { name: \"app\", deps: [
+    Dep {
+        $field: $value,
+        $field: $value,
+        $required
+    },
+] }" "$work/app/plum.pkg:4:9" "$work/app/plum.pkg:3:9" "first field \`$field\` is here"
+done
+
+# Different values, with a comment and other fields between occurrences.
+# Checking both orders rules out either first-wins or last-wins lookup.
+for names in '"app", name: "other"' '"other", name: "app"'; do
+    expect_err "conflicting names in either order" 'duplicate field `name`' \
+        "Package { version: \"1\", name: $names }"
+done
+expect_err "nonadjacent duplicate fields" 'duplicate field `deps`' \
+    'Package { deps: [], name: "app", // another field
+version: "1", deps: [] }'
+
+# Repeated namespace names are invalid even for the same directory. Check
+# the two entries in the manifest before resolving either dependency.
+expect_err "duplicate dependency names" 'duplicate dependency name `codec`' \
+    'Package { name: "app", deps: [
+    Dep { name: "codec", path: "../missing-one" },
+    Dep { path: "../missing-two", name: "codec" },
+] }' "$work/app/plum.pkg:3:35" "$work/app/plum.pkg:2:11" 'first dependency name `codec` is here'
+expect_err "same dependency listed twice" 'duplicate dependency name `parsec`' \
+    'Package { name: "app", deps: [Dep { name: "parsec", path: "../parsec" }, Dep { name: "parsec", path: "../parsec" }] }'
 
 # An EMPTY path is caught in the manifest rather than in the loader,
 # because by the time the loader sees it, it is indistinguishable from a
@@ -414,6 +474,34 @@ echo 'pub let mine (): Int = 1' > "$work/app/parsec/p.plum"
 expect_err "your module vs a package name" 'is both one of your modules' "$good"
 rm -rf "$work/app/parsec"
 rm -rf "$work/core/json"
+
+# Distinct manifests must not merge two package directories into one
+# namespace, even when the modules they export are disjoint.
+mkdir -p "$work/left" "$work/right" "$work/codec-one/json" "$work/codec-two/xml"
+printf 'pub let tag (): String = "json"\n' > "$work/codec-one/json/main.plum"
+printf 'pub let tag (): String = "xml"\n' > "$work/codec-two/xml/main.plum"
+printf 'Package { name: "codec" }\n' > "$work/codec-one/plum.pkg"
+printf 'Package { name: "codec" }\n' > "$work/codec-two/plum.pkg"
+printf 'Package { name: "left", deps: [Dep { name: "codec", path: "../codec-one" }] }\n' > "$work/left/plum.pkg"
+printf 'Package { name: "right", deps: [Dep { name: "codec", path: "../codec-two" }] }\n' > "$work/right/plum.pkg"
+for bridges in 'Dep { name: "left", path: "../left" }, Dep { name: "right", path: "../right" }' \
+               'Dep { name: "right", path: "../right" }, Dep { name: "left", path: "../left" }'; do
+    expect_err "transitive namespace collision" 'duplicate dependency namespace `codec`' \
+        "Package { name: \"app\", deps: [$bridges] }" "$work/codec-one" "$work/codec-two"
+done
+expect_err "direct vs transitive namespace" 'duplicate dependency namespace `codec`' \
+    'Package { name: "app", deps: [Dep { name: "codec", path: "../codec-two" }, Dep { name: "left", path: "../left" }] }' \
+    "$work/codec-one" "$work/codec-two"
+
+# A diamond reaching the same directory is valid. The shared package
+# remains available once, and a cycle back to the root still terminates.
+printf 'Package { name: "right", deps: [Dep { name: "codec", path: "../codec-one" }] }\n' > "$work/right/plum.pkg"
+printf 'Package { name: "codec", deps: [Dep { name: "app", path: "../app" }] }\n' > "$work/codec-one/plum.pkg"
+cat > "$work/app/main.plum" <<'EOF'
+let main (): Unit = println(codec.json.tag())
+EOF
+manifest 'Package { name: "app", deps: [Dep { name: "left", path: "../left" }, Dep { name: "right", path: "../right" }] }'
+expect_ok "a shared dependency with a cycle" "json" "$plum" run "$work/app"
 
 # A dependency's private names stay private. Visibility already worked
 # across modules; what is checked here is that a package boundary does

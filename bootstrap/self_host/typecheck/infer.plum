@@ -3108,12 +3108,13 @@ let expand_nested_acc (p2: Program2) (info: StructInfo) (fields: Array[parser.Fi
         // The inner literal updates ONE field of `base.outer`, spreading
         // the rest -- and recurses, so `a.b.c: v` nests twice.
         let inner_field = parser.FieldInitNode {
+            offset: fields[i].offset,
             name: fields[i].extra_path[0],
             extra_path: Array.slice(fields[i].extra_path, 1, fields[i].extra_path.len()),
             value: fields[i].value,
         };
         let inner = EStructLit([inner_name], [inner_field], Some(EField(base, outer)));
-        expand_nested_acc(p2, info, fields, base, i + 1, acc.push(parser.FieldInitNode { name: outer, extra_path: [], value: inner }))
+        expand_nested_acc(p2, info, fields, base, i + 1, acc.push(parser.FieldInitNode { offset: fields[i].offset, name: outer, extra_path: [], value: inner }))
     }
 
 let infer_struct_lit (p2: Program2) (state: FreshState) (env: TyEnv) (acc: Subst) (path: Array[String]) (fields0: Array[parser.FieldInitNode]) (spread: Option[parser.PExpr]): InferResult = {

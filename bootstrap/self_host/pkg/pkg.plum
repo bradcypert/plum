@@ -134,36 +134,52 @@ pub let parse (path: String) (src: String): Manifest = {
     // bare message.
     parser.set_source_context(path, src, lexed.starts, lexed.ends);
     let value = parser.parse_whole_expr(lexed.tokens);
-    check_value(path, value);
-    to_manifest(path, value)
+    check_value(path, src, value);
+    to_manifest(path, src, value)
 }
 
 // ---------------------------------------------------------------- data
 
 // The line between data and program, in one function. Everything
 // allowed here is inert; everything else names or calls something.
-let check_value (path: String) (e: parser.PExpr): Unit = match e {
+let check_value (path: String) (src: String) (e: parser.PExpr): Unit = match e {
     EInt(_) => (),
     EFloat(_) => (),
     EStr(_) => (),
     EBool(_) => (),
-    EArray(elems) => check_all(path, elems, 0),
+    EArray(elems) => check_all(path, src, elems, 0),
     EStructLit(_, fields, spread) => match spread {
         // `Dep { ..base }` reads a value out of scope, and there is no
         // scope here.
         Some(_) => not_data(path, "a spread (`..`)"),
-        None => check_fields(path, fields, 0),
+        None => check_fields(path, src, fields, 0, Map.new(())),
     },
     _ => not_data(path, kind_of(e)),
 }
 
-let check_all (path: String) (elems: Array[parser.PExpr]) (i: Int): Unit =
+let check_all (path: String) (src: String) (elems: Array[parser.PExpr]) (i: Int): Unit =
     if i >= elems.len() { () }
-    else { check_value(path, elems[i]); check_all(path, elems, i + 1) }
+    else { check_value(path, src, elems[i]); check_all(path, src, elems, i + 1) }
 
-let check_fields (path: String) (fields: Array[parser.FieldInitNode]) (i: Int): Unit =
+// Check every struct before any typed accessor can discard a later field.
+let check_fields (path: String) (src: String) (fields: Array[parser.FieldInitNode]) (i: Int) (seen: Map[String, Int]): Unit =
     if i >= fields.len() { () }
-    else { check_value(path, fields[i].value); check_fields(path, fields, i + 1) }
+    else {
+        let next = unique_name(path, src, seen, fields[i].name, fields[i].offset, "field");
+        check_value(path, src, fields[i].value);
+        check_fields(path, src, fields, i + 1, next)
+    }
+
+// Both configuration keys and dependency namespaces must have one meaning.
+// Keep the original position so the error can point to both declarations.
+let unique_name (path: String) (src: String) (seen: Map[String, Int]) (name: String) (offset: Int) (what: String): Map[String, Int] = {
+    match Map.get(seen, name) {
+        Some(first) => panic_raw(lexer.render_at(src, path, offset, "duplicate ${what} `${name}`")
+            .concat("\n").concat(lexer.render_at(src, path, first, "first ${what} `${name}` is here"))),
+        None => (),
+    };
+    Map.insert(seen, name, offset)
+}
 
 // Named so the message can say WHAT was found. A bare "not allowed"
 // leaves the reader hunting; "a function call" points at the line.
@@ -190,7 +206,7 @@ let not_data (path: String) (what: String): Unit =
 
 // ------------------------------------------------------------ the shape
 
-let to_manifest (path: String) (e: parser.PExpr): Manifest = match e {
+let to_manifest (path: String) (src: String) (e: parser.PExpr): Manifest = match e {
     EStructLit(lit_path, fields, _) => {
         if last_segment(lit_path) != "Package" {
             fail(path, "a manifest is one `Package { .. }`, but this one is `${last_segment(lit_path)}`")
@@ -200,7 +216,7 @@ let to_manifest (path: String) (e: parser.PExpr): Manifest = match e {
         Manifest {
             name: required_string(path, fields, "name", "Package"),
             version: optional_string(path, fields, "version"),
-            deps: deps_of(path, fields),
+            deps: deps_of(path, src, fields),
             link: link_field(path, fields, "link"),
             link_linux: link_field(path, fields, "link_linux"),
             link_macos: link_field(path, fields, "link_macos"),
@@ -250,18 +266,31 @@ let all_library_chars (cs: Array[String]) (i: Int): Bool =
 let is_library_char (c: String): Bool =
     Array.contains(chars_of("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_-.+"), c)
 
-let deps_of (path: String) (fields: Array[parser.FieldInitNode]): Array[Dep] =
+let deps_of (path: String) (src: String) (fields: Array[parser.FieldInitNode]): Array[Dep] =
     match field_named(fields, "deps", 0) {
         None => [],
         Some(v) => match v {
-            EArray(elems) => dep_list(path, elems, 0, []),
+            EArray(elems) => dep_list(path, src, elems, 0, [], Map.new(())),
             _ => { fail(path, "`deps` is an array of `Dep { .. }`"); [] },
         },
     }
 
-let dep_list (path: String) (elems: Array[parser.PExpr]) (i: Int) (acc: Array[Dep]): Array[Dep] =
+let dep_list (path: String) (src: String) (elems: Array[parser.PExpr]) (i: Int) (acc: Array[Dep]) (seen: Map[String, Int]): Array[Dep] =
     if i >= elems.len() { acc }
-    else { dep_list(path, elems, i + 1, acc.push(dep_of(path, elems[i]))) }
+    else {
+        let dep = dep_of(path, elems[i]);
+        let offset = match elems[i] {
+            EStructLit(_, fields, _) => name_offset(fields, 0),
+            _ => 0 - 1,
+        };
+        let next = unique_name(path, src, seen, dep.name, offset, "dependency name");
+        dep_list(path, src, elems, i + 1, acc.push(dep), next)
+    }
+
+let name_offset (fields: Array[parser.FieldInitNode]) (i: Int): Int =
+    if i >= fields.len() { 0 - 1 }
+    else if fields[i].name == "name" { fields[i].offset }
+    else { name_offset(fields, i + 1) }
 
 let dep_of (path: String) (e: parser.PExpr): Dep = match e {
     EStructLit(lit_path, fields, _) => {
