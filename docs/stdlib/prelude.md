@@ -85,7 +85,9 @@ wants `json_parse`.
 Parses JSON text.
 
 `Err` with a message naming what was expected. Accepts one complete
-value and rejects trailing text after it.
+value and rejects trailing text after it. Object member names must
+be unique within each object, compared after decoding escapes;
+duplicate names return `Err("duplicate object member name")`.
 
 ## `let json_stringify (v: JsonValue): String`
 

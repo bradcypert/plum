@@ -398,6 +398,62 @@ pub let test_json_roundtrip (): Unit = {
     check_eq("json edge", "null", json_stringify(JsonNull), "null")
 }
 
+let json_parse_status (text: String): String = match json_parse(text) {
+    Ok(v) => json_stringify(v),
+    Err(e) => e,
+}
+
+let check_json_duplicate (text: String): Unit = {
+    check_eq("JSON duplicate name", text, json_parse_status(text), "duplicate object member name");
+    let decoded = match Json.decode_string(Json.value(), text) {
+        Ok(_) => "unexpected success",
+        Err(e) => e,
+    };
+    check_eq("JSON decoder duplicate name", text, decoded, "duplicate object member name")
+}
+
+let json_duplicate_names (seed: Int) (left: Int): Unit =
+    if left <= 0 { () } else {
+        let key = json_stringify(JsonString(ascii_string(seed, rand_between(seed, 0, 12), "")));
+        let first = json_stringify(json_value(next_seed(seed), 2));
+        let second = json_stringify(json_value(next_seed(next_seed(seed)), 2));
+        let text = "{".concat(key).concat(":").concat(first).concat(",")
+            .concat(key).concat(":").concat(second).concat("}");
+        check_json_duplicate(text);
+        check_json_duplicate("{\"nested\":[".concat(text).concat("]}"));
+        json_duplicate_names(next_seed(seed), left - 1)
+    }
+
+pub let test_json_duplicate_names (): Unit = {
+    json_duplicate_names(313, 100);
+    for text in [
+        "{\"role\":\"user\",\"role\":\"admin\"}",
+        "{\"a\":null,\"b\":true,\"a\":false}",
+        "{\"\":1,\"\":2}",
+        "{\"same\":1,\"same\":1}",
+        "{\"a/b\":1,\"a\\/b\":2}",
+        "{\"a\\/b\":1,\"a/b\":2}",
+        "{\"a\\nb\":1,\"a\\nb\":2}",
+        "{\"a\\\"b\":1,\"a\\\"b\":2}",
+        "{\"a\\\\b\":1,\"a\\\\b\":2}",
+        "{\"outer\":{\"a\":1,\"a\":2}}",
+        "[{\"a\":1,\"a\":2}]",
+    ] { check_json_duplicate(text) };
+    for text in [
+        "{}",
+        "{\"a\":1,\"A\":2}",
+        "{\"\":1,\"a\":2}",
+        "{\"a\":{\"a\":1},\"b\":{\"a\":2}}",
+        "[{\"a\":1},{\"a\":2}]",
+        "{\"a/b\":1,\"a\\\\/b\":2}",
+    ] { check_eq("JSON unique names", text, json_parse_status(text), text) };
+    let role = match Json.decode_string(Json.field("role", Json.string()), "{\"role\":\"user\",\"role\":\"admin\"}") {
+        Ok(v) => v,
+        Err(e) => e,
+    };
+    check_eq("JSON field rejects duplicate role", "role", role, "duplicate object member name")
+}
+
 // --- Array laws ---
 
 let array_laws (seed: Int) (left: Int): Unit =
