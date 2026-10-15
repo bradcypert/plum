@@ -128,9 +128,8 @@ with tempfile.TemporaryDirectory(prefix="plum-cache-check-") as tmp:
     run("world\n", "hit")
     (app / "plum.pkg").unlink()
 
-    # Adjacent packages can have the same manifest name but distinct paths.
-    # Their module namespaces still clash, rather than merging into one
-    # source group merely because the names happen to match.
+    # Distinct package paths cannot share a dependency namespace. Resolve
+    # that conflict before consulting cached artifacts or merging sources.
     one = work / "one"
     shared_a = work / "shared-a"
     shared_b = work / "shared-b"
@@ -144,8 +143,14 @@ with tempfile.TemporaryDirectory(prefix="plum-cache-check-") as tmp:
     (app / "plum.pkg").write_text('Package { name: "app", deps: [ Dep { name: "one", path: "../one" }, Dep { name: "shared", path: "../shared-b" } ] }\n')
     src.write_text('let main (): Unit = println("clash")\n')
     clash = invoke("run", app, ok=False)
-    require("both one of your modules" in clash.stdout + clash.stderr,
-            "distinct package groups lost their conflict diagnostic: " + clash.stdout + clash.stderr)
+    diagnostic = clash.stdout + clash.stderr
+    require("duplicate dependency namespace `shared`" in diagnostic,
+            "distinct package groups lost their conflict diagnostic: " + diagnostic)
+    # MSYS temp paths and native Windows paths can name the same directory
+    # differently. Check each distinct directory suffix in either spelling.
+    require(all("/" + package.name in diagnostic.replace("\\", "/")
+                for package in (shared_a, shared_b)),
+            "namespace conflict did not name both package directories: " + diagnostic)
     (app / "plum.pkg").unlink()
 
     # Single-file dispatch must bypass eager lexing on a valid IR hit.
