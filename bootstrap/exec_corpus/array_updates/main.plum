@@ -1,0 +1,15 @@
+let main (): Unit = {
+    let xs = ["first", "middle", "last"];
+    println(Array.join(xs.set(0, "new first"), ","));
+    println(Array.join(Array.set(xs, 2, "new last"), ","));
+    println(Array.join(xs.remove(0), ","));
+    println(Array.join(Array.remove(xs, 1), ","));
+    println(Array.join(xs.remove(2), ","));
+    println(Array.join(xs, ","));
+    println(Array.join(["only"].set(0, "new"), ","));
+    println(["only"].remove(0).len().to_string());
+    let ns = [10, 20, 30];
+    println(ns.set(2, 40)[2].to_string());
+    println(ns.remove(0)[0].to_string());
+    println(ns[0].to_string());
+}

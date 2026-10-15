@@ -1,0 +1,7 @@
+let main (): Unit = {
+    let xs: Array[String] = ["a", "b"];
+    println("before");
+    let ys = xs.set(-1, "replacement");
+    println(ys.len().to_string());
+    println("unreachable")
+}
