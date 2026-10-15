@@ -48,8 +48,10 @@ decoder, which is the most common way this call is written wrong,
 and rejecting it buys nothing; the two alphabets do not overlap,
 so no input has two readings.
 
-What is NOT lenient is an unrecognised character, or a length that
-cannot have come from an encoder. Both are `Err`.
+Returns `Err` for unrecognised characters, impossible lengths,
+malformed padding, or nonzero unused tail bits. If present, padding
+must be a suffix of one or two `=` characters completing a group
+of four. Unused tail bits must be zero, with or without padding.
 
 ## `let base64_url_decode (s: String): Result[Bytes, String]`
 

@@ -635,6 +635,55 @@ pub let test_encoding_roundtrip (): Unit = {
         match Encoding.percent_decode("%2") { Ok(_) => "accepted", Err(_) => "rejected" }, "rejected")
 }
 
+// Both public decoder names share the same validation contract.
+let check_b64_decode (text: String) (want: String): Unit = {
+    check_eq("base64 validation", text,
+        match Encoding.base64_decode(text) { Ok(b) => b.to_hex(), Err(_) => "rejected" }, want);
+    check_eq("base64url validation", text,
+        match Encoding.base64_url_decode(text) { Ok(b) => b.to_hex(), Err(_) => "rejected" }, want)
+}
+
+pub let test_base64_validation (): Unit = {
+    let malformed = ["=", "==", "====", "A=AA", "AA=A", "=AAA", "AA==AA==",
+        "AA=", "AAA==", "AAAA=", "AAAA====", "AA===", "AA====", "A===",
+        "A", "AAAAA", "AA AA", "AA\n", "AA*="];
+    for text in malformed {
+        check_b64_decode(text, "rejected");
+    };
+    check_b64_decode("", "");
+    check_b64_decode("AAAA", "000000");
+    check_b64_decode("AAAAAA==", "00000000");
+    check_b64_decode("AAAAAAA=", "0000000000");
+    for text in ["+/8=", "+/8", "-_8=", "-_8"] {
+        check_b64_decode(text, "fbff");
+    };
+
+    // Enumerate every possible final sextet in both tail lengths and
+    // alphabets. Acceptance depends only on the unused low bits being
+    // zero, regardless of whether padding or complete groups precede it.
+    let alphabets = ["ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/",
+        "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_"];
+    for alphabet in alphabets {
+        let chars = chars_of(alphabet);
+        for v in 0..64 {
+            let one = "A".concat(chars[v]);
+            let two = "AA".concat(chars[v]);
+            let want_one = if v % 16 == 0 { Bytes.from_array([v / 16]).to_hex() } else { "rejected" };
+            let want_two = if v % 4 == 0 { Bytes.from_array([0, v / 4]).to_hex() } else { "rejected" };
+            check_b64_decode(one, want_one);
+            check_b64_decode(one.concat("=="), want_one);
+            check_b64_decode(two, want_two);
+            check_b64_decode(two.concat("="), want_two);
+            let prefix_one = if v % 16 == 0 { "000000".concat(want_one) } else { "rejected" };
+            let prefix_two = if v % 4 == 0 { "000000".concat(want_two) } else { "rejected" };
+            check_b64_decode("AAAA".concat(one), prefix_one);
+            check_b64_decode("AAAA".concat(one).concat("=="), prefix_one);
+            check_b64_decode("AAAA".concat(two), prefix_two);
+            check_b64_decode("AAAA".concat(two).concat("="), prefix_two);
+        };
+    }
+}
+
 // --- Url round trips ---
 //
 // `parse(stringify(u))` yields the same `Url` as `u`. Note the shape:
