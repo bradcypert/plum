@@ -1,0 +1,27 @@
+// A captured string is retained in each task closure, then the caller's
+// last reference goes away while workers release those captures. Joins
+// keep the process alive until every task has cleaned up its closure.
+
+let launch (label: String): Array[Task[String]] = {
+    let mut tasks: Array[Task[String]] = [];
+    for i in 0..64 { tasks = tasks.push(spawn { label.concat(i.to_string()) }); };
+    tasks
+}
+
+let channel_round (): Unit = {
+    let (tx, rx) = channel[String]();
+    let sender = spawn {
+        for i in 0..64 { tx.send("channel".concat(i.to_string())); };
+    };
+    let mut total = 0;
+    for i in 0..64 { total = total + rx.recv().len(); };
+    sender.join();
+    println(total.to_string());
+}
+
+let main (): Unit = {
+    let tasks = launch("shared capture");
+    let values = Array.map(tasks, |task| task.join());
+    println(values.len().to_string());
+    channel_round();
+}

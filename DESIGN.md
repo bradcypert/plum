@@ -140,18 +140,16 @@ Equality (`==`) is IDENTITY (`Rc::ptr_eq`), matching how `Task`/
 cells holding equal contents are NOT `==`, which is genuinely what
 makes `Ref` useful for aliasing in the first place.
 
-**Concurrency boundary — Decided (2026-07-28).** A plain (non-atomic)
-`Rc` isn't `Send`, so `Ref` crossing a `spawn`/`channel` boundary is a
-clear, reported error (`to_portable` rejects it, same as it already
-rejects closures/bare function values/task handles) — NOT a silent
-deep-copy, which would quietly defeat the entire point of `Ref`'s
-shared-mutation semantics by splitting one cell into two independent
-ones without any warning. Real cross-thread shared mutation would need
-atomic refcounts (`Arc`) and real synchronization (`Mutex`), which
-DESIGN.md's own concurrency section ("How this interacts with non-
-atomic refcounts") already flags as a separate, deliberately deferred
-question — this chunk didn't try to solve it, just made sure the
-current limitation fails loudly instead of silently.
+**Concurrency boundary — Revised (2026-10-15).** Heap reference counts
+are atomic because ordinary values can be retained and released on
+different threads through `spawn` captures and channel payloads. This
+makes cell lifetime management safe across those boundaries without
+changing the one-word count in each cell. It does not synchronize the
+contents of a mutable `Ref[T]`: concurrent `get`/`set` operations still
+need a separate synchronization design. The current checker accepts
+`Ref` captures, so that boundary remains an open correctness issue
+(#279); atomic reference counts must not be presented as making shared
+mutation race-free.
 
 **A real, pre-existing bug caught and fixed while testing, not Ref-
 specific:** `struct Counter { value: Ref[Int] }` (a builtin opaque type
@@ -222,7 +220,7 @@ form for multiplexing over several channels at once — exact surface
 syntax for `select` is deferred until it's actually being implemented,
 not needed to lock the model.
 
-### How this interacts with non-atomic refcounts — Leaning
+### How this interacts with thread-safe refcounts — Decided (2026-10-15)
 
 Go's own proverb — "share memory by communicating, don't communicate by
 sharing memory" — is a move discipline in spirit, but Go doesn't enforce
@@ -230,24 +228,23 @@ it; you can still pass a raw pointer between goroutines and race on it,
 which is why Go ships a separate race detector rather than catching it
 at compile time.
 
-Plum's angle: **channel send is a move**, using the same last-use
-ownership analysis the FBIP pass already computes. Sending a value on a
-channel transfers ownership; the compiler treats that as the value's
-last use, so using it again afterward is a compile error, not a runtime
-race. Because ownership transfers rather than being shared, there's
-never concurrent access to a single non-atomic refcount, so the cheap
-non-atomic default holds without extra runtime cost for the common case.
+Plum's angle remains **channel send is a move**, using the same last-use
+ownership analysis the FBIP pass already computes. Generated channel
+and task code can still retain or release heap values while another
+thread owns an alias, including nested values in captures and payloads.
+Therefore all RC-managed heap cells use atomic counts. This keeps the
+existing cell layout and adds no per-object bytes, while retain/release
+operations pay atomic synchronization cost even in single-threaded code.
 
 This is a genuine claim of improvement over Go, not just parity: Go's
 compiler does not stop you from racing on shared memory (that's what the
 race detector is for); Plum's could, structurally, for the default
 (non-shared) type.
 
-For cases that want genuine concurrent shared access (a read-heavy
-cache, config data touched by many tasks) — an explicit,
-atomic-refcounted wrapper type (an `Arc` equivalent) is the escape
-hatch, matching Rust's `Rc`/`Arc` split: pay for atomics only where
-sharing is real and intentional.
+Atomic counts protect lifetime only. They do not make concurrent writes
+to the same object safe, nor do they synchronize mutable `Ref` contents.
+`Ref` access needs its own synchronization before shared mutation can be
+promised safely.
 
 ### Scheduler — Open, deliberately sequenced last
 
