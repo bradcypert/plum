@@ -56,6 +56,7 @@
 #include <string.h>
 #include <stdlib.h>
 #include <stdio.h>
+#include <limits.h>
 
 // Winsock is a different API in the details, not in the shape: the same
 // `socket`/`bind`/`listen`/`accept`/`send`/`recv` calls with a
@@ -75,7 +76,11 @@ typedef SOCKET plum_sock;
 #define PLUM_BAD_SOCK       INVALID_SOCKET
 #define PLUM_CLOSESOCK(s)   closesocket(s)
 #define PLUM_SOCKOPT(v)     ((const char *)(v))
-#define PLUM_ADDRLEN(n)     ((int)(n))
+// Winsock takes an `int` byte count. Preserve the socket API's existing
+// partial-I/O behavior by limiting each call to its largest representable
+// count instead of allowing a large Plum Int to wrap when narrowed.
+#define PLUM_IO_LEN(n)      ((n) > INT_MAX ? INT_MAX : (n))
+#define PLUM_ADDRLEN(n)     ((int)PLUM_IO_LEN(n))
 
 // Winsock refuses every call until the library is initialised, and
 // there is no natural place to do it once -- this shim has no
@@ -105,6 +110,7 @@ typedef int plum_sock;
 #define PLUM_CLOSESOCK(s)   close(s)
 #define PLUM_SOCKOPT(v)     (v)
 #define PLUM_ADDRLEN(n)     (n)
+#define PLUM_IO_LEN(n)      (n)
 #define plum_net_init()     0
 #endif
 
@@ -281,6 +287,7 @@ const char *tcp_recv(long long fd, long long max_len) {
     if (max_len < 0) {
         max_len = 0;
     }
+    max_len = PLUM_IO_LEN(max_len);
     if (!recv_ensure((size_t)max_len + 1)) {
         return "";
     }
@@ -316,6 +323,7 @@ long long tcp_recv_n(long long fd, long long max_len) {
     if (max_len < 0) {
         max_len = 0;
     }
+    max_len = PLUM_IO_LEN(max_len);
     if (!recv_ensure((size_t)max_len + 1)) {
         return -1;
     }
