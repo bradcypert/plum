@@ -55,7 +55,7 @@ pub enum UOp { UNeg, UNot, UBitNot }
 pub enum BOp { BAdd, BSub, BMul, BDiv, BRem, BEq, BNe, BLt, BGt, BLe, BGe, BAnd, BOr, BRange, BPipe,
                BBitAnd, BBitOr, BBitXor, BShl, BShr }
 
-pub struct FieldInitNode { pub name: String, pub extra_path: Array[String], pub value: PExpr }
+pub struct FieldInitNode { pub name: String, pub extra_path: Array[String], pub value: PExpr, pub offset: Int }
 
 pub enum PExpr {
     EInt(Int),
@@ -1663,12 +1663,12 @@ let parse_field_init (tokens: Array[lexer.Token]) (pos: Int): FieldInitResult = 
     let colon_b = bump_if(tokens, extra_r.next_pos, TokColon);
     if colon_b.matched {
         let value_r = parse_expr(tokens, colon_b.next_pos);
-        FieldInitResult { value: FieldInitNode { name: name_tok.name, extra_path: extra_r.value, value: value_r.value }, next_pos: value_r.next_pos }
+        FieldInitResult { value: FieldInitNode { offset: offset_at(pos), name: name_tok.name, extra_path: extra_r.value, value: value_r.value }, next_pos: value_r.next_pos }
     } else if Array.is_empty(extra_r.value) {
-        FieldInitResult { value: FieldInitNode { name: name_tok.name, extra_path: [], value: EIdent(name_tok.name, offset_at(pos)) }, next_pos: extra_r.next_pos }
+        FieldInitResult { value: FieldInitNode { offset: offset_at(pos), name: name_tok.name, extra_path: [], value: EIdent(name_tok.name, offset_at(pos)) }, next_pos: extra_r.next_pos }
     } else {
         fail_at(extra_r.next_pos, "a nested field-update path needs an explicit ': value'");
-        FieldInitResult { value: FieldInitNode { name: name_tok.name, extra_path: extra_r.value, value: EInt(0) }, next_pos: extra_r.next_pos }
+        FieldInitResult { value: FieldInitNode { offset: offset_at(pos), name: name_tok.name, extra_path: extra_r.value, value: EInt(0) }, next_pos: extra_r.next_pos }
     }
 }
 
