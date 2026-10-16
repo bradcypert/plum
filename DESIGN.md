@@ -14971,11 +14971,13 @@ do not use, and Plum ships no sysroot it would have to maintain.
 All four pieces, in `main.plum`, and the estimate held: the diff is
 under 150 lines and most of it is comment.
 
-- `target_os(triple)` matches by SUBSTRING, not by position. The
-  component count varies in the wild and all three spellings are real:
-  `aarch64-macos`, `x86_64-unknown-linux-gnu`, `x86_64-pc-windows-msvc`.
-  An unrecognized OS is treated as Linux-shaped, which is what a BSD or
-  a bare `aarch64-none-elf` wants from a list that is only `-lm`.
+- `target_os(triple)` scans the components after the architecture for a
+  supported OS: `aarch64-macos`, `x86_64-unknown-linux-gnu`, and
+  `x86_64-pc-windows-msvc` are recognized. The vendor component does
+  not determine the OS, so `apple` alone does not imply macOS. Unknown
+  operating systems are rejected before native source selection; this
+  prevents Linux shims from being compiled into BSD targets and macOS
+  shims into iOS targets.
 - `platform_libs` now takes the target. That was the whole obstruction.
 - `known_64_bit_arches()` is an ALLOW-list, and that direction is the
   point. A block-list lets an unrecognized architecture through, and
