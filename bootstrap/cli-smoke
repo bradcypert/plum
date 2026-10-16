@@ -274,6 +274,21 @@ check $? "plum build wrote the failure to stdout, not stderr: $(head -n 1 "$work
 ! grep -q 'unsupported target' "$work/fail.out"
 check $? "plum build printed the failure on stdout as well as stderr"
 
+# Known-width architectures still need a supported OS. In particular,
+# do not compile Linux shims for FreeBSD or macOS shims for iOS just
+# because their triples share a vendor or architecture with a supported
+# target.
+for target in x86_64-unknown-freebsd arm64-apple-ios; do
+    SH_MEM="${SH_MEM:-512M}" SH_TIMEOUT="${SH_TIMEOUT:-120}" \
+        "$plum" build "$work/failbuild" --target "$target" -o "$work/failbuild/out" \
+        > "$work/fail.out" 2> "$work/fail.err"
+    status=$?
+    [ "$status" -ne 0 ]
+    check $? "plum build accepted unsupported OS target $target"
+    grep -q 'supports Linux, macOS and Windows' "$work/fail.err"
+    check $? "plum build did not explain unsupported OS target $target: $(head -n 1 "$work/fail.err")"
+done
+
 # --- plum build . names the binary after the directory (#53) ----------
 #
 # Without -o, the binary is named after the project path. For `.`, that

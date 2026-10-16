@@ -2666,19 +2666,21 @@ let collect_flag (argv: Array[String]) (flag: String) (i: Int) (acc: Array[Strin
 // build passes. It is NOT a valid triple and never reaches clang.
 let native_target (): String = ""
 
-// The OS component of a target triple, as one of the strings
-// `Os.platform()` itself returns.
-//
-// Matched by SUBSTRING rather than by position, because the number of
-// components varies in the wild and all three spellings are real:
-// `aarch64-macos`, `x86_64-unknown-linux-gnu`, `x86_64-pc-windows-msvc`.
-// Anything unrecognized is treated as Linux-shaped, which is what a
-// bare `aarch64-none-elf` or a BSD wants from this list anyway.
+// Map the OS component of a target triple to a platform whose native
+// sources and link flags Plum knows. Empty means unsupported.
 let target_os (triple: String): String =
     if triple == native_target() { Os.platform() }
-    else if triple.contains("windows") { "windows" }
-    else if triple.contains("macos") || triple.contains("darwin") || triple.contains("apple") { "macos" }
-    else { "linux" }
+    else { target_os_components(triple.split("-"), 1) }
+
+let target_os_components (parts: Array[String]) (i: Int): String =
+    if i >= parts.len() { "" }
+    else {
+        let part = parts[i];
+        if part == "linux" { "linux" }
+        else if part == "windows" { "windows" }
+        else if part == "macos" || part.starts_with("macosx") || part == "darwin" || part.starts_with("darwin") { "macos" }
+        else { target_os_components(parts, i + 1) }
+    }
 
 // The libraries every produced binary links against, which are not the
 // same on every platform.
@@ -2929,6 +2931,9 @@ let target_arch (triple: String): String = {
 // An error message for a target we must not build, or "" to proceed.
 let target_error (triple: String): String =
     if triple == native_target() { "" }
+    else if target_os(triple) == "" {
+        "unsupported target `${triple}`: Plum supports Linux, macOS and Windows targets only."
+    }
     else if Array.contains(known_64_bit_arches(), target_arch(triple)) { "" }
     else {
         "unsupported target `${triple}`: Plum emits 64-bit code only, and `"
