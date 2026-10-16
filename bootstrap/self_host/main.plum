@@ -4267,6 +4267,17 @@ pub let test_path_split_windows (): Unit = {
     eq("dirname", Path.dirname_in(true, "C:\\a\\b.txt"), "C:\\a");
     eq("trailing separator", Path.basename_in(true, "a\\b\\"), "b");
     eq("dirname of a bare name", Path.dirname_in(true, "b.txt"), ".");
+    // A drive without a root is a drive-relative prefix. Joining its
+    // next component must not insert a separator and root it instead.
+    eq("join drive-relative", Path.join_in(true, "C:", "foo"), "C:foo");
+    eq("join drive-relative segments", Path.join_all_in(true, ["C:", "foo", "bar"]), "C:foo\\bar");
+    eq("basename of drive-relative directory", Path.basename_in(true, "C:"), ".");
+    eq("dirname of drive-relative directory", Path.dirname_in(true, "C:"), "C:");
+    eq("basename drive-relative file", Path.basename_in(true, "C:foo"), "foo");
+    eq("dirname drive-relative file", Path.dirname_in(true, "C:foo"), "C:");
+    // A drive-root remains rooted and keeps its volume in the basename.
+    eq("basename drive root", Path.basename_in(true, "C:\\"), "C:\\");
+    eq("dirname drive root", Path.dirname_in(true, "C:\\"), "C:\\");
     eq("join", Path.join_in(true, "C:\\x", "y"), "C:\\x\\y");
     // The rule `join` inherits from `join_all`, under this convention
     // too: a later absolute segment does NOT discard the earlier ones.
@@ -4283,6 +4294,8 @@ pub let test_path_split_windows (): Unit = {
 pub let test_path_split_recombines_windows (): Unit = {
     recombines("C:\\a\\b.txt");
     recombines("C:\\a\\");
+    recombines("C:");
+    recombines("C:foo");
     recombines("\\\\server\\share\\f");
     recombines("b.txt");
     recombines("\\");
