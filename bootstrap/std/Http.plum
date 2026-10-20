@@ -55,16 +55,61 @@ let http_parse_url (url: String): Result[Url.Url, String] =
             else { Err("http client: url must start with http:// or https://") },
     }
 
-let http_build_request (method: String) (parsed: Url.Url) (headers: Array[Header]) (body: String): String = {
-    let extra_header_lines = Array.fold(headers, "", |acc, h| acc.concat(h.name).concat(": ").concat(h.value).concat("\r\n"));
-    let content_length_line = if String.is_empty(body) { "" } else { "Content-Length: ".concat(body.len().to_string()).concat("\r\n") };
-    method.concat(" ").concat(Url.request_target(parsed)).concat(" HTTP/1.1\r\n")
-        .concat("Host: ").concat(Url.authority(parsed)).concat("\r\n")
-        .concat("Connection: close\r\n")
-        .concat(content_length_line)
-        .concat(extra_header_lines)
-        .concat("\r\n")
-        .concat(body)
+// RFC 9110 token syntax, shared by methods and field names. Scan bytes:
+// tokens are ASCII even when the surrounding String contains UTF-8.
+let http_token_byte (c: Int): Bool =
+    (c >= 65 && c <= 90) || (c >= 97 && c <= 122) || (c >= 48 && c <= 57)
+        || c == 33 || c == 35 || c == 36 || c == 37 || c == 38 || c == 39
+        || c == 42 || c == 43 || c == 45 || c == 46 || c == 94 || c == 95
+        || c == 96 || c == 124 || c == 126
+
+let http_token_ok_acc (b: Bytes) (i: Int): Bool =
+    if i >= b.len() { true }
+    else { match b.at(i) {
+        Some(c) => if http_token_byte(c) { http_token_ok_acc(b, i + 1) } else { false },
+        None => false,
+    } }
+
+let http_token_ok (text: String): Bool =
+    !String.is_empty(text) && http_token_ok_acc(text.as_bytes(), 0)
+
+// Field values allow SP and HTAB; targets and authorities allow neither.
+// Bytes above ASCII are preserved, including existing UTF-8 field values.
+let http_text_ok_acc (b: Bytes) (i: Int) (field_value: Bool): Bool =
+    if i >= b.len() { true }
+    else { match b.at(i) {
+        Some(c) => {
+            let ok = if field_value { c == 9 || (c >= 32 && c != 127) } else { c > 32 && c != 127 };
+            if ok { http_text_ok_acc(b, i + 1, field_value) } else { false }
+        },
+        None => false,
+    } }
+
+let http_validate_headers (headers: Array[Header]) (i: Int): Result[Unit, String] =
+    if i >= headers.len() { Ok(()) }
+    else if !http_token_ok(headers[i].name) { Err("http: invalid header name") }
+    else if !http_text_ok_acc(headers[i].value.as_bytes(), 0, true) { Err("http: invalid header value") }
+    else { http_validate_headers(headers, i + 1) }
+
+// Public structs are unchecked data. Validate the actual interpolated fields
+// here, even when a Url was constructed without going through Url.parse.
+let http_build_request (method: String) (parsed: Url.Url) (headers: Array[Header]) (body: String): Result[String, String] = {
+    let target = Url.request_target(parsed);
+    let authority = Url.authority(parsed);
+    if !http_token_ok(method) { Err("http client: invalid method") }
+    else if String.is_empty(target) || !http_text_ok_acc(target.as_bytes(), 0, false) { Err("http client: invalid request target") }
+    else if String.is_empty(authority) || !http_text_ok_acc(authority.as_bytes(), 0, false) { Err("http client: invalid authority") }
+    else { Result.map(http_validate_headers(headers, 0), |ignored| {
+        let extra_header_lines = Array.fold(headers, "", |acc, h| acc.concat(h.name).concat(": ").concat(h.value).concat("\r\n"));
+        let content_length_line = if String.is_empty(body) { "" } else { "Content-Length: ".concat(body.len().to_string()).concat("\r\n") };
+        method.concat(" ").concat(target).concat(" HTTP/1.1\r\n")
+            .concat("Host: ").concat(authority).concat("\r\n")
+            .concat("Connection: close\r\n")
+            .concat(content_length_line)
+            .concat(extra_header_lines)
+            .concat("\r\n")
+            .concat(body)
+    }) }
 }
 
 /// Reads (and accumulates) until the blank-line header/body separator
@@ -193,30 +238,33 @@ let http_read_request_body (fd: Int) (headers: Array[Header]) (leftover_body: St
 /// choosing this one). `|ignored| ..` discards `tcp_write`'s own `Int`
 /// (bytes-written count) — the next step doesn't need it, only that the
 /// write succeeded at all.
-let http_do_request (fd: Int) (secure: Int) (method: String) (parsed: Url.Url) (headers: Array[Header]) (body: String): Result[Response, String] =
-    (if secure == 1 { http_tls_write(fd, http_build_request(method, parsed, headers, body)) } else { Net.write(fd, http_build_request(method, parsed, headers, body)) })
+let http_do_request (fd: Int) (secure: Int) (wire: String): Result[Response, String] =
+    (if secure == 1 { http_tls_write(fd, wire) } else { Net.write(fd, wire) })
         |> Result.and_then(_, |ignored| http_recv_headers_acc(fd, secure, ""))
         |> Result.and_then(_, http_parse_head)
         |> Result.and_then(_, |head| Result.map(http_read_body(fd, secure, head.headers, head.leftover_body), |response_body| Response { status: head.status, headers: head.headers, body: response_body }))
 
-/// `fd` has to stay reachable for the FINAL cleanup step regardless of
-/// `http_do_request`'s own outcome — closure capture (`fd` bound by the
-/// outer `and_then`, still in scope in the block passed to the inner
-/// one) does this without needing the old two-armed "close then re-wrap
-/// Ok/Err separately" match at all.
+/// Sends a request over HTTP or HTTPS. HTTPS verifies the peer's
+/// certificate and hostname using the native TLS trust-store integration.
+///
+/// Invalid URL text, methods, header names, and header values return Err
+/// before connecting. Methods and names must be nonempty ASCII tokens;
+/// values may contain spaces, HTAB, and UTF-8, but no other ASCII controls
+/// or DEL. Bodies are not subject to protocol-field validation.
 pub let request (method: String) (url: String) (headers: Array[Header]) (body: String): Result[Response, String] =
     http_parse_url(url)
-        |> Result.and_then(_, |parsed| if parsed.scheme == "https" {
-            let fd = unsafe { tls_connect(parsed.host.as_cstr(), parsed.port) };
-            if fd < 0 { Err("https client: TLS connection failed") }
-            else { let result = http_do_request(fd, 1, method, parsed, headers, body); unsafe { tls_close(fd) }; result }
-        } else {
-            Net.connect_to(parsed.host, parsed.port) |> Result.and_then(_, |fd| {
-                let result = http_do_request(fd, 0, method, parsed, headers, body);
-                Net.close(fd);
-                result
-            })
-        })
+        |> Result.and_then(_, |parsed| http_build_request(method, parsed, headers, body)
+            |> Result.and_then(_, |wire| if parsed.scheme == "https" {
+                let fd = unsafe { tls_connect(parsed.host.as_cstr(), parsed.port) };
+                if fd < 0 { Err("https client: TLS connection failed") }
+                else { let result = http_do_request(fd, 1, wire); unsafe { tls_close(fd) }; result }
+            } else {
+                Net.connect_to(parsed.host, parsed.port) |> Result.and_then(_, |fd| {
+                    let result = http_do_request(fd, 0, wire);
+                    Net.close(fd);
+                    result
+                })
+            }))
 
 /// Fetches a URL and reads the whole response.
 ///
@@ -279,15 +327,16 @@ let http_status_reason (code: Int): String = match code {
 /// body), not just when the body is non-empty: a request omitting it
 /// for a bodyless `GET` is common/idiomatic, but a SERVER leaving a
 /// client to guess whether a response has a body at all is not.
-let http_response_to_wire (resp: Response): String = {
-    let extra_header_lines = Array.fold(resp.headers, "", |acc, h| acc.concat(h.name).concat(": ").concat(h.value).concat("\r\n"));
-    "HTTP/1.1 ".concat(resp.status.to_string()).concat(" ").concat(http_status_reason(resp.status)).concat("\r\n")
-        .concat("Content-Length: ").concat(resp.body.len().to_string()).concat("\r\n")
-        .concat("Connection: close\r\n")
-        .concat(extra_header_lines)
-        .concat("\r\n")
-        .concat(resp.body)
-}
+let http_response_to_wire (resp: Response): Result[String, String] =
+    Result.map(http_validate_headers(resp.headers, 0), |ignored| {
+        let extra_header_lines = Array.fold(resp.headers, "", |acc, h| acc.concat(h.name).concat(": ").concat(h.value).concat("\r\n"));
+        "HTTP/1.1 ".concat(resp.status.to_string()).concat(" ").concat(http_status_reason(resp.status)).concat("\r\n")
+            .concat("Content-Length: ").concat(resp.body.len().to_string()).concat("\r\n")
+            .concat("Connection: close\r\n")
+            .concat(extra_header_lines)
+            .concat("\r\n")
+            .concat(resp.body)
+    })
 
 /// Reads exactly one request off `conn`, runs `handler`, writes exactly
 /// one response back — never touches `conn`'s own lifecycle (opening/
@@ -301,12 +350,15 @@ let http_handle_connection (conn: Int) (handler: (Request) -> Response): Result[
         |> Result.and_then(_, |head| http_read_request_body(conn, head.headers, head.leftover_body) |> Result.and_then(_, |body| {
             let request = Request { method: head.method, path: head.path, headers: head.headers, body: body };
             let response = handler(request);
-            Result.map(Net.write(conn, http_response_to_wire(response)), |sent| ())
+            http_response_to_wire(response)
+                |> Result.and_then(_, |wire| Result.map(Net.write(conn, wire), |sent| ()))
         }))
 
 /// Handles exactly ONE connection then returns — listens, accepts once,
 /// closes both the connection and the listening socket, and gives back
-/// whatever `http_handle_connection` produced. Real, useful on its own
+/// whatever `http_handle_connection` produced. Invalid handler headers
+/// return Err without writing response bytes; the connection is closed.
+/// Real, useful on its own
 /// (a one-shot server, or a test fixture — this is what THIS module's
 /// own tests exercise directly), not just a building block for `http_
 /// serve` below.
@@ -366,9 +418,9 @@ let http_serve_loop (server: Int) (handler: (Request) -> Response): Result[Unit,
 
 /// Serves HTTP on a port, calling `handler` once per request, forever.
 ///
-/// **Never returns** unless the listen itself fails. One connection is
-/// handled at a time — a slow handler blocks the next request, which is
-/// fine for a local tool and is not a production server.
+/// **Never returns** unless listening or accepting fails. Connections
+/// run concurrently. Invalid handler headers close that connection without
+/// sending a response; other connections continue to be served.
 pub let serve (port: Int) (handler: (Request) -> Response): Result[Unit, String] =
     match Net.listen_on(port) {
         Err(e) => Err(e),

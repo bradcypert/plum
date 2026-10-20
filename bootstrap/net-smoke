@@ -28,6 +28,7 @@ work="$(mktemp -d -t plum-netsmoke-XXXXXX)"
 trap 'rm -rf "$work"' EXIT
 
 fail=0
+plum="${PLUM:-./sh}"
 
 # --- TCP ---------------------------------------------------------
 # Race-free by construction: `main` creates the LISTENING socket before
@@ -201,9 +202,153 @@ let main (): Unit = {
 }
 PLUM
 
+# Exercise private builders against hand-constructed URLs, which can bypass
+# Url.parse. Compile the authoritative source as an ordinary test project;
+# no test-only exports are added to the shipped Http API.
+mkdir -p "$work/httpbuilders"
+{
+    printf 'use Net;\nuse Url;\n'
+    cat bootstrap/std/Http.plum
+    cat <<'PLUM'
+
+let unchecked_url (host: String) (path: String) (query: String): Url.Url =
+    Url.Url { scheme: "http", host: host, port: 80, path: path, raw_query: query, fragment: "" }
+
+let expect_builder_error (url: Url.Url) (expected: String): Unit =
+    match http_build_request("GET", url, [], "body\r\n") {
+        Err(e) => assert_eq(e, expected), Ok(_) => panic_raw("unchecked URL serialized"),
+    }
+
+let main (): Unit = {
+    for c in 0..128 {
+        if c <= 32 || c == 127 {
+            let ch = match Bytes.from_array([c]).as_string() { Ok(s) => s, Err(e) => { panic_raw(e); "" } };
+            expect_builder_error(unchecked_url("h".concat(ch), "/", ""), "http client: invalid authority");
+            expect_builder_error(unchecked_url("h", "/a".concat(ch), ""), "http client: invalid request target");
+            expect_builder_error(unchecked_url("h", "/", "q=".concat(ch)), "http client: invalid request target")
+        } else { () }
+    };
+    expect_builder_error(unchecked_url("", "/", ""), "http client: invalid authority");
+    expect_builder_error(unchecked_url("h", "", ""), "http client: invalid request target");
+    println("HTTP builders reject unchecked URL fields")
+}
+PLUM
+} > "$work/httpbuilders/main.plum"
+
+# Validate both sides of the serialization boundary through compiled public
+# APIs. A raw TCP peer observes every byte, including any partial response.
+mkdir -p "$work/httpfields"
+cat > "$work/httpfields/main.plum" <<'PLUM'
+use Net;
+use Http;
+
+let token (): String = "X!#$%&'*+-.^_`|~09aZ"
+let body (): String = "a\r\nb"
+let request_wire (): String =
+    token().concat(" /%0D%0A%00%20?q=%0D%0A HTTP/1.1\r\nHost: 127.0.0.1:18798\r\nConnection: close\r\nContent-Length: 4\r\n")
+        .concat(token()).concat(": a \t é\r\nX-Empty: \r\n\r\n").concat(body())
+
+let read_n (fd: Int) (acc: String) (n: Int): String =
+    if acc.len() >= n { acc }
+    else {
+        let chunk = Net.read(fd, n - acc.len());
+        if String.is_empty(chunk) { acc } else { read_n(fd, acc.concat(chunk), n) }
+    }
+
+let read_closed (fd: Int) (acc: String): String = {
+    let chunk = Net.read(fd, 4096);
+    if String.is_empty(chunk) { acc } else { read_closed(fd, acc.concat(chunk)) }
+}
+
+let connect_retry (port: Int) (n: Int): Int =
+    match Net.connect_to("127.0.0.1", port) {
+        Ok(fd) => fd,
+        Err(e) => if n <= 0 { panic_raw(e); 0 } else { connect_retry(port, n - 1) },
+    }
+
+let exchange (port: Int) (path: String): String = {
+    let fd = connect_retry(port, 2000);
+    match Net.write(fd, "GET ".concat(path).concat(" HTTP/1.1\r\nHost: localhost\r\n\r\n")) {
+        Err(e) => panic_raw(e), Ok(_) => (),
+    };
+    let wire = read_closed(fd, "");
+    Net.close(fd);
+    wire
+}
+
+let byte_text (c: Int): String =
+    match Bytes.from_array([c]).as_string() { Ok(s) => s, Err(e) => { panic_raw(e); "" } }
+
+let header_for (path: String): Http.Header =
+    if path == "/empty-name" { Http.Header { name: "", value: "ok" } }
+    else if path == "/colon-name" { Http.Header { name: "X:Bad", value: "ok" } }
+    else if path == "/utf8-name" { Http.Header { name: "X-é", value: "ok" } }
+    else if path == "/folded" { Http.Header { name: "X-Test", value: "ok\r\n\tInjected" } }
+    else if String.starts_with(path, "/name/") {
+        let c = match String.parse_int(String.slice(path, 6, path.len())) { Ok(n) => n, Err(e) => { panic_raw(e); 0 } };
+        Http.Header { name: "X".concat(byte_text(c)).concat("-Test"), value: "ok" }
+    } else if String.starts_with(path, "/value/") {
+        let c = match String.parse_int(String.slice(path, 7, path.len())) { Ok(n) => n, Err(e) => { panic_raw(e); 0 } };
+        Http.Header { name: "X-Test", value: "ok".concat(byte_text(c)).concat("Injected: yes") }
+    } else { Http.Header { name: token(), value: "a \t é" } }
+
+let handler (req: Http.Request): Http.Response = Http.Response {
+    status: 200,
+    headers: [Http.Header { name: "X-Empty", value: "" }, header_for(req.path)],
+    body: body(),
+}
+
+let main (): Unit = {
+    // Exact valid request bytes: all token punctuation, UTF-8 and HTAB values,
+    // encoded control data, fragment omission, and an untouched CRLF body.
+    let srv = match Net.listen_on(18798) { Ok(fd) => fd, Err(e) => { panic_raw(e); 0 } };
+    let peer = spawn {
+        let conn = match Net.accept(srv) { Ok(fd) => fd, Err(e) => { panic_raw(e); 0 } };
+        let wire = read_n(conn, "", request_wire().len());
+        match Net.write(conn, "HTTP/1.1 200 OK\r\nContent-Length: 4\r\n\r\na\r\nb") {
+            Ok(_) => (), Err(e) => panic_raw(e),
+        };
+        Net.close(conn);
+        wire
+    };
+    match Http.request(token(), "http://127.0.0.1:18798/%0D%0A%00%20?q=%0D%0A#ignored", [
+        Http.Header { name: token(), value: "a \t é" }, Http.Header { name: "X-Empty", value: "" },
+    ], body()) {
+        Ok(resp) => assert_eq(resp.body, body()), Err(e) => panic_raw(e),
+    };
+    assert_eq(peer.join(), request_wire());
+    Net.close(srv);
+
+    // A one-shot server must surface the validation error and close without
+    // sending even the valid status line or first header.
+    let once = spawn { Http.serve_once(18800, handler) };
+    assert_eq(exchange(18800, "/folded"), "");
+    match once.join() { Err(e) => assert_eq(e, "http: invalid header value"), Ok(_) => panic_raw("expected Err") };
+
+    // The persistent server must survive invalid handler output. Do not join
+    // this deliberately infinite task; process exit ends its listening thread.
+    let server = spawn { Http.serve(18799, handler) };
+    for c in 0..128 {
+        if c <= 32 || c == 127 {
+            assert_eq(exchange(18799, "/name/".concat(c.to_string())), "");
+            if c != 9 && c != 32 {
+                assert_eq(exchange(18799, "/value/".concat(c.to_string())), "")
+            } else { () }
+        } else { () }
+    };
+    for path in ["/empty-name", "/colon-name", "/utf8-name", "/folded"] {
+        assert_eq(exchange(18799, path), "")
+    };
+    let expected = "HTTP/1.1 200 OK\r\nContent-Length: 4\r\nConnection: close\r\nX-Empty: \r\n"
+        .concat(token()).concat(": a \t é\r\n\r\n").concat(body());
+    assert_eq(exchange(18799, "/ok"), expected);
+    println("HTTP fields: valid bytes preserved; invalid responses send no bytes; server continues")
+}
+PLUM
+
 check() {
     local name="$1" expected="$2"
-    if ! SH_MEM="${SH_MEM:-512M}" SH_TIMEOUT="${SH_TIMEOUT:-240}" ./sh build "$work/$name" -o "$work/$name.bin" > "$work/$name.err" 2>&1; then
+    if ! SH_MEM="${SH_MEM:-512M}" SH_TIMEOUT="${SH_TIMEOUT:-240}" "$plum" build "$work/$name" -o "$work/$name.bin" > "$work/$name.err" 2>&1; then
         echo "FAIL [$name]: did not compile: $(head -1 "$work/$name.err")"; fail=1; return
     fi
     local out
@@ -221,6 +366,8 @@ check() {
     fi
 }
 
+check httpbuilders "HTTP builders reject unchecked URL fields"
+check httpfields "HTTP fields: valid bytes preserved; invalid responses send no bytes; server continues"
 check tcp "ping/pong"
 check httpwire "client got 200 hi
 --- request bytes ---

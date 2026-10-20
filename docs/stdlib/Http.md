@@ -34,24 +34,20 @@ carries the bytes that arrived alongside the headers.
 
 ## `let request (method: String) (url: String) (headers: Array[Header]) (body: String): Result[Response, String]`
 
-HTTP and HTTPS share this request API. HTTPS uses a native TLS
-session with certificate and hostname verification; the TLS library
-and trust-store lookup remain implementation details of the runtime.
-Plum embeds a pinned Mbed TLS source snapshot. Unix builds use the
-conventional system CA paths; Windows loads the system ROOT store.
+Sends a request over HTTP or HTTPS. HTTPS verifies the peer's
+certificate and hostname using the native TLS trust-store integration.
 
-`fd` has to stay reachable for the FINAL cleanup step regardless of
-`http_do_request`'s own outcome — closure capture (`fd` bound by the
-outer `and_then`, still in scope in the block passed to the inner
-one) does this without needing the old two-armed "close then re-wrap
-Ok/Err separately" match at all.
+Invalid URL text, methods, header names, and header values return Err
+before connecting. Methods and names must be nonempty ASCII tokens;
+values may contain spaces, HTAB, and UTF-8, but no other ASCII controls
+or DEL. Bodies are not subject to protocol-field validation.
 
 ## `let get (url: String): Result[Response, String]`
 
 Fetches a URL and reads the whole response.
 
-HTTPS performs certificate and hostname verification using the
-runtime's native TLS trust-store integration.
+Supports both `http://` and `https://`; HTTPS uses the native TLS
+transport with platform trust-store and hostname verification.
 
 Redirects are NOT followed: a 301 or 302 comes back as itself, with
 its `Location` header, so the caller decides. Following one changes
@@ -63,13 +59,15 @@ should make quietly.
 POSTs a body and reads the whole response. Sets `Content-Length`;
 set `Content-Type` yourself if the server needs one.
 
-HTTP or HTTPS, and redirects are not followed — see `Http.get`.
+Redirects are not followed — see `Http.get`.
 
 ## `let serve_once (port: Int) (handler: (Request) -> Response): Result[Unit, String]`
 
 Handles exactly ONE connection then returns — listens, accepts once,
 closes both the connection and the listening socket, and gives back
-whatever `http_handle_connection` produced. Real, useful on its own
+whatever `http_handle_connection` produced. Invalid handler headers
+return Err without writing response bytes; the connection is closed.
+Real, useful on its own
 (a one-shot server, or a test fixture — this is what THIS module's
 own tests exercise directly), not just a building block for `http_
 serve` below.
@@ -78,6 +76,6 @@ serve` below.
 
 Serves HTTP on a port, calling `handler` once per request, forever.
 
-**Never returns** unless the listen itself fails. One connection is
-handled at a time — a slow handler blocks the next request, which is
-fine for a local tool and is not a production server.
+**Never returns** unless listening or accepting fails. Connections
+run concurrently. Invalid handler headers close that connection without
+sending a response; other connections continue to be served.

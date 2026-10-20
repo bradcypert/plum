@@ -1386,3 +1386,41 @@ pub let test_sha256_long_vector (): Unit =
     check_eq("sha256 of a million a's", "1000000 x a",
         Encoding.hex_encode(Crypto.sha256(Bytes.from_string(String.repeat("a", 1000000)))),
         "cdc76e5c9914fb9281a1c7e284d73e67f1809a48a497200e046d39ccc7112cd0")
+
+// Raw whitespace/control rejection must cover every URL component, including
+// fragments (which HTTP omits) and authority text used by DNS/TLS and Host.
+pub let test_url_rejects_raw_controls (): Unit = {
+    for c in 0..128 {
+        if c <= 32 || c == 127 {
+            let ch = match Bytes.from_array([c]).as_string() { Ok(s) => s, Err(e) => { panic_raw(e); "" } };
+            for text in [
+                "ht".concat(ch).concat("tp://h/"),
+                "http://h".concat(ch).concat("ost/"),
+                "http://[::".concat(ch).concat("1]/"),
+                "http://h:8".concat(ch).concat("0/"),
+                "http://h/a".concat(ch).concat("b"),
+                "http://h/?q=a".concat(ch).concat("b"),
+                "http://h/#a".concat(ch).concat("b"),
+            ] {
+                check_eq("reject raw URL control", c.to_string(),
+                    match Url.parse(text) { Ok(_) => "accepted", Err(_) => "rejected" }, "rejected")
+            }
+        } else { () }
+    };
+    // Encoded controls are application data, never raw wire delimiters.
+    for encoded in ["%00", "%09", "%0D", "%0A", "%20", "%7F"] {
+        let text = "http://h/".concat(encoded).concat("?q=").concat(encoded).concat("#").concat(encoded);
+        match Url.parse(text) {
+            Err(e) => panic_raw(e),
+            Ok(u) => {
+                check_eq("preserve encoded URL data", text, Url.stringify(u), text);
+                let with_q = Url.with_query(u, [Url.Param { name: "line", value: "a\r\nb" }]);
+                check_eq("encoded query round trip", text,
+                    match Url.parse(Url.stringify(with_q)) {
+                        Err(e) => e,
+                        Ok(v) => match Url.query_get(v, "line") { Some(value) => value, None => "missing" },
+                    }, "a\r\nb")
+            },
+        }
+    }
+}

@@ -151,42 +151,57 @@ let with_port (scheme: String) (host: String) (text: String): Result[Url, String
                  else { Ok(host_port(scheme, host, p)) },
     } }
 
+// Reject raw ASCII whitespace and controls before splitting components.
+// Percent escapes remain encoded; %0D and %0A cannot delimit wire lines.
+let raw_url_ok_acc (b: Bytes) (i: Int): Bool =
+    if i >= b.len() { true }
+    else {
+        let c = byte_at(b, i);
+        if c <= 32 || c == 127 { false } else { raw_url_ok_acc(b, i + 1) }
+    }
+
 /// Absolute URLs only. A scheme-relative (`//host/x`) or relative
 /// (`/x`) reference has no meaning without a base to resolve against,
 /// and resolution is a different function than parsing.
+///
+/// Raw ASCII controls, spaces, and DEL are rejected in every component.
+/// Percent-encoded data remains encoded, including escaped controls and
+/// spaces; query lookups decode it as application data.
 ///
 /// The scheme is lowercased, because schemes are case-insensitive, and
 /// normalising here is what lets `u.scheme == "http"` be written
 /// everywhere else without thinking about it. The host is left
 /// exactly as written, matching Go's `net/url`.
-pub let parse (input: String): Result[Url, String] = {
-    let sp = split_first(input, "://");
-    if !sp.found { Err("Url.parse: missing scheme (expected something like http://host/path)") }
-    else if !scheme_ok(sp.before) { Err("Url.parse: invalid scheme: ".concat(sp.before)) }
+pub let parse (input: String): Result[Url, String] =
+    if !raw_url_ok_acc(input.as_bytes(), 0) { Err("Url.parse: raw whitespace or control character") }
     else {
-        let scheme = String.to_lower(sp.before);
-        // Fragment first, then query: a `#` ends the query, and a `?`
-        // inside a fragment is part of the fragment.
-        let frag = split_first(sp.after, "#");
-        let q = split_first(frag.before, "?");
-        let slash = String.index_of(q.before, "/");
-        let authority = match slash { Some(i) => String.slice(q.before, 0, i), None => q.before };
-        let path = match slash { Some(i) => String.slice(q.before, i, clen(q.before)), None => "/" };
-        match parse_authority(authority, scheme) {
-            Err(e) => Err(e),
-            Ok(base) => match validate_params(raw_params(q.after), 0) {
+        let sp = split_first(input, "://");
+        if !sp.found { Err("Url.parse: missing scheme (expected something like http://host/path)") }
+        else if !scheme_ok(sp.before) { Err("Url.parse: invalid scheme: ".concat(sp.before)) }
+        else {
+            let scheme = String.to_lower(sp.before);
+            // Fragment first, then query: a `#` ends the query, and a `?`
+            // inside a fragment is part of the fragment.
+            let frag = split_first(sp.after, "#");
+            let q = split_first(frag.before, "?");
+            let slash = String.index_of(q.before, "/");
+            let authority = match slash { Some(i) => String.slice(q.before, 0, i), None => q.before };
+            let path = match slash { Some(i) => String.slice(q.before, i, clen(q.before)), None => "/" };
+            match parse_authority(authority, scheme) {
                 Err(e) => Err(e),
-                Ok(_) => match validate_pct("path", path) {
+                Ok(base) => match validate_params(raw_params(q.after), 0) {
                     Err(e) => Err(e),
-                    Ok(_) => Ok(Url {
-                        scheme: base.scheme, host: base.host, port: base.port,
-                        path: path, raw_query: q.after, fragment: frag.after,
-                    }),
+                    Ok(_) => match validate_pct("path", path) {
+                        Err(e) => Err(e),
+                        Ok(_) => Ok(Url {
+                            scheme: base.scheme, host: base.host, port: base.port,
+                            path: path, raw_query: q.after, fragment: frag.after,
+                        }),
+                    },
                 },
-            },
+            }
         }
     }
-}
 
 /// What goes after the method in an HTTP request line: the path, plus
 /// the query exactly as it arrived. Not the fragment; a fragment is
