@@ -5279,7 +5279,12 @@ let cg_pattern (p: CgProgram) (env: Array[CgSlot]) (n: Int) (pattern: typecheck.
             // null is a no-op.
             PatEmit {
                 code: "",
-                binds: cg_inc(sty, sval).concat("  store ").concat(lty).concat(" ").concat(sval).concat(", ptr ").concat(slot).concat("\n"),
+                // Like a let slot, a pattern slot is allocated once per
+                // function and may be filled repeatedly by a loop. Release
+                // its previous binding before overwriting it. Retain the
+                // new value first so rebinding an alias remains safe.
+                binds: cg_inc(sty, sval).concat(cg_release_slot(sity, slot, "_pre"))
+                    .concat("  store ").concat(lty).concat(" ").concat(sval).concat(", ptr ").concat(slot).concat("\n"),
                 allocas: "  ${slot} = alloca ${lty}\n${cg_null_init(sity, slot)}",
                 releases: cg_release_slot(sity, slot, "_end"),
                 globals: "", test: "1", env: env.push(CgSlot { name: name, ptr: slot, ty: sty, ity: sity }), n: n + 1,

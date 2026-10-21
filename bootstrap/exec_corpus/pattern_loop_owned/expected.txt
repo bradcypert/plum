@@ -1,0 +1,1 @@
+loop pattern bindings release previous values and preserve aliases

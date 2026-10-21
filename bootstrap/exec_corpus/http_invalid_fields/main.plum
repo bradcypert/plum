@@ -1,0 +1,56 @@
+use Http;
+
+let byte_text (c: Int): String =
+    match Bytes.from_array([c]).as_string() { Ok(s) => s, Err(e) => { panic_raw(e); "" } }
+
+// Port 1 needs no listener. A validation error, rather than a connect/TLS
+// error, proves malformed local fields are rejected before transport setup.
+let rejects (scheme: String) (method: String) (headers: Array[Http.Header]) (expected: String): Unit =
+    match Http.request(method, scheme.concat("://127.0.0.1:1/"), headers, "body\r\nunchanged") {
+        Ok(_) => panic_raw("invalid fields unexpectedly sent"),
+        Err(e) => assert_eq(e, expected),
+    }
+
+let main (): Unit = {
+    for scheme in ["http", "https"] {
+        for method in ["", "GE T", "GET:", "GéT", "GET\r\nX-Evil: yes"] {
+            rejects(scheme, method, [], "http client: invalid method")
+        };
+        for name in ["", "X Bad", "X:Bad", "X-é", "X\r\nInjected"] {
+            rejects(scheme, "GET", [Http.Header { name: name, value: "ok" }], "http: invalid header name")
+        };
+        for c in 0..128 {
+            if c <= 32 || c == 127 {
+                let ch = byte_text(c);
+                for text in [ch.concat("GET"), "G".concat(ch).concat("ET"), "GET".concat(ch)] {
+                    rejects(scheme, text, [], "http client: invalid method")
+                };
+                for text in [ch.concat("X-Test"), "X".concat(ch).concat("-Test"), "X-Test".concat(ch)] {
+                    rejects(scheme, "GET", [Http.Header { name: text, value: "ok" }], "http: invalid header name")
+                };
+                if c != 9 && c != 32 {
+                    for text in [ch.concat("ok"), "o".concat(ch).concat("k"), "ok".concat(ch)] {
+                        rejects(scheme, "GET", [
+                            Http.Header { name: "X-Good", value: "ok" },
+                            Http.Header { name: "X-Test", value: text },
+                        ], "http: invalid header value")
+                    }
+                } else { () };
+                for url in [
+                    scheme.concat("://127.0.0.1").concat(ch).concat(":1/"),
+                    scheme.concat("://127.0.0.1:1/a").concat(ch).concat("b"),
+                    scheme.concat("://127.0.0.1:1/?q=").concat(ch),
+                    scheme.concat("://127.0.0.1:1/#").concat(ch),
+                ] {
+                    match Http.get(url) {
+                        Ok(_) => panic_raw("invalid URL unexpectedly sent"),
+                        Err(e) => assert_eq(e, "http client: Url.parse: raw whitespace or control character"),
+                    }
+                }
+            } else { () }
+        };
+        rejects(scheme, "GET", [Http.Header { name: "X-Test", value: "ok\r\nInjected: yes" }], "http: invalid header value");
+        rejects(scheme, "GET", [Http.Header { name: "X-Test", value: "ok\r\n\tobsolete folding" }], "http: invalid header value")
+    };
+    println("invalid HTTP fields rejected before connecting")
+}

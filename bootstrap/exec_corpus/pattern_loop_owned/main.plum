@@ -1,0 +1,39 @@
+// Pattern slots, like let slots, are allocated in the function's entry
+// block. Every loop iteration must release their previous heap values.
+// The sanitizer corpus checks the lifetimes; assertions check that an
+// escaped or aliased value is still valid after rebinding.
+enum Item { Left(String), Right(String), Empty }
+struct Pair { left: String, right: Array[String] }
+
+let error (n: Int): Result[Int, String] = Err("error-".concat(n.to_string()))
+
+let main (): Unit = {
+    let saved = ref("");
+    let shared = "alias-".concat(42.to_string());
+    for i in 0..12 {
+        match error(i) {
+            Ok(_) => panic_raw("expected Err"),
+            Err(e) => {
+                assert_eq(e, "error-".concat(i.to_string()));
+                if i == 0 { saved.set(e) } else { () }
+            },
+        };
+        let item = if i % 2 == 0 { Left("left-".concat(i.to_string())) } else { Right("right-".concat(i.to_string())) };
+        match item {
+            Left(s) | Right(s) if s == "never" => panic_raw("guard should fail"),
+            Left(s) | Right(s) => assert_eq(s, (if i % 2 == 0 { "left-" } else { "right-" }).concat(i.to_string())),
+            Empty => panic_raw("expected a payload"),
+        };
+        // Repeatedly bind the same allocation, then keep using the owner.
+        match Some(shared) { Some(s) => assert_eq(s, "alias-42"), None => () };
+        let (a, b) = ("tuple-".concat(i.to_string()), ["array-".concat(i.to_string())]);
+        assert_eq(a, "tuple-".concat(i.to_string()));
+        assert_eq(b[0], "array-".concat(i.to_string()));
+        let Pair(l, r) = Pair { left: "struct-".concat(i.to_string()), right: [a] };
+        assert_eq(l, "struct-".concat(i.to_string()));
+        assert_eq(r[0], a)
+    };
+    assert_eq(saved.get(), "error-0");
+    assert_eq(shared, "alias-42");
+    println("loop pattern bindings release previous values and preserve aliases")
+}

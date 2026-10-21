@@ -38,6 +38,10 @@ Absolute URLs only. A scheme-relative (`//host/x`) or relative
 (`/x`) reference has no meaning without a base to resolve against,
 and resolution is a different function than parsing.
 
+Raw ASCII controls, spaces, and DEL are rejected in every component.
+Percent-encoded data remains encoded, including escaped controls and
+spaces; query lookups decode it as application data.
+
 The scheme is lowercased, because schemes are case-insensitive, and
 normalising here is what lets `u.scheme == "http"` be written
 everywhere else without thinking about it. The host is left
