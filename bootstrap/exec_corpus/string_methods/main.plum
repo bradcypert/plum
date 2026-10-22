@@ -34,6 +34,12 @@ let main (): Unit = {
     println("[".concat("aXbXc".replace("X", "")).concat("]"));
     println("abc".replace("zz", "!"));
     println("aXXb".replace("XX", "-"));
+    // An empty search is a no-op, for methods and the namespaced wrapper.
+    println("abc".replace("", "-"));
+    println("".replace("", "-"));
+    println(String.replace("abc", "", "-"));
+    // A temporary receiver must remain alive after the no-op returns.
+    println(String.concat("ab", "c").replace("", "-"));
     // Trimming a string that is entirely whitespace, and one with none.
     println("[".concat("     ".trim()).concat("]"));
     println("[".concat("tight".trim()).concat("]"))
