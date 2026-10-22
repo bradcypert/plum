@@ -67,6 +67,10 @@ Handles exactly ONE connection then returns — listens, accepts once,
 closes both the connection and the listening socket, and gives back
 whatever `http_handle_connection` produced. Invalid handler headers
 return Err without writing response bytes; the connection is closed.
+Malformed request lines/fields and missing (HTTP/1.1), duplicate, or
+invalid Host fields receive 400 before body reading or handler dispatch,
+then return Err. HTTP/1.0 may omit Host. Present Host values use URI host
+syntax, including empty values, IP literals, and optional decimal ports.
 Real, useful on its own
 (a one-shot server, or a test fixture — this is what THIS module's
 own tests exercise directly), not just a building block for `http_
@@ -78,4 +82,5 @@ Serves HTTP on a port, calling `handler` once per request, forever.
 
 **Never returns** unless listening or accepting fails. Connections
 run concurrently. Invalid handler headers close that connection without
-sending a response; other connections continue to be served.
+sending a response; other connections continue to be served. Invalid
+request heads receive 400 and close, as described by `serve_once`.

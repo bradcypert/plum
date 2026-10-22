@@ -266,15 +266,18 @@ let connect_retry (port: Int) (n: Int): Int =
         Err(e) => if n <= 0 { panic_raw(e); 0 } else { connect_retry(port, n - 1) },
     }
 
-let exchange (port: Int) (path: String): String = {
+let exchange_request (port: Int) (request: String): String = {
     let fd = connect_retry(port, 2000);
-    match Net.write(fd, "GET ".concat(path).concat(" HTTP/1.1\r\nHost: localhost\r\n\r\n")) {
+    match Net.write(fd, request) {
         Err(e) => panic_raw(e), Ok(_) => (),
     };
     let wire = read_closed(fd, "");
     Net.close(fd);
     wire
 }
+
+let exchange (port: Int) (path: String): String =
+    exchange_request(port, "GET ".concat(path).concat(" HTTP/1.1\r\nHost: localhost\r\n\r\n"))
 
 let byte_text (c: Int): String =
     match Bytes.from_array([c]).as_string() { Ok(s) => s, Err(e) => { panic_raw(e); "" } }
@@ -328,6 +331,14 @@ let main (): Unit = {
     // The persistent server must survive invalid handler output. Do not join
     // this deliberately infinite task; process exit ends its listening thread.
     let server = spawn { Http.serve(18799, handler) };
+    for request in [
+        "POST / HTTP/1.1\r\nContent-Length: 999999999999\r\n\r\n",
+        "GET / HTTP/1.1\r\nHost:a\r\nhost:b\r\n\r\n",
+        "GET / HTTP/1.1\r\nHost:[bad]\r\n\r\n",
+        "GET / HTTP/1.1 extra\r\nHost:a\r\n\r\n",
+    ] {
+        assert_eq(exchange_request(18799, request), "HTTP/1.1 400 Bad Request\r\nContent-Length: 0\r\nConnection: close\r\n\r\n")
+    };
     for c in 0..128 {
         if c <= 32 || c == 127 {
             assert_eq(exchange(18799, "/name/".concat(c.to_string())), "");
@@ -345,6 +356,129 @@ let main (): Unit = {
     println("HTTP fields: valid bytes preserved; invalid responses send no bytes; server continues")
 }
 PLUM
+
+# Exercise the authoritative parser plus real one-shot connections. Invalid
+# heads advertise a huge body but send none: the timeout guards early rejection.
+mkdir -p "$work/httpheads"
+{
+    printf 'use Net;\nuse Url;\n'
+    cat bootstrap/std/Http.plum
+    cat <<'PLUM'
+
+let head_ok (wire: String): RequestHead = match http_parse_request_head(wire) {
+    Ok(h) => h, Err(e) => { panic_raw(e.concat(": ").concat(wire)); RequestHead { method: "", path: "", headers: [], leftover_body: "" } },
+}
+let head_bad (wire: String): Unit = match http_parse_request_head(wire) {
+    Err(_) => (), Ok(_) => panic_raw("accepted malformed head: ".concat(wire)),
+}
+let read_closed (fd: Int) (acc: String): String = {
+    let chunk = Net.read(fd, 4096);
+    if String.is_empty(chunk) { acc } else { read_closed(fd, acc.concat(chunk)) }
+}
+let connect_retry (port: Int) (n: Int): Int = match Net.connect_to("127.0.0.1", port) {
+    Ok(fd) => fd, Err(e) => if n <= 0 { panic_raw(e); 0 } else { connect_retry(port, n - 1) },
+}
+let exchange (wire: String): String = {
+    let fd = connect_retry(18801, 2000);
+    match Net.write(fd, wire) { Ok(_) => (), Err(e) => panic_raw(e) };
+    let response = read_closed(fd, "");
+    Net.close(fd);
+    response
+}
+let forbidden_handler (req: Request): Response = {
+    panic_raw("invalid request reached handler");
+    Response { status: 200, headers: [], body: "" }
+}
+let main (): Unit = {
+    // Untrusted host length must not become call-stack depth.
+    let long = String.repeat("a", 100000);
+    assert_eq(http_host_ok(long), true);
+    assert_eq(http_host_ok("host:".concat(String.repeat("1", 100000))), true);
+    assert_eq(http_host_ok("[v".concat(long).concat(".a]")), true);
+    assert_eq(http_host_ok("[v1.".concat(long).concat("]")), true);
+    let many = head_ok("GET / HTTP/1.1\r\nHost:a\r\n".concat(String.repeat("X:a\r\n", 2000)).concat("\r\n"));
+    assert_eq(many.headers.len(), 2001);
+    for host in ["", "example.com", "EXAMPLE.com.", "localhost:8080", "127.0.0.1", "host:", "host:0", "host:9999999999999999999999999", "%65xample.com", "a_b~!$&'()*+,;=", "[::]", "[::1]:80", "[2001:db8::1]", "[1:2:3:4:5:6:7:8]", "[::ffff:192.0.2.1]", "[1:2:3:4:5:6:192.0.2.1]", "[v1.a:b]", "[VF.a!$&'()*+,;=:]"] {
+        assert_eq(http_host_ok(host), true);
+        let h = head_ok("GET / HTTP/1.1\r\nhOsT:\t ".concat(host).concat(" \t\r\n\r\n"));
+        assert_eq(h.headers[0].name, "hOsT");
+        assert_eq(h.headers[0].value, host)
+    };
+    for host in ["a b", "a\tb", "é", "user@host", "a/b", "a?b", "a#b", "a\\b", "a%", "a%2", "a%gg", "a:abc", "a:+80", "a:-1", "a:80:90", "::1", "[]", "[1]", "[gggg::1]", "[12345::]", "[1:2:3:4:5:6:7]", "[1:2:3:4:5:6:7:8:9]", "[1:2:3:4:5:6:7:8::]", "[1::2::3]", "[:::]", "[::1", "[::1]junk", "[::1]:no", "[::ffff:256.1.1.1]", "[::ffff:01.1.1.1]", "[::ffff:1.2.3]", "[1.2.3.4::]", "[fe80::1%25eth0]", "[v.a]", "[v1.]", "[v1.a%20]", "[vG.a]", "a, b"] {
+        assert_eq(http_host_ok(host), false);
+        head_bad("GET / HTTP/1.1\r\nHost: ".concat(host).concat("\r\n\r\n"))
+    };
+    for fields in ["", "Host:a\r\nhost:b\r\n", "Host:a\r\nHOST:a\r\n", "Host:a\r\nHost\r\n", "Host :a\r\n", " Host:a\r\n", "Host:a\r\n folded\r\n", "Host:a\r\nX-Bad\r\n", "Host:a\r\n:empty\r\n", "Host:a\r\nX:ok\rbroken\r\n", "Host:a\nHost:b\r\n"] {
+        head_bad("GET / HTTP/1.1\r\n".concat(fields).concat("\r\n"))
+    };
+    for line in ["GET /", "GET / HTTP/1.1 extra", "GET  / HTTP/1.1", "GET / HTTP/1.1 ", "GET / HTTP/2.0", "GET / http/1.1", "GET / HTTP/1.2", "GET / HTTP/1.0junk", "G@T / HTTP/1.1", "GET /a\tb HTTP/1.1", "GET /a\rb HTTP/1.1", "GET /a b HTTP/1.1", "GET\t/\tHTTP/1.1", " / HTTP/1.1", "GET  HTTP/1.1"] {
+        head_bad(line.concat("\r\nHost:a\r\n\r\n"))
+    };
+    head_bad("GET / HTTP/1.1\r\nHost:a");
+    let legacy = head_ok("GET / HTTP/1.0\r\n\r\n");
+    assert_eq(legacy.path, "/");
+    head_bad("GET / HTTP/1.0\r\nHost:a\r\nHost:b\r\n\r\n");
+    head_bad("GET / HTTP/1.0\r\nHost:a b\r\n\r\n");
+    let unicode = head_ok("GET /é HTTP/1.1\r\nHost:a\r\nX-Text:\t é \t\r\nX-Empty:\t \r\n\r\nbodyé");
+    assert_eq(unicode.headers[1].value, "é");
+    assert_eq(unicode.headers[2].value, "");
+    assert_eq(unicode.leftover_body, "bodyé");
+    for c in 0..128 {
+        if (c < 32 && c != 9) || c == 127 {
+            let ch = match Bytes.from_array([c]).as_string() { Ok(s) => s, Err(e) => { panic_raw(e); "" } };
+            for value in [ch.concat("a"), "a".concat(ch), "a".concat(ch).concat("b")] {
+                head_bad("GET / HTTP/1.1\r\nHost:".concat(value).concat("\r\n\r\n"))
+            }
+        } else { () }
+    };
+    for field in ["content-length:3", "CoNtEnT-LeNgTh:\t3 \t"] {
+        let h = head_ok("POST / HTTP/1.1\r\nHost:a\r\n".concat(field).concat("\r\n\r\nabc"));
+        assert_eq(http_find_header(h.headers, "Content-Length"), Some("3"));
+        assert_eq(http_read_request_body(-1, h.headers, h.leftover_body), Ok("abc"));
+        // With a partial body the recognized length must attempt another read.
+        assert_eq(http_read_request_body(-1, h.headers, "a"), Err("http client: connection closed before the full response body was received"));
+        let r = match http_parse_head("HTTP/1.1 200 OK\r\n".concat(field).concat("\r\n\r\nabc")) { Ok(v) => v, Err(e) => { panic_raw(e); Head { status: 0, headers: [], leftover_body: "" } } };
+        assert_eq(http_read_body(-1, 0, r.headers, r.leftover_body), Ok("abc"))
+    };
+    for field in ["transfer-encoding:chunked", "TrAnSfEr-EnCoDiNg:\tchunked \t"] {
+        let h = head_ok("POST / HTTP/1.1\r\nHost:a\r\n".concat(field).concat("\r\n\r\n"));
+        assert_eq(http_read_request_body(-1, h.headers, ""), Err("http: Transfer-Encoding (chunked) is not supported yet"));
+        assert_eq(http_read_body(-1, 0, h.headers, ""), Err("http: Transfer-Encoding (chunked) is not supported yet"))
+    };
+    for field in ["Bad", "Bad : value", "X: value\rbroken", " X:fold"] {
+        assert_eq(Result.is_err(http_parse_head("HTTP/1.1 200 OK\r\n".concat(field).concat("\r\n\r\n"))), true)
+    };
+
+    // No body is sent and the client keeps its write side open. The only
+    // way this finishes is rejecting BEFORE any Content-Length allocation
+    // or blocking body read. Each join also proves serve_once returns Err.
+    for fields in ["", "Host:a\r\nhOsT:a\r\n", "Host:a/b\r\n", "Host:a\r\nHost\r\n"] {
+        let server = spawn { serve_once(18801, forbidden_handler) };
+        assert_eq(exchange("POST / HTTP/1.1\r\n".concat(fields).concat("Content-Length: 999999999999\r\nExpect: 100-continue\r\n\r\n")), "HTTP/1.1 400 Bad Request\r\nContent-Length: 0\r\nConnection: close\r\n\r\n");
+        assert_eq(Result.is_err(server.join()), true)
+    };
+    let server = spawn { serve_once(18801, |req| Response { status: 200, headers: [], body: req.path.concat(req.body) }) };
+    assert_eq(exchange("POST /ok HTTP/1.1\r\nhost:localhost\r\ncOnTeNt-LeNgTh:\t3 \t\r\n\r\nabc"), "HTTP/1.1 200 OK\r\nContent-Length: 6\r\nConnection: close\r\n\r\n/okabc");
+    assert_eq(server.join(), Ok(()));
+    // A response with a lowercase, no-space length ends at that length.
+    // The peer waits for the client to close: reading until EOF deadlocks.
+    let listener = match Net.listen_on(18802) { Ok(fd) => fd, Err(e) => { panic_raw(e); 0 } };
+    let peer = spawn {
+        let fd = match Net.accept(listener) { Ok(conn) => conn, Err(e) => { panic_raw(e); 0 } };
+        assert_eq(Result.is_ok(http_recv_headers_acc(fd, 0, "")), true);
+        match Net.write(fd, "HTTP/1.1 200 OK\r\ncontent-length:3\r\n\r\na") { Ok(_) => (), Err(e) => panic_raw(e) };
+        match Net.write(fd, "bc") { Ok(_) => (), Err(e) => panic_raw(e) };
+        let closed = String.is_empty(Net.read(fd, 1));
+        Net.close(fd);
+        closed
+    };
+    match get("http://127.0.0.1:18802/") { Ok(r) => assert_eq(r.body, "abc"), Err(e) => panic_raw(e) };
+    assert_eq(peer.join(), true);
+    Net.close(listener);
+    println("HTTP heads: Host, request line, field syntax and framing case validated before body reads")
+}
+PLUM
+} > "$work/httpheads/main.plum"
 
 check() {
     local name="$1" expected="$2"
@@ -366,6 +500,7 @@ check() {
     fi
 }
 
+check httpheads "HTTP heads: Host, request line, field syntax and framing case validated before body reads"
 check httpbuilders "HTTP builders reject unchecked URL fields"
 check httpfields "HTTP fields: valid bytes preserved; invalid responses send no bytes; server continues"
 check tcp "ping/pong"
