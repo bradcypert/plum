@@ -138,20 +138,59 @@ let http_parse_status_line (line: String): Result[Int, String] = {
     } }
 }
 
-let http_parse_header_line (line: String): Option[Header] =
-    match String.index_of(line, ": ") {
-        None => None,
-        Some(i) => Some(Header { name: String.slice(line, 0, i), value: String.trim_end(String.slice(line, i + 2, line.len())) }),
+let http_byte (b: Bytes) (i: Int): Int = match b.at(i) { Some(c) => c, None => -1 }
+let http_ows (c: Int): Bool = c == 32 || c == 9
+let http_ows_start (b: Bytes) (i: Int): Int =
+    if http_ows(http_byte(b, i)) { http_ows_start(b, i + 1) } else { i }
+let http_ows_end (b: Bytes) (i: Int): Int =
+    if http_ows(http_byte(b, i - 1)) { http_ows_end(b, i - 1) } else { i }
+
+// Only SP/HTAB are optional whitespace. Generic Unicode trimming would
+// erase malformed controls. String.slice uses codepoints, Bytes uses octets.
+let http_trim_ows (s: String): String = {
+    let b = s.as_bytes();
+    let start = http_ows_start(b, 0);
+    let end = http_ows_end(b, b.len());
+    String.slice(s, start, String.char_len(s) - (b.len() - end))
+}
+
+let http_parse_header_line (line: String): Result[Header, String] =
+    match String.index_of(line, ":") {
+        None => Err("http: malformed header line"),
+        Some(i) => {
+            let name = String.slice(line, 0, i);
+            let value = http_trim_ows(String.slice(line, i + 1, String.char_len(line)));
+            if !http_token_ok(name) { Err("http: invalid header name") }
+            else if !http_text_ok_acc(value.as_bytes(), 0, true) { Err("http: invalid header value") }
+            else { Ok(Header { name: name, value: value }) }
+        },
     }
 
-let http_parse_headers (lines: Array[String]): Array[Header] =
-    Array.fold(lines, [], |acc, line| match http_parse_header_line(line) {
-        None => acc,
-        Some(h) => acc.push(h),
-    })
+// Tail recursion keeps the stack bounded and moves the accumulator into
+// push. Never silently discard a malformed field (including obs-fold).
+let http_parse_headers_acc (lines: Array[String]) (i: Int) (acc: Array[Header]): Result[Array[Header], String] =
+    if i >= lines.len() { Ok(acc) }
+    else { match http_parse_header_line(lines[i]) {
+        Err(e) => Err(e),
+        Ok(h) => http_parse_headers_acc(lines, i + 1, acc.push(h)),
+    } }
+
+let http_parse_headers (lines: Array[String]): Result[Array[Header], String] =
+    http_parse_headers_acc(lines, 0, [])
+
+// Parsed names are ASCII tokens; folding never changes their spelling in
+// the public Header. The same comparison serves Host and body framing.
+let http_ascii_lower (c: Int): Int = if c >= 65 && c <= 90 { c + 32 } else { c }
+let http_ascii_equal (a: Bytes) (b: Bytes) (i: Int): Bool =
+    if i >= a.len() { true }
+    else if http_ascii_lower(http_byte(a, i)) != http_ascii_lower(http_byte(b, i)) { false }
+    else { http_ascii_equal(a, b, i + 1) }
+
+let http_header_named (header: Header) (name: String): Bool =
+    header.name.len() == name.len() && http_ascii_equal(header.name.as_bytes(), name.as_bytes(), 0)
 
 let http_find_header (headers: Array[Header]) (name: String): Option[String] =
-    Option.map(Array.find(headers, |h| h.name == name), |h| h.value)
+    Option.map(Array.find(headers, |h| http_header_named(h, name)), |h| h.value)
 
 /// Splits the raw, already-fully-received header block (see `http_recv_
 /// headers_acc` above) into the parsed status/headers plus whatever body
@@ -159,13 +198,12 @@ let http_find_header (headers: Array[Header]) (name: String): Option[String] =
 let http_parse_head (raw: String): Result[Head, String] = {
     let sep_index = match String.index_of(raw, "\r\n\r\n") { Some(i) => i, None => raw.len() };
     let leftover_body = if sep_index + 4 <= raw.len() { String.slice(raw, sep_index + 4, raw.len()) } else { "" };
-    let lines = String.slice(raw, 0, sep_index).split("\n");
+    let lines = String.slice(raw, 0, sep_index).split("\r\n");
     if lines.len() == 0 { Err("http client: empty response") }
-    else { Result.map(http_parse_status_line(lines[0]), |status| Head {
-        status: status,
-        headers: http_parse_headers(Array.drop(lines, 1)),
-        leftover_body: leftover_body,
-    }) }
+    else { http_parse_status_line(lines[0]) |> Result.and_then(_, |status|
+        Result.map(http_parse_headers(Array.drop(lines, 1)), |headers| Head {
+            status: status, headers: headers, leftover_body: leftover_body,
+        })) }
 }
 
 let http_recv_body_by_length_acc (fd: Int) (secure: Int) (acc: String) (remaining: Int): Result[String, String] =
@@ -286,27 +324,126 @@ pub let post (url: String) (body: String): Result[Response, String] = request("P
 // --- HTTP server ---
 
 let http_parse_request_line (line: String): Result[RequestLine, String] = {
-    let parts = String.trim_end(line).split(" ");
-    if parts.len() < 2 { Err("http server: malformed request line: ".concat(line)) }
-    else { Ok(RequestLine { method: parts[0], path: parts[1] }) }
+    let parts = line.split(" ");
+    if parts.len() != 3 { Err("http server: malformed request line") }
+    else if !http_token_ok(parts[0]) || String.is_empty(parts[1]) || !http_text_ok_acc(parts[1].as_bytes(), 0, false) {
+        Err("http server: malformed request line")
+    } else if parts[2] != "HTTP/1.1" && parts[2] != "HTTP/1.0" {
+        Err("http server: unsupported HTTP version")
+    } else { Ok(RequestLine { method: parts[0], path: parts[1] }) }
 }
 
-/// Same shape as `http_parse_head` above, just parsing a request's own
-/// first line (`METHOD path HTTP/1.1`) instead of a response's status
-/// line — everything past that (splitting headers from leftover body
-/// bytes, `http_parse_headers`) is identical, reused unchanged.
-let http_parse_request_head (raw: String): Result[RequestHead, String] = {
-    let sep_index = match String.index_of(raw, "\r\n\r\n") { Some(i) => i, None => raw.len() };
-    let leftover_body = if sep_index + 4 <= raw.len() { String.slice(raw, sep_index + 4, raw.len()) } else { "" };
-    let lines = String.slice(raw, 0, sep_index).split("\n");
-    if lines.len() == 0 { Err("http server: empty request") }
-    else { Result.map(http_parse_request_line(lines[0]), |rl| RequestHead {
-        method: rl.method,
-        path: rl.path,
-        headers: http_parse_headers(Array.drop(lines, 1)),
-        leftover_body: leftover_body,
-    }) }
+let http_digit (c: Int): Bool = c >= 48 && c <= 57
+let http_hex (c: Int): Bool = http_digit(c) || (c >= 65 && c <= 70) || (c >= 97 && c <= 102)
+let http_reg_name_byte (c: Int): Bool =
+    (c >= 65 && c <= 90) || (c >= 97 && c <= 122) || http_digit(c)
+        || c == 45 || c == 46 || c == 95 || c == 126
+        || c == 33 || c == 36 || c == 38 || c == 39 || c == 40 || c == 41
+        || c == 42 || c == 43 || c == 44 || c == 59 || c == 61
+
+let http_port_ok (b: Bytes) (i: Int): Bool =
+    if i >= b.len() { true }
+    else if http_digit(http_byte(b, i)) { http_port_ok(b, i + 1) } else { false }
+
+let http_reg_name_ok (b: Bytes) (i: Int): Bool =
+    if i >= b.len() { true }
+    else if http_byte(b, i) == 58 { http_port_ok(b, i + 1) }
+    else if http_byte(b, i) == 37 {
+        if http_hex(http_byte(b, i + 1)) && http_hex(http_byte(b, i + 2)) { http_reg_name_ok(b, i + 3) } else { false }
+    } else if http_reg_name_byte(http_byte(b, i)) { http_reg_name_ok(b, i + 1) } else { false }
+
+let http_hex_ok (b: Bytes) (i: Int): Bool =
+    if i >= b.len() { true }
+    else if http_hex(http_byte(b, i)) { http_hex_ok(b, i + 1) } else { false }
+
+// IPv4 is special only as an IPv6 suffix: exactly four decimal octets,
+// no leading zeroes. Elsewhere dotted text can also be a reg-name.
+let http_ipv4_ok (s: String): Bool = {
+    let parts = s.split(".");
+    parts.len() == 4 && Array.all(parts, |part| {
+        let b = part.as_bytes();
+        b.len() >= 1 && b.len() <= 3 && (b.len() == 1 || http_byte(b, 0) != 48)
+            && http_port_ok(b, 0) && match String.parse_int(part) { Ok(n) => n <= 255, Err(_) => false }
+    })
 }
+
+let http_ipv6_groups (parts: Array[String]) (i: Int) (allow_ipv4: Bool) (count: Int): Int =
+    if i >= parts.len() { count }
+    else {
+        let part = parts[i];
+        if allow_ipv4 && i == parts.len() - 1 && String.contains(part, ".") {
+            if http_ipv4_ok(part) { count + 2 } else { -1 }
+        } else if part.len() >= 1 && part.len() <= 4 && http_hex_ok(part.as_bytes(), 0) {
+            http_ipv6_groups(parts, i + 1, allow_ipv4, count + 1)
+        } else { -1 }
+    }
+
+let http_ipv6_side (s: String) (allow_ipv4: Bool): Int =
+    if String.is_empty(s) { 0 } else { http_ipv6_groups(s.split(":"), 0, allow_ipv4, 0) }
+
+let http_ipv6_ok (s: String): Bool =
+    if s.len() > 45 { false }
+    else { match String.index_of(s, "::") {
+        None => http_ipv6_side(s, true) == 8,
+        Some(i) => {
+            let left = http_ipv6_side(String.slice(s, 0, i), false);
+            let right = http_ipv6_side(String.slice(s, i + 2, String.char_len(s)), true);
+            left >= 0 && right >= 0 && left + right < 8
+        },
+    } }
+
+let http_ipvfuture_tail (b: Bytes) (i: Int): Bool =
+    if i >= b.len() { true }
+    else if http_reg_name_byte(http_byte(b, i)) || http_byte(b, i) == 58 { http_ipvfuture_tail(b, i + 1) } else { false }
+
+let http_ip_literal_ok (s: String): Bool =
+    if String.starts_with(s, "v") || String.starts_with(s, "V") {
+        match String.index_of(s, ".") {
+            None => false,
+            Some(i) => i > 1 && i + 1 < s.len()
+                && http_hex_ok(String.slice(s, 1, i).as_bytes(), 0)
+                && http_ipvfuture_tail(s.as_bytes(), i + 1),
+        }
+    } else { http_ipv6_ok(s) }
+
+// RFC 9110 section 7.2 / RFC 3986: uri-host [ ':' port ]. This is
+// syntax validation, not DNS resolution or a socket port-range check.
+// Empty Host and empty port are legal grammar (RFC 9112 section 3.2).
+let http_host_ok (s: String): Bool =
+    if String.starts_with(s, "[") { match String.index_of(s, "]") {
+        None => false,
+        Some(i) => {
+            let b = s.as_bytes();
+            http_ip_literal_ok(String.slice(s, 1, i))
+                && (i + 1 == b.len() || (http_byte(b, i + 1) == 58 && http_port_ok(b, i + 2)))
+        },
+    } } else { http_reg_name_ok(s.as_bytes(), 0) }
+
+let http_validate_host (headers: Array[Header]) (i: Int) (seen: Bool) (required: Bool): Result[Unit, String] =
+    if i >= headers.len() {
+        if required && !seen { Err("http server: missing Host header") } else { Ok(()) }
+    } else if http_header_named(headers[i], "Host") {
+        if seen { Err("http server: duplicate Host header") }
+        else if !http_host_ok(headers[i].value) { Err("http server: invalid Host header") }
+        else { http_validate_host(headers, i + 1, true, required) }
+    } else { http_validate_host(headers, i + 1, seen, required) }
+
+// Validate the complete head before exposing it to body reading. Keep the
+// version local so the public RequestLine/RequestHead structs stay stable.
+let http_parse_request_head (raw: String): Result[RequestHead, String] =
+    match String.index_of(raw, "\r\n\r\n") {
+        None => Err("http server: incomplete request head"),
+        Some(sep_index) => {
+            let lines = String.slice(raw, 0, sep_index).split("\r\n");
+            http_parse_request_line(lines[0]) |> Result.and_then(_, |rl|
+                http_parse_headers(Array.drop(lines, 1)) |> Result.and_then(_, |headers|
+                    http_validate_host(headers, 0, false, String.ends_with(lines[0], "HTTP/1.1"))
+                        |> Result.map(_, |ignored| RequestHead {
+                            method: rl.method, path: rl.path, headers: headers,
+                            leftover_body: String.slice(raw, sep_index + 4, String.char_len(raw)),
+                        })))
+        },
+    }
 
 /// A small, fixed table covering the reason phrases any real client
 /// actually looks at — not the full IANA registry. An unrecognized code
@@ -338,6 +475,15 @@ let http_response_to_wire (resp: Response): Result[String, String] =
             .concat(resp.body)
     })
 
+// A rejection must be completely sent even if send() makes partial progress.
+let http_write_bad_request (conn: Int) (wire: String): Result[Unit, String] =
+    match Net.write(conn, wire) {
+        Err(e) => Err(e),
+        Ok(n) => if n <= 0 { Err("http server: could not send Bad Request") }
+            else if n == wire.len() { Ok(()) }
+            else { http_write_bad_request(conn, String.slice(wire, n, wire.len())) },
+    }
+
 /// Reads exactly one request off `conn`, runs `handler`, writes exactly
 /// one response back — never touches `conn`'s own lifecycle (opening/
 /// closing), that's `serve_once`/`http_serve_loop`'s job below, so
@@ -345,19 +491,26 @@ let http_response_to_wire (resp: Response): Result[String, String] =
 /// (any connected `fd` pair works, e.g. the SAME loopback-pair shape
 /// `tcp_round_trip`'s own test already uses).
 let http_handle_connection (conn: Int) (handler: (Request) -> Response): Result[Unit, String] =
-    http_recv_headers_acc(conn, 0, "")
-        |> Result.and_then(_, http_parse_request_head)
-        |> Result.and_then(_, |head| http_read_request_body(conn, head.headers, head.leftover_body) |> Result.and_then(_, |body| {
-            let request = Request { method: head.method, path: head.path, headers: head.headers, body: body };
-            let response = handler(request);
-            http_response_to_wire(response)
-                |> Result.and_then(_, |wire| Result.map(Net.write(conn, wire), |sent| ()))
-        }))
+    http_recv_headers_acc(conn, 0, "") |> Result.and_then(_, |raw|
+        match http_parse_request_head(raw) {
+            Err(e) => http_write_bad_request(conn, "HTTP/1.1 400 Bad Request\r\nContent-Length: 0\r\nConnection: close\r\n\r\n")
+                |> Result.and_then(_, |ignored| Err(e)),
+            Ok(head) => http_read_request_body(conn, head.headers, head.leftover_body) |> Result.and_then(_, |body| {
+                let request = Request { method: head.method, path: head.path, headers: head.headers, body: body };
+                let response = handler(request);
+                http_response_to_wire(response)
+                    |> Result.and_then(_, |wire| Result.map(Net.write(conn, wire), |sent| ()))
+            }),
+        })
 
 /// Handles exactly ONE connection then returns — listens, accepts once,
 /// closes both the connection and the listening socket, and gives back
 /// whatever `http_handle_connection` produced. Invalid handler headers
 /// return Err without writing response bytes; the connection is closed.
+/// Malformed request lines/fields and missing (HTTP/1.1), duplicate, or
+/// invalid Host fields receive 400 before body reading or handler dispatch,
+/// then return Err. HTTP/1.0 may omit Host. Present Host values use URI host
+/// syntax, including empty values, IP literals, and optional decimal ports.
 /// Real, useful on its own
 /// (a one-shot server, or a test fixture — this is what THIS module's
 /// own tests exercise directly), not just a building block for `http_
@@ -420,7 +573,8 @@ let http_serve_loop (server: Int) (handler: (Request) -> Response): Result[Unit,
 ///
 /// **Never returns** unless listening or accepting fails. Connections
 /// run concurrently. Invalid handler headers close that connection without
-/// sending a response; other connections continue to be served.
+/// sending a response; other connections continue to be served. Invalid
+/// request heads receive 400 and close, as described by `serve_once`.
 pub let serve (port: Int) (handler: (Request) -> Response): Result[Unit, String] =
     match Net.listen_on(port) {
         Err(e) => Err(e),
