@@ -352,8 +352,6 @@ pub let chdir (path: String): Result[Unit, String] = unsafe {
 pub let home_dir (): Option[String] =
     if platform() == "windows" { env_var("USERPROFILE") } else { env_var("HOME") }
 
-/// --- Standard input and error ---
-///
 /// `None` is END OF STREAM and `Some("")` is a blank line, and
 /// keeping those apart is the whole reason these exist. The shims the
 /// language server uses return `""` for both, so a filter reading

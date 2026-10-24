@@ -48,6 +48,7 @@ let pad_zeros (n: Int): Int = {
     if rem <= 56 { 56 - rem } else { 120 - rem }
 }
 
+/// Produces a sha256 encoded series of Bytes for a given input of Bytes.
 pub let sha256 (input: Bytes): Bytes = {
     let msg = padded(input.to_array());
     let mut h = H_INIT;
