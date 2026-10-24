@@ -79,6 +79,8 @@ mkdir -p "$work/proj/greet"
 cat > "$work/proj/greet/greet.plum" <<'EOF'
 /// Greets somebody.
 pub let hello (who: String): String = "hello, ".concat(who)
+pub struct Greeter { pub name: String }
+pub let Greeter.name (self: Greeter): String = self.name
 let private_helper (): Int = 1
 EOF
 printf 'use greet;\nlet main (): Unit = println(greet.hello("x"))\n' > "$work/proj/main.plum"
@@ -98,6 +100,69 @@ SH_TIMEOUT="${SH_TIMEOUT:-120}" "$plum" doc "$work/proj" -o "$work/dochtml" --ht
 check $? "plum doc --html on a project exited nonzero: $(head -n 1 "$work/doch.log")"
 [ -f "$work/dochtml/index.html" ] && [ -f "$work/dochtml/style.css" ]
 check $? "plum doc --html did not write index.html and style.css"
+
+# Output failures must stop both renderers, including after earlier pages
+# have been written. Directories at file paths fail even when run as root.
+doc_must_fail() {
+    SH_TIMEOUT="${SH_TIMEOUT:-120}" "$plum" doc "$work/proj" -o "$1" "$2" > "$work/doc-error.log" 2>&1
+    [ $? -ne 0 ]; check $? "plum doc accepted failed output: $1 $2"
+    grep -q 'plum doc:.*' "$work/doc-error.log"
+    check $? "plum doc omitted the output error"
+    grep -Fq "$3" "$work/doc-error.log"
+    check $? "plum doc omitted the failing path: $3"
+    ! grep -q '^wrote ' "$work/doc-error.log"
+    check $? "plum doc printed success after failed output"
+}
+
+for mode in --with-deps --html; do
+    printf 'blocked' > "$work/not-a-directory"
+    doc_must_fail "$work/not-a-directory/child" "$mode" "$work/not-a-directory"
+    [ ! -e "$work/not-a-directory/child" ]; check $? "doc continued after mkdir failure"
+    doc_must_fail "$work/not-a-directory" "$mode" "$work/not-a-directory"
+    rm "$work/not-a-directory"
+
+    # New nested prefixes and existing directories are both valid.
+    SH_TIMEOUT="${SH_TIMEOUT:-120}" "$plum" doc "$work/proj" -o "$work/nested/$mode/docs" "$mode" > "$work/doc-nested.log" 2>&1
+    check $? "doc could not create nested output directories"
+    SH_TIMEOUT="${SH_TIMEOUT:-120}" "$plum" doc "$work/proj" -o "$work/nested/$mode/docs" "$mode" > "$work/doc-nested.log" 2>&1
+    check $? "doc could not reuse existing output directories"
+
+    if [ "$mode" = --html ]; then
+        artifacts='style.css search-index.js search.js index.html greet.html greet.Greeter.html'
+    else
+        artifacts='greet.md greet.Greeter.md index.md'
+    fi
+    for artifact in $artifacts; do
+        mkdir -p "$work/blocked/$artifact"
+        doc_must_fail "$work/blocked" "$mode" "$work/blocked/$artifact"
+        rm -rf "$work/blocked"
+    done
+
+done
+
+# /dev/full accepts open and buffered writes but fails on flush/close.
+# Exercise freshly emitted runtime code too: an older driver can build
+# the compiler using a runtime that predates the close-error fix.
+if [ -c /dev/full ]; then
+    mkdir -p "$work/full-test"
+    cat > "$work/full-test/main.plum" <<'EOF'
+use Os;
+let main (): Unit = {
+    assert(Result.is_err(Os.write_file("/dev/full", "small buffered write")));
+    assert(Result.is_err(Os.write_bytes("/dev/full", Bytes.from_string("bytes"))));
+    assert(Result.is_err(Os.append_bytes("/dev/full", Bytes.from_string("append"))))
+}
+EOF
+    SH_TIMEOUT="${SH_TIMEOUT:-120}" "$plum" run "$work/full-test" > "$work/full.log" 2>&1
+    check $? "whole-file I/O ignored a buffered close failure: $(head -n 1 "$work/full.log")"
+    for mode in --with-deps --html; do
+        mkdir -p "$work/full-doc"
+        if [ "$mode" = --html ]; then artifact=style.css; else artifact=greet.md; fi
+        ln -s /dev/full "$work/full-doc/$artifact"
+        doc_must_fail "$work/full-doc" "$mode" "$work/full-doc/$artifact"
+        rm -rf "$work/full-doc"
+    done
+fi
 
 # --- plum doc does not publish a DEPENDENCY's API ----------------------
 #

@@ -81,8 +81,8 @@ Reads a whole file as text.
 
 Writes text to a file, creating it or REPLACING what was there.
 
-The parent directory must exist. Nothing is written on failure, so
-a full disk leaves the old contents rather than a truncated file.
+The parent directory must exist. Returns `Err` if opening, writing,
+or closing fails. A failure can leave a truncated or partially written file.
 
 ## `let read_bytes (path: String): Result[Bytes, String]`
 
@@ -153,8 +153,6 @@ is the worst kind of wrong for a path a program is about to write
 to.
 
 ## `let read_stdin_line (): Result[Option[String], String]`
-
---- Standard input and error ---
 
 `None` is END OF STREAM and `Some("")` is a blank line, and
 keeping those apart is the whole reason these exist. The shims the

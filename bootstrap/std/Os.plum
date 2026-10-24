@@ -117,8 +117,8 @@ pub let read_file (path: String): Result[String, String] = {
 
 /// Writes text to a file, creating it or REPLACING what was there.
 ///
-/// The parent directory must exist. Nothing is written on failure, so
-/// a full disk leaves the old contents rather than a truncated file.
+/// The parent directory must exist. Returns `Err` if opening, writing,
+/// or closing fails. A failure can leave a truncated or partially written file.
 pub let write_file (path: String) (contents: String): Result[Unit, String] =
     if write_file_raw(path, contents) { Ok(()) } else { Err("could not write ".concat(path)) }
 
