@@ -158,6 +158,8 @@ jobs:
         run: ./bootstrap/lsp-smoke
       - name: TCP and HTTP work in a compiled binary
         run: ./bootstrap/net-smoke
+      - name: stdin reads preserve buffers and bound waits
+        run: ./bootstrap/stdin-smoke
       - name: the version string is consistent
         run: ./bootstrap/check-version
       - name: plum help is a real command

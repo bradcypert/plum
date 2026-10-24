@@ -193,6 +193,53 @@ else
         "$(printf 'a\n\n' | "$work/stdinpipe.bin")"
 fi
 
+# Nonpositive requests must finish while the writer is still holding an
+# idle pipe open. The following positive read must time out, not see EOF
+# because an earlier zero-byte read waited for the writer to close.
+mkdir -p "$work/stdinempty"
+cat > "$work/stdinempty/main.plum" <<'PLUM_EOF'
+use Os;
+use Time;
+
+let main (): Unit = {
+    for max_len in [0, -1, 0 - 9223372036854775807 - 1] {
+        for nanos in [0, -1, 9223372036854775807] {
+            assert(match Os.read_stdin_timeout(max_len, Time.nanos(nanos)) {
+                Ok(Got(b)) => b.len() == 0,
+                _ => false,
+            });
+        };
+        assert(match Os.read_stdin(max_len) {
+            Ok(b) => b.len() == 0,
+            Err(_) => false,
+        });
+    };
+    assert(match Os.read_stdin_timeout(1, Time.millis(20)) {
+        Ok(TimedOut) => true,
+        _ => false,
+    });
+    assert(match Os.read_stdin_line_timeout(Time.nanos(9223372036854775807)) {
+        Ok(Eof) => true,
+        _ => false,
+    });
+    println("empty reads complete before EOF; positive read still times out");
+}
+PLUM_EOF
+
+if ! "$plum" build "$work/stdinempty" -o "$work/stdinempty.bin" > "$work/stdinempty.log" 2>&1; then
+    printf 'FAIL  %-24s did not build: %s\n' "stdin_empty" "$(head -n 1 "$work/stdinempty.log")"
+    fail=$((fail + 1))
+else
+    got="$(sleep 1 | "$work/stdinempty.bin")"
+    if [ "$got" = "empty reads complete before EOF; positive read still times out" ]; then
+        printf 'OK    %-24s\n' "stdin_empty"
+        ok=$((ok + 1))
+    else
+        printf 'FAIL  %-24s\n        actual | %s\n' "stdin_empty" "$got"
+        fail=$((fail + 1))
+    fi
+fi
+
 echo
 if [ $fail -eq 0 ]; then
     echo "platform smoke: $ok programs built and ran correctly on $(uname -s) $(uname -m)"
