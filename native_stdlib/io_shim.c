@@ -24,6 +24,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <limits.h>
 
 static char *line_buf = NULL;
 static size_t line_cap = 0;
@@ -280,6 +281,14 @@ static long long plum_now_ns(void) {
 }
 #endif
 
+// Only negative durations mean "forever". Saturate large finite waits
+// instead of overflowing into that sentinel (issue #224).
+static long long plum_stdin_deadline(long long timeout_nanos) {
+    if (timeout_nanos < 0) return -1;
+    long long now = plum_now_ns();
+    return timeout_nanos > LLONG_MAX - now ? LLONG_MAX : now + timeout_nanos;
+}
+
 // Reads once into the buffer, waiting no longer than `deadline_ns`
 // (negative means wait as long as it takes). Returns 1 if bytes were
 // added, 0 on end of stream, PLUM_STDIN_TIMED_OUT if the deadline
@@ -397,7 +406,14 @@ static long long plum_line_until(long long deadline_ns) {
 }
 
 static long long plum_bytes_until(long long max, long long deadline_ns) {
-    if (max < 0) max = 0;
+    // A nonpositive request is an empty result even at EOF. Do not fill
+    // or take: either would allocate, and filling could wait or consume
+    // input. Clear only the previous result, preserving pending input.
+    if (max <= 0) {
+        plum_out_len = 0;
+        if (plum_out_buf) plum_out_buf[0] = '\0';
+        return 0;
+    }
     while (plum_in_len == 0 && !plum_in_eof) {
         int r = plum_in_fill(deadline_ns);
         if (r == PLUM_STDIN_TIMED_OUT) return PLUM_STDIN_TIMED_OUT;
@@ -437,11 +453,11 @@ const char *stdin_bytes_data(void) { return plum_out_buf ? plum_out_buf : ""; }
 // call resumes mid-line rather than starting over. That is what makes
 // bounding the whole call safe.
 long long stdin_line_timed(long long timeout_nanos) {
-    return plum_line_until(timeout_nanos < 0 ? -1 : plum_now_ns() + timeout_nanos);
+    return plum_line_until(plum_stdin_deadline(timeout_nanos));
 }
 
 long long stdin_bytes_timed(long long max, long long timeout_nanos) {
-    return plum_bytes_until(max, timeout_nanos < 0 ? -1 : plum_now_ns() + timeout_nanos);
+    return plum_bytes_until(max, plum_stdin_deadline(timeout_nanos));
 }
 
 // Unbuffered by convention: stderr is where a program says something is

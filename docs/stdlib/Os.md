@@ -168,9 +168,12 @@ trailing newline is an ordinary line rather than something to drop.
 ## `let read_stdin (max_len: Int): Result[Bytes, String]`
 
 Up to `max` bytes, as `Bytes`. Stdin carries whatever was piped
-into it, which is not always text. An EMPTY result is end of
-stream; a SHORT one is data, because a pipe hands over what it has
-rather than waiting to fill a buffer.
+into it, which is not always text. With a positive maximum, an EMPTY
+result is end of stream; a SHORT one is data, because a pipe hands
+over what it has rather than waiting to fill a buffer.
+
+A nonpositive `max_len` returns empty bytes immediately, without
+consuming input or checking for end of stream.
 
 The bytes are copied into a Plum value before this returns, so the
 result stays valid across later reads; the shim's own buffer is
@@ -206,6 +209,8 @@ data loss: calling again resumes where this stopped.
 Up to `max_len` bytes, with the same three outcomes. A SHORT read is
 `Got`, not `TimedOut`: a pipe handing over what it has is data
 arriving, not a deadline passing.
+A nonpositive `max_len` returns `Got` with empty bytes immediately,
+even at end of stream or with a zero timeout, without consuming input.
 
 ## `struct Metadata`
 

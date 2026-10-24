@@ -30,6 +30,13 @@ cd "$root"
 work="$(mktemp -d)"
 trap 'rm -rf "$work"' EXIT
 
+# Native allocations are outside PLUM_RT_STATS. Check that empty reads
+# leave buffer capacity and pending input alone, and use UBSan for the
+# signed deadline arithmetic that ordinary output tests cannot observe.
+clang -O1 -g -fsanitize=address,undefined -fno-sanitize-recover=all \
+    bootstrap/stdin-shim-test.c -o "$work/shim-test" || exit 1
+timeout 10 "$work/shim-test" </dev/null || exit 1
+
 mkdir -p "$work/prog"
 cat > "$work/prog/main.plum" <<'EOF'
 use Os;
@@ -62,7 +69,7 @@ check() {
     fi
 }
 
-SH_TIMEOUT="${SH_TIMEOUT:-120}" SH_MEM="${SH_MEM:-256M}" ./sh build "$work/prog" -o "$work/prog.bin" > "$work/build.log" 2>&1 || {
+SH_TIMEOUT="${SH_TIMEOUT:-120}" SH_MEM="${SH_MEM:-256M}" "${PLUM:-./sh}" build "$work/prog" -o "$work/prog.bin" > "$work/build.log" 2>&1 || {
     echo "stdin-smoke: build failed"; cat "$work/build.log"; exit 1
 }
 

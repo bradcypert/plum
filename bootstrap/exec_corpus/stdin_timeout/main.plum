@@ -41,6 +41,31 @@ let show_bytes (r: Result[Os.Input[Bytes], String]): String = match r {
 // and short enough that a hang is a failure rather than a stuck run.
 let budget (): Time.Duration = Time.seconds(1)
 
+let empty_reads (): Unit = {
+    for max_len in [0, -1, 0 - 9223372036854775807 - 1] {
+        println(match Os.read_stdin(max_len) {
+            Ok(b) => b.len() == 0,
+            Err(_) => false,
+        });
+        for nanos in [0, -1, 9223372036854775807] {
+            println(show_bytes(Os.read_stdin_timeout(max_len, Time.nanos(nanos))));
+        };
+    };
+}
+
+let read_empty (): Unit = {
+    // Fresh input, pending bytes after a short read, then known EOF.
+    // The first returned value must survive later shim buffer reuse.
+    empty_reads();
+    let first = Os.read_stdin(1).unwrap_or(Bytes.empty());
+    empty_reads();
+    println(show_bytes(Os.read_stdin_timeout(8, Time.nanos(9223372036854775807))));
+    println(show_bytes(Os.read_stdin_timeout(1, budget())));
+    empty_reads();
+    println(show_bytes(Os.read_stdin_timeout(1, budget())));
+    println(first.as_string().unwrap_or("invalid"));
+}
+
 let read_lines (n: Int): Unit =
     if n <= 0 { () } else {
         println(show_line(Os.read_stdin_line_timeout(budget())));
@@ -56,6 +81,7 @@ let read_chunks (n: Int): Unit =
 let child (argv: Array[String]): Unit =
     if argv[0] == "--lines" { read_lines(5) }
     else if argv[0] == "--bytes" { read_chunks(4) }
+    else if argv[0] == "--empty" { read_empty() }
     else { println("unknown child mode") }
 
 let run_self (self: String) (mode: String) (input: String): Unit =
@@ -78,6 +104,8 @@ let parent (): Unit = match Os.self_exe() {
         // read is data, and running out is `Eof`.
         println("-- bytes");
         run_self(self, "--bytes", "0123456");
+        println("-- empty reads preserve input and EOF");
+        run_self(self, "--empty", "abc");
     },
 }
 
