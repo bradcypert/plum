@@ -710,9 +710,9 @@ let cmd_doc_render (items: Array[parser.ItemNode]) (out: String) (html: Bool) (h
 }
 
 // `Os.make_dir` creates ONE level, so `-o docs/stdlib` failed when
-// `docs` did not exist -- and failed quietly, because a directory that
-// cannot be made is indistinguishable here from one that already
-// exists. Every prefix is created in turn instead.
+// `docs` did not exist. Create each prefix, accepting a failed mkdir
+// only when the path is already a directory (including a concurrent
+// creator). A file at a prefix must stop generation before any writes.
 let doc_make_dirs (path: String): Unit =
     doc_make_acc(String.split(Path.clean(path), Path.separator()), 0, "")
 
@@ -725,7 +725,11 @@ let doc_make_acc (parts: Array[String]) (i: Int) (acc: String): Unit =
         let here = if String.is_empty(acc) && String.is_empty(parts[i]) { Path.separator() }
             else if String.is_empty(acc) { parts[i] }
             else { Path.join(acc, parts[i]) };
-        match Os.make_dir(here) { Ok(_) => (), Err(_) => () };
+        match Os.make_dir(here) {
+            Ok(_) => (),
+            Err(e) => if Result.unwrap_or(Os.is_directory(here), false) { () }
+                else { doc_fail(e) },
+        };
         doc_make_acc(parts, i + 1, here)
     }
 
@@ -748,7 +752,14 @@ let doc_write_modules (items: Array[parser.ItemNode]) (mods: Array[String]) (out
     }
 
 let doc_write (path: String) (body: String): Unit =
-    match Os.write_file(path, body) { Ok(_) => (), Err(e) => println("plum doc: ${e}") }
+    match Os.write_file(path, body) { Ok(_) => (), Err(e) => doc_fail(e) }
+
+// These helpers belong to the doc command. Stop at the first failure so
+// neither renderer can continue writing or print its success summary.
+let doc_fail (message: String): Unit = {
+    println("plum doc: ${message}");
+    Os.exit_with(1)
+}
 
 // A declaration named `T.f` belongs to the namespace `T`, and gets a
 // page of its own.
