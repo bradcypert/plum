@@ -40,8 +40,10 @@ stuck, so the seed is kept exactly rather than folded into a range.
 
 ## `let Rng.float (r: Rng): (Rng, Float)`
 
-A `Float` in `[0.0, 1.0)`. The upper bound is excluded, which is what
-makes `lo + (hi - lo) * f` stay below `hi`.
+A `Float` in `[0.0, 1.0)`. Use 53 exactly representable bits so
+converting to `Float` cannot round the largest sample up to `1.0`.
+The generator advances exactly once, as for previous versions;
+float samples may differ because the discarded low bits no longer round.
 
 ## `let Rng.float_range (r: Rng) (lo: Float) (hi: Float): (Rng, Float)`
 
@@ -51,13 +53,18 @@ A float in `[lo, hi)`, and the next generator.
 
 `[lo, hi)`, the upper bound EXCLUDED, so `int_range(r, 0, xs.len())`
 is an index into `xs` and needs no `- 1` anywhere.
+All ordered `Int` bounds are supported, even when `hi - lo` would
+overflow. `hi` must itself be an `Int`, so the maximum `Int` cannot
+be included as a result of this half-open API.
 
 Rejection sampling, not `z % span`. The modulo is biased whenever the
 span does not divide the generator's range evenly: the low values
 come up more often, by about one part in `range / span`. That is
 invisible in a game and fatal in a shuffle, and the loop costs an
 extra step only on the fraction of draws that land in the leftover
-tail.
+tail. Widths through the maximum `Int` preserve their seeded sequences.
+Wider ranges reject full signed samples outside `[lo, hi)` instead;
+they accept at least half of the domain, averaging at most two draws.
 
 An empty or backwards range returns `lo` and does not draw, because
 there is no number to return and a panic here would make an ordinary

@@ -1,0 +1,25 @@
+// Cross-platform, sanitizer-covered regressions for #122 and #250.
+let main (): Unit = {
+    let min = 0 - 9223372036854775807 - 1;
+    let max = 9223372036854775807;
+    let r = Rng.from_seed(1);
+    let (_, wide) = Rng.int_range(r, -1, max);
+    assert_eq(wide, 8196980753821780235);
+    let (_, lowest) = Rng.int_range(Rng.from_seed(3453682501520545093), min, 0);
+    assert_eq(lowest, min);
+    let (_, low) = Rng.int_range(Rng.from_seed(3558559446808474027), -1, max);
+    assert_eq(low, -1);
+    let (_, empty) = Rng.int_range(r, max, min);
+    assert_eq(empty, max);
+    for seed in [959135552437182909, 3558559446808474027] {
+        let (_, f) = Rng.float(Rng.from_seed(seed));
+        assert_eq(f, 1.0 - 1.0 / 9007199254740992.0)
+    };
+    let mut next = r;
+    for i in 0..1000 {
+        let (drawn, value) = Rng.int_range(next, min, max);
+        assert(value >= min && value < max);
+        next = drawn;
+    };
+    println("Rng boundaries: ok")
+}

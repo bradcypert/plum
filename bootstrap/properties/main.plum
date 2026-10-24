@@ -1058,6 +1058,65 @@ pub let test_rng_laws (): Unit = {
     check_eq("choice of nothing", "[]", Option.is_none(none).to_string(), "true")
 }
 
+// Integer widths around 2^63, both signed endpoints, and intervals that
+// used to abort even though no draw was required (issues #122 / #250).
+pub let test_rng_integer_boundaries (): Unit = {
+    let min = 0 - 9223372036854775807 - 1;
+    let max = 9223372036854775807;
+    for seed in [0, 1, -1, min, max, 959135552437182909, 3453682501520545093, 3558559446808474027] {
+        for bounds in [(min, max), (min, 0), (-1, max), (min, 1),
+                         (min, -1), (0, max), (min, min + 1), (max - 1, max)] {
+            let (lo, hi) = bounds;
+            check_eq("integer boundary range", seed.to_string(),
+                rng_in_range(Rng.from_seed(seed), lo, hi, 200).to_string(), "true")
+        };
+        for bounds in [(min, min), (max, max), (max, min), (0, min), (max, -1)] {
+            let (lo, hi) = bounds;
+            let (next, value) = Rng.int_range(Rng.from_seed(seed), lo, hi);
+            check_eq("empty/backwards returns lo", seed.to_string(), value.to_string(), lo.to_string());
+            check_eq("empty/backwards preserves state", seed.to_string(),
+                ints_for_rng_test(next), ints_for_rng_test(Rng.from_seed(seed)))
+        }
+    };
+    // Seed 1 produces three rejected negatives before this first
+    // accepted positive value. Verify that the returned state advanced
+    // through every rejected draw, too.
+    let r = Rng.from_seed(1);
+    let (r1, _) = Rng.float(r);
+    let (r2, _) = Rng.float(r1);
+    let (r3, _) = Rng.float(r2);
+    let (r4, _) = Rng.float(r3);
+    let (next, value) = Rng.int_range(r, -1, max);
+    check_eq("wide rejection result", "seed 1", value.to_string(), "8196980753821780235");
+    check_eq("wide rejection advances state", "seed 1", ints_for_rng_test(next), ints_for_rng_test(r4));
+    // These seeds invert SplitMix64 for the exact boundary outputs.
+    let (_, lowest) = Rng.int_range(Rng.from_seed(3453682501520545093), min, 0);
+    check_eq("wide range includes minimum Int", "inverse seed", lowest.to_string(), min.to_string());
+    let (_, negative_one) = Rng.int_range(Rng.from_seed(3558559446808474027), -1, max);
+    check_eq("wide range includes lo", "inverse seed", negative_one.to_string(), "-1")
+}
+
+let ints_for_rng_test (r: Rng): String =
+    Array.join(Array.map(rng_take(r, 8, []), |v: Int| v.to_string()), ",")
+
+pub let test_rng_float_rounding_boundary (): Unit = {
+    // Both raw outputs (max Int and -1) become 2^63-1 after masking;
+    // the old conversion rounded them to exactly 1.0.
+    for seed in [959135552437182909, 3558559446808474027] {
+        let r = Rng.from_seed(seed);
+        let (next, f) = Rng.float(r);
+        check_eq("float excludes one", seed.to_string(),
+            (f == 1.0 - 1.0 / 9007199254740992.0).to_string(), "true");
+        let (range_next, ranged) = Rng.float_range(r, 0.0, 1.0);
+        check_eq("unit float_range excludes hi", seed.to_string(), (ranged < 1.0).to_string(), "true");
+        check_eq("float_range advances once", seed.to_string(), ints_for_rng_test(range_next), ints_for_rng_test(next));
+        let expected_next = Rng.from_seed(Int.wrapping_add(seed, -7046029254386353131));
+        check_eq("float advances once", seed.to_string(), ints_for_rng_test(next), ints_for_rng_test(expected_next))
+    };
+    let (_, zero) = Rng.float(Rng.from_seed(7046029254386353131));
+    check_eq("float includes zero", "inverse seed", zero.to_string(), "0")
+}
+
 // --- Bitwise laws ---
 //
 // Boolean algebra, which these operators either satisfy or are wrong.
