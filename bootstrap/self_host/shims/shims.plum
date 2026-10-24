@@ -1413,4 +1413,9 @@ pub let shim_files (): Array[ShimFile] = [
         source: @embed_file("../../../native_stdlib/tls_shim.c"),
         compile: true,
     },
+    ShimFile {
+        name: "whole_file_shim.c",
+        source: @embed_file("../../../native_stdlib/whole_file_shim.c"),
+        compile: true,
+    },
 ]

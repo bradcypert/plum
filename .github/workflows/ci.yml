@@ -160,6 +160,8 @@ jobs:
         run: ./bootstrap/net-smoke
       - name: stdin reads preserve buffers and bound waits
         run: ./bootstrap/stdin-smoke
+      - name: whole-file reads propagate failures and preserve bytes
+        run: ./bootstrap/file-read-smoke
       - name: the version string is consistent
         run: ./bootstrap/check-version
       - name: plum help is a real command

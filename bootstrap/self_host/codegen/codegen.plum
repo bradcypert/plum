@@ -740,24 +740,40 @@ let cg_line_search (starts: Array[Int]) (offset: Int) (lo: Int) (hi: Int): Int =
         else { cg_line_search(starts, offset, lo, mid - 1) }
     }
 
+// Native paths can contain non-UTF-8 bytes. Split them by byte offsets;
+// character slicing can skip a separator after an invalid leading byte.
 // The directory and last component of a path. A path with no `/` is
 // taken as being in `.` -- a relative name with nowhere to anchor it is
 // still better than an empty directory, which is what this replaced.
-let cg_path_cut (path: String): Int = cg_path_cut_at(path, path.len() - 1)
+let cg_path_cut (path: Bytes): Int = cg_path_cut_at(path, path.len() - 1)
 
-let cg_path_cut_at (path: String) (i: Int): Int =
+let cg_path_cut_at (path: Bytes) (i: Int): Int =
     if i < 0 { 0 - 1 }
-    else if String.slice(path, i, i + 1) == "/" { i }
+    else if path.at(i).unwrap_or(0) == 47 { i }
     else { cg_path_cut_at(path, i - 1) }
 
-let cg_path_dir (path: String): String = {
+let cg_path_dir (path: Bytes): Bytes = {
     let c = cg_path_cut(path);
-    if c <= 0 { "." } else { String.slice(path, 0, c) }
+    if c <= 0 { ".".as_bytes() } else { path.slice(0, c) }
 }
 
-let cg_path_base (path: String): String = {
+let cg_path_base (path: Bytes): Bytes = {
     let c = cg_path_cut(path);
-    if c < 0 { path } else { String.slice(path, c + 1, path.len()) }
+    if c < 0 { path } else { path.slice(c + 1, path.len()) }
+}
+
+// LLVM strings describe bytes, but cached IR is text. Keep ordinary UTF-8
+// readable and encode other native path bytes as ASCII LLVM hex escapes.
+let cg_escape_llvm_path (path: Bytes): String = match path.as_string() {
+    Ok(text) => cg_escape_llvm(text),
+    Err(_) => {
+        let hex = path.to_hex();
+        let mut parts = [];
+        for i in 0..path.len() {
+            parts = parts.push("\\".concat(String.slice(hex, i * 2, i * 2 + 2)));
+        };
+        Array.concat_all(parts)
+    },
 }
 
 let cg_dbg_find (fs: Array[DbgFile]) (path: String) (i: Int): Option[DbgFile] =
@@ -776,6 +792,7 @@ let cg_dbg_file (path: String): DbgFile =
             let starts = match Os.read_file(path) { Ok(src) => cg_line_starts(src), Err(e) => [0] };
             let id = cg_dbg_next(());
             let f = DbgFile { path: path, id: id, starts: starts };
+            let bytes = path.as_bytes();
             // filename and directory SPLIT, rather than a whole path
             // with an empty directory. `DW_AT_comp_dir` is not
             // decoration on Mach-O: the linker builds its debug map
@@ -787,8 +804,8 @@ let cg_dbg_file (path: String): DbgFile =
             // table naming seven C shims and not one `.plum` file, one
             // OSO short of the eight objects linked.
             cg_dbg_emit("!${id} = !DIFile(filename: \""
-                .concat(cg_escape_llvm(cg_path_base(path))).concat("\", directory: \"")
-                .concat(cg_escape_llvm(cg_path_dir(path))).concat("\")\n"));
+                .concat(cg_escape_llvm_path(cg_path_base(bytes))).concat("\", directory: \"")
+                .concat(cg_escape_llvm_path(cg_path_dir(bytes))).concat("\")\n"));
             DBG_FILES.set(DBG_FILES.get().push(f));
             f
         },
@@ -2882,7 +2899,6 @@ let cg_runtime_fn (name: String): Option[String] =
     else if name == "print_raw" { Some("@plum_print_raw") }
     else if name == "exit_raw" { Some("@plum_exit_raw") }
     else if name == "env_var_raw" { Some("@plum_env_var_raw") }
-    else if name == "read_file_raw" { Some("@plum_read_file_raw") }
     else if name == "write_file_raw" { Some("@plum_write_file_raw") }
     // --- Bytes ---
     //
@@ -7114,7 +7130,7 @@ let cg_reachable (p: CgProgram) (pending: Array[CgInst]) (done: Array[CgInst]) (
         let rest = Array.slice(pending, 1, pending.len());
         // A runtime-implemented name is already a symbol: it has no
         // Plum body to walk, and emitting one would COLLIDE with the
-        // runtime's own definition. `read_file_raw` has a stub body in
+        // runtime's own definition. `read_file_bytes_raw` has a stub body in
         // the prelude purely so the checker has a signature for it —
         // this is what stops that stub from being compiled.
         if Option.is_some(cg_runtime_fn(head.name)) || head.name == "Array.concat" { cg_reachable(p, rest, done, fuel + 1) }

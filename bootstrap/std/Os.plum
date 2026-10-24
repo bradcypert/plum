@@ -103,17 +103,21 @@ pub let env_var (name: String): Option[String] = {
 
 // --- Whole-file I/O ---
 
-let read_file_raw (path: String): Array[String] = []
 let write_file_raw (path: String) (contents: String): Bool = false
 
-/// Reads a whole file as text.
+/// Reads a whole seekable file as text.
 ///
 /// `Err` when the file is missing, unreadable, or not valid UTF-8. Use
 /// `Os.read_bytes` for a file that is not text, or that might not be.
-pub let read_file (path: String): Result[String, String] = {
-    let r = read_file_raw(path);
-    if Array.is_empty(r) { Err("could not read ".concat(path)) } else { Ok(r[0]) }
-}
+/// A failed or incomplete read returns `Err`, never a partial string.
+pub let read_file (path: String): Result[String, String] =
+    match read_bytes(path) {
+        Err(e) => Err(e),
+        Ok(b) => match b.as_string() {
+            Ok(s) => Ok(s),
+            Err(_) => Err("could not read ".concat(path)),
+        },
+    }
 
 /// Writes text to a file, creating it or REPLACING what was there.
 ///
@@ -130,25 +134,20 @@ pub let write_file (path: String) (contents: String): Result[Unit, String] =
 /// images, compressed data, anything with an embedded NUL or a byte
 /// that is not valid UTF-8.
 ///
-/// The runtime half needed almost nothing: `read_file_raw` already
-/// reads with `fread` and the file's real size, and `write_file_raw`
-/// already writes with `fwrite` and the cell's stored length, so
-/// neither has ever stopped at a NUL. What was missing was a TYPE
-/// that promised as much. `Os.read_file` returning a `String` is a
-/// claim about encoding that a JPEG does not satisfy, and
-/// byte-indexed operations to do anything with the result.
+/// Both readers use the same checked byte read. `read_file` then
+/// validates UTF-8 through `Bytes.as_string`, which shares the byte
+/// cell without copying it. Binary reads preserve every byte.
 ///
-/// `read_file_bytes_raw` returns an ARRAY for the same reason its
-/// String twin does: hand-written runtime IR cannot construct a
-/// `Result` without hard-coding tag numbers the backend assigns per
-/// program, so the wrapping happens here.
+/// `read_file_bytes_raw` returns an ARRAY because hand-written runtime
+/// IR cannot construct a `Result` without hard-coding tag numbers the
+/// backend assigns per program, so the wrapping happens here.
 let read_file_bytes_raw (path: String): Array[Bytes] = []
 let write_file_bytes_raw (path: String) (contents: Bytes): Bool = false
 let append_file_bytes_raw (path: String) (contents: Bytes): Bool = false
 
-/// An empty file reads back as empty `Bytes`, NOT as an error, because the
-/// array is empty only when the file could not be opened at all, so
-/// "no such file" and "a file with nothing in it" stay distinct.
+/// Reads a whole seekable file as bytes. An empty file returns empty
+/// `Bytes`. Opening, sizing, temporary buffer allocation, incomplete
+/// reads, I/O errors, and close failures return `Err`, never a partial buffer.
 pub let read_bytes (path: String): Result[Bytes, String] = {
     let r = read_file_bytes_raw(path);
     if Array.is_empty(r) { Err("could not read ".concat(path)) } else { Ok(r[0]) }

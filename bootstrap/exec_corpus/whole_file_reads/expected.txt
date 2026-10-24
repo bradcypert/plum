@@ -1,0 +1,4 @@
+empty, NUL, CRLF and UTF-8 boundaries: ok
+invalid UTF-8 rejected as text, preserved as bytes: ok
+missing files and directories: err
+large valid text and invalid final byte: ok

@@ -168,13 +168,26 @@ with tempfile.TemporaryDirectory(prefix="plum-cache-check-") as tmp:
     # Native Windows argv can contain ANSI bytes rather than UTF-8. A
     # POSIX byte filename reproduces that manifest round-trip locally.
     if os.name == "posix" and sys.platform.startswith("linux"):
-        byte_path = Path(os.fsdecode(os.fsencode(work) + b"/source-\xfc.plum"))
-        byte_path.write_text('let main (): Unit = println("bytes")\n')
-        run("bytes\n", "miss", target=byte_path)
-        run("bytes\n", "hit", target=byte_path)
-        byte_path.write_text('let main (): Unit = println("edit")\n')
-        run("edit\n", "miss", target=byte_path)
-        run("edit\n", "hit", target=byte_path)
+        byte_dir = Path(os.fsdecode(os.fsencode(work) + b"/directory-\xfc"))
+        byte_dir.mkdir()
+        for parent in (work, byte_dir):
+            byte_path = Path(os.fsdecode(os.fsencode(parent) + b"/source-\xfc.plum"))
+            byte_path.write_text('let main (): Unit = println("bytes")\n')
+            run("bytes\n", "miss", target=byte_path)
+            run("bytes\n", "hit", target=byte_path)
+            byte_path.write_text('let main (): Unit = println("edit")\n')
+            run("edit\n", "miss", target=byte_path)
+            run("edit\n", "hit", target=byte_path)
+            # Strict decoding proves cached IR remains UTF-8.
+            # LLVM escapes must preserve the exact native filename bytes,
+            # including a separator directly after an invalid leading byte.
+            emitted = "\n".join(entry.read_text(encoding="utf-8")
+                                for entry in (cache / "build" / "v1" / "ir").glob("*/data"))
+            filename = "".join(f"\\{b:02x}" for b in os.fsencode(byte_path.name))
+            directory = ("".join(f"\\{b:02x}" for b in os.fsencode(parent))
+                         if parent == byte_dir else str(parent))
+            require(f'!DIFile(filename: "{filename}", directory: "{directory}")' in emitted,
+                    "debug path bytes changed")
     if not WINDOWS_HOST:
         alias = work / "source-link.plum"
         alias.symlink_to(src)
