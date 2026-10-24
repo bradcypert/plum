@@ -1093,21 +1093,22 @@ let plum__mod_floor (a: Int) (m: Int): Int = {
 }
 
 /// The raw step: advance by SplitMix64's golden-ratio increment, then
-/// mix all 64 bits. The sign-bit mask gives callers `[0, 2^63)`, which
-/// keeps range arithmetic non-negative without weakening the generator
-/// state or its period.
+/// mix all 64 bits. Keep the sign bit here: wide integer ranges need
+/// the full signed domain. Each caller reduces the output as needed.
 let rng_step (r: Rng): (Rng, Int) = {
     let next = Rng { state: Int.wrapping_add(r.state, RNG_GAMMA) };
     let z1 = Int.wrapping_mul(next.state ^ Int.shr_logical(next.state, 30), RNG_MIX_1);
     let z2 = Int.wrapping_mul(z1 ^ Int.shr_logical(z1, 27), RNG_MIX_2);
-    (next, (z2 ^ Int.shr_logical(z2, 31)) & RNG_RANGE)
+    (next, z2 ^ Int.shr_logical(z2, 31))
 }
 
-/// A `Float` in `[0.0, 1.0)`. The upper bound is excluded, which is what
-/// makes `lo + (hi - lo) * f` stay below `hi`.
+/// A `Float` in `[0.0, 1.0)`. Use 53 exactly representable bits so
+/// converting to `Float` cannot round the largest sample up to `1.0`.
+/// The generator advances exactly once, as for previous versions;
+/// float samples may differ because the discarded low bits no longer round.
 pub let Rng.float (r: Rng): (Rng, Float) = {
     let (next, z) = rng_step(r);
-    (next, z.to_float() / 9223372036854775808.0)
+    (next, Int.shr_logical(z & RNG_RANGE, 10).to_float() / 9007199254740992.0)
 }
 
 /// A float in `[lo, hi)`, and the next generator.
@@ -1118,26 +1119,41 @@ pub let Rng.float_range (r: Rng) (lo: Float) (hi: Float): (Rng, Float) = {
 
 /// `[lo, hi)`, the upper bound EXCLUDED, so `int_range(r, 0, xs.len())`
 /// is an index into `xs` and needs no `- 1` anywhere.
+/// All ordered `Int` bounds are supported, even when `hi - lo` would
+/// overflow. `hi` must itself be an `Int`, so the maximum `Int` cannot
+/// be included as a result of this half-open API.
 ///
 /// Rejection sampling, not `z % span`. The modulo is biased whenever the
 /// span does not divide the generator's range evenly: the low values
 /// come up more often, by about one part in `range / span`. That is
 /// invisible in a game and fatal in a shuffle, and the loop costs an
 /// extra step only on the fraction of draws that land in the leftover
-/// tail.
+/// tail. Widths through the maximum `Int` preserve their seeded sequences.
+/// Wider ranges reject full signed samples outside `[lo, hi)` instead;
+/// they accept at least half of the domain, averaging at most two draws.
 ///
 /// An empty or backwards range returns `lo` and does not draw, because
 /// there is no number to return and a panic here would make an ordinary
 /// off-by-one crash a program at random.
 pub let Rng.int_range (r: Rng) (lo: Int) (hi: Int): (Rng, Int) = {
-    let span = hi - lo;
-    if span <= 0 { (r, lo) } else { rng_below(r, span, lo) }
+    if hi <= lo { (r, lo) } else {
+        let span = Int.wrapping_sub(hi, lo);
+        if span < 0 { rng_wide(r, lo, hi) } else { rng_below(r, span, lo) }
+    }
+}
+
+// Tail recursion keeps retries in constant stack space. No span or
+// offset arithmetic is needed for ranges at least 2^63 wide.
+let rng_wide (r: Rng) (lo: Int) (hi: Int): (Rng, Int) = {
+    let (next, z) = rng_step(r);
+    if z < lo || z >= hi { rng_wide(next, lo, hi) } else { (next, z) }
 }
 
 let rng_below (r: Rng) (span: Int) (lo: Int): (Rng, Int) = {
     let range = RNG_RANGE;
     let limit = range - plum__mod_floor(range, span);
-    let (next, z) = rng_step(r);
+    let (next, raw) = rng_step(r);
+    let z = raw & RNG_RANGE;
     if z >= limit { rng_below(next, span, lo) } else { (next, lo + plum__mod_floor(z, span)) }
 }
 

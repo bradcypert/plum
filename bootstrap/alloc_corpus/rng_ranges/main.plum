@@ -1,0 +1,17 @@
+// Exercise narrow sampling, wide rejection and float conversion without
+// collecting results. Track allocation churn separately from retained
+// memory; the Rng and result tuples still use ordinary refcounted cells.
+let sample (r: Rng) (left: Int): Int =
+    if left <= 0 { 0 } else {
+        let (r1, small) = Rng.int_range(r, -5, 7);
+        let (r2, wide) = Rng.int_range(r1, -1, 9223372036854775807);
+        let (r3, full) = Rng.int_range(r2, 0 - 9223372036854775807 - 1, 9223372036854775807);
+        let (r4, f) = Rng.float(r3);
+        assert(small >= -5 && small < 7);
+        assert(wide >= -1 && wide < 9223372036854775807);
+        assert(full < 9223372036854775807);
+        assert(f >= 0.0 && f < 1.0);
+        sample(r4, left - 1)
+    }
+
+let main (): Unit = println(sample(Rng.from_seed(1), 1000).to_string())
