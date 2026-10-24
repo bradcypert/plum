@@ -129,13 +129,31 @@ let http_recv_headers_acc (fd: Int) (secure: Int) (acc: String): Result[String, 
         },
     }
 
+let http_status_valid (status: Int): Bool = status >= 100 && status <= 599
+let http_informational (status: Int): Bool = status >= 100 && status < 200
+
+// RFC 9112 section 6.3: these responses end at the header terminator,
+// before Content-Length or Transfer-Encoding can select body framing.
+let http_response_bodyless (method: String) (status: Int): Bool =
+    method == "HEAD" || http_informational(status) || status == 204 || status == 304
+
+let http_tunnel (method: String) (status: Int): Bool =
+    method == "CONNECT" && status >= 200 && status < 300
+
 let http_parse_status_line (line: String): Result[Int, String] = {
-    let parts = String.trim_end(line).split(" ");
+    let parts = line.split(" ");
     if parts.len() < 2 { Err("http client: malformed status line: ".concat(line)) }
-    else { match String.parse_int(parts[1]) {
-        Err(e) => Err("http client: malformed status code: ".concat(e)),
-        Ok(code) => Ok(code),
-    } }
+    else if parts[0] != "HTTP/1.0" && parts[0] != "HTTP/1.1" {
+        Err("http client: unsupported HTTP version")
+    } else {
+        let code = parts[1].as_bytes();
+        if code.len() != 3 || !http_digit(http_byte(code, 0)) || !http_digit(http_byte(code, 1)) || !http_digit(http_byte(code, 2)) {
+            Err("http client: malformed status code")
+        } else { match String.parse_int(parts[1]) {
+            Err(e) => Err("http client: malformed status code: ".concat(e)),
+            Ok(status) => if http_status_valid(status) { Ok(status) } else { Err("http client: invalid response status") },
+        } }
+    }
 }
 
 let http_byte (b: Bytes) (i: Int): Int = match b.at(i) { Some(c) => c, None => -1 }
@@ -219,13 +237,13 @@ let http_recv_body_until_close_acc (fd: Int) (secure: Int) (acc: String): String
     if String.is_empty(chunk) { acc } else { http_recv_body_until_close_acc(fd, secure, acc.concat(chunk)) }
 }
 
-/// Takes `headers`/`leftover_body` directly (not a whole `Head`) —
-/// but, UNLIKE the rest of this module's shared parsing helpers, this
-/// one is response-side ONLY, not reused for requests (see `http_read_
-/// request_body` below for why the two genuinely differ, not just a
-/// convenience split).
-let http_read_body (fd: Int) (secure: Int) (headers: Array[Header]) (leftover_body: String): Result[String, String] =
-    match http_find_header(headers, "Content-Length") {
+// Response framing needs the initiating method as well as the status.
+// Ignore even buffered content for a bodyless response; never allocate a
+// receive buffer based on its representation's advertised Content-Length.
+let http_read_body (fd: Int) (secure: Int) (method: String) (status: Int) (headers: Array[Header]) (leftover_body: String): Result[String, String] =
+    if http_response_bodyless(method, status) { Ok("") }
+    else if http_tunnel(method, status) { Err("http client: CONNECT tunnels are not supported") }
+    else { match http_find_header(headers, "Content-Length") {
         Some(cl) => match String.parse_int(cl) {
             Err(e) => Err("http: invalid Content-Length header: ".concat(e)),
             Ok(content_length) => http_recv_body_by_length_acc(fd, secure, leftover_body, content_length - leftover_body.len()),
@@ -234,7 +252,7 @@ let http_read_body (fd: Int) (secure: Int) (headers: Array[Header]) (leftover_bo
             Some(te) => Err("http: Transfer-Encoding (".concat(te).concat(") is not supported yet")),
             None => Ok(http_recv_body_until_close_acc(fd, secure, leftover_body)),
         },
-    }
+    } }
 
 /// The REQUEST-side sibling of `http_read_body` above — same `Content-
 /// Length`/`Transfer-Encoding` handling, but a DELIBERATELY different
@@ -265,22 +283,26 @@ let http_read_request_body (fd: Int) (headers: Array[Header]) (leftover_body: St
         },
     }
 
-/// Pipe + `Result.and_then`/`Result.map`, not nested `match` — a
-/// deliberate house-style adoption (see DESIGN.md's own "?/early-return
-/// sugar" section for the full writeup: real `?`-style early return
-/// would need a language feature Plum doesn't have at all, `return`,
-/// plus a `From`-style error-conversion mechanism the closed trait set
-/// has no room for — this gets most of the real readability benefit
-/// today, for free, confirmed by rewriting this exact chain both ways
-/// and running BOTH against the real shipped counterpart before
-/// choosing this one). `|ignored| ..` discards `tcp_write`'s own `Int`
-/// (bytes-written count) — the next step doesn't need it, only that the
-/// write succeeded at all.
-let http_do_request (fd: Int) (secure: Int) (wire: String): Result[Response, String] =
+// Carry only unread bytes to the next head. A direct tail call releases
+// the previous head instead of retaining one continuation per interim
+// response. The count also bounds a peer's endless informational stream.
+let http_recv_final_head (fd: Int) (secure: Int) (pending: String) (interim_count: Int): Result[Head, String] =
+    match http_recv_headers_acc(fd, secure, pending) {
+        Err(e) => Err(e),
+        Ok(raw) => match http_parse_head(raw) {
+            Err(e) => Err(e),
+            Ok(head) => if head.status == 101 { Err("http client: protocol upgrades are not supported") }
+                else if http_informational(head.status) {
+                    if interim_count >= 100 { Err("http client: too many informational responses") }
+                    else { http_recv_final_head(fd, secure, head.leftover_body, interim_count + 1) }
+                } else { Ok(head) },
+        },
+    }
+
+let http_do_request (fd: Int) (secure: Int) (method: String) (wire: String): Result[Response, String] =
     (if secure == 1 { http_tls_write(fd, wire) } else { Net.write(fd, wire) })
-        |> Result.and_then(_, |ignored| http_recv_headers_acc(fd, secure, ""))
-        |> Result.and_then(_, http_parse_head)
-        |> Result.and_then(_, |head| Result.map(http_read_body(fd, secure, head.headers, head.leftover_body), |response_body| Response { status: head.status, headers: head.headers, body: response_body }))
+        |> Result.and_then(_, |ignored| http_recv_final_head(fd, secure, "", 0))
+        |> Result.and_then(_, |head| Result.map(http_read_body(fd, secure, method, head.status, head.headers, head.leftover_body), |response_body| Response { status: head.status, headers: head.headers, body: response_body }))
 
 /// Sends a request over HTTP or HTTPS. HTTPS verifies the peer's
 /// certificate and hostname using the native TLS trust-store integration.
@@ -289,16 +311,21 @@ let http_do_request (fd: Int) (secure: Int) (wire: String): Result[Response, Str
 /// before connecting. Methods and names must be nonempty ASCII tokens;
 /// values may contain spaces, HTAB, and UTF-8, but no other ASCII controls
 /// or DEL. Bodies are not subject to protocol-field validation.
+///
+/// Reads past up to 100 informational responses to the final response.
+/// HEAD, 204, and 304 responses have an empty body regardless of framing
+/// headers. Protocol upgrades (101) and successful CONNECT tunnels return
+/// Err and close the connection; this API cannot hand off a transport.
 pub let request (method: String) (url: String) (headers: Array[Header]) (body: String): Result[Response, String] =
     http_parse_url(url)
         |> Result.and_then(_, |parsed| http_build_request(method, parsed, headers, body)
             |> Result.and_then(_, |wire| if parsed.scheme == "https" {
                 let fd = unsafe { tls_connect(parsed.host.as_cstr(), parsed.port) };
                 if fd < 0 { Err("https client: TLS connection failed") }
-                else { let result = http_do_request(fd, 1, wire); unsafe { tls_close(fd) }; result }
+                else { let result = http_do_request(fd, 1, method, wire); unsafe { tls_close(fd) }; result }
             } else {
                 Net.connect_to(parsed.host, parsed.port) |> Result.and_then(_, |fd| {
-                    let result = http_do_request(fd, 0, wire);
+                    let result = http_do_request(fd, 0, method, wire);
                     Net.close(fd);
                     result
                 })
@@ -459,21 +486,28 @@ let http_status_reason (code: Int): String = match code {
     _ => "Unknown",
 }
 
-/// The wire-format inverse of `http_build_request` — unlike that
-/// function, `Content-Length` is ALWAYS sent (even `0` for an empty
-/// body), not just when the body is non-empty: a request omitting it
-/// for a bodyless `GET` is common/idiomatic, but a SERVER leaving a
-/// client to guess whether a response has a body at all is not.
-let http_response_to_wire (resp: Response): Result[String, String] =
-    Result.map(http_validate_headers(resp.headers, 0), |ignored| {
-        let extra_header_lines = Array.fold(resp.headers, "", |acc, h| acc.concat(h.name).concat(": ").concat(h.value).concat("\r\n"));
+// This whole-response API owns framing: caller-supplied lengths/codings
+// cannot override the method/status policy or describe a different body.
+// Omit length for 304: resp.body need not be the selected representation.
+// HEAD may report the byte length of the handler's would-be GET body.
+let http_response_to_wire (method: String) (resp: Response): Result[String, String] =
+    if !http_status_valid(resp.status) { Err("http server: invalid response status") }
+    else if http_informational(resp.status) { Err("http server: handler must return a final response") }
+    else if http_tunnel(method, resp.status) { Err("http server: CONNECT tunnels are not supported") }
+    else { Result.map(http_validate_headers(resp.headers, 0), |ignored| {
+        let extra_header_lines = Array.fold(resp.headers, "", |acc, h|
+            if http_header_named(h, "Content-Length") || http_header_named(h, "Transfer-Encoding") { acc }
+            else { acc.concat(h.name).concat(": ").concat(h.value).concat("\r\n") });
+        let length_line = if resp.status == 204 || resp.status == 304 { "" }
+            else { "Content-Length: ".concat(resp.body.len().to_string()).concat("\r\n") };
+        let body = if http_response_bodyless(method, resp.status) { "" } else { resp.body };
         "HTTP/1.1 ".concat(resp.status.to_string()).concat(" ").concat(http_status_reason(resp.status)).concat("\r\n")
-            .concat("Content-Length: ").concat(resp.body.len().to_string()).concat("\r\n")
+            .concat(length_line)
             .concat("Connection: close\r\n")
             .concat(extra_header_lines)
             .concat("\r\n")
-            .concat(resp.body)
-    })
+            .concat(body)
+    }) }
 
 // A rejection must be completely sent even if send() makes partial progress.
 let http_write_bad_request (conn: Int) (wire: String): Result[Unit, String] =
@@ -498,7 +532,7 @@ let http_handle_connection (conn: Int) (handler: (Request) -> Response): Result[
             Ok(head) => http_read_request_body(conn, head.headers, head.leftover_body) |> Result.and_then(_, |body| {
                 let request = Request { method: head.method, path: head.path, headers: head.headers, body: body };
                 let response = handler(request);
-                http_response_to_wire(response)
+                http_response_to_wire(head.method, response)
                     |> Result.and_then(_, |wire| Result.map(Net.write(conn, wire), |sent| ()))
             }),
         })
@@ -507,6 +541,11 @@ let http_handle_connection (conn: Int) (handler: (Request) -> Response): Result[
 /// closes both the connection and the listening socket, and gives back
 /// whatever `http_handle_connection` produced. Invalid handler headers
 /// return Err without writing response bytes; the connection is closed.
+/// Status codes must be 200..599: informational-only handler responses and
+/// successful CONNECT tunnels return Err without writing response bytes.
+/// HEAD, 204, and 304 suppress the handler's body. HEAD reports its byte
+/// length; 204 and 304 omit Content-Length. Caller Content-Length and
+/// Transfer-Encoding fields are replaced by this generated framing.
 /// Malformed request lines/fields and missing (HTTP/1.1), duplicate, or
 /// invalid Host fields receive 400 before body reading or handler dispatch,
 /// then return Err. HTTP/1.0 may omit Host. Present Host values use URI host

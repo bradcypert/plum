@@ -42,6 +42,11 @@ before connecting. Methods and names must be nonempty ASCII tokens;
 values may contain spaces, HTAB, and UTF-8, but no other ASCII controls
 or DEL. Bodies are not subject to protocol-field validation.
 
+Reads past up to 100 informational responses to the final response.
+HEAD, 204, and 304 responses have an empty body regardless of framing
+headers. Protocol upgrades (101) and successful CONNECT tunnels return
+Err and close the connection; this API cannot hand off a transport.
+
 ## `let get (url: String): Result[Response, String]`
 
 Fetches a URL and reads the whole response.
@@ -67,6 +72,11 @@ Handles exactly ONE connection then returns — listens, accepts once,
 closes both the connection and the listening socket, and gives back
 whatever `http_handle_connection` produced. Invalid handler headers
 return Err without writing response bytes; the connection is closed.
+Status codes must be 200..599: informational-only handler responses and
+successful CONNECT tunnels return Err without writing response bytes.
+HEAD, 204, and 304 suppress the handler's body. HEAD reports its byte
+length; 204 and 304 omit Content-Length. Caller Content-Length and
+Transfer-Encoding fields are replaced by this generated framing.
 Malformed request lines/fields and missing (HTTP/1.1), duplicate, or
 invalid Host fields receive 400 before body reading or handler dispatch,
 then return Err. HTTP/1.0 may omit Host. Present Host values use URI host
