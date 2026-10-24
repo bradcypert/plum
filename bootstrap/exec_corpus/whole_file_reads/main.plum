@@ -1,0 +1,52 @@
+use Os;
+
+let check_bytes (path: String) (data: Bytes): Unit = {
+    assert(Result.is_ok(Os.write_bytes(path, data)));
+    assert(match Os.read_bytes(path) { Ok(b) => b == data, Err(_) => false });
+}
+
+let main (): Unit = match Os.temp_dir() {
+    Err(e) => { println(e); assert(false) },
+    Ok(root) => {
+        let path = root.concat("/data");
+        // Empty is successful for both APIs. NUL and CRLF are ordinary
+        // data; valid UTF-8 boundary codepoints must survive byte for byte.
+        let valid = [Bytes.empty(), Bytes.from_array([0, 13, 10, 65]),
+            Bytes.from_array([194, 128, 223, 191, 224, 160, 128, 237, 159, 191,
+                239, 191, 191, 240, 144, 128, 128, 244, 143, 191, 191])];
+        for data in valid {
+            check_bytes(path, data);
+            assert(match Os.read_file(path) { Ok(s) => s.as_bytes() == data, Err(_) => false });
+        };
+        println("empty, NUL, CRLF and UTF-8 boundaries: ok");
+
+        // Lone continuations, overlong forms, surrogates, out-of-range
+        // values, bad continuations and truncated multibyte sequences.
+        let invalid = [[128], [192, 128], [224, 128, 128], [237, 160, 128],
+            [240, 128, 128, 128], [244, 144, 128, 128], [245, 128, 128, 128],
+            [255], [194, 65], [226, 130], [240, 144, 128]];
+        for values in invalid {
+            check_bytes(path, Bytes.from_array(values));
+            assert(Result.is_err(Os.read_file(path)));
+        };
+        println("invalid UTF-8 rejected as text, preserved as bytes: ok");
+
+        assert(Result.is_err(Os.read_file(root.concat("/missing"))));
+        assert(Result.is_err(Os.read_bytes(root.concat("/missing"))));
+        assert(Result.is_err(Os.read_file(root)));
+        assert(Result.is_err(Os.read_bytes(root)));
+        println("missing files and directories: err");
+
+        // A whole-file text read must validate a large buffer without
+        // growing the stack or making a second full-size text copy.
+        let mut prefix = "a";
+        for i in 0..20 { prefix = prefix.concat(prefix); };
+        let large = prefix.concat("\u{1F600}");
+        assert(Result.is_ok(Os.write_file(path, large)));
+        assert(match Os.read_file(path) { Ok(s) => s == large, Err(_) => false });
+        check_bytes(path, large.as_bytes().concat(Bytes.from_array([255])));
+        assert(Result.is_err(Os.read_file(path)));
+        println("large valid text and invalid final byte: ok");
+        assert(Result.is_ok(Os.remove_tree(root)));
+    },
+}

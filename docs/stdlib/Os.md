@@ -72,10 +72,11 @@ ordinary variants.
 
 ## `let read_file (path: String): Result[String, String]`
 
-Reads a whole file as text.
+Reads a whole seekable file as text.
 
 `Err` when the file is missing, unreadable, or not valid UTF-8. Use
 `Os.read_bytes` for a file that is not text, or that might not be.
+A failed or incomplete read returns `Err`, never a partial string.
 
 ## `let write_file (path: String) (contents: String): Result[Unit, String]`
 
@@ -86,9 +87,9 @@ or closing fails. A failure can leave a truncated or partially written file.
 
 ## `let read_bytes (path: String): Result[Bytes, String]`
 
-An empty file reads back as empty `Bytes`, NOT as an error, because the
-array is empty only when the file could not be opened at all, so
-"no such file" and "a file with nothing in it" stay distinct.
+Reads a whole seekable file as bytes. An empty file returns empty
+`Bytes`. Opening, sizing, temporary buffer allocation, incomplete
+reads, I/O errors, and close failures return `Err`, never a partial buffer.
 
 ## `let write_bytes (path: String) (data: Bytes): Result[Unit, String]`
 

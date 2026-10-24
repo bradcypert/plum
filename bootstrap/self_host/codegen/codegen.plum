@@ -2882,7 +2882,6 @@ let cg_runtime_fn (name: String): Option[String] =
     else if name == "print_raw" { Some("@plum_print_raw") }
     else if name == "exit_raw" { Some("@plum_exit_raw") }
     else if name == "env_var_raw" { Some("@plum_env_var_raw") }
-    else if name == "read_file_raw" { Some("@plum_read_file_raw") }
     else if name == "write_file_raw" { Some("@plum_write_file_raw") }
     // --- Bytes ---
     //
@@ -7114,7 +7113,7 @@ let cg_reachable (p: CgProgram) (pending: Array[CgInst]) (done: Array[CgInst]) (
         let rest = Array.slice(pending, 1, pending.len());
         // A runtime-implemented name is already a symbol: it has no
         // Plum body to walk, and emitting one would COLLIDE with the
-        // runtime's own definition. `read_file_raw` has a stub body in
+        // runtime's own definition. `read_file_bytes_raw` has a stub body in
         // the prelude purely so the checker has a signature for it —
         // this is what stops that stub from being compiled.
         if Option.is_some(cg_runtime_fn(head.name)) || head.name == "Array.concat" { cg_reachable(p, rest, done, fuel + 1) }
