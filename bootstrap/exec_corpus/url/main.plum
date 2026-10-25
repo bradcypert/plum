@@ -80,6 +80,34 @@ let main (): Unit = {
     // HTTP request line, and decoding it would mean re-encoding it.
     show("http://h/%C3%A9");
 
+    // --- Component grammar and bracketed host regressions ---
+    show("http://host/a b?x=hello world");
+    show("http://ho st/");
+    show("http://[:: 1]/");
+    show("http://h/?a b=c");
+    show("http://h/?a=b c");
+    show("http://h/#a b");
+    show("http://h/a\\b");
+    show("http://h/<x>");
+    show("http://h/?q=[x]");
+    show("http://h/#a#b");
+    show("http://é/");
+    show("http://h/é");
+    show("http://bad%GG/");
+    show("http://h/#bad%GG");
+    show("http://h/#%C3");
+    show("http://[]");
+    show("http://[]:80");
+    show("http://[example.com]/");
+    show("http://[1::2::3]/");
+    show("http://[::ffff:256.1.1.1]/");
+    show_canonical("http://h/a%20b?x=hello%20world#space%20here");
+    show_canonical("http://%C3%A9/%C3%A9?q=%C3%A9#%C3%A9");
+    show_canonical("http://h/a:@!$&'()*+,;=-._~/?q=:@/?#f?/");
+    show_canonical("http://[::]/");
+    show_canonical("http://[2001:db8::1]:8080/");
+    show_canonical("http://[::ffff:192.0.2.128]/");
+
     // --- Canonical form ---
     show_canonical("http://example.com");
     show_canonical("http://example.com:80/x");

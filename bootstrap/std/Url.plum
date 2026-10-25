@@ -71,28 +71,137 @@ let split_first (s: String) (sep: String): Split =
         },
     }
 
-/// Every escape in the query must decode, and decode to text.
-/// Checked at PARSE time so that `query_get` afterwards cannot fail:
-/// a lookup returning `Option` should mean "absent", never "present
-/// but malformed".
-let validate_pct (context: String) (s: String): Result[Unit, String] =
-    match Encoding.percent_decode(s) {
-        Err(e) => Err("Url.parse: ".concat(context).concat(": ").concat(e)),
-        Ok(bytes) => match bytes.as_string() {
-            Err(_) => Err("Url.parse: ".concat(context).concat(" is not valid UTF-8 once decoded")),
-            Ok(_) => Ok(()),
-        },
+let hex_value (c: Int): Int =
+    if c >= 48 && c <= 57 { c - 48 }
+    else if c >= 65 && c <= 70 { c - 65 + 10 }
+    else if c >= 97 && c <= 102 { c - 97 + 10 }
+    else { 0 - 1 }
+
+enum PercentError { Escape(String), Utf8 }
+
+// Raw component syntax has already established that unescaped bytes are
+// ASCII. Only escaped bytes can form multibyte UTF-8, so collect at most
+// one codepoint (four bytes), then use the prelude's complete validator.
+// Never decode an entire component just to discard the decoded buffer.
+let validate_pct_acc (b: Bytes) (i: Int) (pending: Array[Int]) (left: Int): Result[Unit, PercentError] =
+    if i >= b.len() {
+        if left == 0 { Ok(()) } else { Err(Utf8) }
+    } else if byte_at(b, i) != 37 {
+        if left != 0 { Err(Utf8) }
+        else { validate_pct_acc(b, i + 1, pending, 0) }
+    } else if i + 2 >= b.len() {
+        Err(Escape("Encoding.percent_decode: truncated escape at byte ".concat(i.to_string())))
+    } else {
+        let hi = hex_value(byte_at(b, i + 1));
+        let lo = hex_value(byte_at(b, i + 2));
+        if hi < 0 || lo < 0 {
+            Err(Escape("Encoding.percent_decode: invalid escape at byte ".concat(i.to_string())))
+        } else {
+            let c = hi * 16 + lo;
+            if left == 0 && c < 128 { validate_pct_acc(b, i + 3, pending, 0) }
+            else if left == 0 && (c < 194 || c > 244) { Err(Utf8) }
+            else {
+                let next = pending.push(c);
+                let remaining = if left > 0 { left - 1 }
+                                else if c < 224 { 1 } else if c < 240 { 2 } else { 3 };
+                if remaining > 0 { validate_pct_acc(b, i + 3, next, remaining) }
+                else if !Bytes.is_utf8(Bytes.from_array(next)) { Err(Utf8) }
+                else { validate_pct_acc(b, i + 3, [], 0) }
+            }
+        }
     }
 
-let validate_params (params: Array[Param]) (i: Int): Result[Unit, String] =
-    if i >= params.len() { Ok(()) }
-    else { match validate_pct("query name", params[i].name) {
-        Err(e) => Err(e),
-        Ok(_) => match validate_pct("query value", params[i].value) {
-            Err(e) => Err(e),
-            Ok(_) => validate_params(params, i + 1),
-        },
-    } }
+// Keep decoded UTF-8 checks separate from the raw URI alphabet. Parsing
+// establishes the text contract that lets query_get return only Option.
+let validate_pct (context: String) (s: String): Result[Unit, String] =
+    match validate_pct_acc(s.as_bytes(), 0, [], 0) {
+        Ok(_) => Ok(()),
+        Err(Utf8) => Err("Url.parse: ".concat(context).concat(" is not valid UTF-8 once decoded")),
+        Err(Escape(e)) => Err("Url.parse: ".concat(context).concat(": ").concat(e)),
+    }
+
+// RFC 3986 component alphabets. Percent escapes are checked separately:
+// admitting '%' here must never mean admitting an arbitrary following byte.
+let unreserved (c: Int): Bool =
+    (c >= 65 && c <= 90) || (c >= 97 && c <= 122) || (c >= 48 && c <= 57)
+        || c == 45 || c == 46 || c == 95 || c == 126
+
+let sub_delim (c: Int): Bool =
+    c == 33 || c == 36 || c == 38 || c == 39 || c == 40 || c == 41
+        || c == 42 || c == 43 || c == 44 || c == 59 || c == 61
+
+enum Component { Host, Path, Query, Fragment }
+
+let component_char (kind: Component) (c: Int): Bool =
+    unreserved(c) || sub_delim(c) || match kind {
+        Host => false,
+        Path => c == 58 || c == 64 || c == 47,
+        Query => c == 58 || c == 64 || c == 47 || c == 63,
+        Fragment => c == 58 || c == 64 || c == 47 || c == 63,
+    }
+
+// Scan raw syntax without allocating decoded text. '%' is provisionally
+// allowed, but its triplet and decoded UTF-8 must pass validate_pct below.
+// All other bytes must be ASCII members of this component's grammar.
+let component_ok (b: Bytes) (kind: Component) (i: Int): Bool =
+    if i >= b.len() { true }
+    else if byte_at(b, i) == 37 || component_char(kind, byte_at(b, i)) {
+        component_ok(b, kind, i + 1)
+    } else { false }
+
+let validate_component (context: String) (kind: Component) (s: String): Result[Unit, String] =
+    if !component_ok(s.as_bytes(), kind, 0) {
+        Err("Url.parse: invalid raw character in ".concat(context))
+    } else if String.contains(s, "%") { validate_pct(context, s) }
+    else { Ok(()) }
+
+let hex_digit (c: Int): Bool =
+    (c >= 48 && c <= 57) || (c >= 65 && c <= 70) || (c >= 97 && c <= 102)
+
+// A dotted IPv4 tail counts as two IPv6 groups. No leading zeroes,
+// empty octets, or values outside 0..255 (RFC 3986 dec-octet).
+let ipv4_tail (b: Bytes) (i: Int) (octets: Int) (digits: Int) (value: Int): Bool =
+    if i >= b.len() { octets == 3 && digits > 0 }
+    else {
+        let c = byte_at(b, i);
+        if c == 46 {
+            digits > 0 && octets < 3 && ipv4_tail(b, i + 1, octets + 1, 0, 0)
+        } else if c >= 48 && c <= 57 {
+            let next = value * 10 + c - 48;
+            digits < 3 && !(digits > 0 && value == 0) && next <= 255
+                && ipv4_tail(b, i + 1, octets, digits + 1, next)
+        } else { false }
+    }
+
+let hex_end (b: Bytes) (i: Int): Int =
+    if i < b.len() && hex_digit(byte_at(b, i)) { hex_end(b, i + 1) } else { i }
+
+// Count explicit 16-bit groups; '::' may occur once and must replace
+// at least one group. Work on the same byte view, including IPv4 tails.
+let ipv6_groups (b: Bytes) (i: Int) (groups: Int) (compressed: Bool): Bool = {
+    let end = hex_end(b, i);
+    let digits = end - i;
+    if digits < 1 || digits > 4 || groups >= 8 { false }
+    else if end < b.len() && byte_at(b, end) == 46 {
+        ipv4_tail(b, i, 0, 0, 0)
+            && (if compressed { groups + 2 < 8 } else { groups + 2 == 8 })
+    } else if end == b.len() {
+        if compressed { groups + 1 < 8 } else { groups + 1 == 8 }
+    } else if byte_at(b, end) != 58 { false }
+    else if end + 1 < b.len() && byte_at(b, end + 1) == 58 {
+        if compressed { false }
+        else if end + 2 == b.len() { groups + 1 < 8 }
+        else { ipv6_groups(b, end + 2, groups + 1, true) }
+    } else { ipv6_groups(b, end + 1, groups + 1, compressed) }
+}
+
+let ipv6_ok (host: String): Bool = {
+    let b = host.as_bytes();
+    if b.len() < 2 || b.len() > 45 { false }
+    else if byte_at(b, 0) == 58 {
+        byte_at(b, 1) == 58 && (b.len() == 2 || ipv6_groups(b, 2, 0, true))
+    } else { ipv6_groups(b, 0, 0, false) }
+}
 
 /// `a=1&b=2` into pairs, still encoded. A field with no `=` has an
 /// empty value (`?flag`), and an empty field is skipped (`?a=1&&b=2`)
@@ -127,24 +236,34 @@ let parse_authority (authority: String) (scheme: String): Result[Url, String] =
             Some(close) => {
                 let host = String.slice(authority, 1, close);
                 let rest = String.slice(authority, close + 1, clen(authority));
-                if String.is_empty(rest) { Ok(host_port(scheme, host, default_port(scheme))) }
+                if String.is_empty(host) { Err("Url.parse: missing host") }
+                else if !ipv6_ok(host) { Err("Url.parse: invalid or unsupported IP literal") }
+                else if String.is_empty(rest) { Ok(host_port(scheme, host, default_port(scheme))) }
                 else if !String.starts_with(rest, ":") { Err("Url.parse: trailing text after IPv6 address") }
                 else { with_port(scheme, host, String.slice(rest, 1, clen(rest))) }
             },
         }
     } else {
         let hp = split_first(authority, ":");
-        if !hp.found { Ok(host_port(scheme, authority, default_port(scheme))) }
-        else if String.is_empty(hp.before) { Err("Url.parse: missing host") }
-        else { with_port(scheme, hp.before, hp.after) }
+        if String.is_empty(hp.before) { Err("Url.parse: missing host") }
+        else { match validate_component("host", Host, hp.before) {
+            Err(e) => Err(e),
+            Ok(_) => if !hp.found { Ok(host_port(scheme, hp.before, default_port(scheme))) }
+                     else { with_port(scheme, hp.before, hp.after) },
+        } }
     }
 
 /// A partially-built `Url`; the caller fills in path/query/fragment.
 let host_port (scheme: String) (host: String) (port: Int): Url =
     Url { scheme: scheme, host: host, port: port, path: "/", raw_query: "", fragment: "" }
 
+let port_digits (b: Bytes) (i: Int): Bool =
+    if i >= b.len() { true }
+    else { let c = byte_at(b, i); c >= 48 && c <= 57 && port_digits(b, i + 1) }
+
 let with_port (scheme: String) (host: String) (text: String): Result[Url, String] =
     if String.is_empty(text) { Err("Url.parse: empty port") }
+    else if !port_digits(text.as_bytes(), 0) { Err("Url.parse: invalid port: ".concat(text)) }
     else { match String.parse_int(text) {
         Err(_) => Err("Url.parse: invalid port: ".concat(text)),
         Ok(p) => if p < 1 || p > 65535 { Err("Url.parse: port out of range: ".concat(text)) }
@@ -164,7 +283,12 @@ let raw_url_ok_acc (b: Bytes) (i: Int): Bool =
 /// (`/x`) reference has no meaning without a base to resolve against,
 /// and resolution is a different function than parsing.
 ///
-/// Raw ASCII controls, spaces, and DEL are rejected in every component.
+/// Components follow RFC 3986: raw spaces, controls, non-ASCII text,
+/// and characters outside each component's grammar must be percent-encoded.
+/// Bracketed hosts must be IPv6 literals, including optional dotted IPv4
+/// tails; IPvFuture and scoped zone identifiers are not supported.
+/// Percent escapes must be complete hex triplets; decoded components
+/// must be valid UTF-8.
 /// Percent-encoded data remains encoded, including escaped controls and
 /// spaces; query lookups decode it as application data.
 ///
@@ -189,14 +313,17 @@ pub let parse (input: String): Result[Url, String] =
             let path = match slash { Some(i) => String.slice(q.before, i, clen(q.before)), None => "/" };
             match parse_authority(authority, scheme) {
                 Err(e) => Err(e),
-                Ok(base) => match validate_params(raw_params(q.after), 0) {
+                Ok(base) => match validate_component("query", Query, q.after) {
                     Err(e) => Err(e),
-                    Ok(_) => match validate_pct("path", path) {
+                    Ok(_) => match validate_component("path", Path, path) {
                         Err(e) => Err(e),
-                        Ok(_) => Ok(Url {
-                            scheme: base.scheme, host: base.host, port: base.port,
-                            path: path, raw_query: q.after, fragment: frag.after,
-                        }),
+                        Ok(_) => match validate_component("fragment", Fragment, frag.after) {
+                            Err(e) => Err(e),
+                            Ok(_) => Ok(Url {
+                                scheme: base.scheme, host: base.host, port: base.port,
+                                path: path, raw_query: q.after, fragment: frag.after,
+                            }),
+                        },
                     },
                 },
             }

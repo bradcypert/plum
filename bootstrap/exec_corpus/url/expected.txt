@@ -15,9 +15,35 @@ http:///x -> Url.parse: missing host
 http://h:99999/x -> Url.parse: port out of range: 99999
 http://h:0x/x -> Url.parse: invalid port: 0x
 http://h:/x -> Url.parse: empty port
-http://h/p?a=%zz -> Url.parse: query value: Encoding.percent_decode: invalid escape at byte 0
-http://h/p?a=%2 -> Url.parse: query value: Encoding.percent_decode: truncated escape at byte 0
+http://h/p?a=%zz -> Url.parse: query: Encoding.percent_decode: invalid escape at byte 2
+http://h/p?a=%2 -> Url.parse: query: Encoding.percent_decode: truncated escape at byte 2
 http://h/%C3%A9 -> http | h | 80 | /%C3%A9 | - | -
+http://host/a b?x=hello world -> Url.parse: raw whitespace or control character
+http://ho st/ -> Url.parse: raw whitespace or control character
+http://[:: 1]/ -> Url.parse: raw whitespace or control character
+http://h/?a b=c -> Url.parse: raw whitespace or control character
+http://h/?a=b c -> Url.parse: raw whitespace or control character
+http://h/#a b -> Url.parse: raw whitespace or control character
+http://h/a\b -> Url.parse: invalid raw character in path
+http://h/<x> -> Url.parse: invalid raw character in path
+http://h/?q=[x] -> Url.parse: invalid raw character in query
+http://h/#a#b -> Url.parse: invalid raw character in fragment
+http://é/ -> Url.parse: invalid raw character in host
+http://h/é -> Url.parse: invalid raw character in path
+http://bad%GG/ -> Url.parse: host: Encoding.percent_decode: invalid escape at byte 3
+http://h/#bad%GG -> Url.parse: fragment: Encoding.percent_decode: invalid escape at byte 3
+http://h/#%C3 -> Url.parse: fragment is not valid UTF-8 once decoded
+http://[] -> Url.parse: missing host
+http://[]:80 -> Url.parse: missing host
+http://[example.com]/ -> Url.parse: invalid or unsupported IP literal
+http://[1::2::3]/ -> Url.parse: invalid or unsupported IP literal
+http://[::ffff:256.1.1.1]/ -> Url.parse: invalid or unsupported IP literal
+http://h/a%20b?x=hello%20world#space%20here => http://h/a%20b?x=hello%20world#space%20here (stable)
+http://%C3%A9/%C3%A9?q=%C3%A9#%C3%A9 => http://%C3%A9/%C3%A9?q=%C3%A9#%C3%A9 (stable)
+http://h/a:@!$&'()*+,;=-._~/?q=:@/?#f?/ => http://h/a:@!$&'()*+,;=-._~/?q=:@/?#f?/ (stable)
+http://[::]/ => http://[::]/ (stable)
+http://[2001:db8::1]:8080/ => http://[2001:db8::1]:8080/ (stable)
+http://[::ffff:192.0.2.128]/ => http://[::ffff:192.0.2.128]/ (stable)
 http://example.com => http://example.com/ (stable)
 http://example.com:80/x => http://example.com/x (stable)
 https://example.com:443/x => https://example.com/x (stable)

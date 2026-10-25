@@ -1483,3 +1483,112 @@ pub let test_url_rejects_raw_controls (): Unit = {
         }
     }
 }
+
+// RFC 3986 alphabets, tested through the public parser. Structural
+// delimiters are tested separately because they start another component.
+pub let test_url_component_alphabets (): Unit = {
+    let common = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-._~!$&'()*+,;=";
+    for c in 33..127 {
+        let ch = Result.unwrap_or(Bytes.from_array([c]).as_string(), "");
+        let shared = String.contains(common, ch);
+        if !String.contains(":/?#", ch) {
+            check_eq("reg-name alphabet", ch,
+                Result.is_ok(Url.parse("http://ho".concat(ch).concat("st/"))).to_string(), shared.to_string())
+        } else { () };
+        if ch != "?" && ch != "#" {
+            check_eq("path alphabet", ch,
+                Result.is_ok(Url.parse("http://h/a".concat(ch).concat("b"))).to_string(),
+                (shared || String.contains(":@/", ch)).to_string())
+        } else { () };
+        if ch != "#" {
+            check_eq("query alphabet", ch,
+                Result.is_ok(Url.parse("http://h/?a=".concat(ch).concat("b"))).to_string(),
+                (shared || String.contains(":@/?", ch)).to_string())
+        } else { () };
+        check_eq("fragment alphabet", ch,
+            Result.is_ok(Url.parse("http://h/#a".concat(ch).concat("b"))).to_string(),
+            (shared || String.contains(":@/?", ch)).to_string())
+    };
+    for text in ["http://h:+80/", "http://h:1_0/", "http://[::1]:+80/", "http://h:80:90/"] {
+        check_eq("port contains digits only", text, Result.is_ok(Url.parse(text)).to_string(), "false")
+    };
+    for component in ["é", "日本語", "%", "%0", "%GG", "%C3", "%80", "%ED%A0%80", "%F4%90%80%80", "%C3x", "%C3%20", "%E0%80%80", "%C0%AF", "%F5%80%80%80"] {
+        for text in [
+            "http://".concat(component).concat("/"),
+            "http://h/".concat(component),
+            "http://h/?".concat(component).concat("=ok"),
+            "http://h/?ok=".concat(component),
+            "http://h/#".concat(component),
+        ] {
+            check_eq("invalid component text", text,
+                Result.is_ok(Url.parse(text)).to_string(), "false")
+        }
+    };
+    for component in ["%20", "%2f", "%00", "%C3%A9", "%F0%9F%98%80", "%25", "%23", "%C2%80", "%E0%A0%80", "%ED%9F%BF", "%F4%8F%BF%BF"] {
+        let text = "http://".concat(component).concat("/").concat(component)
+            .concat("?").concat(component).concat("=").concat(component).concat("#").concat(component);
+        match Url.parse(text) {
+            Err(e) => panic_raw(e),
+            Ok(u) => check_eq("encoded components stay encoded", text, Url.stringify(u), text),
+        }
+    }
+}
+
+pub let test_url_ip_literals (): Unit = {
+    for host in ["::", "::1", "1::", "2001:db8::1", "1:2:3:4:5:6:7:8",
+                 "1:2:3:4:5:6::8", "::ffff:192.0.2.128", "1:2:3:4:5:6:192.0.2.1",
+                 "::192.0.2.1", "1:2:3:4:5::192.0.2.1"] {
+        for port in ["", ":80", ":8080"] {
+            let text = "http://[".concat(host).concat("]").concat(port).concat("/x");
+            match Url.parse(text) {
+                Err(e) => panic_raw(text.concat(": ").concat(e)),
+                Ok(u) => {
+                    check_eq("IP brackets stripped", text, u.host, host);
+                    check_eq("IP literal canonical round trip", text,
+                        match Url.parse(Url.stringify(u)) { Err(e) => e, Ok(v) => url_fields(v) }, url_fields(u))
+                },
+            }
+        }
+    };
+    for host in ["", "example.com", "not-an-ip", ":", ":::1", "1:::2", "1::2::3",
+                 "1:2:3:4:5:6:7", "1:2:3:4:5:6:7:8:9", "1:2:3:4:5:6:7:8::",
+                 "::1:2:3:4:5:6:7:8", "12345::", "gggg::", "1:2:3:4:5:6:7:",
+                 "::ffff:256.1.1.1", "::ffff:01.2.3.4", "::ffff:1.2.3", "::ffff:1.2.3.4.5",
+                 "1:2:3:4:5:6::192.0.2.1", "1:2:3:4:5:192.0.2.1", "fe80::1%25eth0", "v1.test"] {
+        for port in ["", ":80"] {
+            let text = "http://[".concat(host).concat("]").concat(port).concat("/");
+            check_eq("invalid IP literal", text, Result.is_ok(Url.parse(text)).to_string(), "false")
+        }
+    }
+}
+
+pub let test_url_long_components (): Unit = {
+    let path = "/".concat(String.repeat("a:@!$&'()*+,;=-._~/", 4096));
+    let query = String.repeat("a=b%20%C3%A9&", 8192).concat("last=%C3%A9");
+    let fragment = String.repeat("a/?", 8192);
+    let text = "http://h".concat(path).concat("?").concat(query).concat("#").concat(fragment);
+    match Url.parse(text) {
+        Err(e) => panic_raw(e),
+        Ok(u) => {
+            check_eq("long URL round trip", "large components", Url.stringify(u), text);
+            check_eq("long query lookup", "last",
+                match Url.query_get(u, "last") { Some(v) => v, None => "missing" }, "é")
+        },
+    }
+}
+
+// Encoded text validation must agree with the public byte-level UTF-8
+// contract, including overlong forms, surrogates and U+10FFFF boundaries.
+pub let test_url_encoded_utf8 (): Unit = {
+    for lead in 0..256 {
+        for tail in [0, 127, 128, 143, 144, 159, 160, 191, 192, 255] {
+            for values in [[lead], [lead, tail], [lead, tail, 128], [lead, tail, 191, 191]] {
+                let bytes = Bytes.from_array(values);
+                let encoded = Encoding.percent_encode(bytes);
+                let text = "http://h/".concat(encoded).concat("?q=").concat(encoded).concat("#").concat(encoded);
+                check_eq("URL encoded UTF-8 agrees with Bytes", bytes.to_hex(),
+                    Result.is_ok(Url.parse(text)).to_string(), bytes.is_utf8().to_string())
+            }
+        }
+    }
+}
