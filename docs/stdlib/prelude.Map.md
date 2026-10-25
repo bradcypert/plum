@@ -10,7 +10,9 @@ A hash map from `K` to `V`.
 
 PERSISTENT: `Map.insert` returns a new map and leaves the original
 alone, so a map can be shared without copying defensively. Keys
-need `Eq`.
+need `Eq` and `Hash`. Equal keys hash identically.
+NaN is not a supported key, including inside aggregates, because
+IEEE equality makes it unequal to itself. References use identity.
 
 ## `let Map.new (): Map[K, V]`
 

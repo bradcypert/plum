@@ -1,0 +1,2 @@
+error: call to constrained: T is (T1) -> T1, but constrained requires T to support structural hashing
+main.plum:2:1

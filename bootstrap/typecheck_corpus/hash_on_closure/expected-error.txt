@@ -1,0 +1,2 @@
+error: .hash() is not supported for (T0) -> T0
+main.plum:1:1

@@ -1251,20 +1251,15 @@ pub let assert_ne[T] (a: T) (b: T): Unit =
 
 // --- Collections: Map and Set ---
 
-/// Mirrored from `crates/plumc/src/lib.rs`'s STDLIB_COLLECTIONS_SRC,
-/// character for character. `Map` is a real hash map, so the mirror
-/// has to be exact in one way that is easy to miss: bucket index is
-/// `String.hash(..) % bucket_count`, which means `Map.keys` and
-/// `Map.values` enumerate in HASH order. A hash that disagreed with
-/// the real compiler's would print the same map in a different order.
-/// `String.hash` is FNV-1a in the prelude, including the sign-bit mask
-/// that a first attempt got wrong.
+/// One key and value stored in a map bucket.
 pub struct MapEntry[K, V] { key: K, value: V }
 /// A hash map from `K` to `V`.
 ///
 /// PERSISTENT: `Map.insert` returns a new map and leaves the original
 /// alone, so a map can be shared without copying defensively. Keys
-/// need `Eq`.
+/// need `Eq` and `Hash`. Equal keys hash identically.
+/// NaN is not a supported key, including inside aggregates, because
+/// IEEE equality makes it unequal to itself. References use identity.
 pub struct Map[K, V] { buckets: Array[Array[MapEntry[K, V]]], size: Int }
 
 let MAP_INITIAL_BUCKETS: Int = 8
@@ -1277,9 +1272,9 @@ let map_make_buckets[K, V] (n: Int): Array[Array[MapEntry[K, V]]] = {
     buckets
 }
 
-let value_hash[T] (x: T): Int = String.hash(x.to_string())
+let value_hash[T: Hash] (x: T): Int = x.hash()
 
-let map_bucket_index[K] (k: K) (bucket_count: Int): Int = value_hash(k) % bucket_count
+let map_bucket_index[K: Hash] (k: K) (bucket_count: Int): Int = value_hash(k) % bucket_count
 
 let map_bucket_find_index[K: Eq, V] (bucket: Array[MapEntry[K, V]]) (k: K) (i: Int): Int =
     if i >= bucket.len() { -1 }
@@ -1289,7 +1284,7 @@ let map_bucket_find_index[K: Eq, V] (bucket: Array[MapEntry[K, V]]) (k: K) (i: I
 /// An empty map.
 pub let Map.new[K, V] (): Map[K, V] = Map { buckets: map_make_buckets(MAP_INITIAL_BUCKETS), size: 0 }
 
-let map_rehash[K, V] (m: Map[K, V]) (new_bucket_count: Int): Map[K, V] = {
+let map_rehash[K: Hash, V] (m: Map[K, V]) (new_bucket_count: Int): Map[K, V] = {
     let mut new_buckets = map_make_buckets(new_bucket_count);
     for bucket in m.buckets {
         for entry in bucket {
@@ -1302,7 +1297,7 @@ let map_rehash[K, V] (m: Map[K, V]) (new_bucket_count: Int): Map[K, V] = {
 
 /// A NEW map with `k` set to `v`, replacing any previous value. The
 /// original is unchanged.
-pub let Map.insert[K: Eq, V] (m: Map[K, V]) (k: K) (v: V): Map[K, V] = {
+pub let Map.insert[K: Eq + Hash, V] (m: Map[K, V]) (k: K) (v: V): Map[K, V] = {
     let idx = map_bucket_index(k, m.buckets.len());
     let bucket = m.buckets[idx];
     let existing_i = map_bucket_find_index(bucket, k, 0);
@@ -1319,18 +1314,18 @@ pub let Map.insert[K: Eq, V] (m: Map[K, V]) (k: K) (v: V): Map[K, V] = {
 }
 
 /// The value for `k`, or `None`.
-pub let Map.get[K: Eq, V] (m: Map[K, V]) (k: K): Option[V] = {
+pub let Map.get[K: Eq + Hash, V] (m: Map[K, V]) (k: K): Option[V] = {
     let bucket = m.buckets[map_bucket_index(k, m.buckets.len())];
     let i = map_bucket_find_index(bucket, k, 0);
     if i >= 0 { Some(bucket[i].value) } else { None }
 }
 
 /// Whether `k` has a value.
-pub let Map.contains[K: Eq, V] (m: Map[K, V]) (k: K): Bool =
+pub let Map.contains[K: Eq + Hash, V] (m: Map[K, V]) (k: K): Bool =
     map_bucket_find_index(m.buckets[map_bucket_index(k, m.buckets.len())], k, 0) >= 0
 
 /// A new map without `k`. Removing an absent key is not an error.
-pub let Map.remove[K: Eq, V] (m: Map[K, V]) (k: K): Map[K, V] = {
+pub let Map.remove[K: Eq + Hash, V] (m: Map[K, V]) (k: K): Map[K, V] = {
     let idx = map_bucket_index(k, m.buckets.len());
     let bucket = m.buckets[idx];
     let i = map_bucket_find_index(bucket, k, 0);
@@ -1354,54 +1349,56 @@ pub let Map.values[K, V] (m: Map[K, V]): Array[V] = {
     acc
 }
 
-let map_from_arrays_acc[K: Eq, V] (keys: Array[K]) (values: Array[V]) (i: Int) (acc: Map[K, V]): Map[K, V] =
+let map_from_arrays_acc[K: Eq + Hash, V] (keys: Array[K]) (values: Array[V]) (i: Int) (acc: Map[K, V]): Map[K, V] =
     if i >= keys.len() { acc } else { map_from_arrays_acc(keys, values, i + 1, Map.insert(acc, keys[i], values[i])) }
 /// A map from parallel arrays, stopping at the shorter. A repeated
 /// key keeps the LAST value.
-pub let Map.from_arrays[K: Eq, V] (keys: Array[K]) (values: Array[V]): Map[K, V] = map_from_arrays_acc(keys, values, 0, Map.new(()))
+pub let Map.from_arrays[K: Eq + Hash, V] (keys: Array[K]) (values: Array[V]): Map[K, V] = map_from_arrays_acc(keys, values, 0, Map.new(()))
 
 /// A set of `T`, persistent like `Map` — `Set.insert` returns a new
-/// set. Members need `Eq`.
+/// set. Members need `Eq` and `Hash`. Equal keys hash identically.
+/// NaN is not a supported key, including inside aggregates, because
+/// IEEE equality makes it unequal to itself. References use identity.
 pub struct Set[T] { inner: Map[T, Unit] }
 
 /// An empty set.
 pub let Set.new[T] (): Set[T] = Set { inner: Map.new(()) }
 /// A new set with `x` added. Adding a member twice changes nothing.
-pub let Set.insert[T: Eq] (s: Set[T]) (x: T): Set[T] = Set { inner: Map.insert(s.inner, x, ()) }
+pub let Set.insert[T: Eq + Hash] (s: Set[T]) (x: T): Set[T] = Set { inner: Map.insert(s.inner, x, ()) }
 /// Whether `x` is a member.
-pub let Set.contains[T: Eq] (s: Set[T]) (x: T): Bool = Map.contains(s.inner, x)
+pub let Set.contains[T: Eq + Hash] (s: Set[T]) (x: T): Bool = Map.contains(s.inner, x)
 /// A new set without `x`.
-pub let Set.remove[T: Eq] (s: Set[T]) (x: T): Set[T] = Set { inner: Map.remove(s.inner, x) }
+pub let Set.remove[T: Eq + Hash] (s: Set[T]) (x: T): Set[T] = Set { inner: Map.remove(s.inner, x) }
 /// How many members.
 pub let Set.len[T] (s: Set[T]): Int = Map.len(s.inner)
 /// Every member, in no particular order.
 pub let Set.to_array[T] (s: Set[T]): Array[T] = Map.keys(s.inner)
 
 /// Everything in either set.
-pub let Set.union[T: Eq] (a: Set[T]) (b: Set[T]): Set[T] = {
+pub let Set.union[T: Eq + Hash] (a: Set[T]) (b: Set[T]): Set[T] = {
     let mut result = b;
     for x in Set.to_array(a) { result = Set.insert(result, x); };
     result
 }
 
 /// Only what is in both.
-pub let Set.intersection[T: Eq] (a: Set[T]) (b: Set[T]): Set[T] = {
+pub let Set.intersection[T: Eq + Hash] (a: Set[T]) (b: Set[T]): Set[T] = {
     let mut result = Set.new(());
     for x in Set.to_array(a) { if Set.contains(b, x) { result = Set.insert(result, x); } };
     result
 }
 
 /// What is in `a` and not in `b`.
-pub let Set.difference[T: Eq] (a: Set[T]) (b: Set[T]): Set[T] = {
+pub let Set.difference[T: Eq + Hash] (a: Set[T]) (b: Set[T]): Set[T] = {
     let mut result = Set.new(());
     for x in Set.to_array(a) { if !Set.contains(b, x) { result = Set.insert(result, x); } };
     result
 }
 
-let set_from_array_acc[T: Eq] (arr: Array[T]) (i: Int) (acc: Set[T]): Set[T] =
+let set_from_array_acc[T: Eq + Hash] (arr: Array[T]) (i: Int) (acc: Set[T]): Set[T] =
     if i >= arr.len() { acc } else { set_from_array_acc(arr, i + 1, Set.insert(acc, arr[i])) }
 /// A set of the array's elements, discarding duplicates.
-pub let Set.from_array[T: Eq] (arr: Array[T]): Set[T] = set_from_array_acc(arr, 0, Set.new(()))
+pub let Set.from_array[T: Eq + Hash] (arr: Array[T]): Set[T] = set_from_array_acc(arr, 0, Set.new(()))
 
 // --- JSON ---
 

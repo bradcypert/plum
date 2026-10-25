@@ -264,11 +264,25 @@ The same applies to `.to_string()`: rendering a type parameter requires
 the type argument to have a text form, so `show(ref(1))` is rejected at
 the call rather than accepted and then refused by the build.
 
-Bounds may also be written down. `[T: Ord]`, `[T: Eq]` and `[T: Show]`
+Bounds may also be written down. `[T: Ord]`, `[T: Eq]`, `[T: Show]` and `[T: Hash]`
 — and are then required of callers whether or not the body compares or
 renders anything. Writing one is optional: it pins the requirement into
 the signature so a body that stops needing it does not silently widen
 what callers may pass.
+
+`x.hash()` returns a non-negative structural hash and requires `Hash`.
+Equal values have equal hashes, including positive and negative floating-point
+zero, also when nested in arrays, tuples, structs or enum payloads. References
+hash their identity, so changing a reference's contents does not change its hash.
+Functions, C strings and opaque resources have no structural hash. Hashes are
+not cryptographic and may change between releases; do not persist them.
+
+`Map` keys and `Set` members require both `Eq` and `Hash`. Key equality remains
+ordinary `==`: NaN is unsuitable as a key or member, including inside aggregates,
+because IEEE equality makes it unequal to itself. Hashing does not allocate a
+formatted copy of a key. Persistent bucket updates still have their existing
+copying costs; this does not imply constant-time updates or precise last-use
+reclamation of every temporary.
 
 ## Associated functions: `Type.func(args)`
 

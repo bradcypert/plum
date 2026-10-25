@@ -48,14 +48,7 @@ Stops the program if the two are equal, printing them.
 
 ## `struct MapEntry`
 
-Mirrored from `crates/plumc/src/lib.rs`'s STDLIB_COLLECTIONS_SRC,
-character for character. `Map` is a real hash map, so the mirror
-has to be exact in one way that is easy to miss: bucket index is
-`String.hash(..) % bucket_count`, which means `Map.keys` and
-`Map.values` enumerate in HASH order. A hash that disagreed with
-the real compiler's would print the same map in a different order.
-`String.hash` is FNV-1a in the prelude, including the sign-bit mask
-that a first attempt got wrong.
+One key and value stored in a map bucket.
 
 ## `struct JsonEntry`
 
@@ -95,6 +88,12 @@ Renders a `JsonValue` as compact JSON — no spaces, no newlines.
 
 Object keys come out in the order they are held, which for a parsed
 document is the order they were read.
+
+## `let hash (self: T): Int`
+
+A non-negative structural hash. Equal values hash identically, including both signs of floating-point zero. Structs, tuples, enums and arrays hash their contents; references hash their identity. Requires `Hash`. Does not allocate temporary text. Not cryptographic or stable across releases; do not persist it. NaN still follows IEEE equality and is unsuitable as a Map key or Set member, including inside aggregates.
+
+Implemented by the compiler itself, so it has no Plum source to read.
 
 ## `let to_string (self: T): String`
 

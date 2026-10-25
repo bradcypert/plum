@@ -1,0 +1,3 @@
+let hashes[T] (xs: Array[T]): Int = xs.hash()
+let forward[T] (xs: Array[T]): Int = hashes(xs)
+let main (): Unit = println(forward([|x: Int| x]).to_string())

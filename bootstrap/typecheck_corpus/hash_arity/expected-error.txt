@@ -1,0 +1,2 @@
+error: .hash() takes no arguments
+main.plum:1:1

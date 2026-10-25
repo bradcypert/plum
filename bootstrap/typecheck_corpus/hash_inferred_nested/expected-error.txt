@@ -1,0 +1,2 @@
+error: call to forward: T is (T1) -> T1, but forward requires T to support structural hashing
+main.plum:3:1
