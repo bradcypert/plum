@@ -157,7 +157,7 @@ let main (): Unit = match Net.listen_on(18797) {
         };
         match Http.get("http://127.0.0.1:18797/a/b?q=1&r=2") {
             Err(e) => println("client: ".concat(e)),
-            Ok(r) => println("client got ".concat(r.status.to_string()).concat(" ").concat(r.body)),
+            Ok(r) => println("client got ".concat(r.status.to_string()).concat(" ").concat(Result.unwrap_or(r.text(), "invalid UTF-8"))),
         };
         println("--- request bytes ---");
         println(String.replace(server.join(), "\r\n", "\\r\\n\n"));
@@ -181,7 +181,7 @@ let attempt (n: Int): String =
     if n <= 0 { "client: gave up" }
     else {
         match Http.get("http://127.0.0.1:18734/world") {
-            Ok(r) => r.status.to_string().concat(" ").concat(r.body),
+            Ok(r) => r.status.to_string().concat(" ").concat(Result.unwrap_or(r.text(), "invalid UTF-8")),
             Err(e) => attempt(n - 1),
         }
     }
@@ -191,7 +191,7 @@ let main (): Unit = {
         Http.serve_once(18734, |req| Http.Response {
             status: 200,
             headers: [Http.Header { name: "Content-Type", value: "text/plain" }],
-            body: "hello ".concat(req.path),
+            body: "hello ".concat(req.path).as_bytes(),
         })
     };
     let got = attempt(200);
@@ -215,7 +215,7 @@ let unchecked_url (host: String) (path: String) (query: String): Url.Url =
     Url.Url { scheme: "http", host: host, port: 80, path: path, raw_query: query, fragment: "" }
 
 let expect_builder_error (url: Url.Url) (expected: String): Unit =
-    match http_build_request("GET", url, [], "body\r\n") {
+    match http_build_request("GET", url, [], "body\r\n".as_bytes()) {
         Err(e) => assert_eq(e, expected), Ok(_) => panic_raw("unchecked URL serialized"),
     }
 
@@ -298,7 +298,7 @@ let header_for (path: String): Http.Header =
 let handler (req: Http.Request): Http.Response = Http.Response {
     status: 200,
     headers: [Http.Header { name: "X-Empty", value: "" }, header_for(req.path)],
-    body: body(),
+    body: body().as_bytes(),
 }
 
 let main (): Unit = {
@@ -316,8 +316,8 @@ let main (): Unit = {
     };
     match Http.request(token(), "http://127.0.0.1:18798/%0D%0A%00%20?q=%0D%0A#ignored", [
         Http.Header { name: token(), value: "a \t é" }, Http.Header { name: "X-Empty", value: "" },
-    ], body()) {
-        Ok(resp) => assert_eq(resp.body, body()), Err(e) => panic_raw(e),
+    ], body().as_bytes()) {
+        Ok(resp) => assert_eq(resp.text(), Ok(body())), Err(e) => panic_raw(e),
     };
     assert_eq(peer.join(), request_wire());
     Net.close(srv);
@@ -365,10 +365,10 @@ mkdir -p "$work/httpheads"
     cat bootstrap/std/Http.plum
     cat <<'PLUM'
 
-let head_ok (wire: String): RequestHead = match http_parse_request_head(wire) {
-    Ok(h) => h, Err(e) => { panic_raw(e.concat(": ").concat(wire)); RequestHead { method: "", path: "", headers: [], leftover_body: "" } },
+let head_ok (wire: String): RequestHead = match http_parse_request_head(wire.as_bytes()) {
+    Ok(h) => h, Err(e) => { panic_raw(e.concat(": ").concat(wire)); RequestHead { method: "", path: "", headers: [], leftover_body: Bytes.empty() } },
 }
-let head_bad (wire: String): Unit = match http_parse_request_head(wire) {
+let head_bad (wire: String): Unit = match http_parse_request_head(wire.as_bytes()) {
     Err(_) => (), Ok(_) => panic_raw("accepted malformed head: ".concat(wire)),
 }
 let read_closed (fd: Int) (acc: String): String = {
@@ -387,7 +387,7 @@ let exchange (wire: String): String = {
 }
 let forbidden_handler (req: Request): Response = {
     panic_raw("invalid request reached handler");
-    Response { status: 200, headers: [], body: "" }
+    Response { status: 200, headers: [], body: Bytes.empty() }
 }
 let main (): Unit = {
     // Untrusted host length must not become call-stack depth.
@@ -422,7 +422,7 @@ let main (): Unit = {
     let unicode = head_ok("GET /é HTTP/1.1\r\nHost:a\r\nX-Text:\t é \t\r\nX-Empty:\t \r\n\r\nbodyé");
     assert_eq(unicode.headers[1].value, "é");
     assert_eq(unicode.headers[2].value, "");
-    assert_eq(unicode.leftover_body, "bodyé");
+    assert_eq(unicode.leftover_body.as_string(), Ok("bodyé"));
     for c in 0..128 {
         if (c < 32 && c != 9) || c == 127 {
             let ch = match Bytes.from_array([c]).as_string() { Ok(s) => s, Err(e) => { panic_raw(e); "" } };
@@ -434,19 +434,19 @@ let main (): Unit = {
     for field in ["content-length:3", "CoNtEnT-LeNgTh:\t3 \t"] {
         let h = head_ok("POST / HTTP/1.1\r\nHost:a\r\n".concat(field).concat("\r\n\r\nabc"));
         assert_eq(http_find_header(h.headers, "Content-Length"), Some("3"));
-        assert_eq(http_read_request_body(-1, h.headers, h.leftover_body), Ok("abc"));
+        assert_eq(http_read_request_body(-1, h.headers, h.leftover_body) == Ok("abc".as_bytes()), true);
         // With a partial body the recognized length must attempt another read.
-        assert_eq(http_read_request_body(-1, h.headers, "a"), Err("http client: connection closed before the full response body was received"));
-        let r = match http_parse_head("HTTP/1.1 200 OK\r\n".concat(field).concat("\r\n\r\nabc")) { Ok(v) => v, Err(e) => { panic_raw(e); Head { status: 0, headers: [], leftover_body: "" } } };
-        assert_eq(http_read_body(-1, 0, "GET", r.status, r.headers, r.leftover_body), Ok("abc"))
+        assert_eq(http_read_request_body(-1, h.headers, "a".as_bytes()) == Err("Net.read_bytes: recv failed"), true);
+        let r = match http_parse_head("HTTP/1.1 200 OK\r\n".concat(field).concat("\r\n\r\nabc").as_bytes()) { Ok(v) => v, Err(e) => { panic_raw(e); Head { status: 0, headers: [], leftover_body: Bytes.empty() } } };
+        assert_eq(http_read_body(-1, 0, "GET", r.status, r.headers, r.leftover_body) == Ok("abc".as_bytes()), true)
     };
     for field in ["transfer-encoding:chunked", "TrAnSfEr-EnCoDiNg:\tchunked \t"] {
         let h = head_ok("POST / HTTP/1.1\r\nHost:a\r\n".concat(field).concat("\r\n\r\n"));
-        assert_eq(http_read_request_body(-1, h.headers, ""), Err("http: Transfer-Encoding (chunked) is not supported yet"));
-        assert_eq(http_read_body(-1, 0, "GET", 200, h.headers, ""), Err("http: Transfer-Encoding (chunked) is not supported yet"))
+        assert_eq(http_read_request_body(-1, h.headers, Bytes.empty()) == Err("http: Transfer-Encoding (chunked) is not supported yet"), true);
+        assert_eq(http_read_body(-1, 0, "GET", 200, h.headers, Bytes.empty()) == Err("http: Transfer-Encoding (chunked) is not supported yet"), true)
     };
     for field in ["Bad", "Bad : value", "X: value\rbroken", " X:fold"] {
-        assert_eq(Result.is_err(http_parse_head("HTTP/1.1 200 OK\r\n".concat(field).concat("\r\n\r\n"))), true)
+        assert_eq(Result.is_err(http_parse_head("HTTP/1.1 200 OK\r\n".concat(field).concat("\r\n\r\n").as_bytes())), true)
     };
 
     // No body is sent and the client keeps its write side open. The only
@@ -457,7 +457,7 @@ let main (): Unit = {
         assert_eq(exchange("POST / HTTP/1.1\r\n".concat(fields).concat("Content-Length: 999999999999\r\nExpect: 100-continue\r\n\r\n")), "HTTP/1.1 400 Bad Request\r\nContent-Length: 0\r\nConnection: close\r\n\r\n");
         assert_eq(Result.is_err(server.join()), true)
     };
-    let server = spawn { serve_once(18801, |req| Response { status: 200, headers: [], body: req.path.concat(req.body) }) };
+    let server = spawn { serve_once(18801, |req| Response { status: 200, headers: [], body: req.path.as_bytes().concat(req.body) }) };
     assert_eq(exchange("POST /ok HTTP/1.1\r\nhost:localhost\r\ncOnTeNt-LeNgTh:\t3 \t\r\n\r\nabc"), "HTTP/1.1 200 OK\r\nContent-Length: 6\r\nConnection: close\r\n\r\n/okabc");
     assert_eq(server.join(), Ok(()));
     // A response with a lowercase, no-space length ends at that length.
@@ -465,14 +465,14 @@ let main (): Unit = {
     let listener = match Net.listen_on(18802) { Ok(fd) => fd, Err(e) => { panic_raw(e); 0 } };
     let peer = spawn {
         let fd = match Net.accept(listener) { Ok(conn) => conn, Err(e) => { panic_raw(e); 0 } };
-        assert_eq(Result.is_ok(http_recv_headers_acc(fd, 0, "")), true);
+        assert_eq(Result.is_ok(http_recv_headers_acc(fd, 0, Bytes.empty())), true);
         match Net.write(fd, "HTTP/1.1 200 OK\r\ncontent-length:3\r\n\r\na") { Ok(_) => (), Err(e) => panic_raw(e) };
         match Net.write(fd, "bc") { Ok(_) => (), Err(e) => panic_raw(e) };
         let closed = String.is_empty(Net.read(fd, 1));
         Net.close(fd);
         closed
     };
-    match get("http://127.0.0.1:18802/") { Ok(r) => assert_eq(r.body, "abc"), Err(e) => panic_raw(e) };
+    match get("http://127.0.0.1:18802/") { Ok(r) => assert_eq(r.text(), Ok("abc")), Err(e) => panic_raw(e) };
     assert_eq(peer.join(), true);
     Net.close(listener);
     println("HTTP heads: Host, request line, field syntax and framing case validated before body reads")
@@ -485,6 +485,24 @@ mkdir -p "$work/httpresponses"
     printf 'use Net;\nuse Url;\n'
     cat bootstrap/std/Http.plum bootstrap/http-response-test.plum
 } > "$work/httpresponses/main.plum"
+
+# Fault injection exercises the same byte transport adapters with exact
+# short counts, zero progress and failures, for TCP and TLS independently
+# of kernel buffering and packet scheduling. Production source is unchanged.
+mkdir -p "$work/httptransports/native"
+cp bootstrap/http-transport-test.c "$work/httptransports/native/peer.c"
+{
+    printf 'use Net;\nuse Url;\n'
+    sed -e 's/Net.read_bytes(/test_tcp_read(/g' \
+        -e 's/Net.write_bytes(/test_tcp_write(/g' \
+        -e 's/tls_recv_n/http_test_recv_n/g' \
+        -e 's/tls_recv_data/http_test_recv_data/g' \
+        -e 's/tls_send/http_test_send/g' bootstrap/std/Http.plum
+    cat bootstrap/http-transport-test.plum
+} > "$work/httptransports/main.plum"
+
+mkdir -p "$work/httpbinary"
+cp bootstrap/http-binary-test.plum "$work/httpbinary/main.plum"
 
 check() {
     local name="$1" expected="$2"
@@ -506,6 +524,8 @@ check() {
     fi
 }
 
+check httpbinary "HTTP binary bodies: all octets round-trip through public client and server"
+check httptransports "HTTP transports: binary framing, short writes, EOF and errors verified"
 check httpresponses "HTTP responses: method/status framing, interim heads and server wire output verified"
 check httpheads "HTTP heads: Host, request line, field syntax and framing case validated before body reads"
 check httpbuilders "HTTP builders reject unchecked URL fields"

@@ -1,0 +1,18 @@
+use Http;
+
+let main (): Unit = {
+    let text = "hé".as_bytes().concat(Bytes.from_array([0])).concat("llo".as_bytes());
+    let response = Http.Response { status: 200, headers: [], body: text };
+    let request = Http.Request { method: "POST", path: "/", headers: [], body: text };
+    assert_eq(response.text(), text.as_string());
+    assert_eq(request.text(), text.as_string());
+    assert_eq(Result.unwrap_or(response.text(), "").as_bytes().to_hex(), text.to_hex());
+    let invalid = Bytes.from_array([0, 255, 128, 65]);
+    let bad_response = Http.Response { status: 200, headers: [], body: invalid };
+    let bad_request = Http.Request { method: "POST", path: "/", headers: [], body: invalid };
+    assert_eq(bad_response.text(), Err("Bytes.as_string: not valid UTF-8"));
+    assert_eq(bad_request.text(), Err("Bytes.as_string: not valid UTF-8"));
+    let empty = Http.Response { status: 204, headers: [], body: Bytes.empty() };
+    assert_eq(empty.text(), Ok(""));
+    println("HTTP text helpers validate UTF-8 and preserve embedded NUL")
+}
