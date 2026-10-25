@@ -16,6 +16,11 @@ the parent's environment; non-empty entries are `NAME=value`
 overlays on top of it, not a replacement. `stdin: None` gives the
 child an EMPTY stdin, not the parent's.
 
+On Windows, program, arguments, and environment entries are converted
+from UTF-8 to UTF-16. Invalid UTF-8 or an oversized command line fails
+to start. Environment names are case-insensitive on Windows; the last
+overlay entry for a name wins.
+
 ## `struct ProcessResult`
 
 What a finished process left behind.
