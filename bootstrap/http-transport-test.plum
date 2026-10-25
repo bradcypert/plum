@@ -1,0 +1,124 @@
+// Appended to a test copy of Http.plum. Both native TCP and TLS boundaries
+// are redirected to the deterministic peer in http-transport-test.c.
+extern "C" {
+    fn http_test_reset(split: Int, limit: Int, fail_read: Int, stop_write: Int) -> Unit;
+    fn http_test_input(data: CStr, len: Int) -> Unit;
+    fn http_test_written() -> Int;
+    fn http_test_output() -> CStr;
+    fn http_test_largest_read() -> Int;
+    fn http_test_allocated_bytes() -> Int;
+    fn http_test_large_body() -> CStr;
+}
+let test_tcp_read (fd: Int) (max_len: Int): Result[Bytes, String] = unsafe {
+    let n = http_test_recv_n(fd, max_len);
+    if n < 0 { Err("Net.read_bytes: recv failed") }
+    else { Ok(Bytes.from_cstr(http_test_recv_data(), n)) }
+}
+let test_tcp_write (fd: Int) (data: Bytes): Result[Int, String] = unsafe {
+    let nbytes = data.len();
+    let n = http_test_send(fd, data.as_cstr(), nbytes);
+    if n < 0 { Err("Net.write_bytes: send failed") } else { Ok(n) }
+}
+let test_peer (data: Bytes) (split: Int) (limit: Int) (fail_read: Int) (stop_write: Int): Unit = unsafe {
+    http_test_reset(split, limit, fail_read, stop_write);
+    let len = data.len();
+    http_test_input(data.as_cstr(), len)
+}
+let test_output (): Bytes = unsafe {
+    let n = http_test_written();
+    Bytes.from_cstr(http_test_output(), n)
+}
+let test_bytes (actual: Bytes) (expected: Bytes): Unit = assert_eq(actual.to_hex(), expected.to_hex())
+let test_body (result: Result[Bytes, String]) (expected: Bytes): Unit = match result {
+    Err(e) => panic_raw(e), Ok(b) => test_bytes(b, expected),
+}
+let test_wire (result: Result[HttpWire, String]): HttpWire = match result {
+    Ok(w) => w, Err(e) => { panic_raw(e); HttpWire { head: Bytes.empty(), body: Bytes.empty() } },
+}
+let main (): Unit = {
+    let mut octets = [];
+    for n in 0..256 { octets = octets.push(n); };
+    let payload = Bytes.from_array(octets);
+    let response = "HTTP/1.1 200 OK\r\nX-Text: é\r\nContent-Length: 256\r\n\r\n".as_bytes().concat(payload);
+    let request_head = "POST /é HTTP/1.1\r\nHost: a\r\nX-Text: é\r\nContent-Length: 256\r\n\r\n".as_bytes();
+    let request = request_head.concat(payload);
+    let target = Url.Url { scheme: "http", host: "a", port: 80, path: "/", raw_query: "", fragment: "" };
+    for secure in [0, 1] {
+        // Every split includes splits inside UTF-8, CRLFCRLF, and the body.
+        // The fake peer returns a counted buffer with no NUL terminator.
+        for split in 0..response.len() {
+            test_peer(response, split, 7, 0, -1);
+            match http_recv_final_head(1, secure, Bytes.empty(), 0) {
+                Err(e) => panic_raw(e),
+                Ok(h) => {
+                    assert_eq(h.headers[0].value, "é");
+                    test_body(http_read_body(1, secure, "GET", h.status, h.headers, h.leftover_body), payload)
+                },
+            }
+        };
+        test_peer(payload, 1, 7, 0, -1);
+        test_body(http_recv_body_until_close_acc(1, secure, Bytes.empty()), payload);
+        test_peer(payload, 1, 7, 1, -1);
+        assert_eq(Result.is_err(http_recv_body_until_close_acc(1, secure, Bytes.empty())), true);
+        test_peer(Bytes.empty(), 0, 7, 1, -1);
+        assert_eq(Result.is_err(http_recv_headers_acc(1, secure, Bytes.empty())), true);
+        assert_eq(Result.is_err(http_recv_body_by_length_acc(1, secure, Bytes.empty(), 1)), true);
+        test_peer(Bytes.empty(), 0, 7, 0, -1);
+        assert_eq(Result.is_err(http_recv_body_by_length_acc(1, secure, Bytes.empty(), 1)), true);
+        // Even a huge advertised length must request only a bounded chunk.
+        test_peer(Bytes.empty(), 0, 7, 0, -1);
+        assert_eq(Result.is_err(http_recv_body_by_length_acc(1, secure, Bytes.empty(), 999999999999)), true);
+        assert_eq(unsafe { http_test_largest_read() }, 16384);
+        // Many short writes, including binary offsets, must send all bytes.
+        for limit in [1, 7, 16384] {
+            test_peer(response, 0, limit, 0, -1);
+            let wire = test_wire(http_build_request("POST", target, [], payload));
+            let expected = wire.head.concat(payload);
+            match http_do_request(1, secure, "POST", wire) {
+                Err(e) => panic_raw(e), Ok(r) => test_bytes(r.body, payload),
+            };
+            test_bytes(test_output(), expected)
+        };
+        for stop in [0, 1, 75] {
+            test_peer(Bytes.empty(), 0, 7, 0, stop);
+            assert_eq(Result.is_err(http_write_all(1, secure, response, 0)), true)
+        }
+    };
+    for split in 0..request.len() {
+        test_peer(request, split, 7, 0, -1);
+        assert_eq(http_handle_connection(1, |req| {
+            assert_eq(req.path, "/é");
+            test_bytes(req.body, payload);
+            Response { status: 200, headers: [], body: req.body }
+        }), Ok(()));
+        test_bytes(test_output(), "HTTP/1.1 200 OK\r\nContent-Length: 256\r\nConnection: close\r\n\r\n".as_bytes().concat(payload))
+    };
+    // Invalid UTF-8 belongs in bodies, never in String protocol fields.
+    assert_eq(Result.is_err(http_parse_head("HTTP/1.1 200 OK\r\nX: ".as_bytes().concat(Bytes.from_array([255])).concat("\r\n\r\n".as_bytes()))), true);
+    assert_eq(Result.is_err(http_parse_request_head("GET / HTTP/1.1\r\nHost:a\r\nX: ".as_bytes().concat(Bytes.from_array([255])).concat("\r\n\r\n".as_bytes()))), true);
+    // Bounded slices on sends also cover bodies larger than the chunk cap.
+    let large = String.repeat("a", 40000).as_bytes().concat(payload);
+    test_peer(Bytes.empty(), 0, 997, 0, -1);
+    assert_eq(http_write_all(1, 0, large, 0), Ok(()));
+    test_bytes(test_output(), large);
+    // Measure allocation volume while the 64 KiB payload is still live.
+    // Metadata and Result cells are small; a payload copy exceeds this cap.
+    let big = unsafe { Bytes.from_cstr(http_test_large_body(), 65536) };
+    let before_request = unsafe { http_test_allocated_bytes() };
+    let outgoing_request = test_wire(http_build_request("POST", target, [], big));
+    let request_cost = unsafe { http_test_allocated_bytes() } - before_request;
+    assert_eq(request_cost < 4096, true);
+    assert_eq(outgoing_request.body.len(), 65536);
+    let before_response = unsafe { http_test_allocated_bytes() };
+    let outgoing_response = test_wire(http_response_to_wire("GET", Response { status: 200, headers: [], body: big }));
+    let response_cost = unsafe { http_test_allocated_bytes() } - before_response;
+    assert_eq(response_cost < 4096, true);
+    assert_eq(outgoing_response.body.len(), 65536);
+    let resp = Response { status: 200, headers: [], body: big };
+    let before_text = unsafe { http_test_allocated_bytes() };
+    let text = resp.text();
+    let text_cost = unsafe { http_test_allocated_bytes() } - before_text;
+    assert_eq(text_cost < 4096, true);
+    assert_eq(Result.map(text, |s| s.len()), Ok(65536));
+    println("HTTP transports: binary framing, short writes, EOF and errors verified")
+}

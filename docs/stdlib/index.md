@@ -22,16 +22,24 @@ Every declaration, linked to the page that documents it.
 ## [Http](Http.md)
 
 - [`struct Header`](Http.md#Header)
-- [`struct Response`](Http.md#Response)
 - [`struct Head`](Http.md#Head)
-- [`struct Request`](Http.md#Request)
 - [`struct RequestLine`](Http.md#RequestLine)
 - [`struct RequestHead`](Http.md#RequestHead)
-- [`let request (method: String) (url: String) (headers: Array[Header]) (body: String): Result[Response, String]`](Http.md#request)
+- [`let request (method: String) (url: String) (headers: Array[Header]) (body: Bytes): Result[Response, String]`](Http.md#request)
 - [`let get (url: String): Result[Response, String]`](Http.md#get)
-- [`let post (url: String) (body: String): Result[Response, String]`](Http.md#post)
+- [`let post (url: String) (body: Bytes): Result[Response, String]`](Http.md#post)
 - [`let serve_once (port: Int) (handler: (Request) -> Response): Result[Unit, String]`](Http.md#serve_once)
 - [`let serve (port: Int) (handler: (Request) -> Response): Result[Unit, String]`](Http.md#serve)
+
+### [Http.Request](Http.Request.md)
+
+- [`struct Request`](Http.Request.md#Request)
+- [`let Request.text (req: Request): Result[String, String]`](Http.Request.md#Request.text)
+
+### [Http.Response](Http.Response.md)
+
+- [`struct Response`](Http.Response.md#Response)
+- [`let Response.text (resp: Response): Result[String, String]`](Http.Response.md#Response.text)
 
 ## [Json](Json.md)
 

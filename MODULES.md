@@ -238,7 +238,7 @@ add `use Time;` to this file
 
 `Http.get`, `Http.post`, and `Http.request` accept both `http://` and
 `https://` URLs and return `Result[Http.Response, String]`. A response
-contains its status code, headers, and body:
+contains its status code, headers, and body as `Bytes`:
 
 ```plum fragment
 use Http;
@@ -246,11 +246,31 @@ use Http;
 let fetch (): Unit = match Http.get("https://example.com/") {
     Ok(response) => {
         println(response.status.to_string());
-        println(response.body)
+        match response.text() {
+            Ok(text) => println(text),
+            Err(message) => println(message),
+        }
     },
     Err(message) => println(message),
 }
 ```
+
+Bodies preserve all octets, including NUL and invalid UTF-8. For text,
+pass `"hello".as_bytes()` to `Http.post` or `Http.request`, and use
+`response.text()` or `request.text()` to validate and decode UTF-8. These
+helpers return `Result[String, String]`; they do not infer a charset from
+Content-Type or decompress content. Encoding a String and decoding valid
+UTF-8 share the existing reference-counted payload, without copying it.
+Handlers likewise construct responses with `body: "hello".as_bytes()`;
+use `Bytes.empty()` for an empty body. This replaces the previous String
+body API; direct binary access remains through `.body`.
+
+HTTP buffers whole messages. Transport reads and temporary write slices
+are bounded to at most 16 KiB, and sending headers does not create a copy
+of the complete outgoing body. This is not a total memory limit: headers
+and received bodies remain uncapped, and repeated immutable concatenation
+can copy growing prefixes. Streaming, total framing limits (#111), and
+precise compiler lifetime/reuse improvements (#349) remain separate work.
 
 HTTPS verifies the server's certificate and hostname. Plum embeds Mbed
 TLS, so no separate TLS development library is needed to build a

@@ -1,0 +1,56 @@
+use Net;
+use Http;
+
+let socket (r: Result[Int, String]): Int = match r { Ok(fd) => fd, Err(e) => { panic_raw(e); -1 } }
+let send_all (fd: Int) (b: Bytes) (offset: Int): Unit =
+    if offset >= b.len() { () }
+    else {
+        let end = offset + Int.min(4096, b.len() - offset);
+        let n = socket(Net.write_bytes(fd, b.slice(offset, end)));
+        if n <= 0 { panic_raw("peer made no progress") } else { send_all(fd, b, offset + n) }
+    }
+let read_closed (fd: Int) (acc: Bytes): Bytes = match Net.read_bytes(fd, 4096) {
+    Err(e) => { panic_raw(e); acc },
+    Ok(b) => if b.is_empty() { acc } else { read_closed(fd, acc.concat(b)) },
+}
+let read_n (fd: Int) (acc: Bytes) (n: Int): Bytes =
+    if acc.len() >= n { acc }
+    else { match Net.read_bytes(fd, Int.min(4096, n - acc.len())) {
+        Err(e) => { panic_raw(e); acc },
+        Ok(b) => if b.is_empty() { panic_raw("peer closed early"); acc } else { read_n(fd, acc.concat(b), n) },
+    } }
+let connect_retry (port: Int) (n: Int): Int = match Net.connect_to("127.0.0.1", port) {
+    Ok(fd) => fd, Err(e) => if n <= 0 { panic_raw(e); -1 } else { connect_retry(port, n - 1) },
+}
+let main (): Unit = {
+    let mut octets = [];
+    for n in 0..256 { octets = octets.push(n); };
+    let payload = Bytes.from_array(octets).concat(String.repeat("x", 40000).as_bytes());
+    let request = "POST / HTTP/1.1\r\nHost: 127.0.0.1:18806\r\nConnection: close\r\nContent-Length: 40256\r\n\r\n".as_bytes().concat(payload);
+    let reply = "HTTP/1.1 200 OK\r\nContent-Length: 40256\r\n\r\n".as_bytes().concat(payload);
+    let listener = socket(Net.listen_on(18806));
+    let peer = spawn {
+        let fd = socket(Net.accept(listener));
+        assert_eq(read_n(fd, Bytes.empty(), request.len()).to_hex(), request.to_hex());
+        send_all(fd, reply, 0);
+        Net.close(fd)
+    };
+    match Http.post("http://127.0.0.1:18806/", payload) {
+        Err(e) => panic_raw(e), Ok(r) => {
+            assert_eq(r.body.to_hex(), payload.to_hex());
+            assert_eq(Result.is_err(r.text()), true)
+        },
+    };
+    peer.join();
+    Net.close(listener);
+    let server = spawn { Http.serve_once(18807, |req| {
+        assert_eq(req.body.to_hex(), payload.to_hex());
+        Http.Response { status: 200, headers: [], body: req.body }
+    }) };
+    let fd = connect_retry(18807, 2000);
+    send_all(fd, "POST / HTTP/1.1\r\nHost:localhost\r\nContent-Length: 40256\r\n\r\n".as_bytes().concat(payload), 0);
+    assert_eq(read_closed(fd, Bytes.empty()).to_hex(), "HTTP/1.1 200 OK\r\nContent-Length: 40256\r\nConnection: close\r\n\r\n".as_bytes().concat(payload).to_hex());
+    Net.close(fd);
+    assert_eq(server.join(), Ok(()));
+    println("HTTP binary bodies: all octets round-trip through public client and server")
+}
