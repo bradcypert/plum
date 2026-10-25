@@ -72,6 +72,8 @@
 #include <stdlib.h>
 #include <string.h>
 #include <stdint.h>
+#include <limits.h>
+#include <wchar.h>
 
 #if defined(_WIN32)
 #include <windows.h>
@@ -470,88 +472,161 @@ static HANDLE plum_win_temp_handle(const char *prefix, char *path_out) {
                        &sa, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
 }
 
-static int plum_win_env_key_overridden(char **extra, const char *entry) {
-    const char *eq = strchr(entry, '=');
-    size_t klen = eq ? (size_t)(eq - entry) : strlen(entry);
-    int i;
-    for (i = 0; extra[i] != NULL; i++) {
-        if (strncmp(extra[i], entry, klen) == 0 && extra[i][klen] == '=') return 1;
-    }
-    return 0;
-}
-
-// NULL means inherit. A non-NULL extra list is overlaid on the parent
-// environment and returned as a double-NUL block the caller frees.
-static char *plum_win_env_block(char **extra) {
-    char *parent;
-    const char *p;
-    size_t cap = 1;
-    size_t n = 0;
-    char *block;
-    int i;
-    if (extra == NULL) return NULL;
-    parent = GetEnvironmentStringsA();
-    if (parent == NULL) return NULL;
-    for (i = 0; extra[i] != NULL; i++) cap += strlen(extra[i]) + 1;
-    for (p = parent; *p != '\0'; ) {
-        size_t elen = strlen(p);
-        if (!plum_win_env_key_overridden(extra, p)) cap += elen + 1;
-        p += elen + 1;
-    }
-    block = (char *)malloc(cap + 1);
-    if (block == NULL) {
-        FreeEnvironmentStringsA(parent);
+// Strict conversion at the OS boundary: never let the active ANSI code
+// page interpret Plum bytes, or replace malformed UTF-8 with other text.
+static wchar_t *plum_win_utf16(const char *text, int max_units) {
+    int n = MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, text, -1, NULL, 0);
+    if (n <= 0 || n > max_units || (size_t)n > SIZE_MAX / sizeof(wchar_t)) return NULL;
+    wchar_t *wide = malloc((size_t)n * sizeof(wchar_t));
+    if (wide == NULL) return NULL;
+    if (MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, text, -1, wide, n) != n) {
+        free(wide);
         return NULL;
     }
-    for (i = 0; extra[i] != NULL; i++) {
-        size_t elen = strlen(extra[i]);
-        memcpy(block + n, extra[i], elen + 1);
-        n += elen + 1;
+    return wide;
+}
+
+// Quoting only examines ASCII syntax, so it is safe to quote UTF-8
+// before converting. Both spawn paths use this one command-line builder.
+static wchar_t *plum_win_command_line(char **argv) {
+    // A valid command line has at most 32766 UTF-16 units. Each unit
+    // takes at most three UTF-8 bytes, so even rejected input needs no
+    // more than this bounded quoting buffer.
+    const size_t max_bytes = 3 * 32766 + 1;
+    size_t cap = 1, len = 0;
+    for (size_t i = 0; argv[i] != NULL; i++) {
+        size_t n = strlen(argv[i]);
+        if (n >= max_bytes) return NULL;
+        size_t growth = n * 2 + 3;
+        cap = growth > max_bytes - cap ? max_bytes : cap + growth;
     }
-    for (p = parent; *p != '\0'; ) {
-        size_t elen = strlen(p);
-        if (!plum_win_env_key_overridden(extra, p)) {
-            memcpy(block + n, p, elen + 1);
-            n += elen + 1;
+    char *quoted = malloc(cap);
+    if (quoted == NULL) return NULL;
+    for (size_t i = 0; argv[i] != NULL; i++) {
+        if (plum_win_append_arg(quoted, cap, &len, argv[i]) != 0) {
+            free(quoted);
+            return NULL;
         }
-        p += elen + 1;
     }
-    block[n] = '\0';
-    FreeEnvironmentStringsA(parent);
-    return block;
+    quoted[len] = '\0';
+    // Count UTF-16 units before allocating the wide command line.
+    wchar_t *wide = plum_win_utf16(quoted, 32767);
+    free(quoted);
+    return wide;
+}
+
+typedef struct {
+    wchar_t *text;
+    int key_len;
+    size_t order; // later entries win, including duplicate overlay keys
+    int owned;   // parent entries borrow the GetEnvironmentStringsW snapshot
+} PlumWinEnvEntry;
+
+static int plum_win_env_key_compare(const PlumWinEnvEntry *a, const PlumWinEnvEntry *b) {
+    return CompareStringOrdinal(a->text, a->key_len, b->text, b->key_len, TRUE) - CSTR_EQUAL;
+}
+
+static int plum_win_env_compare(const void *left, const void *right) {
+    const PlumWinEnvEntry *a = left, *b = right;
+    int cmp = plum_win_env_key_compare(a, b);
+    if (cmp != 0) return cmp;
+    return (a->order > b->order) - (a->order < b->order);
+}
+
+// Success with *out == NULL means inherit. A requested overlay either
+// produces a sorted, unique UTF-16 block or fails; OOM must not silently
+// change which environment the child receives. All scratch storage is
+// released here; only the final block survives until CreateProcessW.
+static int plum_win_env_block(char **extra, wchar_t **out) {
+    wchar_t *parent = NULL, *block = NULL;
+    PlumWinEnvEntry *entries = NULL;
+    size_t count = 0, used = 0, units = 1;
+    int result = -1;
+    *out = NULL;
+    if (extra == NULL || extra[0] == NULL) return 0;
+    parent = GetEnvironmentStringsW();
+    if (parent == NULL) goto done;
+    for (const wchar_t *p = parent; *p; p += wcslen(p) + 1) count++;
+    for (size_t i = 0; extra[i] != NULL; i++) {
+        if (count == SIZE_MAX) goto done;
+        count++;
+    }
+    if (count > SIZE_MAX / sizeof(*entries)) goto done;
+    entries = calloc(count, sizeof(*entries));
+    if (entries == NULL) goto done;
+    for (wchar_t *p = parent; *p; p += wcslen(p) + 1) {
+        entries[used].text = p;
+        entries[used].order = used;
+        used++;
+    }
+    for (size_t i = 0; extra[i] != NULL; i++) {
+        wchar_t *wide = plum_win_utf16(extra[i], INT_MAX);
+        if (wide == NULL) goto done;
+        entries[used].text = wide;
+        entries[used].order = used;
+        entries[used].owned = 1;
+        used++;
+        // Overlay names must be nonempty. Leading '=' is reserved for
+        // Windows' inherited per-drive current-directory entries.
+        if (*wide == L'=' || wcschr(wide, L'=') == NULL) goto done;
+    }
+    for (size_t i = 0; i < used; i++) {
+        wchar_t *p = entries[i].text;
+        // Preserve inherited entries such as '=C:=C:\\work'.
+        wchar_t *eq = wcschr(p + (*p == L'='), L'=');
+        if (eq == NULL || eq == p || eq - p > INT_MAX) goto done;
+        entries[i].key_len = (int)(eq - p);
+    }
+    qsort(entries, used, sizeof(*entries), plum_win_env_compare);
+    for (size_t i = 0; i < used; i++) {
+        if (i + 1 < used && plum_win_env_key_compare(&entries[i], &entries[i + 1]) == 0) continue;
+        size_t n = wcslen(entries[i].text) + 1;
+        if (n > SIZE_MAX - units) goto done;
+        units += n;
+    }
+    if (units > SIZE_MAX / sizeof(*block)) goto done;
+    block = malloc(units * sizeof(*block));
+    if (block == NULL) goto done;
+    size_t pos = 0;
+    for (size_t i = 0; i < used; i++) {
+        if (i + 1 < used && plum_win_env_key_compare(&entries[i], &entries[i + 1]) == 0) continue;
+        size_t n = wcslen(entries[i].text) + 1;
+        memcpy(block + pos, entries[i].text, n * sizeof(*block));
+        pos += n;
+    }
+    block[pos] = L'\0';
+    *out = block;
+    result = 0;
+done:
+    for (size_t i = 0; i < used; i++) {
+        if (entries[i].owned) free(entries[i].text);
+    }
+    free(entries);
+    if (parent != NULL) FreeEnvironmentStringsW(parent);
+    return result;
 }
 
 static long long plum_spawn_capture(const char *program, char **argv, char *out_path, char *err_path,
                                     char **envp, const char *stdin_data, long long stdin_len,
                                     int stdin_mode, int fail_on_exec, PlumChildState *async) {
-    char *cmdline;
-    size_t cap = 0;
-    size_t len = 0;
-    int i;
+    wchar_t *cmdline = plum_win_command_line(argv);
+    wchar_t *env_block = NULL;
     HANDLE ho, he;
-    STARTUPINFOA si;
+    STARTUPINFOW si;
     PROCESS_INFORMATION pi;
     DWORD code = 0;
-
-    // Worst case per argument: every character doubled, plus two quotes
-    // and a separating space.
-    for (i = 0; argv[i] != NULL; i++) cap += strlen(argv[i]) * 2 + 3;
-    cap += 1;
-    cmdline = (char *)malloc(cap);
     if (cmdline == NULL) return PLUM_SPAWN_FAILED;
-    for (i = 0; argv[i] != NULL; i++) {
-        if (plum_win_append_arg(cmdline, cap, &len, argv[i]) != 0) {
-            free(cmdline);
-            return PLUM_SPAWN_FAILED;
-        }
+    if (plum_win_env_block(envp, &env_block) != 0) {
+        free(cmdline);
+        return PLUM_SPAWN_FAILED;
     }
-    cmdline[len] = '\0';
 
     ho = plum_win_temp_handle("plo", out_path);
     he = (ho != INVALID_HANDLE_VALUE) ? plum_win_temp_handle("ple", err_path) : INVALID_HANDLE_VALUE;
     if (ho == INVALID_HANDLE_VALUE || he == INVALID_HANDLE_VALUE) {
         if (ho != INVALID_HANDLE_VALUE) { CloseHandle(ho); DeleteFileA(out_path); }
         free(cmdline);
+        free(env_block);
         return PLUM_SPAWN_FAILED;
     }
 
@@ -577,6 +652,7 @@ static long long plum_spawn_capture(const char *program, char **argv, char *out_
             CloseHandle(ho); CloseHandle(he);
             DeleteFileA(out_path); DeleteFileA(err_path);
             free(cmdline);
+            free(env_block);
             return PLUM_SPAWN_FAILED;
         }
         if (stdin_len > 0 && stdin_data != NULL) {
@@ -584,6 +660,7 @@ static long long plum_spawn_capture(const char *program, char **argv, char *out_
                 CloseHandle(hw); CloseHandle(ho); CloseHandle(he);
                 DeleteFileA(in_path); DeleteFileA(out_path); DeleteFileA(err_path);
                 free(cmdline);
+                free(env_block);
                 return PLUM_SPAWN_FAILED;
             }
         }
@@ -601,10 +678,9 @@ static long long plum_spawn_capture(const char *program, char **argv, char *out_
         DeleteFileA(out_path); DeleteFileA(err_path);
         if (in_path[0] != '\0') DeleteFileA(in_path);
         free(cmdline);
+        free(env_block);
         return PLUM_SPAWN_FAILED;
     }
-
-    char *env_block = plum_win_env_block(envp);
 
     ZeroMemory(&si, sizeof(si));
     si.cb = sizeof(si);
@@ -620,7 +696,7 @@ static long long plum_spawn_capture(const char *program, char **argv, char *out_
     // that risky -- an unquoted program path containing spaces -- does
     // not apply, because the program was quoted above like any other
     // argument.
-    if (!CreateProcessA(NULL, cmdline, NULL, NULL, TRUE, 0, env_block, NULL, &si, &pi)) {
+    if (!CreateProcessW(NULL, cmdline, NULL, NULL, TRUE, CREATE_UNICODE_ENVIRONMENT, env_block, NULL, &si, &pi)) {
         CloseHandle(ho);
         CloseHandle(he);
         if (hi_owned) CloseHandle(hi);
@@ -632,6 +708,8 @@ static long long plum_spawn_capture(const char *program, char **argv, char *out_
         return PLUM_SPAWN_FAILED;
     }
 
+    free(cmdline);
+    free(env_block);
     CloseHandle(pi.hThread);
 
     // Asynchronous: keep the process handle to wait on, and keep the
@@ -646,8 +724,6 @@ static long long plum_spawn_capture(const char *program, char **argv, char *out_
         async->h_err = (void *)he;
         if (hi_owned) CloseHandle(hi);
         if (in_path[0] != '\0') async->in_path = plum_strdup_or_null(in_path);
-        free(cmdline);
-        free(env_block);
         (void)program;
         (void)fail_on_exec;
         return 0;
@@ -663,8 +739,6 @@ static long long plum_spawn_capture(const char *program, char **argv, char *out_
     CloseHandle(he);
     if (hi_owned) CloseHandle(hi);
     if (in_path[0] != '\0') DeleteFileA(in_path);
-    free(cmdline);
-    free(env_block);
     (void)program;
     (void)fail_on_exec;
     return (long long)(int)code;
@@ -744,6 +818,11 @@ long long process_run_ex(const char *program, const char *args_joined, long long
     }
     char *env_copy = NULL;
     char **envp = plum_split_joined(env_joined, envc, &env_copy);
+    if (envc > 0 && envp == NULL) {
+        free(args_copy);
+        free(argv);
+        return -1;
+    }
 
     char out_path[PLUM_PROC_PATH_MAX];
     char err_path[PLUM_PROC_PATH_MAX];
@@ -880,6 +959,11 @@ long long process_spawn(const char *program, const char *args_joined, long long 
     if (argv == NULL) return -1;
     char *env_copy = NULL;
     char **envp = plum_split_joined(env_joined, envc, &env_copy);
+    if (envc > 0 && envp == NULL) {
+        free(args_copy);
+        free(argv);
+        return -1;
+    }
 
     PlumChildState *child = calloc(1, sizeof(PlumChildState));
     if (child == NULL) {
@@ -1114,25 +1198,11 @@ static long long plum_spawn_inherit(const char *program, char **argv) {
 #else
 
 static long long plum_spawn_inherit(const char *program, char **argv) {
-    char *cmdline;
-    size_t cap = 0;
-    size_t len = 0;
-    int i;
-    STARTUPINFOA si;
+    wchar_t *cmdline = plum_win_command_line(argv);
+    STARTUPINFOW si;
     PROCESS_INFORMATION pi;
     DWORD code = 0;
-
-    for (i = 0; argv[i] != NULL; i++) cap += strlen(argv[i]) * 2 + 3;
-    cap += 1;
-    cmdline = (char *)malloc(cap);
     if (cmdline == NULL) return -1;
-    for (i = 0; argv[i] != NULL; i++) {
-        if (plum_win_append_arg(cmdline, cap, &len, argv[i]) != 0) {
-            free(cmdline);
-            return -1;
-        }
-    }
-    cmdline[len] = '\0';
 
     // No `STARTF_USESTDHANDLES`: leaving the field unset is what makes
     // the child inherit this process's console, which is the entire
@@ -1141,16 +1211,16 @@ static long long plum_spawn_inherit(const char *program, char **argv) {
     si.cb = sizeof(si);
     ZeroMemory(&pi, sizeof(pi));
 
-    if (!CreateProcessA(NULL, cmdline, NULL, NULL, TRUE, 0, NULL, NULL, &si, &pi)) {
+    if (!CreateProcessW(NULL, cmdline, NULL, NULL, TRUE, 0, NULL, NULL, &si, &pi)) {
         free(cmdline);
         return -1;
     }
+    free(cmdline);
     CloseHandle(pi.hThread);
 
     WaitForSingleObject(pi.hProcess, INFINITE);
     if (!GetExitCodeProcess(pi.hProcess, &code)) code = (DWORD)-1;
     CloseHandle(pi.hProcess);
-    free(cmdline);
     (void)program;
     return (long long)(int)code;
 }

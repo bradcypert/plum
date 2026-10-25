@@ -107,6 +107,23 @@ for dir in bootstrap/exec_corpus/*/; do
     fi
 done
 
+# Native Windows process-boundary checks: real UTF-16 child argv/env,
+# both spawn paths, and deterministic allocation-failure cleanup.
+case "$(uname -s)" in
+    MINGW*|MSYS*|CYGWIN*)
+        if clang -O1 -g -Wall -Wextra bootstrap/windows-process-test.c -lshell32 \
+                -o "$work/windows-process-test.exe" > "$work/windows-process-test.log" 2>&1 &&
+                "$work/windows-process-test.exe"; then
+            printf 'OK    %-24s\n' "windows_process_unicode"
+            ok=$((ok + 1))
+        else
+            printf 'FAIL  %-24s\n' "windows_process_unicode"
+            cat "$work/windows-process-test.log"
+            fail=$((fail + 1))
+        fi
+        ;;
+esac
+
 # --- Timed stdin reads, over a real PIPE (issue #32) ---
 #
 # The corpus above cannot reach this. A fixture feeds its child's stdin
