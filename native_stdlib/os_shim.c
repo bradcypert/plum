@@ -607,6 +607,7 @@ static int plum_remove_tree(const char *path) {
     while (n > 0 && (wide[n - 1] == L'/' || wide[n - 1] == L'\\')) wide[--n] = 0;
     WCHAR *name = wide + n;
     while (name > wide && name[-1] != L'/' && name[-1] != L'\\') --name;
+    if (name == wide && n > 2 && wide[1] == L':') name = wide + 2;
     if (n == 0 || wide[n - 1] == L':' || wcscmp(name, L".") == 0 || wcscmp(name, L"..") == 0) {
         free(wide);
         return -1;
@@ -614,7 +615,6 @@ static int plum_remove_tree(const char *path) {
     // Split before acquiring the root too: a single native child name avoids
     // Win32's trailing-dot/space normalization and follows no final reparse
     // point. Only the caller-supplied ancestors resolve normally.
-    if (name == wide && n > 2 && wide[1] == L':') name = wide + 2;
     DWORD bytes = (DWORD)((wide + n - name) * sizeof(WCHAR));
     WCHAR first = *name;
     *name = 0;

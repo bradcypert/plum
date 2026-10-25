@@ -51,6 +51,19 @@ echo
 ok=0
 fail=0
 
+# Native tree-removal checks run on every platform, including Windows
+# junctions and POSIX symlink swaps; no external helper programs required.
+if clang -O1 -g -Wall -Wextra bootstrap/remove-tree-test.c \
+        -o "$work/remove-tree-test.bin" > "$work/remove-tree-test.log" 2>&1 &&
+        "$work/remove-tree-test.bin"; then
+    printf 'OK    %-24s\n' "native_tree_removal"
+    ok=$((ok + 1))
+else
+    printf 'FAIL  %-24s\n' "native_tree_removal"
+    cat "$work/remove-tree-test.log"
+    fail=$((fail + 1))
+fi
+
 for dir in bootstrap/exec_corpus/*/; do
     name="$(basename "$dir")"
     [ -f "$dir/main.plum" ] || continue
@@ -106,19 +119,6 @@ for dir in bootstrap/exec_corpus/*/; do
         fail=$((fail + 1))
     fi
 done
-
-# Native tree-removal checks run on every platform, including Windows
-# junctions and POSIX symlink swaps; no external helper programs required.
-if clang -O1 -g -Wall -Wextra bootstrap/remove-tree-test.c \
-        -o "$work/remove-tree-test.bin" > "$work/remove-tree-test.log" 2>&1 &&
-        "$work/remove-tree-test.bin"; then
-    printf 'OK    %-24s\n' "native_tree_removal"
-    ok=$((ok + 1))
-else
-    printf 'FAIL  %-24s\n' "native_tree_removal"
-    cat "$work/remove-tree-test.log"
-    fail=$((fail + 1))
-fi
 
 # Native Windows process-boundary checks: real UTF-16 child argv/env,
 # both spawn paths, and deterministic allocation-failure cleanup.

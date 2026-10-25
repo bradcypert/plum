@@ -177,6 +177,15 @@ static void basics(void) {
     assert(os_remove_tree("") == -1); clean();
     assert(os_remove_tree(".") == -1); clean();
     assert(os_remove_tree("..") == -1); clean();
+#if defined(_WIN32)
+    WCHAR cwd[4096]; assert(GetCurrentDirectoryW(4096, cwd));
+    if (cwd[1] == L':') {
+        char dot[] = {(char)cwd[0], ':', '.', 0};
+        char dotdot[] = {(char)cwd[0], ':', '.', '.', 0};
+        assert(os_remove_tree(dot) == -1); clean();
+        assert(os_remove_tree(dotdot) == -1); clean();
+    }
+#endif
     directory("tree"); put("tree/keep");
     assert(os_remove_tree("tree/.") == -1); assert(exists("tree/keep")); clean();
     fail_alloc = 1; assert(os_remove_tree("tree") == -1); clean();
