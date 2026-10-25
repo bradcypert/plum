@@ -1,0 +1,15 @@
+#!/usr/bin/env bash
+# Native race/failure tests under sanitizers, plus the public Plum API.
+set -euo pipefail
+root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+cd "$root"
+plum="${PLUM:-./sh}"
+work="$(mktemp -d)"
+trap 'rm -rf "$work"' EXIT
+clang -O1 -g -Wall -Wextra -fsanitize=address,undefined -fno-sanitize-recover=all \
+    bootstrap/remove-tree-test.c -o "$work/native-test"
+ASAN_OPTIONS=detect_leaks=1 timeout 30 "$work/native-test"
+"$plum" build bootstrap/exec_corpus/os_filesystem -o "$work/public-test"
+timeout 30 "$work/public-test" > "$work/out"
+diff -u bootstrap/exec_corpus/os_filesystem/expected.txt "$work/out"
+echo 'remove-tree smoke: ok'
