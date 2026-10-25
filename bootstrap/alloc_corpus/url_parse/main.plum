@@ -1,0 +1,19 @@
+// Parse-time validation should not split query fields or construct Params.
+// Keep this query-heavy workload sensitive to reintroducing those temporaries.
+use Url;
+
+let run (text: String) (left: Int) (total: Int): Int =
+    if left == 0 { total } else {
+        match Url.parse(text) {
+            Err(e) => { panic_raw(e); 0 },
+            Ok(u) => run(text, left - 1, total + u.raw_query.len()),
+        }
+    }
+
+let main (): Unit = {
+    let text = "http://example.com/a/b?".concat(String.repeat("key=value&", 1000)).concat("last=end#top");
+    println(run(text, 100, 0));
+    // Escaped data must not trigger a component-sized decoding buffer.
+    let encoded = "http://example.com/a/b?".concat(String.repeat("key=value%20x&", 1000)).concat("last=end#top");
+    println(run(encoded, 100, 0));
+}

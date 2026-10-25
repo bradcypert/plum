@@ -38,7 +38,12 @@ Absolute URLs only. A scheme-relative (`//host/x`) or relative
 (`/x`) reference has no meaning without a base to resolve against,
 and resolution is a different function than parsing.
 
-Raw ASCII controls, spaces, and DEL are rejected in every component.
+Components follow RFC 3986: raw spaces, controls, non-ASCII text,
+and characters outside each component's grammar must be percent-encoded.
+Bracketed hosts must be IPv6 literals, including optional dotted IPv4
+tails; IPvFuture and scoped zone identifiers are not supported.
+Percent escapes must be complete hex triplets; decoded components
+must be valid UTF-8.
 Percent-encoded data remains encoded, including escaped controls and
 spaces; query lookups decode it as application data.
 

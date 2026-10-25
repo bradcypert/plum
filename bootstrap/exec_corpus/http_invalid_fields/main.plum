@@ -49,6 +49,14 @@ let main (): Unit = {
                 }
             } else { () }
         };
+        // Component errors must be reported before DNS or socket setup too.
+        for suffix in ["://bad%GG/", "://[]/", "://[example.com]/",
+                       "://127.0.0.1:1/<x>", "://127.0.0.1:1/?a=[", "://127.0.0.1:1/#%GG"] {
+            match Http.get(scheme.concat(suffix)) {
+                Ok(_) => panic_raw("malformed URI unexpectedly sent"),
+                Err(e) => assert_eq(String.starts_with(e, "http client: Url.parse: "), true),
+            }
+        };
         rejects(scheme, "GET", [Http.Header { name: "X-Test", value: "ok\r\nInjected: yes" }], "http: invalid header value");
         rejects(scheme, "GET", [Http.Header { name: "X-Test", value: "ok\r\n\tobsolete folding" }], "http: invalid header value")
     };
