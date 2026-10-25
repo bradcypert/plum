@@ -438,12 +438,12 @@ let main (): Unit = {
         // With a partial body the recognized length must attempt another read.
         assert_eq(http_read_request_body(-1, h.headers, "a"), Err("http client: connection closed before the full response body was received"));
         let r = match http_parse_head("HTTP/1.1 200 OK\r\n".concat(field).concat("\r\n\r\nabc")) { Ok(v) => v, Err(e) => { panic_raw(e); Head { status: 0, headers: [], leftover_body: "" } } };
-        assert_eq(http_read_body(-1, 0, r.headers, r.leftover_body), Ok("abc"))
+        assert_eq(http_read_body(-1, 0, "GET", r.status, r.headers, r.leftover_body), Ok("abc"))
     };
     for field in ["transfer-encoding:chunked", "TrAnSfEr-EnCoDiNg:\tchunked \t"] {
         let h = head_ok("POST / HTTP/1.1\r\nHost:a\r\n".concat(field).concat("\r\n\r\n"));
         assert_eq(http_read_request_body(-1, h.headers, ""), Err("http: Transfer-Encoding (chunked) is not supported yet"));
-        assert_eq(http_read_body(-1, 0, h.headers, ""), Err("http: Transfer-Encoding (chunked) is not supported yet"))
+        assert_eq(http_read_body(-1, 0, "GET", 200, h.headers, ""), Err("http: Transfer-Encoding (chunked) is not supported yet"))
     };
     for field in ["Bad", "Bad : value", "X: value\rbroken", " X:fold"] {
         assert_eq(Result.is_err(http_parse_head("HTTP/1.1 200 OK\r\n".concat(field).concat("\r\n\r\n"))), true)
@@ -480,6 +480,12 @@ let main (): Unit = {
 PLUM
 } > "$work/httpheads/main.plum"
 
+mkdir -p "$work/httpresponses"
+{
+    printf 'use Net;\nuse Url;\n'
+    cat bootstrap/std/Http.plum bootstrap/http-response-test.plum
+} > "$work/httpresponses/main.plum"
+
 check() {
     local name="$1" expected="$2"
     if ! SH_MEM="${SH_MEM:-512M}" SH_TIMEOUT="${SH_TIMEOUT:-240}" "$plum" build "$work/$name" -o "$work/$name.bin" > "$work/$name.err" 2>&1; then
@@ -500,6 +506,7 @@ check() {
     fi
 }
 
+check httpresponses "HTTP responses: method/status framing, interim heads and server wire output verified"
 check httpheads "HTTP heads: Host, request line, field syntax and framing case validated before body reads"
 check httpbuilders "HTTP builders reject unchecked URL fields"
 check httpfields "HTTP fields: valid bytes preserved; invalid responses send no bytes; server continues"
