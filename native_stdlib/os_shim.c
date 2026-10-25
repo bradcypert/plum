@@ -532,12 +532,13 @@ typedef NTSTATUS (NTAPI *PlumRemoveOpen)(PHANDLE, ACCESS_MASK, POBJECT_ATTRIBUTE
     PIO_STATUS_BLOCK, PLARGE_INTEGER, ULONG, ULONG, ULONG, ULONG, PVOID, ULONG);
 
 static HANDLE plum_remove_child(PlumRemoveOpen open_child, HANDLE parent,
-                                WCHAR *name, DWORD bytes) {
+                                WCHAR *name, DWORD bytes, ULONG object_flags) {
     if (bytes == 0 || bytes > 65534 || bytes % sizeof(WCHAR) != 0) return INVALID_HANDLE_VALUE;
     UNICODE_STRING text = {(USHORT)bytes, (USHORT)bytes, name};
     OBJECT_ATTRIBUTES attrs = {0};
     attrs.Length = sizeof(attrs);
     attrs.RootDirectory = parent;
+    attrs.Attributes = object_flags;
     attrs.ObjectName = &text;
     IO_STATUS_BLOCK status;
     HANDLE child = INVALID_HANDLE_VALUE;
@@ -573,7 +574,7 @@ static int plum_remove_handle(PlumRemoveOpen open_child, HANDLE handle, unsigned
                 WCHAR *name = entry->FileName;
                 if (!((bytes == 2 && name[0] == L'.') ||
                       (bytes == 4 && name[0] == L'.' && name[1] == L'.'))) {
-                    HANDLE child = plum_remove_child(open_child, handle, name, bytes);
+                    HANDLE child = plum_remove_child(open_child, handle, name, bytes, 0);
                     if (child == INVALID_HANDLE_VALUE) { rc = -1; break; }
                     if (plum_remove_handle(open_child, child, depth + 1) != 0) rc = -1;
                     if (!CloseHandle(child)) rc = -1;
@@ -623,7 +624,9 @@ static int plum_remove_tree(const char *path) {
         NULL, OPEN_EXISTING, FILE_FLAG_BACKUP_SEMANTICS, NULL);
     *name = first;
     if (parent == INVALID_HANDLE_VALUE) { free(wide); return -1; }
-    HANDLE handle = plum_remove_child(open_child, parent, name, bytes);
+    // Keep Win32 root-name lookup case-insensitive. Enumeration supplies
+    // exact child names, so those opens also support case-sensitive trees.
+    HANDLE handle = plum_remove_child(open_child, parent, name, bytes, OBJ_CASE_INSENSITIVE);
     int parent_closed = CloseHandle(parent);
     free(wide);
     if (handle == INVALID_HANDLE_VALUE) return -1;

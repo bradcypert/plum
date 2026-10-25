@@ -303,6 +303,7 @@ static void junction(const char *path) {
 }
 static void links_and_races(void) {
     directory("outside"); put("outside/keep");
+    directory("MiXeD"); removed("mixed");
     assert(CreateDirectoryW(L"tree-\x65e5", NULL));
     FILE *unicode = _wfopen(L"tree-\x65e5/file", L"wb");
     assert(unicode != NULL && fclose(unicode) == 0);
