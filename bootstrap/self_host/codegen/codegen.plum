@@ -3012,7 +3012,8 @@ let cg_join_acc (parts: Array[String]) (i: Int) (acc: String): String =
     if i >= parts.len() { acc } else { cg_join_acc(parts, i + 1, acc.concat(", ").concat(parts[i])) }
 
 let cg_method_call (p: CgProgram) (env: Array[CgSlot]) (n: Int) (method_name: String) (base: typecheck.TExpr) (args: Array[typecheck.TExpr]) (ty: CgTy): Emit =
-    if method_name == "to_string" { cg_to_string(p, env, n, base) }
+    if method_name == "hash" { cg_hash(p, env, n, base) }
+    else if method_name == "to_string" { cg_to_string(p, env, n, base) }
     else if method_name == "concat" { cg_concat(p, env, n, base, args[0]) }
     else if method_name == "len" { cg_len(p, env, n, base) }
     else if method_name == "push" { cg_array_push(p, env, n, base, args[0], ty) }
@@ -5732,6 +5733,8 @@ let cg_eq_code (t: typecheck.ITy) (av: String) (bv: String) (n: Int): EqEmit = {
 // `seen` check is what makes a RECURSIVE type (`PExpr` whose payload is
 // a `PExpr`) terminate — it needs exactly one function, which calls
 // itself.
+let HASH_TYPES: Ref[Array[typecheck.ITy]] = ref([])
+let HASH_SEEN: Ref[Map[String, Bool]] = ref(cg_empty_type_set(()))
 let EQ_TYPES: Ref[Map[String, Bool]] = ref(cg_empty_type_set(()))
 let REL_TYPES: Ref[Map[String, Bool]] = ref(cg_empty_type_set(()))
 let cg_empty_type_set (): Map[String, Bool] = Map.new(())
@@ -5747,6 +5750,11 @@ let cg_type_seen (table: Ref[Map[String, Bool]]) (t: typecheck.ITy): Bool = {
 }
 
 let cg_eq_close (p: CgProgram) (t: typecheck.ITy) (acc: Array[typecheck.ITy]): Array[typecheck.ITy] =
+    cg_structural_close(p, t, acc, EQ_TYPES)
+
+// Hashing and equality share the layout walk, but keep separate reachable
+// sets so a comparison does not generate unused hash helpers or vice versa.
+let cg_structural_close (p: CgProgram) (t: typecheck.ITy) (acc: Array[typecheck.ITy]) (seen: Ref[Map[String, Bool]]): Array[typecheck.ITy] =
     // A type with a handle ANYWHERE inside it gets no equality function,
     // not even a container's. The checker refuses `==` on exactly these
     // (`first_handle_within`), so nothing can call one -- and generating
@@ -5758,20 +5766,20 @@ let cg_eq_close (p: CgProgram) (t: typecheck.ITy) (acc: Array[typecheck.ITy]): A
     // asked for `Result[Os.File, String]`'s.
     if Option.is_some(typecheck.first_handle_within(p.ctx, t, [])) { acc }
     else if cg_eq_is_primitive(t) { acc }
-    else if cg_type_seen(EQ_TYPES, t) { acc }
+    else if cg_type_seen(seen, t) { acc }
     else {
         let acc2 = acc.push(t);
         match t {
             ITStruct(name, args) =>
-                if name == "Array" { cg_eq_close(p, args[0], acc2) }
+                if name == "Array" { cg_structural_close(p, args[0], acc2, seen) }
                 // A handle has no structure to compare and no fields to
                 // walk into. Reached when one is a FIELD of something
                 // being compared, which is why this is a stop rather
                 // than an error.
                 else if cg_is_handle(p, name) { acc2 }
-                else { cg_eq_close_list(p, Array.map(typecheck.ctx_field_types(p.ctx, name), |ft| typecheck.instantiate_template(typecheck.ctx_struct_generics(p.ctx, name), args, ft)), 0, acc2) },
-            ITEnum(name, args) => cg_eq_close_variants(p, cg_find_enum(p, name).variants, args, 0, acc2),
-            ITTuple(elems) => cg_eq_close_list(p, elems, 0, acc2),
+                else { cg_structural_close_list(p, Array.map(typecheck.ctx_field_types(p.ctx, name), |ft| typecheck.instantiate_template(typecheck.ctx_struct_generics(p.ctx, name), args, ft)), 0, acc2, seen) },
+            ITEnum(name, args) => cg_structural_close_variants(p, cg_find_enum(p, name).variants, args, 0, acc2, seen),
+            ITTuple(elems) => cg_structural_close_list(p, elems, 0, acc2, seen),
             _ => acc2,
         }
     }
@@ -5782,14 +5790,14 @@ let cg_ty_in (acc: Array[typecheck.ITy]) (t: typecheck.ITy) (i: Int): Bool =
 let cg_ty_name_in (acc: Array[typecheck.ITy]) (name: String) (i: Int): Bool =
     if i >= acc.len() { false } else if cg_ity_mangle(acc[i]) == name { true } else { cg_ty_name_in(acc, name, i + 1) }
 
-let cg_eq_close_list (p: CgProgram) (ts: Array[typecheck.ITy]) (i: Int) (acc: Array[typecheck.ITy]): Array[typecheck.ITy] =
-    if i >= ts.len() { acc } else { cg_eq_close_list(p, ts, i + 1, cg_eq_close(p, ts[i], acc)) }
+let cg_structural_close_list (p: CgProgram) (ts: Array[typecheck.ITy]) (i: Int) (acc: Array[typecheck.ITy]) (seen: Ref[Map[String, Bool]]): Array[typecheck.ITy] =
+    if i >= ts.len() { acc } else { cg_structural_close_list(p, ts, i + 1, cg_structural_close(p, ts[i], acc, seen), seen) }
 
-let cg_eq_close_variants (p: CgProgram) (vs: Array[CgVariant]) (args: Array[typecheck.ITy]) (i: Int) (acc: Array[typecheck.ITy]): Array[typecheck.ITy] =
+let cg_structural_close_variants (p: CgProgram) (vs: Array[CgVariant]) (args: Array[typecheck.ITy]) (i: Int) (acc: Array[typecheck.ITy]) (seen: Ref[Map[String, Bool]]): Array[typecheck.ITy] =
     if i >= vs.len() { acc }
     else {
         let payload = Array.map(typecheck.ctx_variant_payload(p.ctx, vs[i].enum_name, vs[i].name), |t| typecheck.instantiate_template(typecheck.ctx_variant_generics(p.ctx, vs[i].enum_name, vs[i].name), args, t));
-        cg_eq_close_variants(p, vs, args, i + 1, cg_eq_close_list(p, payload, 0, acc))
+        cg_structural_close_variants(p, vs, args, i + 1, cg_structural_close_list(p, payload, 0, acc, seen), seen)
     }
 
 // --- `.to_string()` on aggregates ---
@@ -7017,6 +7025,8 @@ pub let cg_emit_program (program0: parser.ProgramNode): String = cg_emit_program
 pub let cg_emit_program_entry (program0: parser.ProgramNode) (entry: String): String = {
     cg_dbg_reset(());
     EQ_TYPES.set(cg_empty_type_set(()));
+    HASH_SEEN.set(cg_empty_type_set(()));
+    HASH_TYPES.set([]);
     REL_TYPES.set(cg_empty_type_set(()));
     let prelude_time = buildcache.start(());
     let program = cg_with_prelude(program0);
@@ -7035,12 +7045,12 @@ pub let cg_emit_program_entry (program0: parser.ProgramNode) (entry: String): St
     // an aggregate compared inside an unreachable function needs no
     // function emitted for it.
     let helper_time = buildcache.start(());
-    let eqs = cg_eq_types_of(p, insts, 0, []);
+    let eqs = cg_eq_types_of(p, insts, 0, cg_eq_in_globals(p, 0, []));
     // Release functions are needed for every heap type that appears
     // ANYWHERE reachable, not just where `==` is used, so the closure
     // starts from every function's parameter and return types and from
     // every equality type already found.
-    let rels = cg_rel_types_of(p, insts, 0, cg_rel_close_list(p, eqs, 0, []));
+    let rels = cg_rel_types_of(p, insts, 0, cg_rel_close_list(p, Array.concat(eqs, HASH_TYPES.get()), 0, []));
     buildcache.finish("helper discovery", helper_time);
     let global_time = buildcache.start(());
     let gl = cg_emit_globals(p, 0, 1000000, "", "");
@@ -7048,6 +7058,8 @@ pub let cg_emit_program_entry (program0: parser.ProgramNode) (entry: String): St
     let helpers_time = buildcache.start(());
     let helpers = Array.concat_all([
         cg_emit_eq_fns(p, eqs, 0, ""),
+        cg_emit_hash_fns(p, HASH_TYPES.get()),
+        cg_hash_runtime(()),
         cg_emit_rel_fns(p, rels, 0, ""),
         cg_emit_channel_copy_fns(p, rels),
         cg_emit_str_fns(p, rels, 0, ""),
@@ -7245,6 +7257,14 @@ let cg_rel_in_arms (p: CgProgram) (arms: Array[typecheck.TArm]) (i: Int) (acc: A
 let cg_rel_in_fields (p: CgProgram) (fields: Array[typecheck.TFieldInit]) (i: Int) (acc: Array[typecheck.ITy]): Array[typecheck.ITy] =
     if i >= fields.len() { acc } else { cg_rel_in_fields(p, fields, i + 1, cg_rel_in(p, fields[i].value, acc)) }
 
+// Global initializers can hash aggregates without calling a named function.
+let cg_eq_in_globals (p: CgProgram) (i: Int) (acc: Array[typecheck.ITy]): Array[typecheck.ITy] =
+    if i >= p.globals.len() { acc } else {
+        let g = p.globals[i];
+        let gp = CgProgram { fns: p.fns, globals: p.globals, ctx: p.ctx, enums: p.enums, subst: g.subst, generics: [], targs: [], movable: [], cur_sym: "", cur_frame: false, tail_rel: "", tail_ok: false, cur_proto: "" };
+        cg_eq_in_globals(p, i + 1, cg_eq_in(gp, g.body, acc))
+    }
+
 let cg_eq_types_of (p: CgProgram) (insts: Array[CgInst]) (i: Int) (acc: Array[typecheck.ITy]): Array[typecheck.ITy] =
     if i >= insts.len() { acc }
     else {
@@ -7265,7 +7285,13 @@ let cg_eq_in (p: CgProgram) (e: typecheck.TExpr) (acc: Array[typecheck.ITy]): Ar
         },
         TFnCall(_, _, args, _) => cg_eq_in_list(p, args, 0, acc),
         TClosureCall(callee, args) => cg_eq_in_list(p, args, 0, cg_eq_in(p, callee, acc)),
-        TMethodCall(_, base, args) => cg_eq_in_list(p, args, 0, cg_eq_in(p, base, acc)),
+        TMethodCall(method, base, args) => {
+            let inner = cg_eq_in_list(p, args, 0, cg_eq_in(p, base, acc));
+            if method == "hash" {
+                HASH_TYPES.set(cg_structural_close(p, cg_concrete(p, typecheck.texpr_ty(p.subst, base)), HASH_TYPES.get(), HASH_SEEN));
+            };
+            inner
+        },
         TArrayNs(_, args) => cg_eq_in_list(p, args, 0, acc),
         TVariantNew(_, _, args) => cg_eq_in_list(p, args, 0, acc),
         TPrintln(a) => cg_eq_in(p, a, acc),

@@ -1,0 +1,1 @@
+let main (): Unit = println([["key".as_cstr()]].hash().to_string())

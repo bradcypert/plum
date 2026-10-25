@@ -1,0 +1,74 @@
+struct Key { name: String, points: Array[Float] }
+enum Tree[T] { Leaf(T), Branch(Tree[T], Tree[T]), Empty }
+
+let GLOBAL_HASH: Int = Some([0.0, 1.0]).hash()
+
+let hash_of[T] (x: T): Int = x.hash()
+let array_hash[T] (x: Array[T]): Int = x.hash()
+
+let main (): Unit = {
+    assert_eq(GLOBAL_HASH, Some([-0.0, 1.0]).hash());
+    let neg = -0.0;
+    assert_eq(neg.to_string(), "-0");
+    assert_eq(0.0.hash(), neg.hash());
+    let text = Result.unwrap_or(Bytes.as_string(Bytes.from_array([104, 195, 169, 0, 108, 108, 111])), "invalid");
+    assert_eq(hash_of(text), String.hash(text));
+    assert_eq("".hash(), String.hash(""));
+    assert_eq(Bytes.from_array([0, 255, 42]).hash(), Bytes.from_array([0, 255, 42]).hash());
+    assert_eq(hash_of(()), ().hash());
+    assert_eq(hash_of(true), true.hash());
+    assert_eq(hash_of((-9223372036854775807 - 1)), ((-9223372036854775807 - 1)).hash());
+    let a = Key { name: "sample", points: [0.0, 1.0] };
+    let b = Key { name: "sample", points: [neg, 1.0] };
+    assert_eq(a, b);
+    assert_eq(a.hash(), b.hash());
+    assert_eq(array_hash([a]), array_hash([b]));
+    assert_eq((a, Some(0.0)).hash(), (b, Some(neg)).hash());
+    let t = Branch(Leaf(0.0), Branch(Empty, Leaf(1.0)));
+    let u = Branch(Leaf(neg), Branch(Empty, Leaf(1.0)));
+    assert_eq(t, u);
+    assert_eq(t.hash(), u.hash());
+    let m = Map.insert(Map.new(()), a, "first");
+    let replaced = Map.insert(m, b, "second");
+    assert_eq(Map.get(replaced, a), Some("second"));
+    assert_eq(Map.len(replaced), 1);
+    assert_eq(Map.get(m, b), Some("first"));
+    assert_eq(Map.len(Map.remove(replaced, b)), 0);
+    let mut floats = Map.insert(Map.new(()), 0.0, 10);
+    for i in 1..50 { floats = Map.insert(floats, i.to_float(), i); };
+    assert_eq(Map.get(floats, neg), Some(10));
+    floats = Map.insert(floats, neg, 99);
+    assert_eq(Map.len(floats), 50);
+    assert_eq(Map.get(floats, 0.0), Some(99));
+    assert(!Map.contains(Map.remove(floats, neg), 0.0));
+    let s = Set.from_array([a, b]);
+    assert_eq(Set.len(s), 1);
+    assert_eq(Set.len(Set.remove(s, b)), 0);
+    let cell = ref(1);
+    let alias = cell;
+    let refs = Map.insert(Map.new(()), cell, "same cell");
+    let before = cell.hash();
+    cell.set(2);
+    assert_eq(before, cell.hash());
+    assert_eq(Map.get(refs, alias), Some("same cell"));
+    assert(!Map.contains(refs, ref(2)));
+    assert_eq(Map.len(Map.insert(refs, alias, "updated")), 1);
+    assert_eq(Map.len(Map.remove(refs, alias)), 0);
+    let pairs = Map.insert(Map.new(()), (1, neg), true);
+    assert_eq(Map.get(pairs, (1, 0.0)), Some(true));
+    let bytes = Map.insert(Map.new(()), Bytes.from_array([0, 255]), 3);
+    assert_eq(Map.get(bytes, Bytes.from_array([0, 255])), Some(3));
+    let nan = 0.0 / 0.0;
+    assert(nan != nan);
+    assert((1.0 / 0.0).hash() >= 0);
+    assert((-1.0 / 0.0).hash() >= 0);
+    for i in 0..100 {
+        // Fresh receivers must be dropped after hashing; shared fields
+        // must stay alive for later reads of the original aggregate.
+        let live = Key { name: i.to_string(), points: [0.0, i.to_float()] };
+        assert_eq(Key { name: i.to_string(), points: [neg, i.to_float()] }.hash(), live.hash());
+        assert_eq(live.name, i.to_string());
+        assert_eq(i.to_string().concat("x").hash(), String.hash(i.to_string().concat("x")));
+    };
+    println("structural hashing: ok");
+}

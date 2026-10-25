@@ -7,7 +7,9 @@ Part of [`prelude`](prelude.md).
 ## `struct Set`
 
 A set of `T`, persistent like `Map` — `Set.insert` returns a new
-set. Members need `Eq`.
+set. Members need `Eq` and `Hash`. Equal keys hash identically.
+NaN is not a supported key, including inside aggregates, because
+IEEE equality makes it unequal to itself. References use identity.
 
 ## `let Set.new (): Set[T]`
 

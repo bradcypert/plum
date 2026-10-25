@@ -1,0 +1,14 @@
+// Repeated lookup must not render or allocate a temporary key. The map
+// remains shared with its caller, so this cannot rely on unique ownership.
+struct Key { name: String, point: Float }
+
+let lookups (m: Map[Key, Int]) (key: Key): Unit = {
+    for i in 0..1000 { assert(Map.contains(m, key)); };
+}
+
+let main (): Unit = {
+    let key = Key { name: "sample", point: 1.5 };
+    let m = Map.insert(Map.new(()), key, 7);
+    lookups(m, key);
+    assert_eq(Map.len(m), 1);
+}

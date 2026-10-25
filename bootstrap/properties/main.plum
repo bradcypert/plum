@@ -1592,3 +1592,32 @@ pub let test_url_encoded_utf8 (): Unit = {
         }
     }
 }
+
+// Hashing must follow equality even through nested structural values.
+// Negating zero at runtime preserves its sign; parsing or Float.abs
+// would test a different operation.
+struct HashKey { label: String, coordinates: Array[Float] }
+
+pub let test_hash_equality_and_map_laws (): Unit = {
+    let mut rng = Rng.from_seed(123);
+    for i in 0..150 {
+        let (next, n) = Rng.int_range(rng, -10000, 10000);
+        rng = next;
+        let a = HashKey { label: n.to_string(), coordinates: [0.0, n.to_float()] };
+        let b = HashKey { label: n.to_string(), coordinates: [-0.0, n.to_float()] };
+        assert_eq(a, b);
+        assert_eq(a.hash(), b.hash());
+        assert(a.hash() >= 0);
+        assert_eq((Some(a), n).hash(), (Some(b), n).hash());
+        let m = Map.insert(Map.new(()), a, n);
+        assert_eq(Map.get(m, b), Some(n));
+        assert(Map.contains(m, b));
+        let updated = Map.insert(m, b, n + 1);
+        assert_eq(Map.len(updated), 1);
+        assert_eq(Map.get(updated, a), Some(n + 1));
+        assert_eq(Map.get(m, a), Some(n));
+        assert_eq(Map.len(Map.remove(updated, b)), 0);
+        assert_eq(Set.len(Set.from_array([a, b])), 1);
+        assert_eq(n.to_string().hash(), String.hash(n.to_string()));
+    };
+}

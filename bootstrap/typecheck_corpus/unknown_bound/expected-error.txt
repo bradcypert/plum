@@ -1,2 +1,2 @@
-error: unknown bound `Nonsense` on T. Plum has three: `Ord`, `Eq` and `Show`
+error: unknown bound `Nonsense` on T. Plum has four: `Ord`, `Eq`, `Show` and `Hash`
 main.plum:6:1

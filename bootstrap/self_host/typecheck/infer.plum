@@ -571,13 +571,13 @@ let generic_bounds (module_name: String) (fn_name: String) (gs: Array[parser.Gen
 
 let bound_names (module_name: String) (fn_name: String) (param: String) (bs: Array[String]) (i: Int) (acc: Array[OrdReq]): Array[OrdReq] =
     if i >= bs.len() { acc }
-    else if bs[i] != "Ord" && bs[i] != "Eq" && bs[i] != "Show" {
+    else if bs[i] != "Ord" && bs[i] != "Eq" && bs[i] != "Show" && bs[i] != "Hash" {
         // A typo in a bound used to do nothing at all, silently. A name
         // this does not know is rejected rather than ignored, for the
         // same reason an unknown type is: quietly meaning nothing is
         // the worst of the three options.
         fail_tc("unknown bound `${bs[i]}` on ${param}"
-            .concat(". Plum has three: `Ord`, `Eq` and `Show`"));
+            .concat(". Plum has four: `Ord`, `Eq`, `Show` and `Hash`"));
         bound_names(module_name, fn_name, param, bs, i + 1, acc)
     }
     else if has_req(acc, module_name, fn_name, param, bs[i], 0) { bound_names(module_name, fn_name, param, bs, i + 1, acc) }
@@ -667,7 +667,7 @@ let ord_reqs_in (f: TFn) (e: TExpr) (acc: Array[OrdReq]): Array[OrdReq] = {
         //
         // Inside `show` the type is only `T`, so the same answer applies
         // as for `<` and `==`: ask at the CALL, where it is concrete.
-        TMethodCall(m, recv, _) => if m == "to_string" { ord_req_for(f, "Show", recv.ty, acc) } else { acc },
+        TMethodCall(m, recv, _) => if m == "to_string" { ord_req_for(f, "Show", recv.ty, acc) } else if m == "hash" { ord_req_for(f, "Hash", recv.ty, acc) } else { acc },
         _ => acc,
     };
     ord_reqs_children(f, t_children(e), 0, here)
@@ -680,9 +680,16 @@ let is_equality_op (op: parser.BOp): Bool = match op { BEq => true, BNe => true,
 
 let ord_req_for (f: TFn) (kind: String) (t: ITy) (acc: Array[OrdReq]): Array[OrdReq] =
     match t {
+        ITStruct(_, args) => if kind == "Hash" { hash_reqs_for(f, args, 0, acc) } else { acc },
+        ITEnum(_, args) => if kind == "Hash" { hash_reqs_for(f, args, 0, acc) } else { acc },
+        ITTuple(elems) => if kind == "Hash" { hash_reqs_for(f, elems, 0, acc) } else { acc },
         ITParam(n) => if Array.contains(f.generics, n) && !has_req(acc, f.module, f.name, n, kind, 0) { acc.push(OrdReq { module: f.module, name: f.name, param: n, kind: kind }) } else { acc },
         _ => acc,
     }
+
+// References are leaves: their payload needs no hashing capability.
+let hash_reqs_for (f: TFn) (ts: Array[ITy]) (i: Int) (acc: Array[OrdReq]): Array[OrdReq] =
+    if i >= ts.len() { acc } else { hash_reqs_for(f, ts, i + 1, ord_req_for(f, "Hash", ts[i], acc)) }
 
 // Whether a concrete type fails `kind`. Both arms delegate to the check
 // that already existed for concrete types, so a generic call and a
@@ -691,11 +698,13 @@ let violates_bound (ctx: TyContext) (kind: String) (t: ITy): Bool =
     if kind == "Ord" { is_known_unordered(t) }
     else if kind == "Eq" { Option.is_some(first_function_within(ctx, t, [])) }
     else if kind == "Show" { is_unrenderable(ctx, t) }
+    else if kind == "Hash" { Option.is_some(first_unhashable(ctx, t, [])) }
     else { false }
 
 let bound_needs (kind: String): String =
     if kind == "Ord" { " to be ordered -- Int, Float or String" }
     else if kind == "Show" { " to have a text form, and this one has none" }
+    else if kind == "Hash" { " to support structural hashing" }
     else { " to have equality, and a function has none" }
 
 // And which calls bind one of those parameters to a type that cannot be
@@ -1494,6 +1503,54 @@ let first_handle_in_variants (ctx: TyContext) (enum_name: String) (tags: Array[S
         match first_handle_in_list(ctx, payload, seen, 0) {
             Some(f) => Some(f),
             None => first_handle_in_variants(ctx, enum_name, tags, args, seen, i + 1),
+        }
+    }
+
+// Hash follows structural equality; opaque resources, C strings and
+// functions have no hash contract. A Ref hashes its identity, never its value.
+let first_unhashable (ctx: TyContext) (t: ITy) (seen: Array[String]): Option[ITy] =
+    match t {
+        ITCStr => Some(t),
+        ITFunction(_, _) => Some(t),
+        ITStruct(name, args) => {
+            // Always check arguments before the nominal recursion guard:
+            // Array[Array[Function]] must not stop at the second Array.
+            let inner = first_unhashable_in_list(ctx, args, seen, 0);
+            if Option.is_some(inner) { inner }
+            else if ctx_is_handle(ctx, name) || name == "Task" || name == "Sender" || name == "Receiver" { Some(t) }
+            else if Array.contains(seen, name) { None }
+            else { match find_struct(ctx, name) {
+                None => None,
+                Some(_) => first_unhashable_in_list(ctx,
+                    Array.map(ctx_field_types(ctx, name), |ft| instantiate_template(ctx_struct_generics(ctx, name), args, ft)),
+                    seen.push(name), 0),
+            } }
+        },
+        ITEnum(name, args) => {
+            let inner = first_unhashable_in_list(ctx, args, seen, 0);
+            if Option.is_some(inner) { inner }
+            else if Array.contains(seen, name) { None }
+            else { match ctx_enum_tags(ctx, name) {
+                Some(tags) => first_unhashable_in_variants(ctx, name, tags, args, seen.push(name), 0),
+                None => None,
+            } }
+        },
+        ITTuple(elems) => first_unhashable_in_list(ctx, elems, seen, 0),
+        ITRef(_) => first_handle_within(ctx, t, seen),
+        _ => None,
+    }
+
+let first_unhashable_in_list (ctx: TyContext) (ts: Array[ITy]) (seen: Array[String]) (i: Int): Option[ITy] =
+    if i >= ts.len() { None }
+    else { match first_unhashable(ctx, ts[i], seen) { Some(x) => Some(x), None => first_unhashable_in_list(ctx, ts, seen, i + 1) } }
+
+let first_unhashable_in_variants (ctx: TyContext) (enum_name: String) (tags: Array[String]) (args: Array[ITy]) (seen: Array[String]) (i: Int): Option[ITy] =
+    if i >= tags.len() { None }
+    else {
+        let payload = Array.map(ctx_variant_payload(ctx, enum_name, tags[i]), |pt| instantiate_template(ctx_variant_generics(ctx, enum_name, tags[i]), args, pt));
+        match first_unhashable_in_list(ctx, payload, seen, 0) {
+            Some(f) => Some(f),
+            None => first_unhashable_in_variants(ctx, enum_name, tags, args, seen, i + 1),
         }
     }
 
@@ -2589,6 +2646,7 @@ let has_builtin_method (ms: Array[BuiltinMethod]) (ns: String) (name: String) (i
     else { has_builtin_method(ms, ns, name, i + 1) }
 
 pub let builtin_methods (): Array[BuiltinMethod] = [
+    BuiltinMethod { recv: "", name: "hash", detail: "hash(): Int", doc: "A non-negative structural hash. Equal values hash identically, including both signs of floating-point zero. Structs, tuples, enums and arrays hash their contents; references hash their identity. Requires `Hash`. Does not allocate temporary text. Not cryptographic or stable across releases; do not persist it. NaN still follows IEEE equality and is unsuitable as a Map key or Set member, including inside aggregates.", recv_ty: "T" },
     BuiltinMethod { recv: "", name: "to_string", detail: "to_string(): String", doc: "Renders any value as text. Every type has one, including structs, enums and arrays, so it is the fallback whenever a value has to be shown. `\${x}` in an interpolated string calls it.\n///\n/// Written `x.to_string()`. It is a METHOD on every value rather than a free function, so there is no `to_string(x)` spelling and no one type it belongs to.", recv_ty: "T" },
     BuiltinMethod { recv: "Array", name: "map", detail: "map(f: (T) -> U): Array[U]", doc: "A new array holding `f` applied to each element, in order. The result's element type is whatever `f` returns, so mapping can change it.", recv_ty: "Array[T]" },
     BuiltinMethod { recv: "Array", name: "filter", detail: "filter(f: (T) -> Bool): Array[T]", doc: "A new array holding the elements `f` says `true` about, in their original order.", recv_ty: "Array[T]" },
@@ -2623,7 +2681,15 @@ pub let builtin_methods (): Array[BuiltinMethod] = [
 ]
 
 let infer_method_call (p2: Program2) (state: FreshState) (env: TyEnv) (acc: Subst) (base: parser.PExpr) (method_name: String) (args: Array[parser.PExpr]): InferResult =
-    if method_name == "to_string" {
+    if method_name == "hash" {
+        if args.len() != 0 { fail_tc(".hash() takes no arguments") };
+        let r = infer_expr(p2, state, env, acc, base);
+        let t = subst_apply(r.subst, r.ty);
+        if Option.is_some(first_unhashable(p2.ctx, t, [])) {
+            fail_tc(".hash() is not supported for ${render_ty(t)}")
+        };
+        ir_leaf(ITInt, r.subst, r.state, TMethodCall("hash", r.texpr, []))
+    } else if method_name == "to_string" {
         let r = infer_expr(p2, state, env, acc, base);
         reject_unrenderable(p2, subst_apply(r.subst, r.ty));
         ir_leaf(ITStr, r.subst, r.state, TMethodCall("to_string", r.texpr, []))
