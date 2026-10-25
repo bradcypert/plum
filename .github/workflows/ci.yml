@@ -144,8 +144,6 @@ jobs:
         run: ./bootstrap/check-build-modes
       - name: the user-facing commands work
         run: ./bootstrap/cli-smoke
-      - name: build cache preserves program behavior
-        run: ./bootstrap/build-cache-check
       - name: packages resolve and manifests stay data
         run: ./bootstrap/pkg-check
       - name: allocations have not risen
@@ -160,12 +158,36 @@ jobs:
         run: ./bootstrap/net-smoke
       - name: stdin reads preserve buffers and bound waits
         run: ./bootstrap/stdin-smoke
+      - name: tree removal stays inside held directories and releases resources
+        run: ./bootstrap/remove-tree-smoke
       - name: whole-file reads propagate failures and preserve bytes
         run: ./bootstrap/file-read-smoke
       - name: the version string is consistent
         run: ./bootstrap/check-version
       - name: plum help is a real command
         run: ./bootstrap/help-check
+
+  # The cache behavior suite takes several minutes. Give it an independent
+  # budget so the CLI/docs job does not time out after otherwise passing.
+  cache_behavior:
+    name: Linux build cache behavior
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v5
+      - name: install clang
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y clang
+          clang --version
+      - uses: actions/download-artifact@v4
+        with:
+          name: plum-linux-compiler
+      - name: restore freshly built compiler
+        run: tar -xzf plum-linux-compiler.tar.gz
+      - name: build cache preserves program behavior
+        run: ./bootstrap/build-cache-check
 
   cache_objects:
     name: Linux required object cache and debug locations
@@ -194,7 +216,7 @@ jobs:
   bootstrap:
     name: build from seed and validate
     if: ${{ always() }}
-    needs: [build, bootstrap_proofs, corpus, checks, cache_objects]
+    needs: [build, bootstrap_proofs, corpus, checks, cache_behavior, cache_objects]
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
@@ -204,6 +226,7 @@ jobs:
           test "${{ needs.bootstrap_proofs.result }}" = success
           test "${{ needs.corpus.result }}" = success
           test "${{ needs.checks.result }}" = success
+          test "${{ needs.cache_behavior.result }}" = success
           test "${{ needs.cache_objects.result }}" = success
 
   # Does the compiler work somewhere that is not the developer's Linux

@@ -47,8 +47,14 @@ directories.
 
 ## `let remove_tree (path: String): Result[Unit, String]`
 
-Deletes a directory and everything under it. Symlinks are removed,
-never followed into.
+Deletes a file or directory tree. A final symlink is removed even
+with trailing separators; links encountered in the tree are never
+followed. Ancestors of the requested path resolve normally when the
+starting directory is acquired; traversal then uses held directories.
+Concurrent changes or resource exhaustion can return `Err` after partial
+removal. Traversal is limited to 128 directory levels to bound native
+stack, enumeration storage, and open handles. Empty paths and final
+`.` or `..` components are rejected.
 
 ## `let copy_tree (src: String) (dst: String): Result[Unit, String]`
 

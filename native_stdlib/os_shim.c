@@ -34,18 +34,22 @@
 #include <sys/stat.h>
 #include <dirent.h>
 #include <stdint.h>
+#include <stddef.h>
+#include <wchar.h>
 #include <ctype.h>
 #include <errno.h>
 #include <time.h>
 
 #if defined(_WIN32)
 #include <windows.h>
+#include <winternl.h>
 #include <direct.h>
 #include <io.h>
 #define PLUM_MKDIR(p) _mkdir(p)
 #define PLUM_RMDIR(p) _rmdir(p)
 #else
 #include <unistd.h>
+#include <fcntl.h>
 #include <signal.h>
 #define PLUM_MKDIR(p) mkdir((p), 0700)
 #define PLUM_RMDIR(p) rmdir(p)
@@ -451,50 +455,187 @@ static int plum_join(char *out, size_t cap, const char *a, const char *b) {
     return (n > 0 && (size_t)n < cap) ? 0 : -1;
 }
 
-// Deletes a directory and everything under it. Recurses with a
-// heap-allocated path buffer per level rather than a shared one,
-// because the caller's path must stay intact across the child call.
-//
-// Symlinks are removed, never followed: `plum_is_dir` uses `stat`,
-// which follows, so a symlink to a directory would recurse into the
-// TARGET and delete someone else's files. `lstat` is used here for
-// exactly that reason. On Windows there is no `lstat`; the reparse
-// point is deleted by `remove` as an ordinary entry.
-static int plum_remove_tree(const char *path) {
-    DIR *d;
-    struct dirent *e;
-    char *child;
-    int rc = 0;
+// Removal has a deliberately separate traversal from copying: every child
+// operation is relative to a held directory, never a reconstructed pathname.
+// A bounded depth also bounds native stack, enumeration storage and handles.
+// Exhaustion is an error, never a reason to fall back to path-based removal.
+#define PLUM_REMOVE_DEPTH 128
 
 #if !defined(_WIN32)
+static int plum_remove_at(int parent, const char *name, unsigned depth) {
     struct stat st;
-    if (lstat(path, &st) != 0) return -1;
-    if (!S_ISDIR(st.st_mode)) return remove(path) == 0 ? 0 : -1;
-#else
-    DWORD attrs=GetFileAttributesA(path);
-    if (attrs == INVALID_FILE_ATTRIBUTES) return -1;
-    if (attrs & FILE_ATTRIBUTE_REPARSE_POINT) {
-        if (attrs & FILE_ATTRIBUTE_DIRECTORY) return RemoveDirectoryA(path) ? 0 : -1;
-        return remove(path) == 0 ? 0 : -1;
-    }
-    if (!plum_is_dir(path)) return remove(path) == 0 ? 0 : -1;
-#endif
+    if (fstatat(parent, name, &st, AT_SYMLINK_NOFOLLOW) != 0) return -1;
+    if (!S_ISDIR(st.st_mode)) return unlinkat(parent, name, 0);
+    if (depth >= PLUM_REMOVE_DEPTH) return -1;
 
-    d = opendir(path);
-    if (d == NULL) return -1;
-    child = (char *)malloc(PLUM_PATH_MAX);
-    if (child == NULL) { closedir(d); return -1; }
-
-    while ((e = readdir(d)) != NULL) {
-        if (strcmp(e->d_name, ".") == 0 || strcmp(e->d_name, "..") == 0) continue;
-        if (plum_join(child, PLUM_PATH_MAX, path, e->d_name) != 0) { rc = -1; continue; }
-        if (plum_remove_tree(child) != 0) rc = -1;
+    int fd = openat(parent, name, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC);
+    if (fd < 0) return -1;
+    // Pin the checked object. A replacement directory is not the directory
+    // we inspected; a replacement symlink cannot pass O_NOFOLLOW at all.
+    struct stat opened;
+    if (fstat(fd, &opened) != 0 || opened.st_dev != st.st_dev || opened.st_ino != st.st_ino) {
+        close(fd);
+        return -1;
     }
-    free(child);
-    closedir(d);
-    if (PLUM_RMDIR(path) != 0) rc = -1;
+    DIR *dir = fdopendir(fd);
+    if (dir == NULL) { close(fd); return -1; }
+    int rc = 0;
+    for (;;) {
+        errno = 0;
+        struct dirent *entry = readdir(dir);
+        if (entry == NULL) { if (errno != 0) rc = -1; break; }
+        if (strcmp(entry->d_name, ".") == 0 || strcmp(entry->d_name, "..") == 0) continue;
+        if (plum_remove_at(fd, entry->d_name, depth + 1) != 0) { rc = -1; break; }
+    }
+    // Detect replacement after walking the original. The final unlinkat
+    // never follows a symlink, including a swap after this identity check.
+    if (rc == 0 && (fstatat(parent, name, &st, AT_SYMLINK_NOFOLLOW) != 0 ||
+                   st.st_dev != opened.st_dev || st.st_ino != opened.st_ino)) rc = -1;
+    if (rc == 0 && unlinkat(parent, name, AT_REMOVEDIR) != 0) rc = -1;
+    if (closedir(dir) != 0) rc = -1; // owns fd after fdopendir succeeds
     return rc;
 }
+
+static int plum_remove_tree(const char *path) {
+    size_t n = strlen(path);
+    if (n == 0) return -1;
+    char *copy = (char *)malloc(n + 1);
+    if (copy == NULL) return -1;
+    memcpy(copy, path, n + 1);
+    // Only trim separators. realpath/lexical dot elimination would resolve
+    // the link before we can remove it. Never turn '/' into an empty path.
+    while (n > 1 && copy[n - 1] == '/') copy[--n] = 0;
+    char *slash = strrchr(copy, '/');
+    const char *name = slash ? slash + 1 : copy;
+    if (*name == 0 || strcmp(name, ".") == 0 || strcmp(name, "..") == 0) {
+        free(copy);
+        return -1;
+    }
+    // Ancestors in the caller's path resolve once to acquire this parent.
+    // All traversal below it uses single-component names and held fds.
+    int parent;
+    if (slash == NULL) parent = open(".", O_RDONLY | O_DIRECTORY | O_CLOEXEC);
+    else if (slash == copy) parent = open("/", O_RDONLY | O_DIRECTORY | O_CLOEXEC);
+    else {
+        *slash = 0;
+        parent = open(copy, O_RDONLY | O_DIRECTORY | O_CLOEXEC);
+    }
+    int rc = parent < 0 ? -1 : plum_remove_at(parent, name, 0);
+    if (parent >= 0 && close(parent) != 0) rc = -1;
+    free(copy);
+    return rc;
+}
+#else
+// NtCreateFile supplies the directory-relative open missing from CreateFile.
+// Resolve it per call, without a mutable global or a new linker dependency.
+typedef NTSTATUS (NTAPI *PlumRemoveOpen)(PHANDLE, ACCESS_MASK, POBJECT_ATTRIBUTES,
+    PIO_STATUS_BLOCK, PLARGE_INTEGER, ULONG, ULONG, ULONG, ULONG, PVOID, ULONG);
+
+static HANDLE plum_remove_child(PlumRemoveOpen open_child, HANDLE parent,
+                                WCHAR *name, DWORD bytes, ULONG object_flags) {
+    if (bytes == 0 || bytes > 65534 || bytes % sizeof(WCHAR) != 0) return INVALID_HANDLE_VALUE;
+    UNICODE_STRING text = {(USHORT)bytes, (USHORT)bytes, name};
+    OBJECT_ATTRIBUTES attrs = {0};
+    attrs.Length = sizeof(attrs);
+    attrs.RootDirectory = parent;
+    attrs.Attributes = object_flags;
+    attrs.ObjectName = &text;
+    IO_STATUS_BLOCK status;
+    HANDLE child = INVALID_HANDLE_VALUE;
+    // Denying write/delete sharing pins the entry and prevents changing an
+    // opened ordinary directory into a reparse point while we enumerate it.
+    NTSTATUS rc = open_child(&child, DELETE | FILE_LIST_DIRECTORY | FILE_READ_ATTRIBUTES | SYNCHRONIZE,
+        &attrs, &status, NULL, 0, FILE_SHARE_READ, FILE_OPEN, FILE_OPEN_REPARSE_POINT | FILE_SYNCHRONOUS_IO_NONALERT, NULL, 0);
+    return rc < 0 ? INVALID_HANDLE_VALUE : child;
+}
+
+static int plum_remove_handle(PlumRemoveOpen open_child, HANDLE handle, unsigned depth) {
+    FILE_ATTRIBUTE_TAG_INFO attrs;
+    if (!GetFileInformationByHandleEx(handle, FileAttributeTagInfo, &attrs, sizeof(attrs))) return -1;
+    if ((attrs.FileAttributes & FILE_ATTRIBUTE_DIRECTORY) &&
+        !(attrs.FileAttributes & FILE_ATTRIBUTE_REPARSE_POINT)) {
+        if (depth >= PLUM_REMOVE_DEPTH) return -1;
+        // malloc is suitably aligned for FILE_ID_BOTH_DIR_INFO. One bounded
+        // buffer per active directory, not one allocation per entry.
+        unsigned char *buffer = (unsigned char *)malloc(4096);
+        if (buffer == NULL) return -1;
+        int rc = 0;
+        for (;;) {
+            if (!GetFileInformationByHandleEx(handle, FileIdBothDirectoryInfo, buffer, 4096)) {
+                if (GetLastError() != ERROR_NO_MORE_FILES) rc = -1;
+                break;
+            }
+            DWORD offset = 0;
+            for (;;) {
+                FILE_ID_BOTH_DIR_INFO *entry = (FILE_ID_BOTH_DIR_INFO *)(buffer + offset);
+                DWORD bytes = entry->FileNameLength;
+                if (bytes == 0 || bytes % sizeof(WCHAR) != 0 ||
+                    bytes > 4096 - offset - offsetof(FILE_ID_BOTH_DIR_INFO, FileName)) { rc = -1; break; }
+                WCHAR *name = entry->FileName;
+                if (!((bytes == 2 && name[0] == L'.') ||
+                      (bytes == 4 && name[0] == L'.' && name[1] == L'.'))) {
+                    HANDLE child = plum_remove_child(open_child, handle, name, bytes, 0);
+                    if (child == INVALID_HANDLE_VALUE) { rc = -1; break; }
+                    if (plum_remove_handle(open_child, child, depth + 1) != 0) rc = -1;
+                    if (!CloseHandle(child)) rc = -1;
+                    if (rc != 0) break;
+                }
+                if (entry->NextEntryOffset == 0) break;
+                DWORD next = entry->NextEntryOffset;
+                if (next % 8 != 0 || next < offsetof(FILE_ID_BOTH_DIR_INFO, FileName) + bytes ||
+                    next > 4096 - offset - sizeof(FILE_ID_BOTH_DIR_INFO)) { rc = -1; break; }
+                offset += next;
+            }
+            if (rc != 0) break;
+        }
+        free(buffer);
+        if (rc != 0) return -1;
+    }
+    FILE_DISPOSITION_INFO disposition = {TRUE};
+    return SetFileInformationByHandle(handle, FileDispositionInfo, &disposition, sizeof(disposition)) ? 0 : -1;
+}
+
+static int plum_remove_tree(const char *path) {
+    HMODULE ntdll = GetModuleHandleW(L"ntdll.dll");
+    PlumRemoveOpen open_child = ntdll ? (PlumRemoveOpen)(void *)GetProcAddress(ntdll, "NtCreateFile") : NULL;
+    if (open_child == NULL) return -1;
+    int n = MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, path, -1, NULL, 0);
+    if (n <= 1) return -1;
+    WCHAR *wide = (WCHAR *)malloc((size_t)n * sizeof(WCHAR));
+    if (wide == NULL) return -1;
+    if (!MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, path, -1, wide, n)) { free(wide); return -1; }
+    --n;
+    while (n > 0 && (wide[n - 1] == L'/' || wide[n - 1] == L'\\')) wide[--n] = 0;
+    WCHAR *name = wide + n;
+    while (name > wide && name[-1] != L'/' && name[-1] != L'\\') --name;
+    if (name == wide && n > 2 && wide[1] == L':') name = wide + 2;
+    if (n == 0 || wide[n - 1] == L':' || wcscmp(name, L".") == 0 || wcscmp(name, L"..") == 0) {
+        free(wide);
+        return -1;
+    }
+    // Split before acquiring the root too: a single native child name avoids
+    // Win32's trailing-dot/space normalization and follows no final reparse
+    // point. Only the caller-supplied ancestors resolve normally.
+    DWORD bytes = (DWORD)((wide + n - name) * sizeof(WCHAR));
+    WCHAR first = *name;
+    *name = 0;
+    HANDLE parent = CreateFileW(name == wide ? L"." : wide,
+        FILE_LIST_DIRECTORY | FILE_READ_ATTRIBUTES | SYNCHRONIZE, FILE_SHARE_READ,
+        NULL, OPEN_EXISTING, FILE_FLAG_BACKUP_SEMANTICS, NULL);
+    *name = first;
+    if (parent == INVALID_HANDLE_VALUE) { free(wide); return -1; }
+    // Keep Win32 root-name lookup case-insensitive. Enumeration supplies
+    // exact child names, so those opens also support case-sensitive trees.
+    HANDLE handle = plum_remove_child(open_child, parent, name, bytes, OBJ_CASE_INSENSITIVE);
+    int parent_closed = CloseHandle(parent);
+    free(wide);
+    if (handle == INVALID_HANDLE_VALUE) return -1;
+    if (!parent_closed) { CloseHandle(handle); return -1; }
+    int rc = plum_remove_handle(open_child, handle, 0);
+    if (!CloseHandle(handle)) rc = -1;
+    return rc;
+}
+#endif
 
 long long os_remove_tree(const char *path) {
     return plum_remove_tree(path) == 0 ? 0 : -1;

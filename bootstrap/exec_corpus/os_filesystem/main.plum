@@ -70,7 +70,7 @@ let main (): Unit =
             };
 
             // `remove_tree` takes the whole thing, nested and all.
-            report("remove_tree", Os.remove_tree(root));
+            report("remove_tree", Os.remove_tree(root.concat("///")));
             match Os.is_directory(root) {
                 Err(_) => println("tree is gone: yes"),
                 Ok(still) => println(if still { "tree is gone: no" } else { "tree is gone: yes" }),
