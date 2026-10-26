@@ -155,8 +155,8 @@ with tempfile.TemporaryDirectory(prefix='plum-native-deps-') as tmp:
     direct = work / 'direct'
     direct.mkdir()
     manifest(direct, '[]')
-    (direct / 'main.plum').write_text('extern "C" { fn mbedtls_version_get_number() -> Int; }\n'
-        'let main (): Unit = println(if unsafe { mbedtls_version_get_number() } > 0 { 7 } else { -1 })\n')
+    (direct / 'main.plum').write_text('extern "C" { fn tls_close(handle: Int); }\n'
+        'let main (): Unit = { unsafe { tls_close(0) }; println(7) }\n')
     built(direct, 'tls', '--native-deps', 'none')
 
     for declaration in ('false', '[1]', '["openssl"]', '["tls", "tls"]'):

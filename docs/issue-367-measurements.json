@@ -1,0 +1,296 @@
+{
+  "platform": "Linux-7.2.11-arch1-1-x86_64-with-glibc2.44",
+  "clang": "clang version 23.1.3\nTarget: x86_64-pc-linux-gnu\nThread model: posix\nInstalledDir: /usr/bin\n",
+  "source_commit": "cae2f4cba7470ed3b8d0fe655a13ab3cd1558991",
+  "note": "Identical Plum/C source; baseline omits native_deps, candidate declares [] or [\"tls\"]. POSIX RSS is child-process maximum resident set, not concurrent aggregate memory. Wall time includes the Python measurement launcher on POSIX.",
+  "compiler_sha256": {
+    "baseline": "4cce215376586a71c81c26d1a54ebb400ad1f473d579346897ebcc89cc7334ee",
+    "candidate": "31141d5ab89da115d27e79f0f5e4cde8d5f71faa9cba4ade3d02934daced5ca2"
+  },
+  "results": {
+    "baseline-undeclared": {
+      "samples": [
+        {
+          "seconds": 10.64780826799688,
+          "max_rss_kib": 129892,
+          "executable_bytes": 3117808,
+          "phases_seconds": {
+            "dependency resolution": 9.4e-05,
+            "source discovery": 3.1e-05,
+            "IR lookup": 0.0,
+            "lex/parse": 0.00014,
+            "prelude/stdlib": 0.069864,
+            "type checking": 0.026733,
+            "reachability": 3.3e-05,
+            "helper discovery": 5e-05,
+            "global emission": 0.000532,
+            "helper emission": 3e-06,
+            "function emission": 0.000132,
+            "debug metadata": 0.0,
+            "IR join": 0.000955,
+            "shim extraction": 0.036692,
+            "native compile/link": 10.470092
+          }
+        },
+        {
+          "seconds": 10.11989056901075,
+          "max_rss_kib": 129692,
+          "executable_bytes": 3117808,
+          "phases_seconds": {
+            "dependency resolution": 0.000123,
+            "source discovery": 3.3e-05,
+            "IR lookup": 0.0,
+            "lex/parse": 0.000209,
+            "prelude/stdlib": 0.051269,
+            "type checking": 0.019537,
+            "reachability": 1.8e-05,
+            "helper discovery": 3.2e-05,
+            "global emission": 0.000369,
+            "helper emission": 3e-06,
+            "function emission": 0.000104,
+            "debug metadata": 0.0,
+            "IR join": 0.000699,
+            "shim extraction": 0.026992,
+            "native compile/link": 9.967353
+          }
+        },
+        {
+          "seconds": 9.746701588999713,
+          "max_rss_kib": 128808,
+          "executable_bytes": 3117808,
+          "phases_seconds": {
+            "dependency resolution": 0.000152,
+            "source discovery": 4.2e-05,
+            "IR lookup": 0.0,
+            "lex/parse": 0.000235,
+            "prelude/stdlib": 0.074892,
+            "type checking": 0.030303,
+            "reachability": 3.6e-05,
+            "helper discovery": 5.9e-05,
+            "global emission": 0.000814,
+            "helper emission": 5e-06,
+            "function emission": 0.000201,
+            "debug metadata": 0.0,
+            "IR join": 0.001617,
+            "shim extraction": 0.044575,
+            "native compile/link": 9.552916
+          }
+        }
+      ],
+      "median_seconds": 10.11989056901075
+    },
+    "candidate-undeclared": {
+      "samples": [
+        {
+          "seconds": 11.078768848004984,
+          "max_rss_kib": 129604,
+          "executable_bytes": 3117808,
+          "phases_seconds": {
+            "dependency resolution": 0.000133,
+            "source discovery": 3.3e-05,
+            "IR lookup": 0.0,
+            "lex/parse": 0.000208,
+            "prelude/stdlib": 0.0539,
+            "type checking": 0.019596,
+            "reachability": 2.3e-05,
+            "helper discovery": 2.9e-05,
+            "global emission": 0.000368,
+            "helper emission": 3e-06,
+            "function emission": 0.000113,
+            "debug metadata": 0.0,
+            "IR join": 0.0007,
+            "shim extraction": 0.027639,
+            "native compile/link": 10.933979
+          }
+        },
+        {
+          "seconds": 10.952810479997424,
+          "max_rss_kib": 130080,
+          "executable_bytes": 3117808,
+          "phases_seconds": {
+            "dependency resolution": 0.000109,
+            "source discovery": 2.6e-05,
+            "IR lookup": 0.0,
+            "lex/parse": 0.000153,
+            "prelude/stdlib": 0.070476,
+            "type checking": 0.026615,
+            "reachability": 2.4e-05,
+            "helper discovery": 3.8e-05,
+            "global emission": 0.000505,
+            "helper emission": 3e-06,
+            "function emission": 0.000134,
+            "debug metadata": 0.0,
+            "IR join": 0.000949,
+            "shim extraction": 0.037716,
+            "native compile/link": 10.777912
+          }
+        },
+        {
+          "seconds": 15.35676791498554,
+          "max_rss_kib": 129476,
+          "executable_bytes": 3117808,
+          "phases_seconds": {
+            "dependency resolution": 0.000132,
+            "source discovery": 3.2e-05,
+            "IR lookup": 0.0,
+            "lex/parse": 0.000159,
+            "prelude/stdlib": 0.076253,
+            "type checking": 0.029904,
+            "reachability": 2.7e-05,
+            "helper discovery": 4.2e-05,
+            "global emission": 0.000549,
+            "helper emission": 5e-06,
+            "function emission": 0.000184,
+            "debug metadata": 0.0,
+            "IR join": 0.001067,
+            "shim extraction": 0.040741,
+            "native compile/link": 15.164645
+          }
+        }
+      ],
+      "median_seconds": 11.078768848004984
+    },
+    "candidate-none": {
+      "samples": [
+        {
+          "seconds": 1.364209535997361,
+          "max_rss_kib": 113544,
+          "executable_bytes": 201792,
+          "phases_seconds": {
+            "dependency resolution": 0.000132,
+            "source discovery": 2.9e-05,
+            "IR lookup": 0.0,
+            "lex/parse": 0.000151,
+            "prelude/stdlib": 0.068547,
+            "type checking": 0.026456,
+            "reachability": 2.6e-05,
+            "helper discovery": 4e-05,
+            "global emission": 0.000514,
+            "helper emission": 4e-06,
+            "function emission": 0.000151,
+            "debug metadata": 0.0,
+            "IR join": 0.001174,
+            "shim extraction": 0.009203,
+            "native compile/link": 1.196475
+          }
+        },
+        {
+          "seconds": 1.1759120879869442,
+          "max_rss_kib": 113560,
+          "executable_bytes": 201792,
+          "phases_seconds": {
+            "dependency resolution": 0.00013,
+            "source discovery": 2.6e-05,
+            "IR lookup": 0.0,
+            "lex/parse": 0.000157,
+            "prelude/stdlib": 0.076137,
+            "type checking": 0.029682,
+            "reachability": 3.4e-05,
+            "helper discovery": 5.2e-05,
+            "global emission": 0.000562,
+            "helper emission": 4e-06,
+            "function emission": 0.000222,
+            "debug metadata": 0.0,
+            "IR join": 0.001078,
+            "shim extraction": 0.010031,
+            "native compile/link": 1.002477
+          }
+        },
+        {
+          "seconds": 1.098815351986559,
+          "max_rss_kib": 113328,
+          "executable_bytes": 201792,
+          "phases_seconds": {
+            "dependency resolution": 0.000222,
+            "source discovery": 2.8e-05,
+            "IR lookup": 0.0,
+            "lex/parse": 0.00015,
+            "prelude/stdlib": 0.070841,
+            "type checking": 0.02701,
+            "reachability": 2.5e-05,
+            "helper discovery": 4.6e-05,
+            "global emission": 0.000512,
+            "helper emission": 5e-06,
+            "function emission": 0.00013,
+            "debug metadata": 0.0,
+            "IR join": 0.000966,
+            "shim extraction": 0.009358,
+            "native compile/link": 0.949554
+          }
+        }
+      ],
+      "median_seconds": 1.1759120879869442
+    },
+    "candidate-tls": {
+      "samples": [
+        {
+          "seconds": 10.917459727992537,
+          "max_rss_kib": 129924,
+          "executable_bytes": 3117808,
+          "phases_seconds": {
+            "dependency resolution": 0.000139,
+            "source discovery": 2.6e-05,
+            "IR lookup": 0.0,
+            "lex/parse": 0.000151,
+            "prelude/stdlib": 0.070142,
+            "type checking": 0.026767,
+            "reachability": 2.4e-05,
+            "helper discovery": 3.9e-05,
+            "global emission": 0.000502,
+            "helper emission": 3e-06,
+            "function emission": 0.000135,
+            "debug metadata": 0.0,
+            "IR join": 0.000955,
+            "shim extraction": 0.03598,
+            "native compile/link": 10.742538
+          }
+        },
+        {
+          "seconds": 10.020893915003398,
+          "max_rss_kib": 128608,
+          "executable_bytes": 3117808,
+          "phases_seconds": {
+            "dependency resolution": 0.000181,
+            "source discovery": 3.4e-05,
+            "IR lookup": 0.0,
+            "lex/parse": 0.000206,
+            "prelude/stdlib": 0.067181,
+            "type checking": 0.020307,
+            "reachability": 1.9e-05,
+            "helper discovery": 3e-05,
+            "global emission": 0.000384,
+            "helper emission": 3e-06,
+            "function emission": 0.000109,
+            "debug metadata": 0.0,
+            "IR join": 0.000721,
+            "shim extraction": 0.028221,
+            "native compile/link": 9.867688
+          }
+        },
+        {
+          "seconds": 9.616842680989066,
+          "max_rss_kib": 130068,
+          "executable_bytes": 3117808,
+          "phases_seconds": {
+            "dependency resolution": 0.000187,
+            "source discovery": 3.3e-05,
+            "IR lookup": 0.0,
+            "lex/parse": 0.00021,
+            "prelude/stdlib": 0.060231,
+            "type checking": 0.021544,
+            "reachability": 2.5e-05,
+            "helper discovery": 3.7e-05,
+            "global emission": 0.000455,
+            "helper emission": 5e-06,
+            "function emission": 0.000176,
+            "debug metadata": 0.0,
+            "IR join": 0.000853,
+            "shim extraction": 0.030277,
+            "native compile/link": 9.468521
+          }
+        }
+      ],
+      "median_seconds": 10.020893915003398
+    }
+  }
+}
