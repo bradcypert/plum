@@ -20,13 +20,12 @@
 // Plum's extern surface has no raw pointers, no out-parameters and no
 // multi-value return.
 //
-// **Returned strings live in a static buffer**, not in `malloc`'d
-// memory. The Plum side copies immediately into a string cell
-// (`plum_str_new`), so the buffer's contents are needed only until the
-// call returns -- and a `malloc` here would be a leak, since the
-// extern boundary gives the Plum side no way to free it. Not
-// re-entrant, and not required to be: nothing calls these from more
-// than one thread.
+// Path results borrow fixed-size thread-local buffers. The Plum side
+// copies immediately into a string cell (`plum_str_new`), before another
+// native call on that thread can overwrite the result. Other threads
+// cannot overwrite it during that copy. No per-call malloc or thread-exit
+// destructor is needed: the buffers themselves have thread storage
+// duration, rather than pointing at separately allocated heap memory.
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -69,7 +68,15 @@
 
 #define PLUM_PATH_MAX 4096
 
-static char plum_os_buf[PLUM_PATH_MAX];
+#if defined(_MSC_VER)
+#define PLUM_OS_TLS __declspec(thread)
+#else
+#define PLUM_OS_TLS _Thread_local
+#endif
+
+// temp_dir and self_exe share scratch space only within one thread.
+// Each simultaneous mkdtemp/GetTempFileNameA call has its own template.
+static PLUM_OS_TLS char plum_os_buf[PLUM_PATH_MAX];
 
 // Compiler artifact support. Hash files in bounded memory: materializing the
 // compiler executable as an Array[Int] just to fingerprint it would dominate
@@ -416,7 +423,11 @@ const char *os_self_exe(void) {
     if (_NSGetExecutablePath(plum_os_buf, &n) != 0) plum_os_buf[0] = '\0';
 #else
     ssize_t n = readlink("/proc/self/exe", plum_os_buf, sizeof(plum_os_buf) - 1);
-    if (n < 0) { plum_os_buf[0] = '\0'; } else { plum_os_buf[n] = '\0'; }
+    // readlink does not terminate its output and a full buffer may be
+    // truncated. Report failure rather than a successful path prefix.
+    if (n < 0 || (size_t)n >= sizeof(plum_os_buf) - 1) {
+        plum_os_buf[0] = '\0';
+    } else { plum_os_buf[n] = '\0'; }
 #endif
     return plum_os_buf;
 }
@@ -774,12 +785,6 @@ long long os_copy_tree(const char *src, const char *dst) {
 #include <errno.h>
 #include <time.h>
 
-#if defined(_MSC_VER)
-#define PLUM_OS_TLS __declspec(thread)
-#else
-#define PLUM_OS_TLS _Thread_local
-#endif
-
 static PLUM_OS_TLS long long stat_size = 0;
 static PLUM_OS_TLS long long stat_mtime = 0;
 static PLUM_OS_TLS long long stat_is_dir = 0;
@@ -930,7 +935,7 @@ long long os_path_exists(const char *path) {
 // Its own buffer rather than `plum_os_buf`: that one holds the result of
 // `os_temp_dir`/`os_self_exe`, and a caller holding one of those across
 // a `cwd()` would silently get the wrong string back.
-static char plum_cwd_buf[PLUM_PATH_MAX];
+static PLUM_OS_TLS char plum_cwd_buf[PLUM_PATH_MAX];
 
 // "" on failure, never NULL -- a null `CStr` return is a hard runtime
 // abort under Plum's FFI semantics, the same trade every other shim
