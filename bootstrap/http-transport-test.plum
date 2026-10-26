@@ -35,7 +35,83 @@ let test_body (result: Result[Bytes, String]) (expected: Bytes): Unit = match re
 let test_wire (result: Result[HttpWire, String]): HttpWire = match result {
     Ok(w) => w, Err(e) => { panic_raw(e); HttpWire { head: Bytes.empty(), body: Bytes.empty() } },
 }
+let test_forbidden_handler (req: Request): Response = {
+    panic_raw("invalid framing reached handler");
+    Response { status: 200, headers: [], body: Bytes.empty() }
+}
+let test_framing (): Unit = {
+    let bad = ["", "-1", "+1", "1x", "0x10", "1 0", "1\t0", ",1", "1,", "1,,1", "1,2", "9223372036854775808", "99999999999999999999999999"];
+    for value in bad {
+        let headers = [Header { name: "cOnTeNt-LeNgTh", value: value }];
+        for secure in [0, 1] {
+            test_peer(Bytes.empty(), 0, 7, 1, -1);
+            assert_eq(Result.is_err(http_read_body(1, secure, "GET", 200, headers, Bytes.empty())), true);
+            assert_eq(unsafe { http_test_largest_read() }, 0)
+        };
+        test_peer("POST / HTTP/1.1\r\nHost:a\r\nContent-Length: ".concat(value)
+            .concat("\r\nExpect: 100-continue\r\n\r\n").as_bytes(), 0, 7, 1, -1);
+        assert_eq(Result.is_err(http_handle_connection(1, test_forbidden_handler)), true);
+        test_bytes(test_output(), "HTTP/1.1 400 Bad Request\r\nContent-Length: 0\r\nConnection: close\r\n\r\n".as_bytes())
+    };
+    for fields in ["Content-Length:3\r\ncontent-length:4", "Content-Length:3\r\nTransfer-Encoding:chunked", "Transfer-Encoding:chunked\r\ncontent-length:3", "Transfer-Encoding:\r\nContent-Length:0", "Transfer-Encoding:chunked\r\nTransfer-Encoding:identity"] {
+        let wire = "POST / HTTP/1.1\r\nHost:a\r\n".concat(fields).concat("\r\nExpect: 100-continue\r\n\r\n");
+        test_peer(wire.as_bytes(), 0, 7, 1, -1);
+        assert_eq(Result.is_err(http_handle_connection(1, test_forbidden_handler)), true);
+        test_bytes(test_output(), "HTTP/1.1 400 Bad Request\r\nContent-Length: 0\r\nConnection: close\r\n\r\n".as_bytes());
+        let h = match http_parse_head("HTTP/1.1 200 OK\r\n".concat(fields).concat("\r\n\r\n").as_bytes()) {
+            Ok(h) => h, Err(e) => { panic_raw(e); Head { status: 0, headers: [], leftover_body: Bytes.empty() } },
+        };
+        for secure in [0, 1] {
+            test_peer(Bytes.empty(), 0, 7, 1, -1);
+            assert_eq(Result.is_err(http_read_body(1, secure, "GET", 200, h.headers, Bytes.empty())), true);
+            assert_eq(unsafe { http_test_largest_read() }, 0)
+        }
+    };
+    for value in ["3", "003", "3,3", " 3 , 003\t", "3, 3,3"] {
+        let headers = [Header { name: "Content-Length", value: value }, Header { name: "CONTENT-LENGTH", value: "03" }];
+        assert_eq(http_framing(headers), Ok(3));
+        for secure in [0, 1] {
+            test_peer(Bytes.empty(), 0, 7, 1, -1);
+            test_body(http_read_body(1, secure, "GET", 200, headers, "abcNEXT".as_bytes()), "abc".as_bytes());
+            assert_eq(unsafe { http_test_largest_read() }, 0)
+        };
+        test_body(http_read_request_body(-1, headers, "abcNEXT".as_bytes()), "abc".as_bytes())
+    };
+    test_body(http_read_request_body(-1, [], "GET /next HTTP/1.1\r\n\r\n".as_bytes()), Bytes.empty());
+    test_body(http_read_request_body(-1, [Header { name: "Content-Length", value: "0" }], "extra".as_bytes()), Bytes.empty());
+    assert_eq(http_framing([Header { name: "Content-Length", value: "9223372036854775807" }]), Ok(9223372036854775807));
+    // Long leading-zero spelling exercises bounded stack and linear work.
+    // Bytes.at currently allocates a 24-byte Option per byte. Pin linear
+    // allocation volume; this is not a peak-live-memory measurement.
+    let long = String.repeat("0", 100000).concat("3");
+    let headers = [Header { name: "Content-Length", value: long }];
+    let before = unsafe { http_test_allocated_bytes() };
+    assert_eq(http_framing(headers), Ok(3));
+    assert_eq(unsafe { http_test_allocated_bytes() } - before < 24 * long.len() + 4096, true);
+    for version in ["HTTP/1.0", "HTTP/1.1"] {
+        for fields in ["Content-Length:3\r\nExpect:100-continue", "Content-Length:3\r\nExpect:100-continue\r\nexpect:100-CONTINUE", "Content-Length:3\r\nExpect: 100-continue, 100-CONTINUE\t"] {
+            test_peer("POST / ".concat(version).concat("\r\nHost:a\r\n").concat(fields).concat("\r\n\r\nabcEXTRA").as_bytes(), 0, 7, 1, -1);
+            assert_eq(http_handle_connection(1, |req| Response { status: 200, headers: [], body: req.body }), Ok(()));
+            test_bytes(test_output(), "HTTP/1.1 200 OK\r\nContent-Length: 3\r\nConnection: close\r\n\r\nabc".as_bytes())
+        }
+    };
+    test_peer("GET / HTTP/1.1\r\nHost:a\r\nContent-Length:0\r\nExpect:100-continue\r\n\r\n".as_bytes(), 0, 7, 1, -1);
+    assert_eq(http_handle_connection(1, |req| Response { status: 204, headers: [], body: req.body }), Ok(()));
+    test_bytes(test_output(), "HTTP/1.1 204 No Content\r\nConnection: close\r\n\r\n".as_bytes());
+    for expectation in ["", "magic", "100-continue, magic", "100-continue\r\nExpect:magic"] {
+        test_peer("POST / HTTP/1.1\r\nHost:a\r\nContent-Length:3\r\nExpect:".concat(expectation).concat("\r\n\r\n").as_bytes(), 0, 7, 1, -1);
+        assert_eq(Result.is_err(http_handle_connection(1, test_forbidden_handler)), true);
+        test_bytes(test_output(), "HTTP/1.1 417 Expectation Failed\r\nContent-Length: 0\r\nConnection: close\r\n\r\n".as_bytes())
+    };
+    test_peer("POST / HTTP/1.0\r\nContent-Length:3\r\nExpect:magic\r\n\r\nabc".as_bytes(), 0, 7, 1, -1);
+    assert_eq(http_handle_connection(1, |req| Response { status: 200, headers: [], body: req.body }), Ok(()));
+    for name in ["Host", "hOsT", "Content-Length", "content-length", "Transfer-Encoding", "TRANSFER-ENCODING"] {
+        assert_eq(request("POST", "http://127.0.0.1:1/", [Header { name: name, value: "3" }], "abc".as_bytes())
+            == Err("http client: Host, Content-Length and Transfer-Encoding are managed headers"), true)
+    }
+}
 let main (): Unit = {
+    test_framing();
     let mut octets = [];
     for n in 0..256 { octets = octets.push(n); };
     let payload = Bytes.from_array(octets);

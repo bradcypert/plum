@@ -138,17 +138,18 @@ let http_build_request (method: String) (parsed: Url.Url) (headers: Array[Header
     if !http_token_ok(method) { Err("http client: invalid method") }
     else if String.is_empty(target) || !http_text_ok_acc(target.as_bytes(), 0, false) { Err("http client: invalid request target") }
     else if String.is_empty(authority) || !http_text_ok_acc(authority.as_bytes(), 0, false) { Err("http client: invalid authority") }
-    else { Result.map(http_validate_headers(headers, 0), |ignored| {
-        let extra_header_lines = Array.fold(headers, "", |acc, h| acc.concat(h.name).concat(": ").concat(h.value).concat("\r\n"));
-        let content_length_line = if body.is_empty() { "" } else { "Content-Length: ".concat(body.len().to_string()).concat("\r\n") };
-        let head = method.concat(" ").concat(target).concat(" HTTP/1.1\r\n")
+    else { Result.map(http_validate_headers(headers, 0)
+        |> Result.and_then(_, |ignored| http_request_headers(headers, 0)), |ignored| {
+            let extra_header_lines = Array.fold(headers, "", |acc, h| acc.concat(h.name).concat(": ").concat(h.value).concat("\r\n"));
+            let content_length_line = if body.is_empty() { "" } else { "Content-Length: ".concat(body.len().to_string()).concat("\r\n") };
+            let head = method.concat(" ").concat(target).concat(" HTTP/1.1\r\n")
             .concat("Host: ").concat(authority).concat("\r\n")
             .concat("Connection: close\r\n")
             .concat(content_length_line)
             .concat(extra_header_lines)
             .concat("\r\n");
-        HttpWire { head: head.as_bytes(), body: body }
-    }) }
+            HttpWire { head: head.as_bytes(), body: body }
+        }) }
 }
 
 // Search byte offsets, retaining the last three bytes as overlap after a
@@ -254,6 +255,54 @@ let http_header_named (header: Header) (name: String): Bool =
 let http_find_header (headers: Array[Header]) (name: String): Option[String] =
     Option.map(Array.find(headers, |h| http_header_named(h, name)), |h| h.value)
 
+// Parse decimal lists directly from bytes: no split array or magnitude-sized
+// recursion/allocation. The -1 sentinel means no length has been seen yet.
+// SP/HTAB may surround list members, never interrupt a decimal number.
+let http_lengths (b: Bytes) (i: Int) (n: Int) (phase: Int) (known: Int): Result[Int, String] = {
+    let c = http_byte(b, i);
+    if i == b.len() || c == 44 {
+        if phase == 0 { Err("http: invalid Content-Length header") }
+        else if known >= 0 && known != n { Err("http: conflicting Content-Length headers") }
+        else if i == b.len() { Ok(n) }
+        else { http_lengths(b, i + 1, 0, 0, n) }
+    } else if http_digit(c) && phase != 2 {
+        let digit = c - 48;
+        if n > (9223372036854775807 - digit) / 10 { Err("http: Content-Length out of range") }
+        else { http_lengths(b, i + 1, n * 10 + digit, 1, known) }
+    } else if http_ows(c) {
+        http_lengths(b, i + 1, n, if phase == 1 { 2 } else { phase }, known)
+    } else { Err("http: invalid Content-Length header") }
+}
+
+let http_content_lengths (headers: Array[Header]) (i: Int) (known: Int): Result[Int, String] =
+    if i >= headers.len() { Ok(known) }
+    else if http_header_named(headers[i], "Content-Length") {
+        match http_lengths(headers[i].value.as_bytes(), 0, 0, 0, known) {
+            Err(e) => Err(e),
+            Ok(n) => http_content_lengths(headers, i + 1, n),
+        }
+    } else { http_content_lengths(headers, i + 1, known) }
+
+// Resolve metadata before reading or acknowledging any body. Chunked
+// decoding is unsupported; never fall back to Content-Length for a coding.
+// -1 is unframed: empty for requests, close-delimited for responses.
+let http_framing (headers: Array[Header]): Result[Int, String] =
+    match http_find_header(headers, "Transfer-Encoding") {
+        Some(te) => if Option.is_some(http_find_header(headers, "Content-Length")) {
+            Err("http: Content-Length and Transfer-Encoding cannot be combined")
+        } else { Err("http: Transfer-Encoding (".concat(te).concat(") is not supported yet")) },
+        None => http_content_lengths(headers, 0, -1),
+    }
+
+// Whole-message APIs own Host/framing. Reject caller overrides before
+// connecting rather than emitting a second, potentially conflicting field.
+let http_request_headers (headers: Array[Header]) (i: Int): Result[Unit, String] =
+    if i >= headers.len() { Ok(()) }
+    else if http_header_named(headers[i], "Host") || http_header_named(headers[i], "Content-Length")
+        || http_header_named(headers[i], "Transfer-Encoding") {
+            Err("http client: Host, Content-Length and Transfer-Encoding are managed headers")
+        } else { http_request_headers(headers, i + 1) }
+
 // Decode exactly the head, never the body. Byte offsets stay byte offsets
 // even when a header contains multibyte UTF-8.
 let http_parse_head (raw: Bytes): Result[Head, String] =
@@ -283,51 +332,27 @@ let http_recv_body_until_close_acc (fd: Int) (secure: Int) (acc: Bytes): Result[
             else { http_recv_body_until_close_acc(fd, secure, acc.concat(chunk)) },
     }
 
-// Response framing needs the initiating method as well as the status.
-// Ignore even buffered content for a bodyless response; never allocate a
-// receive buffer based on its representation's advertised Content-Length.
+// Ignore bytes beyond the selected message boundary. This server closes
+// after one request; surplus bytes must never become handler body content.
+let http_read_fixed_body (fd: Int) (secure: Int) (length: Int) (pending: Bytes): Result[Bytes, String] =
+    if length == 0 { Ok(Bytes.empty()) }
+    else if pending.len() == length { Ok(pending) }
+    else if pending.len() > length { Ok(pending.slice(0, length)) }
+    else { http_recv_body_by_length_acc(fd, secure, pending, length - pending.len()) }
+
+// Method/status precedence comes before framing metadata (RFC 9112 6.3).
 let http_read_body (fd: Int) (secure: Int) (method: String) (status: Int) (headers: Array[Header]) (leftover_body: Bytes): Result[Bytes, String] =
     if http_response_bodyless(method, status) { Ok(Bytes.empty()) }
     else if http_tunnel(method, status) { Err("http client: CONNECT tunnels are not supported") }
-    else { match http_find_header(headers, "Content-Length") {
-        Some(cl) => match String.parse_int(cl) {
-            Err(e) => Err("http: invalid Content-Length header: ".concat(e)),
-            Ok(content_length) => http_recv_body_by_length_acc(fd, secure, leftover_body, content_length - leftover_body.len()),
-        },
-        None => match http_find_header(headers, "Transfer-Encoding") {
-            Some(te) => Err("http: Transfer-Encoding (".concat(te).concat(") is not supported yet")),
-            None => http_recv_body_until_close_acc(fd, secure, leftover_body),
-        },
-    } }
+    else { http_framing(headers) |> Result.and_then(_, |length|
+        if length < 0 { http_recv_body_until_close_acc(fd, secure, leftover_body) }
+        else { http_read_fixed_body(fd, secure, length, leftover_body) }) }
 
-/// The REQUEST-side sibling of `http_read_body` above — same `Content-
-/// Length`/`Transfer-Encoding` handling, but a DELIBERATELY different
-/// answer when NEITHER is present: an EMPTY body (`leftover_body` as-
-/// is), never "read until the connection closes." Originally shared
-/// `http_read_body` directly for both — a real, live DEADLOCK surfaced
-/// exactly that assumption was wrong, not just imprecise: a bodyless
-/// `GET` (no `Content-Length`, since there's no body to measure) has no
-/// reason to ever close its OWN write side, so a server blocked
-/// "reading until close" on it hangs forever waiting for a body that
-/// will never arrive — confirmed directly (a real test hung against a
-/// real socket, root-caused by isolating each step with `println`
-/// debugging until the exact hang site was found), not merely
-/// theorized. The response side's OWN "no length header -> read until
-/// close" answer stays correct on ITS side: every request this client
-/// sends already includes `Connection: close`, so that read is bounded
-/// by the SERVER eventually closing once it's done writing — a
-/// guarantee nothing analogous exists for on the request side.
+// Requests without framing have zero content, even if another request or
+// unsolicited bytes arrived in the same network read.
 let http_read_request_body (fd: Int) (headers: Array[Header]) (leftover_body: Bytes): Result[Bytes, String] =
-    match http_find_header(headers, "Content-Length") {
-        Some(cl) => match String.parse_int(cl) {
-            Err(e) => Err("http: invalid Content-Length header: ".concat(e)),
-            Ok(content_length) => http_recv_body_by_length_acc(fd, 0, leftover_body, content_length - leftover_body.len()),
-        },
-        None => match http_find_header(headers, "Transfer-Encoding") {
-            Some(te) => Err("http: Transfer-Encoding (".concat(te).concat(") is not supported yet")),
-            None => Ok(leftover_body),
-        },
-    }
+    http_framing(headers) |> Result.and_then(_, |length|
+        http_read_fixed_body(fd, 0, Int.max(0, length), leftover_body))
 
 // Carry only unread bytes to the next head. A direct tail call releases
 // the previous head instead of retaining one continuation per interim
@@ -359,7 +384,9 @@ let http_do_request (fd: Int) (secure: Int) (method: String) (wire: HttpWire): R
 /// certificate and hostname using the native TLS trust-store integration.
 ///
 /// Invalid URL text, methods, header names, and header values return Err
-/// before connecting. Methods and names must be nonempty ASCII tokens;
+/// before connecting. Caller Host, Content-Length and Transfer-Encoding
+/// fields are rejected: the builder owns authority and framing. Methods
+/// and names must be nonempty ASCII tokens;
 /// values may contain spaces, HTAB, and UTF-8, but no other ASCII controls
 /// or DEL. Bodies are not subject to protocol-field validation.
 ///
@@ -561,6 +588,45 @@ let http_response_to_wire (method: String) (resp: Response): Result[HttpWire, St
         HttpWire { head: head.as_bytes(), body: body }
     }) }
 
+// The public RequestHead omits version. Inspect the already validated
+// request line only when Expect is present, preserving that public shape.
+let http_request_http11 (raw: Bytes) (i: Int): Bool =
+    if i + 1 >= raw.len() { false }
+    else if http_byte(raw, i) == 13 && http_byte(raw, i + 1) == 10 {
+        i >= 8 && raw.slice(i - 8, i) == "HTTP/1.1".as_bytes()
+    } else { http_request_http11(raw, i + 1) }
+
+let http_expectations_ok (headers: Array[Header]) (i: Int): Bool =
+    if i >= headers.len() { true }
+    else if http_header_named(headers[i], "Expect")
+        && !http_expectation_value(headers[i].value.as_bytes(), 0) { false }
+    else { http_expectations_ok(headers, i + 1) }
+
+// Expect is a list. Each supported member is exactly 100-continue;
+// compare bounded token slices rather than allocating a split array.
+let http_expectation_value (value: Bytes) (offset: Int): Bool = {
+    let start = http_ows_start(value, offset);
+    let end = start + 12;
+    if end > value.len() || !http_ascii_equal(value.slice(start, end), "100-continue".as_bytes(), 0) { false }
+    else {
+        let next = http_ows_start(value, end);
+        if next == value.len() { true }
+        else if http_byte(value, next) == 44 { http_expectation_value(value, next + 1) }
+        else { false }
+    }
+}
+
+let http_reject_request (conn: Int) (status: String) (error: String): Result[Unit, String] =
+    http_write_all(conn, 0, "HTTP/1.1 ".concat(status).concat("\r\nContent-Length: 0\r\nConnection: close\r\n\r\n").as_bytes(), 0)
+        |> Result.and_then(_, |ignored| Err(error))
+
+let http_dispatch_request (conn: Int) (head: RequestHead) (length: Int) (handler: (Request) -> Response): Result[Unit, String] =
+    http_read_fixed_body(conn, 0, Int.max(0, length), head.leftover_body) |> Result.and_then(_, |body| {
+        let request = Request { method: head.method, path: head.path, headers: head.headers, body: body };
+        http_response_to_wire(head.method, handler(request))
+            |> Result.and_then(_, |wire| http_send(conn, 0, wire))
+    })
+
 /// Reads exactly one request off `conn`, runs `handler`, writes exactly
 /// one response back — never touches `conn`'s own lifecycle (opening/
 /// closing), that's `serve_once`/`http_serve_loop`'s job below, so
@@ -570,14 +636,21 @@ let http_response_to_wire (method: String) (resp: Response): Result[HttpWire, St
 let http_handle_connection (conn: Int) (handler: (Request) -> Response): Result[Unit, String] =
     http_recv_headers_acc(conn, 0, Bytes.empty()) |> Result.and_then(_, |raw|
         match http_parse_request_head(raw) {
-            Err(e) => http_write_all(conn, 0, "HTTP/1.1 400 Bad Request\r\nContent-Length: 0\r\nConnection: close\r\n\r\n".as_bytes(), 0)
-                |> Result.and_then(_, |ignored| Err(e)),
-            Ok(head) => http_read_request_body(conn, head.headers, head.leftover_body) |> Result.and_then(_, |body| {
-                let request = Request { method: head.method, path: head.path, headers: head.headers, body: body };
-                let response = handler(request);
-                http_response_to_wire(head.method, response)
-                    |> Result.and_then(_, |wire| http_send(conn, 0, wire))
-            }),
+            Err(e) => http_reject_request(conn, "400 Bad Request", e),
+            Ok(head) => match http_framing(head.headers) {
+                Err(e) => http_reject_request(conn, "400 Bad Request", e),
+                Ok(length) => {
+                    let expect = Option.is_some(http_find_header(head.headers, "Expect")) && http_request_http11(raw, 0);
+                    if expect && !http_expectations_ok(head.headers, 0) {
+                        http_reject_request(conn, "417 Expectation Failed", "http server: unsupported expectation")
+                    } else {
+                        let ready = if expect && length > head.leftover_body.len() {
+                            http_write_all(conn, 0, "HTTP/1.1 100 Continue\r\n\r\n".as_bytes(), 0)
+                        } else { Ok(()) };
+                        ready |> Result.and_then(_, |ignored| http_dispatch_request(conn, head, length, handler))
+                    }
+                },
+            },
         })
 
 /// Handles exactly ONE connection then returns — listens, accepts once,
@@ -591,7 +664,14 @@ let http_handle_connection (conn: Int) (handler: (Request) -> Response): Result[
 /// Transfer-Encoding fields are replaced by this generated framing.
 /// Malformed request lines/fields and missing (HTTP/1.1), duplicate, or
 /// invalid Host fields receive 400 before body reading or handler dispatch,
-/// then return Err. HTTP/1.0 may omit Host. Present Host values use URI host
+/// then return Err. Ambiguous, invalid, or unsupported body framing also
+/// receives 400 before reading content or dispatching the handler. Repeated
+/// or comma-separated Content-Length values must all agree and use decimal
+/// digits within Int range. Requests without framing have an empty body;
+/// bytes beyond a declared length are excluded from that request's body.
+/// HTTP/1.1 Expect: 100-continue is acknowledged before waiting for content;
+/// unsupported expectations receive 417. HTTP/1.0 expectations are ignored.
+/// HTTP/1.0 may omit Host. Present Host values use URI host
 /// syntax, including empty values, IP literals, and optional decimal ports.
 /// Real, useful on its own
 /// (a one-shot server, or a test fixture — this is what THIS module's

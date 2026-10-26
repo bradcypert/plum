@@ -452,7 +452,7 @@ let main (): Unit = {
     // No body is sent and the client keeps its write side open. The only
     // way this finishes is rejecting BEFORE any Content-Length allocation
     // or blocking body read. Each join also proves serve_once returns Err.
-    for fields in ["", "Host:a\r\nhOsT:a\r\n", "Host:a/b\r\n", "Host:a\r\nHost\r\n"] {
+    for fields in ["", "Host:a\r\nhOsT:a\r\n", "Host:a/b\r\n", "Host:a\r\nHost\r\n", "Host:a\r\nContent-Length:-1\r\n", "Host:a\r\ncontent-length:3\r\n", "Host:a\r\nTransfer-Encoding:chunked\r\n"] {
         let server = spawn { serve_once(18801, forbidden_handler) };
         assert_eq(exchange("POST / HTTP/1.1\r\n".concat(fields).concat("Content-Length: 999999999999\r\nExpect: 100-continue\r\n\r\n")), "HTTP/1.1 400 Bad Request\r\nContent-Length: 0\r\nConnection: close\r\n\r\n");
         assert_eq(Result.is_err(server.join()), true)
