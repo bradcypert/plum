@@ -91,6 +91,8 @@ pub struct Manifest {
     pub link_macos: Array[String],
     pub link_windows: Array[String],
     pub link_posix: Array[String],
+    // None preserves conservative selection for undeclared native inputs.
+    pub native_deps: Option[Array[String]],
 }
 
 // The libraries this manifest asks for when building for `os`.
@@ -106,7 +108,7 @@ pub let manifest_name (unit: Unit): String = "plum.pkg"
 
 // What a project with no `plum.pkg` has. Not an error: the file is
 // optional, and its absence means "no dependencies", not "malformed".
-pub let no_manifest (unit: Unit): Manifest = Manifest { name: "", version: "", deps: [], link: [], link_linux: [], link_macos: [], link_windows: [], link_posix: [] }
+pub let no_manifest (unit: Unit): Manifest = Manifest { name: "", version: "", deps: [], link: [], link_linux: [], link_macos: [], link_windows: [], link_posix: [], native_deps: None }
 
 pub let manifest_path (root: String): String = Path.join(root, manifest_name(()))
 
@@ -212,7 +214,7 @@ let to_manifest (path: String) (src: String) (e: parser.PExpr): Manifest = match
             fail(path, "a manifest is one `Package { .. }`, but this one is `${last_segment(lit_path)}`")
         };
         reject_unknown(path, fields, 0,
-            ["name", "version", "deps", "link", "link_linux", "link_macos", "link_windows", "link_posix"], "Package");
+            ["name", "version", "deps", "link", "link_linux", "link_macos", "link_windows", "link_posix", "native_deps"], "Package");
         Manifest {
             name: required_string(path, fields, "name", "Package"),
             version: optional_string(path, fields, "version"),
@@ -222,10 +224,43 @@ let to_manifest (path: String) (src: String) (e: parser.PExpr): Manifest = match
             link_macos: link_field(path, fields, "link_macos"),
             link_windows: link_field(path, fields, "link_windows"),
             link_posix: link_field(path, fields, "link_posix"),
+            native_deps: native_deps_field(path, fields),
         }
     },
     _ => { fail(path, "a manifest is one `Package { .. }`"); no_manifest(()) },
 }
+
+// Embedded native dependencies are capabilities, not linker flags or
+// source-text guesses. An explicit empty list certifies no dependency;
+// omission leaves native callers on the compatibility path.
+let native_deps_field (path: String) (fields: Array[parser.FieldInitNode]): Option[Array[String]] =
+    match field_named(fields, "native_deps", 0) {
+        None => None,
+        Some(v) => match v {
+            EArray(elems) => Some(native_dep_names(path, elems, 0, [])),
+            _ => { fail(path, "`native_deps` is an array of embedded dependency names (`tls`)"); None },
+        },
+    }
+
+let native_dep_names (path: String) (elems: Array[parser.PExpr]) (i: Int) (acc: Array[String]): Array[String] =
+    if i >= elems.len() { acc }
+    else {
+        let name = match elems[i] {
+            EStr(s) => s,
+            _ => { fail(path, "`native_deps` holds strings (`tls`)"); "" },
+        };
+        if name != "tls" { fail(path, "unknown embedded native dependency `${name}`; expected `tls`") };
+        if Array.contains(acc, name) { fail(path, "duplicate native dependency `${name}`") };
+        native_dep_names(path, elems, i + 1, acc.push(name))
+    }
+
+// Only a package with selected native sources/libraries needs the unknown
+// fallback. Explicit dependencies may request TLS even without own sources.
+pub let native_needs_tls (m: Manifest) (has_inputs: Bool): Bool =
+    match m.native_deps {
+        None => has_inputs,
+        Some(names) => Array.contains(names, "tls"),
+    }
 
 // A list of library NAMES. The validator is the whole point: a name is
 // what `-l` takes, so anything that could be a flag, a path or a shell
@@ -439,3 +474,14 @@ let is_identifier (s: String): Bool = {
 }
 
 let fail (path: String) (msg: String): Unit = panic_raw("${path}: ${msg}")
+
+pub let test_native_dependency_contract (): Unit = {
+    let unknown = parse("plum.pkg", "Package { name: \"native\" }");
+    assert(native_needs_tls(unknown, true));
+    assert(!native_needs_tls(unknown, false));
+    let none = parse("plum.pkg", "Package { name: \"native\", native_deps: [] }");
+    assert(!native_needs_tls(none, true));
+    let tls = parse("plum.pkg", "Package { name: \"native\", native_deps: [\"tls\"] }");
+    assert(native_needs_tls(tls, true));
+    assert(native_needs_tls(tls, false));
+}

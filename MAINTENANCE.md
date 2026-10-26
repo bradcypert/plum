@@ -965,3 +965,26 @@ never looked at).
 variables. The reference must stand alone in a folder on someone's disk
 with no build step and no network, so it cannot import a stylesheet
 from the site. Change one, change the other.
+
+## Measuring embedded native dependency selection
+
+`bootstrap/native-deps-check [compiler]` verifies the `native_deps`
+manifest contract, legacy fallback, native-only TLS calls, and cache edits.
+It runs on Linux, macOS, and Windows CI. See MODULES.md for the public
+contract. Keep undeclared/opaque inputs conservative; a source-text search
+is not evidence that a C input or linked library has no TLS dependency.
+
+For repeatable measurements on an idle host:
+
+```sh
+./bootstrap/measure-native-deps --baseline /path/to/old-plum \
+    --candidate /path/to/new-plum --samples 3 --out /tmp/native-deps.json
+```
+
+The baseline receives identical Plum/C code without the new manifest field;
+the candidate is measured with omitted, empty, and TLS declarations. For a
+selection-only comparison on one host, use the same current compiler for
+both arguments. The report includes wall/phase times, executable sizes,
+and per-command maximum RSS on POSIX. Windows RSS is left unavailable;
+measure it separately rather than confusing executable size with runtime
+memory. The tool measures compiler invocations, not application runtime RSS.

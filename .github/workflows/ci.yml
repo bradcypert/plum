@@ -164,6 +164,10 @@ jobs:
         run: ./bootstrap/remove-tree-smoke
       - name: OS path results survive concurrent native calls
         run: ./bootstrap/os-path-smoke
+      - name: declared native dependencies preserve TLS compatibility
+        env:
+          PLUM_CI_TIMINGS: "1"
+        run: ./bootstrap/native-deps-check ./sh.real
       - name: whole-file reads propagate failures and preserve bytes
         run: ./bootstrap/file-read-smoke
       - name: the version string is consistent
@@ -309,6 +313,10 @@ jobs:
         run: ./bootstrap/platform-smoke ./sh.real
       - name: build cache preserves program behavior
         run: ./bootstrap/build-cache-check ./sh.real
+      - name: declared native dependencies preserve TLS compatibility
+        env:
+          PLUM_CI_TIMINGS: "1"
+        run: ./bootstrap/native-deps-check ./sh.real
 
   platforms-memory-and-debug:
     name: macOS memory and debug checks
@@ -551,6 +559,10 @@ jobs:
         env:
           PLUM_CI_TIMINGS: "1"
         run: ./bootstrap/build-cache-check ./sh.real
+      - name: declared native dependencies preserve TLS compatibility
+        env:
+          PLUM_CI_TIMINGS: "1"
+        run: ./bootstrap/native-deps-check ./sh.real
 
   windows-lsp:
     name: Windows language server smoke
