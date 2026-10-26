@@ -120,8 +120,8 @@ with tempfile.TemporaryDirectory(prefix='plum-win-measure-') as tmp:
             seconds = time.perf_counter() - start
             out.seek(0)
             err.seek(0)
-            stdout = out.read().decode()
-            stderr = err.read().decode()
+            stdout = out.read().decode().replace('\r\n', '\n')
+            stderr = err.read().decode().replace('\r\n', '\n')
         if process.returncode or stdout != expected:
             raise RuntimeError(label + ': ' + stdout + stderr)
         phases = {}

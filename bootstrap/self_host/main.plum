@@ -2939,7 +2939,8 @@ let cached_object_loop (program: String) (srcs: Array[String]) (i: Int) (scratch
                     buildcache.hash("plum-native-object-v2".concat(buildcache.frame(fingerprint)).concat(buildcache.frame(spec)).concat(digest))
                 } else { "" };
                 let hit = key != "" && buildcache.load_object(key, obj);
-                // Validate C assembly through Clang's parsed AST on misses.
+                // Validate C assembly through Clang's parsed AST (Linux)
+                // or emitted LLVM IR (Windows) on misses.
                 // Text searches miss concatenated/escaped asm strings. A
                 // stored object already passed this check under the v2 key.
                 let reusable = hit || (key != "" && (src.ends_with(".ll") || buildcache.c_snapshot_safe(program, flags, input)));

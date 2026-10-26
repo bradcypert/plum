@@ -39532,9 +39532,9 @@ entry:
   %t1201 = alloca i1, !dbg !7
   %t1232 = alloca i1, !dbg !7
   %t1250 = alloca i1, !dbg !7
-  ; plum.off 208894
+  ; plum.off 208950
   %t0 = call i1 @plum_buildcache_configure_profile(i1 0), !dbg !8
-  ; plum.off 208932
+  ; plum.off 208988
   %t2 = call ptr @plum_args(), !dbg !9
   %t1_pre = load ptr, ptr %t1, !dbg !9
   call void @plum_rel_Array_Str(ptr %t1_pre), !dbg !9
@@ -39596,7 +39596,7 @@ L8:
   %t44 = load i1, ptr %t6, !dbg !9
   br i1 %t44, label %L46, label %L47, !dbg !9
 L46:
-  ; plum.off 209284
+  ; plum.off 209340
   %t51 = call ptr @plum_plum_version(i1 0), !dbg !10
   %t52 = call ptr @plum_str_concat_reuse(ptr @.str49, ptr %t51), !dbg !10
   call void @plum_rel_str(ptr %t51), !dbg !10
@@ -39661,7 +39661,7 @@ L59:
   %t95 = load i1, ptr %t57, !dbg !10
   br i1 %t95, label %L97, label %L98, !dbg !10
 L97:
-  ; plum.off 209683
+  ; plum.off 209739
   %t100 = call i1 @plum_usage(i1 0), !dbg !11
   store i1 0, ptr %t96, !dbg !11
   br label %L99, !dbg !11
@@ -39711,7 +39711,7 @@ L139:
   call void @plum_rel_str(ptr %t137_pre), !dbg !11
   store ptr null, ptr %t137, !dbg !11
   store ptr %t135, ptr %t137, !dbg !11
-  ; plum.off 210115
+  ; plum.off 210171
   %t142 = load ptr, ptr %t1, !dbg !12
   %t143 = call i64 @plum_array_check_index(ptr %t142, i64 1), !dbg !12
   %t144 = mul i64 1, 8, !dbg !12
@@ -39806,7 +39806,7 @@ L207:
   call void @plum_rel_str(ptr %t205_pre), !dbg !12
   store ptr null, ptr %t205, !dbg !12
   store ptr %t203, ptr %t205, !dbg !12
-  ; plum.off 211011
+  ; plum.off 211067
   %t210 = load ptr, ptr %t1, !dbg !13
   %t211 = call i64 @plum_array_check_index(ptr %t210, i64 1), !dbg !13
   %t212 = mul i64 1, 8, !dbg !13
@@ -39841,7 +39841,7 @@ L232:
   call void @plum_rel_str(ptr %t230_pre), !dbg !13
   store ptr null, ptr %t230, !dbg !13
   store ptr %t228, ptr %t230, !dbg !13
-  ; plum.off 211100
+  ; plum.off 211156
   %t233 = load ptr, ptr %t1, !dbg !14
   %t234 = call i64 @plum_array_check_index(ptr %t233, i64 1), !dbg !14
   %t235 = mul i64 1, 8, !dbg !14
@@ -40236,12 +40236,12 @@ L528:
   %t538 = load i1, ptr %t526, !dbg !14
   br i1 %t538, label %L540, label %L541, !dbg !14
 L540:
-  ; plum.off 212782
+  ; plum.off 212838
   %t544 = load ptr, ptr %t1, !dbg !15
   call void @plum_rc_inc(ptr %t544), !dbg !15
   %t547 = call i1 @plum_doc_has_flag(ptr %t544, ptr @.str545, i64 0), !dbg !15
   store i1 %t547, ptr %t543, !dbg !15
-  ; plum.off 212834
+  ; plum.off 212890
   %t549 = load ptr, ptr %t1, !dbg !16
   call void @plum_rc_inc(ptr %t549), !dbg !16
   %t552 = call ptr @plum_doc_out_dir(ptr %t549, i64 0, ptr @.str550), !dbg !16
@@ -40249,7 +40249,7 @@ L540:
   call void @plum_rel_str(ptr %t548_pre), !dbg !16
   store ptr null, ptr %t548, !dbg !16
   store ptr %t552, ptr %t548, !dbg !16
-  ; plum.off 212882
+  ; plum.off 212938
   %t554 = load ptr, ptr %t1, !dbg !17
   call void @plum_rc_inc(ptr %t554), !dbg !17
   %t559 = call ptr @plum_doc_flag_value(ptr %t554, ptr @.str555, i64 0, ptr @.str557), !dbg !17
@@ -40257,7 +40257,7 @@ L540:
   call void @plum_rel_str(ptr %t553_pre), !dbg !17
   store ptr null, ptr %t553, !dbg !17
   store ptr %t559, ptr %t553, !dbg !17
-  ; plum.off 213058
+  ; plum.off 213114
   %t561 = load ptr, ptr %t1, !dbg !18
   call void @plum_rc_inc(ptr %t561), !dbg !18
   %t564 = call i1 @plum_doc_has_flag(ptr %t561, ptr @.str562, i64 0), !dbg !18
@@ -40309,7 +40309,7 @@ L541:
   %t596 = icmp slt i64 %t595, 2, !dbg !18
   br i1 %t596, label %L598, label %L599, !dbg !18
 L598:
-  ; plum.off 213282
+  ; plum.off 213338
   %t601 = call i1 @plum_usage(i1 0), !dbg !19
   store i1 0, ptr %t597, !dbg !19
   br label %L600, !dbg !19
@@ -40336,7 +40336,7 @@ L613:
   %t617 = load i1, ptr %t611, !dbg !19
   br i1 %t617, label %L619, label %L620, !dbg !19
 L619:
-  ; plum.off 213355
+  ; plum.off 213411
   %t622 = load ptr, ptr %t1, !dbg !20
   %t623 = call i64 @plum_array_check_index(ptr %t622, i64 1), !dbg !20
   %t624 = mul i64 1, 8, !dbg !20
@@ -40385,7 +40385,7 @@ L620:
   call void @plum_rel_str(ptr @.str657), !dbg !20
   br i1 %t659, label %L661, label %L662, !dbg !20
 L661:
-  ; plum.off 213546
+  ; plum.off 213602
   %t664 = load ptr, ptr %t1, !dbg !21
   %t665 = call i64 @plum_array_check_index(ptr %t664, i64 1), !dbg !21
   %t666 = mul i64 1, 8, !dbg !21
@@ -40409,7 +40409,7 @@ L662:
   call void @plum_rel_str(ptr @.str677), !dbg !21
   br i1 %t679, label %L681, label %L682, !dbg !21
 L681:
-  ; plum.off 213611
+  ; plum.off 213667
   %t684 = load ptr, ptr %t1, !dbg !22
   %t685 = call i64 @plum_array_check_index(ptr %t684, i64 1), !dbg !22
   %t686 = mul i64 1, 8, !dbg !22
@@ -40443,7 +40443,7 @@ L702:
   %t706 = load i1, ptr %t700, !dbg !22
   br i1 %t706, label %L708, label %L709, !dbg !22
 L708:
-  ; plum.off 213697
+  ; plum.off 213753
   %t711 = load ptr, ptr %t1, !dbg !23
   %t712 = call i64 @plum_array_check_index(ptr %t711, i64 1), !dbg !23
   %t713 = mul i64 1, 8, !dbg !23
@@ -40502,7 +40502,7 @@ L751:
   %t755 = load i1, ptr %t749, !dbg !23
   br i1 %t755, label %L757, label %L758, !dbg !23
 L757:
-  ; plum.off 213911
+  ; plum.off 213967
   %t760 = load ptr, ptr %t1, !dbg !24
   %t761 = call i64 @plum_array_check_index(ptr %t760, i64 1), !dbg !24
   %t762 = mul i64 1, 8, !dbg !24
@@ -40551,7 +40551,7 @@ L758:
   call void @plum_rel_str(ptr @.str795), !dbg !24
   br i1 %t797, label %L799, label %L800, !dbg !24
 L799:
-  ; plum.off 214103
+  ; plum.off 214159
   %t802 = load ptr, ptr %t1, !dbg !25
   %t803 = call i64 @plum_array_check_index(ptr %t802, i64 1), !dbg !25
   %t804 = mul i64 1, 8, !dbg !25
@@ -40575,7 +40575,7 @@ L800:
   call void @plum_rel_str(ptr @.str815), !dbg !25
   br i1 %t817, label %L819, label %L820, !dbg !25
 L819:
-  ; plum.off 215014
+  ; plum.off 215070
   %t822 = load ptr, ptr %t1, !dbg !26
   %t823 = call i64 @plum_array_check_index(ptr %t822, i64 1), !dbg !26
   %t824 = mul i64 1, 8, !dbg !26
@@ -40589,7 +40589,7 @@ L819:
   store ptr %t828, ptr %t830, !dbg !26
   %t831 = call ptr @plum_codegen_cg_with_prelude(ptr %t829), !dbg !26
   %t832 = call i1 @plum_typecheck_check_program(ptr %t831), !dbg !26
-  ; plum.off 215128
+  ; plum.off 215184
   %t835 = call i1 @plum_println(ptr @.str833), !dbg !27
   call void @plum_rel_str(ptr @.str833), !dbg !27
   store i1 0, ptr %t818, !dbg !27
@@ -40623,7 +40623,7 @@ L847:
   %t856 = load i1, ptr %t845, !dbg !27
   br i1 %t856, label %L858, label %L859, !dbg !27
 L858:
-  ; plum.off 215238
+  ; plum.off 215294
   %t861 = load ptr, ptr %t1, !dbg !28
   %t862 = call i64 @plum_array_check_index(ptr %t861, i64 1), !dbg !28
   %t863 = mul i64 1, 8, !dbg !28
@@ -40669,7 +40669,7 @@ L883:
   %t892 = load i1, ptr %t881, !dbg !28
   br i1 %t892, label %L894, label %L895, !dbg !28
 L894:
-  ; plum.off 215393
+  ; plum.off 215449
   %t897 = load ptr, ptr %t1, !dbg !29
   call void @plum_rc_inc(ptr %t897), !dbg !29
   %t898 = call i1 @plum_build_project(ptr %t897), !dbg !29
@@ -40704,18 +40704,18 @@ L910:
   %t919 = load i1, ptr %t908, !dbg !29
   br i1 %t919, label %L921, label %L922, !dbg !29
 L921:
-  ; plum.off 215699
+  ; plum.off 215755
   %t924 = load ptr, ptr %t1, !dbg !30
   call void @plum_rc_inc(ptr %t924), !dbg !30
   %t925 = call i1 @plum_wants_trace(ptr %t924), !dbg !30
   %t926 = call i1 @plum_codegen_set_debug_frames(i1 %t925), !dbg !30
-  ; plum.off 215752
+  ; plum.off 215808
   %t927 = load ptr, ptr %t1, !dbg !31
   call void @plum_rc_inc(ptr %t927), !dbg !31
   %t928 = call i1 @plum_wants_release(ptr %t927), !dbg !31
   %t929 = xor i1 %t928, true, !dbg !31
   %t930 = call i1 @plum_codegen_set_debug_info(i1 %t929), !dbg !31
-  ; plum.off 215806
+  ; plum.off 215862
   %t931 = load ptr, ptr %t1, !dbg !32
   %t932 = call i64 @plum_array_check_index(ptr %t931, i64 1), !dbg !32
   %t933 = mul i64 1, 8, !dbg !32
@@ -40745,7 +40745,7 @@ L922:
   call void @plum_rel_str(ptr @.str948), !dbg !32
   br i1 %t950, label %L952, label %L953, !dbg !32
 L952:
-  ; plum.off 215937
+  ; plum.off 215993
   %t955 = load ptr, ptr %t1, !dbg !33
   call void @plum_rc_inc(ptr %t955), !dbg !33
   %t956 = call i1 @plum_cmd_fmt(ptr %t955), !dbg !33
@@ -40764,7 +40764,7 @@ L953:
   call void @plum_rel_str(ptr @.str963), !dbg !33
   br i1 %t965, label %L967, label %L968, !dbg !33
 L967:
-  ; plum.off 216132
+  ; plum.off 216188
   %t970 = load ptr, ptr %t1, !dbg !34
   %t971 = call i64 @plum_array_len(ptr %t970), !dbg !34
   %t972 = icmp slt i64 %t971, 2, !dbg !34
@@ -40801,7 +40801,7 @@ L968:
   call void @plum_rel_str(ptr @.str992), !dbg !34
   br i1 %t994, label %L996, label %L997, !dbg !34
 L996:
-  ; plum.off 216826
+  ; plum.off 216882
   %t999 = load ptr, ptr %t1, !dbg !35
   %t1000 = call i64 @plum_array_check_index(ptr %t999, i64 1), !dbg !35
   %t1001 = mul i64 1, 8, !dbg !35
@@ -40918,7 +40918,7 @@ L1083:
   call void @plum_rel_str(ptr %t1081_pre), !dbg !35
   store ptr null, ptr %t1081, !dbg !35
   store ptr %t1079, ptr %t1081, !dbg !35
-  ; plum.off 217696
+  ; plum.off 217752
   %t1086 = load ptr, ptr %t1081, !dbg !36
   %t1087 = call ptr @plum_str_concat_reuse(ptr @.str1084, ptr %t1086), !dbg !36
   %t1088 = call i1 @plum_println(ptr %t1087), !dbg !36
@@ -40947,7 +40947,7 @@ L997:
   call void @plum_rel_str(ptr @.str1097), !dbg !36
   br i1 %t1099, label %L1101, label %L1102, !dbg !36
 L1101:
-  ; plum.off 217797
+  ; plum.off 217853
   %t1104 = load ptr, ptr %t1, !dbg !37
   call void @plum_rc_inc(ptr %t1104), !dbg !37
   %t1105 = call i1 @plum_run_project(ptr %t1104), !dbg !37
@@ -40997,7 +40997,7 @@ L1138:
   call void @plum_rel_str(ptr %t1136_pre), !dbg !37
   store ptr null, ptr %t1136, !dbg !37
   store ptr %t1134, ptr %t1136, !dbg !37
-  ; plum.off 218115
+  ; plum.off 218171
   %t1140 = load ptr, ptr %t1136, !dbg !38
   call void @plum_rc_inc(ptr %t1140), !dbg !38
   %t1141 = load ptr, ptr %t1, !dbg !38
@@ -41012,7 +41012,7 @@ L1138:
   call void @plum_rel_lexer_LexedSource(ptr %t1139_pre), !dbg !38
   store ptr null, ptr %t1139, !dbg !38
   store ptr %t1147, ptr %t1139, !dbg !38
-  ; plum.off 218185
+  ; plum.off 218241
   %t1148 = load ptr, ptr %t1, !dbg !39
   %t1149 = call i64 @plum_array_check_index(ptr %t1148, i64 1), !dbg !39
   %t1150 = mul i64 1, 8, !dbg !39
@@ -41060,7 +41060,7 @@ L1173:
   %t1183 = load i1, ptr %t1171, !dbg !39
   br i1 %t1183, label %L1185, label %L1186, !dbg !39
 L1185:
-  ; plum.off 218343
+  ; plum.off 218399
   %t1188 = load ptr, ptr %t1136, !dbg !40
   call void @plum_rc_inc(ptr %t1188), !dbg !40
   %t1189 = call ptr @plum_lexer_tokenize(ptr %t1188), !dbg !40
@@ -41099,7 +41099,7 @@ L1203:
   %t1213 = load i1, ptr %t1201, !dbg !40
   br i1 %t1213, label %L1215, label %L1216, !dbg !40
 L1215:
-  ; plum.off 218484
+  ; plum.off 218540
   %t1218 = load ptr, ptr %t1136, !dbg !41
   call void @plum_rc_inc(ptr %t1218), !dbg !41
   %t1219 = call ptr @plum_lexer_tokenize(ptr %t1218), !dbg !41
@@ -41122,7 +41122,7 @@ L1216:
   call void @plum_rel_str(ptr @.str1229), !dbg !41
   br i1 %t1231, label %L1233, label %L1234, !dbg !41
 L1233:
-  ; plum.off 219521
+  ; plum.off 219577
   %t1236 = load ptr, ptr %t1136, !dbg !42
   call void @plum_rc_inc(ptr %t1236), !dbg !42
   %t1237 = call ptr @plum_lexer_tokenize(ptr %t1236), !dbg !42
@@ -41145,14 +41145,14 @@ L1234:
   call void @plum_rel_str(ptr @.str1247), !dbg !42
   br i1 %t1249, label %L1251, label %L1252, !dbg !42
 L1251:
-  ; plum.off 219870
+  ; plum.off 219926
   %t1254 = load ptr, ptr %t1, !dbg !43
   call void @plum_rc_inc(ptr %t1254), !dbg !43
   %t1255 = call i1 @plum_run_project(ptr %t1254), !dbg !43
   store i1 0, ptr %t1250, !dbg !43
   br label %L1253, !dbg !43
 L1252:
-  ; plum.off 219934
+  ; plum.off 219990
   %t1256 = call i1 @plum_usage(i1 0), !dbg !44
   store i1 0, ptr %t1250, !dbg !44
   br label %L1253, !dbg !44
@@ -41770,7 +41770,7 @@ entry:
   %t1458 = alloca i1, !dbg !112
   %t1471 = alloca ptr, !dbg !112
   store ptr null, ptr %t1471, !dbg !112
-  ; plum.off 192363
+  ; plum.off 192419
   %t1454 = load ptr, ptr %s0, !dbg !113
   call void @plum_rc_inc(ptr %t1454), !dbg !113
   %t1455 = call ptr @plum_Os_is_directory(ptr %t1454), !dbg !113
@@ -41793,7 +41793,7 @@ L1460:
   br label %L1461, !dbg !113
 L1461:
   %t1470 = load i1, ptr %t1458, !dbg !113
-  ; plum.off 192505
+  ; plum.off 192561
   %t1472 = load ptr, ptr %s0, !dbg !114
   call void @plum_rc_inc(ptr %t1472), !dbg !114
   %t1473 = load ptr, ptr %s0, !dbg !114
@@ -41823,7 +41823,7 @@ L1461:
   call void @plum_rel_Array_pkg_Dep(ptr %t1471_pre), !dbg !114
   store ptr null, ptr %t1471, !dbg !114
   store ptr %t1487, ptr %t1471, !dbg !114
-  ; plum.off 192632
+  ; plum.off 192688
   %t1488 = load ptr, ptr %t1471, !dbg !115
   call void @plum_rc_inc(ptr %t1488), !dbg !115
   %t1489 = call i1 @plum_report_fetched(ptr %t1488, i64 0), !dbg !115
@@ -41863,7 +41863,7 @@ entry:
   store ptr null, ptr %t1519, !dbg !117
   %t1522 = alloca ptr, !dbg !117
   store ptr null, ptr %t1522, !dbg !117
-  ; plum.off 193028
+  ; plum.off 193084
   %t1502 = load ptr, ptr %s0, !dbg !118
   call void @plum_rc_inc(ptr %t1502), !dbg !118
   %t1503 = call ptr @plum_Os_is_directory(ptr %t1502), !dbg !118
@@ -41886,7 +41886,7 @@ L1508:
   br label %L1509, !dbg !118
 L1509:
   %t1518 = load i1, ptr %t1506, !dbg !118
-  ; plum.off 193159
+  ; plum.off 193215
   %t1520 = load ptr, ptr %s0, !dbg !119
   call void @plum_rc_inc(ptr %t1520), !dbg !119
   %t1521 = call ptr @plum_Path_clean(ptr %t1520), !dbg !119
@@ -41894,7 +41894,7 @@ L1509:
   call void @plum_rel_str(ptr %t1519_pre), !dbg !119
   store ptr null, ptr %t1519, !dbg !119
   store ptr %t1521, ptr %t1519, !dbg !119
-  ; plum.off 193191
+  ; plum.off 193247
   %t1523 = load ptr, ptr %t1519, !dbg !120
   call void @plum_rc_inc(ptr %t1523), !dbg !120
   %t1524 = load ptr, ptr %t1519, !dbg !120
@@ -41922,7 +41922,7 @@ L1509:
   call void @plum_rel_Array_pkg_Dep(ptr %t1522_pre), !dbg !120
   store ptr null, ptr %t1522, !dbg !120
   store ptr %t1536, ptr %t1522, !dbg !120
-  ; plum.off 193297
+  ; plum.off 193353
   %t1537 = load ptr, ptr %t1519, !dbg !121
   call void @plum_rc_inc(ptr %t1537), !dbg !121
   %t1538 = load ptr, ptr %t1522, !dbg !121
@@ -41964,19 +41964,19 @@ entry:
   store i1 %p0, ptr %s0, !dbg !123
   %t1552 = alloca ptr, !dbg !123
   store ptr null, ptr %t1552, !dbg !123
-  ; plum.off 193944
+  ; plum.off 194000
   %t1553 = call ptr @plum_pkg_cached_packages(i1 0), !dbg !124
   %t1552_pre = load ptr, ptr %t1552, !dbg !124
   call void @plum_rel_Array_Str(ptr %t1552_pre), !dbg !124
   store ptr null, ptr %t1552, !dbg !124
   store ptr %t1553, ptr %t1552, !dbg !124
-  ; plum.off 193987
+  ; plum.off 194043
   %t1556 = call ptr @plum_pkg_cache_root(i1 0), !dbg !125
   %t1557 = call ptr @plum_str_concat_reuse(ptr @.str1554, ptr %t1556), !dbg !125
   call void @plum_rel_str(ptr %t1556), !dbg !125
   %t1558 = call i1 @plum_println(ptr %t1557), !dbg !125
   call void @plum_rel_str(ptr %t1557), !dbg !125
-  ; plum.off 194032
+  ; plum.off 194088
   %t1559 = load ptr, ptr %t1552, !dbg !126
   call void @plum_rc_inc(ptr %t1559), !dbg !126
   %t1560 = call i1 @plum_report_cached_packages(ptr %t1559, i64 0), !dbg !126
@@ -42027,18 +42027,18 @@ entry:
   %t1594 = alloca i1, !dbg !128
   %t1633 = alloca ptr, !dbg !128
   store ptr null, ptr %t1633, !dbg !128
-  ; plum.off 195422
+  ; plum.off 195478
   %t1586 = call ptr @plum_pkg_cached_packages(i1 0), !dbg !129
   %t1585_pre = load ptr, ptr %t1585, !dbg !129
   call void @plum_rel_Array_Str(ptr %t1585_pre), !dbg !129
   store ptr null, ptr %t1585, !dbg !129
   store ptr %t1586, ptr %t1585, !dbg !129
-  ; plum.off 195465
+  ; plum.off 195521
   %t1588 = load ptr, ptr %t1585, !dbg !130
   call void @plum_rc_inc(ptr %t1588), !dbg !130
   %t1589 = call i64 @plum_cached_file_count(ptr %t1588, i64 0, i64 0), !dbg !130
   store i64 %t1589, ptr %t1587, !dbg !130
-  ; plum.off 195515
+  ; plum.off 195571
   %t1591 = load ptr, ptr %t1585, !dbg !131
   call void @plum_rc_inc(ptr %t1591), !dbg !131
   %t1592 = call i64 @plum_cached_byte_count(ptr %t1591, i64 0, i64 0), !dbg !131
@@ -43817,15 +43817,15 @@ L2434:
   %t2440 = and i1 %t2436, 1, !dbg !203
   br i1 %t2440, label %L2441, label %L2419, !dbg !203
 L2441:
-  ; plum.off 208097
+  ; plum.off 208153
   %t2444 = load ptr, ptr %s0, !dbg !204
   %t2445 = call ptr @plum_str_concat_reuse(ptr @.str2442, ptr %t2444), !dbg !204
   %t2446 = call i1 @plum_println(ptr %t2445), !dbg !204
   call void @plum_rel_str(ptr %t2445), !dbg !204
-  ; plum.off 208147
+  ; plum.off 208203
   %t2449 = call i1 @plum_println(ptr @.str2447), !dbg !205
   call void @plum_rel_str(ptr @.str2447), !dbg !205
-  ; plum.off 208176
+  ; plum.off 208232
   %t2452 = load ptr, ptr %s0, !dbg !206
   call void @plum_rc_inc(ptr %t2452), !dbg !206
   %t2453 = call ptr @plum_str_concat_reuse(ptr @.str2450, ptr %t2452), !dbg !206
@@ -43834,7 +43834,7 @@ L2441:
   call void @plum_rel_str(ptr @.str2454), !dbg !206
   %t2457 = call i1 @plum_println(ptr %t2456), !dbg !206
   call void @plum_rel_str(ptr %t2456), !dbg !206
-  ; plum.off 208247
+  ; plum.off 208303
   %t2460 = load ptr, ptr %s0, !dbg !207
   call void @plum_rc_inc(ptr %t2460), !dbg !207
   %t2461 = call ptr @plum_str_concat_reuse(ptr @.str2458, ptr %t2460), !dbg !207
@@ -44435,7 +44435,7 @@ entry:
   %t2757 = alloca ptr, !dbg !249
   store ptr null, ptr %t2757, !dbg !249
   %t2788 = alloca i1, !dbg !249
-  ; plum.off 171644
+  ; plum.off 171700
   %t2722 = load ptr, ptr %s0, !dbg !250
   call void @plum_rc_inc(ptr %t2722), !dbg !250
   %t2725 = call ptr @plum_find_flag_value(ptr %t2722, ptr @.str2723, i64 0), !dbg !250
@@ -44477,7 +44477,7 @@ L2727:
   call void @plum_rel_str(ptr %t2721_pre), !dbg !250
   store ptr null, ptr %t2721, !dbg !250
   store ptr %t2744, ptr %t2721, !dbg !250
-  ; plum.off 171747
+  ; plum.off 171803
   %t2746 = load ptr, ptr %s0, !dbg !251
   call void @plum_rc_inc(ptr %t2746), !dbg !251
   %t2747 = load ptr, ptr %t2721, !dbg !251
@@ -44487,7 +44487,7 @@ L2727:
   call void @plum_rel_str(ptr %t2745_pre), !dbg !251
   store ptr null, ptr %t2745, !dbg !251
   store ptr %t2748, ptr %t2745, !dbg !251
-  ; plum.off 171788
+  ; plum.off 171844
   %t2750 = load ptr, ptr %s0, !dbg !252
   %t2751 = call i64 @plum_array_check_index(ptr %t2750, i64 1), !dbg !252
   %t2752 = mul i64 1, 8, !dbg !252
@@ -44500,7 +44500,7 @@ L2727:
   call void @plum_rel_BuildInputs(ptr %t2749_pre), !dbg !252
   store ptr null, ptr %t2749, !dbg !252
   store ptr %t2756, ptr %t2749, !dbg !252
-  ; plum.off 171830
+  ; plum.off 171886
   %t2758 = load ptr, ptr %s0, !dbg !253
   %t2759 = call i64 @plum_array_check_index(ptr %t2758, i64 1), !dbg !253
   %t2760 = mul i64 1, 8, !dbg !253
@@ -44640,17 +44640,17 @@ entry:
   %t2837 = alloca ptr, !dbg !261
   store ptr null, ptr %t2837, !dbg !261
   %t2842 = alloca i1, !dbg !261
-  ; plum.off 179218
+  ; plum.off 179274
   %t2813 = load ptr, ptr %s0, !dbg !262
   call void @plum_rc_inc(ptr %t2813), !dbg !262
   %t2816 = call i1 @plum_fmt_has_flag(ptr %t2813, ptr @.str2814, i64 1), !dbg !262
   store i1 %t2816, ptr %t2812, !dbg !262
-  ; plum.off 179268
+  ; plum.off 179324
   %t2818 = load ptr, ptr %s0, !dbg !263
   call void @plum_rc_inc(ptr %t2818), !dbg !263
   %t2821 = call i1 @plum_fmt_has_flag(ptr %t2818, ptr @.str2819, i64 1), !dbg !263
   store i1 %t2821, ptr %t2817, !dbg !263
-  ; plum.off 179318
+  ; plum.off 179374
   %t2823 = load ptr, ptr %s0, !dbg !264
   call void @plum_rc_inc(ptr %t2823), !dbg !264
   %t2824 = call ptr @plum_fmt_target(ptr %t2823, i64 1), !dbg !264
@@ -44663,14 +44663,14 @@ entry:
   call void @plum_rel_str(ptr @.str2826), !dbg !264
   br i1 %t2828, label %L2830, label %L2831, !dbg !264
 L2830:
-  ; plum.off 179376
+  ; plum.off 179432
   %t2835 = call i1 @plum_println(ptr @.str2833), !dbg !265
   call void @plum_rel_str(ptr @.str2833), !dbg !265
   %t2836 = call i1 @plum_Os_exit_with(i64 1), !dbg !265
   store i1 %t2836, ptr %t2829, !dbg !265
   br label %L2832, !dbg !265
 L2831:
-  ; plum.off 179481
+  ; plum.off 179537
   %t2838 = load ptr, ptr %t2822, !dbg !266
   call void @plum_rc_inc(ptr %t2838), !dbg !266
   %t2839 = call ptr @plum_fmt_files(ptr %t2838), !dbg !266
@@ -44683,7 +44683,7 @@ L2831:
   %t2841 = call i1 @plum__prelude__Array_is_empty__Str(ptr %t2840), !dbg !266
   br i1 %t2841, label %L2843, label %L2844, !dbg !266
 L2843:
-  ; plum.off 179549
+  ; plum.off 179605
   %t2848 = load ptr, ptr %t2822, !dbg !267
   %t2849 = call ptr @plum_str_concat_reuse(ptr @.str2846, ptr %t2848), !dbg !267
   %t2850 = call i1 @plum_println(ptr %t2849), !dbg !267
@@ -44863,7 +44863,7 @@ entry:
   store ptr null, ptr %t2930, !dbg !278
   %t2937 = alloca ptr, !dbg !278
   store ptr null, ptr %t2937, !dbg !278
-  ; plum.off 177896
+  ; plum.off 177952
   %t2918 = load ptr, ptr %s1, !dbg !279
   call void @plum_rc_inc(ptr %t2918), !dbg !279
   %t2919 = load ptr, ptr %s0, !dbg !279
@@ -44873,7 +44873,7 @@ entry:
   call void @plum_rel_lexer_LexedSource(ptr %t2917_pre), !dbg !279
   store ptr null, ptr %t2917, !dbg !279
   store ptr %t2920, ptr %t2917, !dbg !279
-  ; plum.off 177950
+  ; plum.off 178006
   %t2921 = load ptr, ptr %s0, !dbg !280
   call void @plum_rc_inc(ptr %t2921), !dbg !280
   %t2922 = load ptr, ptr %s1, !dbg !280
@@ -44887,7 +44887,7 @@ entry:
   %t2928 = load ptr, ptr %t2927, !dbg !280
   call void @plum_rc_inc(ptr %t2928), !dbg !280
   %t2929 = call i1 @plum_parser_set_source_context(ptr %t2921, ptr %t2922, ptr %t2925, ptr %t2928), !dbg !280
-  ; plum.off 178018
+  ; plum.off 178074
   %t2931 = load ptr, ptr %t2917, !dbg !281
   %t2932 = getelementptr i8, ptr %t2931, i64 8, !dbg !281
   %t2933 = load ptr, ptr %t2932, !dbg !281
@@ -44901,7 +44901,7 @@ entry:
   call void @plum_rel_Array_parser_ItemNode(ptr %t2930_pre), !dbg !281
   store ptr null, ptr %t2930, !dbg !281
   store ptr %t2936, ptr %t2930, !dbg !281
-  ; plum.off 178076
+  ; plum.off 178132
   %t2938 = load ptr, ptr %s1, !dbg !282
   call void @plum_rc_inc(ptr %t2938), !dbg !282
   %t2939 = call ptr @plum_chars_of(ptr %t2938), !dbg !282
@@ -45082,7 +45082,7 @@ L2993:
   call void @plum_rel_str(ptr %t2991_pre), !dbg !293
   store ptr null, ptr %t2991, !dbg !293
   store ptr %t2989, ptr %t2991, !dbg !293
-  ; plum.off 173604
+  ; plum.off 173660
   %t2995 = load ptr, ptr %t2991, !dbg !294
   call void @plum_rc_inc(ptr %t2995), !dbg !294
   %t2998 = call ptr @plum_str_concat_reuse(ptr %t2995, ptr @.str2996), !dbg !294
@@ -45091,7 +45091,7 @@ L2993:
   call void @plum_rel_str(ptr %t2994_pre), !dbg !294
   store ptr null, ptr %t2994, !dbg !294
   store ptr %t2998, ptr %t2994, !dbg !294
-  ; plum.off 173917
+  ; plum.off 173973
   %t3000 = load ptr, ptr %s0, !dbg !295
   %t3001 = call i64 @plum_array_check_index(ptr %t3000, i64 1), !dbg !295
   %t3002 = mul i64 1, 8, !dbg !295
@@ -45104,7 +45104,7 @@ L2993:
   call void @plum_rel_BuildInputs(ptr %t2999_pre), !dbg !295
   store ptr null, ptr %t2999, !dbg !295
   store ptr %t3006, ptr %t2999, !dbg !295
-  ; plum.off 173967
+  ; plum.off 174023
   %t3008 = load ptr, ptr %s0, !dbg !296
   %t3009 = call i64 @plum_array_check_index(ptr %t3008, i64 1), !dbg !296
   %t3010 = mul i64 1, 8, !dbg !296
@@ -45155,7 +45155,7 @@ L3040:
   store i1 %t3044, ptr %t3039, !dbg !296
   br label %L3042, !dbg !296
 L3041:
-  ; plum.off 174223
+  ; plum.off 174279
   %t3046 = load ptr, ptr %s0, !dbg !297
   call void @plum_rc_inc(ptr %t3046), !dbg !297
   %t3047 = load ptr, ptr %s0, !dbg !297
@@ -45165,7 +45165,7 @@ L3041:
   call void @plum_rel_Array_Str(ptr %t3045_pre), !dbg !297
   store ptr null, ptr %t3045, !dbg !297
   store ptr %t3049, ptr %t3045, !dbg !297
-  ; plum.off 174284
+  ; plum.off 174340
   %t3051 = load ptr, ptr %t2994, !dbg !298
   %t3052 = getelementptr i8, ptr %t3051, i64 16, !dbg !298
   %t3053 = load ptr, ptr %t3045, !dbg !298
@@ -45177,7 +45177,7 @@ L3041:
   %t3059 = call i64 @plum_array_len(ptr %t3058), !dbg !298
   %t3060 = call i64 @process_run_inherit(ptr %t3052, ptr %t3057, i64 %t3059), !dbg !298
   store i64 %t3060, ptr %t3050, !dbg !298
-  ; plum.off 174403
+  ; plum.off 174459
   %t3063 = load ptr, ptr %t2991, !dbg !299
   call void @plum_rc_inc(ptr %t3063), !dbg !299
   %t3064 = call ptr @plum_Os_remove_tree(ptr %t3063), !dbg !299
@@ -46882,7 +46882,7 @@ L3834:
   store i1 0, ptr %t3833, !dbg !376
   br label %L3836, !dbg !376
 L3835:
-  ; plum.off 195928
+  ; plum.off 195984
   %t3837 = load ptr, ptr %s0, !dbg !377
   %t3838 = load i64, ptr %s1, !dbg !377
   %t3839 = call i64 @plum_array_check_index(ptr %t3837, i64 %t3838), !dbg !377
@@ -46933,7 +46933,7 @@ L3848:
   store i1 %t3876, ptr %t3847, !dbg !377
   br label %L3850, !dbg !377
 L3849:
-  ; plum.off 196405
+  ; plum.off 196461
   %t3879 = load ptr, ptr %s0, !dbg !378
   %t3880 = load i64, ptr %s1, !dbg !378
   %t3881 = call i64 @plum_array_check_index(ptr %t3879, i64 %t3880), !dbg !378
@@ -46983,7 +46983,7 @@ L3849:
   call void @plum_rel_str(ptr %t3914), !dbg !378
   %t3916 = call i1 @plum_println(ptr %t3915), !dbg !378
   call void @plum_rel_str(ptr %t3915), !dbg !378
-  ; plum.off 196501
+  ; plum.off 196557
   %t3919 = load ptr, ptr %s0, !dbg !379
   %t3920 = load i64, ptr %s1, !dbg !379
   %t3921 = call i64 @plum_array_check_index(ptr %t3919, i64 %t3920), !dbg !379
@@ -47070,7 +47070,7 @@ L3960:
   store i1 0, ptr %t3959, !dbg !381
   br label %L3962, !dbg !381
 L3961:
-  ; plum.off 193533
+  ; plum.off 193589
   %t3963 = load ptr, ptr %s1, !dbg !382
   %t3964 = load i64, ptr %s2, !dbg !382
   %t3965 = call i64 @plum_array_check_index(ptr %t3963, i64 %t3964), !dbg !382
@@ -47334,7 +47334,7 @@ L4103:
   store i1 0, ptr %t4102, !dbg !390
   br label %L4105, !dbg !390
 L4104:
-  ; plum.off 194366
+  ; plum.off 194422
   %t4108 = load ptr, ptr %s0, !dbg !391
   %t4109 = load i64, ptr %s1, !dbg !391
   %t4110 = call i64 @plum_array_check_index(ptr %t4108, i64 %t4109), !dbg !391
@@ -51483,7 +51483,7 @@ define i1 @plum_new_failed(ptr %p0) !dbg !507 {
 entry:
   %s0 = alloca ptr, !dbg !508
   store ptr %p0, ptr %s0, !dbg !508
-  ; plum.off 208716
+  ; plum.off 208772
   %t6468 = load ptr, ptr %s0, !dbg !509
   %t6469 = call i1 @plum_println(ptr %t6468), !dbg !509
   %t6472 = call i1 @plum_panic(ptr @.str6470), !dbg !509
@@ -52422,7 +52422,7 @@ L6940:
   store ptr %t6943, ptr %t6939, !dbg !541
   br label %L6942, !dbg !541
 L6941:
-  ; plum.off 187837
+  ; plum.off 187893
   %t6945 = load ptr, ptr %s0, !dbg !542
   call void @plum_rc_inc(ptr %t6945), !dbg !542
   %t6946 = load i64, ptr %s1, !dbg !542
@@ -52449,7 +52449,7 @@ L6951:
   call void @plum_rel_SourceFile(ptr %t6959), !dbg !542
   %t6962 = call i64 @plum_source_group_end(ptr %t6945, i64 %t6948, ptr %t6961), !dbg !542
   store i64 %t6962, ptr %t6944, !dbg !542
-  ; plum.off 187903
+  ; plum.off 187959
   %t6964 = load ptr, ptr %s0, !dbg !543
   call void @plum_rc_inc(ptr %t6964), !dbg !543
   %t6965 = load i64, ptr %s1, !dbg !543
@@ -52459,7 +52459,7 @@ L6951:
   call void @plum_rel_Array_parser_ItemNode(ptr %t6963_pre), !dbg !543
   store ptr null, ptr %t6963, !dbg !543
   store ptr %t6968, ptr %t6963, !dbg !543
-  ; plum.off 187962
+  ; plum.off 188018
   %t6969 = load ptr, ptr %s0, !dbg !544
   %t6970 = load i64, ptr %s1, !dbg !544
   %t6971 = call i64 @plum_array_check_index(ptr %t6969, i64 %t6970), !dbg !544
@@ -52562,13 +52562,13 @@ entry:
   %t7025 = alloca ptr, !dbg !546
   %t7041 = alloca ptr, !dbg !546
   store ptr null, ptr %t7041, !dbg !546
-  ; plum.off 187224
+  ; plum.off 187280
   %t7011 = call ptr @plum_buildcache_start(i1 0), !dbg !547
   %t7010_pre = load ptr, ptr %t7010, !dbg !547
   call void @plum_rel_Time_Instant(ptr %t7010_pre), !dbg !547
   store ptr null, ptr %t7010, !dbg !547
   store ptr %t7011, ptr %t7010, !dbg !547
-  ; plum.off 187258
+  ; plum.off 187314
   %t7013 = load ptr, ptr %s0, !dbg !548
   call void @plum_rc_inc(ptr %t7013), !dbg !548
   %t7014 = call ptr @plum_project_deps(ptr %t7013), !dbg !548
@@ -52576,17 +52576,17 @@ entry:
   call void @plum_rel_Array_pkg_Dep(ptr %t7012_pre), !dbg !548
   store ptr null, ptr %t7012, !dbg !548
   store ptr %t7014, ptr %t7012, !dbg !548
-  ; plum.off 187292
+  ; plum.off 187348
   %t7017 = load ptr, ptr %t7010, !dbg !549
   call void @plum_rc_inc(ptr %t7017), !dbg !549
   %t7018 = call i1 @plum_buildcache_finish(ptr @.str7015, ptr %t7017), !dbg !549
-  ; plum.off 187343
+  ; plum.off 187399
   %t7020 = call ptr @plum_buildcache_start(i1 0), !dbg !550
   %t7019_pre = load ptr, ptr %t7019, !dbg !550
   call void @plum_rel_Time_Instant(ptr %t7019_pre), !dbg !550
   store ptr null, ptr %t7019, !dbg !550
   store ptr %t7020, ptr %t7019, !dbg !550
-  ; plum.off 187377
+  ; plum.off 187433
   %t7022 = load ptr, ptr %s0, !dbg !551
   call void @plum_rc_inc(ptr %t7022), !dbg !551
   %t7023 = call ptr @plum_Os_is_directory(ptr %t7022), !dbg !551
@@ -52613,7 +52613,7 @@ L7028:
   call void @plum_rel_Array_SourceFile(ptr %t7021_pre), !dbg !551
   store ptr null, ptr %t7021, !dbg !551
   store ptr %t7040, ptr %t7021, !dbg !551
-  ; plum.off 187538
+  ; plum.off 187594
   %t7042 = load ptr, ptr %t7012, !dbg !552
   call void @plum_rc_inc(ptr %t7042), !dbg !552
   %t7043 = load ptr, ptr %t7021, !dbg !552
@@ -52623,7 +52623,7 @@ L7028:
   call void @plum_rel_Array_SourceFile(ptr %t7041_pre), !dbg !552
   store ptr null, ptr %t7041, !dbg !552
   store ptr %t7044, ptr %t7041, !dbg !552
-  ; plum.off 187581
+  ; plum.off 187637
   %t7047 = load ptr, ptr %t7019, !dbg !553
   call void @plum_rc_inc(ptr %t7047), !dbg !553
   %t7048 = call i1 @plum_buildcache_finish(ptr @.str7045, ptr %t7047), !dbg !553
@@ -53775,7 +53775,7 @@ entry:
   %t7630 = alloca i1, !dbg !584
   %t7641 = alloca ptr, !dbg !584
   store ptr null, ptr %t7641, !dbg !584
-  ; plum.off 166486
+  ; plum.off 166542
   %t7580 = load ptr, ptr %s3, !dbg !585
   call void @plum_rc_inc(ptr %t7580), !dbg !585
   %t7581 = call ptr @plum_target_error(ptr %t7580), !dbg !585
@@ -53828,7 +53828,7 @@ L7617:
   call void @plum_rel_str(ptr %t7615_pre), !dbg !585
   store ptr null, ptr %t7615, !dbg !585
   store ptr %t7613, ptr %t7615, !dbg !585
-  ; plum.off 166679
+  ; plum.off 166735
   %t7619 = load ptr, ptr %s0, !dbg !586
   call void @plum_rc_inc(ptr %t7619), !dbg !586
   %t7620 = load ptr, ptr %s1, !dbg !586
@@ -53849,7 +53849,7 @@ L7617:
   call void @plum_rel_str(ptr %t7618_pre), !dbg !586
   store ptr null, ptr %t7618, !dbg !586
   store ptr %t7628, ptr %t7618, !dbg !586
-  ; plum.off 166794
+  ; plum.off 166850
   %t7629 = load i1, ptr %s7, !dbg !587
   store i1 0, ptr %t7630, !dbg !587
   br i1 %t7629, label %L7631, label %L7632, !dbg !587
@@ -53869,7 +53869,7 @@ L7637:
   br label %L7638, !dbg !587
 L7638:
   %t7640 = load i1, ptr %t7635, !dbg !587
-  ; plum.off 166884
+  ; plum.off 166940
   %t7642 = load ptr, ptr %t7615, !dbg !588
   call void @plum_rc_inc(ptr %t7642), !dbg !588
   %t7643 = call ptr @plum_Os_remove_tree(ptr %t7642), !dbg !588
@@ -53987,7 +53987,7 @@ entry:
   %t7739 = alloca i1, !dbg !590
   %t7746 = alloca i1, !dbg !590
   %t7767 = alloca i64, !dbg !590
-  ; plum.off 156698
+  ; plum.off 156754
   %t7648 = load ptr, ptr %s2, !dbg !591
   call void @plum_rc_inc(ptr %t7648), !dbg !591
   %t7649 = call ptr @plum_target_os(ptr %t7648), !dbg !591
@@ -53995,7 +53995,7 @@ entry:
   call void @plum_rel_str(ptr %t7647_pre), !dbg !591
   store ptr null, ptr %t7647, !dbg !591
   store ptr %t7649, ptr %t7647, !dbg !591
-  ; plum.off 157157
+  ; plum.off 157213
   %t7651 = load ptr, ptr %s1, !dbg !592
   call void @plum_rc_inc(ptr %t7651), !dbg !592
   %t7652 = call ptr @plum_pkg_read(ptr %t7651), !dbg !592
@@ -54003,7 +54003,7 @@ entry:
   call void @plum_rel_pkg_Manifest(ptr %t7650_pre), !dbg !592
   store ptr null, ptr %t7650, !dbg !592
   store ptr %t7652, ptr %t7650, !dbg !592
-  ; plum.off 157186
+  ; plum.off 157242
   %t7654 = load ptr, ptr %s1, !dbg !593
   call void @plum_rc_inc(ptr %t7654), !dbg !593
   %t7657 = call ptr @plum_Path_join(ptr %t7654, ptr @.str7655), !dbg !593
@@ -54014,7 +54014,7 @@ entry:
   call void @plum_rel_Array_Str(ptr %t7653_pre), !dbg !593
   store ptr null, ptr %t7653, !dbg !593
   store ptr %t7659, ptr %t7653, !dbg !593
-  ; plum.off 157249
+  ; plum.off 157305
   %t7661 = load ptr, ptr %t7650, !dbg !594
   call void @plum_rc_inc(ptr %t7661), !dbg !594
   %t7662 = load ptr, ptr %t7647, !dbg !594
@@ -54024,7 +54024,7 @@ entry:
   call void @plum_rel_Array_Str(ptr %t7660_pre), !dbg !594
   store ptr null, ptr %t7660, !dbg !594
   store ptr %t7663, ptr %t7660, !dbg !594
-  ; plum.off 157300
+  ; plum.off 157356
   %t7665 = load ptr, ptr %s0, !dbg !595
   call void @plum_rc_inc(ptr %t7665), !dbg !595
   %t7669 = call ptr @plum_collect_flag(ptr %t7665, ptr @.str7666, i64 0, ptr @.const7668), !dbg !595
@@ -54037,7 +54037,7 @@ entry:
   call void @plum_rel_Array_Str(ptr %t7664_pre), !dbg !595
   store ptr null, ptr %t7664, !dbg !595
   store ptr %t7671, ptr %t7664, !dbg !595
-  ; plum.off 157378
+  ; plum.off 157434
   %t7673 = load ptr, ptr %s0, !dbg !596
   call void @plum_rc_inc(ptr %t7673), !dbg !596
   %t7677 = call ptr @plum_collect_flag(ptr %t7673, ptr @.str7674, i64 0, ptr @.const7676), !dbg !596
@@ -54050,7 +54050,7 @@ entry:
   call void @plum_rel_Array_Str(ptr %t7672_pre), !dbg !596
   store ptr null, ptr %t7672, !dbg !596
   store ptr %t7679, ptr %t7672, !dbg !596
-  ; plum.off 157462
+  ; plum.off 157518
   %t7681 = load ptr, ptr %s0, !dbg !597
   call void @plum_rc_inc(ptr %t7681), !dbg !597
   %t7682 = call i1 @plum_command_native_tls(ptr %t7681), !dbg !597
@@ -54078,7 +54078,7 @@ L7692:
 L7685:
   %t7698 = load i1, ptr %t7683, !dbg !597
   store i1 %t7698, ptr %t7680, !dbg !597
-  ; plum.off 157575
+  ; plum.off 157631
   %t7699 = load ptr, ptr %s3, !dbg !598
   call void @plum_rc_inc(ptr %t7699), !dbg !598
   %t7711 = call i64 @plum_array_len(ptr %t7699), !dbg !598
@@ -54097,7 +54097,7 @@ L7704:
   %t7710 = load ptr, ptr %t7709, !dbg !598
   call void @plum_rc_inc(ptr %t7710), !dbg !598
   store ptr %t7710, ptr %t7701, !dbg !598
-  ; plum.off 157601
+  ; plum.off 157657
   %t7713 = load ptr, ptr %t7701, !dbg !599
   %t7714 = getelementptr i8, ptr %t7713, i64 16, !dbg !599
   %t7715 = load ptr, ptr %t7714, !dbg !599
@@ -54107,7 +54107,7 @@ L7704:
   call void @plum_rel_pkg_Manifest(ptr %t7712_pre), !dbg !599
   store ptr null, ptr %t7712, !dbg !599
   store ptr %t7716, ptr %t7712, !dbg !599
-  ; plum.off 157637
+  ; plum.off 157693
   %t7718 = load ptr, ptr %t7701, !dbg !600
   %t7719 = getelementptr i8, ptr %t7718, i64 16, !dbg !600
   %t7720 = load ptr, ptr %t7719, !dbg !600
@@ -54120,7 +54120,7 @@ L7704:
   call void @plum_rel_Array_Str(ptr %t7717_pre), !dbg !600
   store ptr null, ptr %t7717, !dbg !600
   store ptr %t7725, ptr %t7717, !dbg !600
-  ; plum.off 157709
+  ; plum.off 157765
   %t7727 = load ptr, ptr %t7712, !dbg !601
   call void @plum_rc_inc(ptr %t7727), !dbg !601
   %t7728 = load ptr, ptr %t7647, !dbg !601
@@ -54130,7 +54130,7 @@ L7704:
   call void @plum_rel_Array_Str(ptr %t7726_pre), !dbg !601
   store ptr null, ptr %t7726, !dbg !601
   store ptr %t7729, ptr %t7726, !dbg !601
-  ; plum.off 157762
+  ; plum.off 157818
   %t7730 = load ptr, ptr %t7664, !dbg !602
   call void @plum_rc_inc(ptr %t7730), !dbg !602
   %t7731 = load ptr, ptr %t7717, !dbg !602
@@ -54142,7 +54142,7 @@ L7704:
   call void @plum_rel_Array_Str(ptr %t7664_a7733), !dbg !602
   store ptr null, ptr %t7664, !dbg !602
   store ptr %t7732, ptr %t7664, !dbg !602
-  ; plum.off 157801
+  ; plum.off 157857
   %t7734 = load ptr, ptr %t7672, !dbg !603
   call void @plum_rc_inc(ptr %t7734), !dbg !603
   %t7735 = load ptr, ptr %t7726, !dbg !603
@@ -54154,7 +54154,7 @@ L7704:
   call void @plum_rel_Array_Str(ptr %t7672_a7737), !dbg !603
   store ptr null, ptr %t7672, !dbg !603
   store ptr %t7736, ptr %t7672, !dbg !603
-  ; plum.off 157846
+  ; plum.off 157902
   %t7738 = load i1, ptr %t7680, !dbg !604
   store i1 1, ptr %t7739, !dbg !604
   br i1 %t7738, label %L7741, label %L7740, !dbg !604
@@ -54322,7 +54322,7 @@ define i1 @plum_fail_cmd(ptr %p0) !dbg !605 {
 entry:
   %s0 = alloca ptr, !dbg !606
   store ptr %p0, ptr %s0, !dbg !606
-  ; plum.off 171532
+  ; plum.off 171588
   %t7817 = load ptr, ptr %s0, !dbg !607
   store ptr null, ptr %s0, !dbg !607
   %t7820 = call ptr @plum_str_concat_reuse(ptr %t7817, ptr @.str7818), !dbg !607
@@ -55071,7 +55071,7 @@ L8161:
   %t8164 = load i1, ptr %t8159, !dbg !653
   br i1 %t8164, label %L8166, label %L8167, !dbg !653
 L8166:
-  ; plum.off 181262
+  ; plum.off 181318
   %t8169 = load i64, ptr %s4, !dbg !654
   %t8170 = call ptr @plum_int_to_string(i64 %t8169), !dbg !654
   %t8173 = call ptr @plum_str_concat_reuse(ptr %t8170, ptr @.str8171), !dbg !654
@@ -55089,7 +55089,7 @@ L8168:
   store i1 %t8176, ptr %t8154, !dbg !654
   br label %L8157, !dbg !654
 L8156:
-  ; plum.off 181402
+  ; plum.off 181458
   %t8178 = load ptr, ptr %s0, !dbg !655
   %t8179 = load i64, ptr %s1, !dbg !655
   %t8180 = call i64 @plum_array_check_index(ptr %t8178, i64 %t8179), !dbg !655
@@ -55323,7 +55323,7 @@ L8275:
   store ptr %t8285, ptr %t8274, !dbg !666
   br label %L8277, !dbg !666
 L8276:
-  ; plum.off 178381
+  ; plum.off 178437
   %t8287 = load ptr, ptr %s1, !dbg !667
   %t8288 = load i64, ptr %s2, !dbg !667
   %t8289 = call i64 @plum_array_check_index(ptr %t8287, i64 %t8288), !dbg !667
@@ -55336,7 +55336,7 @@ L8276:
   call void @plum_rel_parser_ItemNode(ptr %t8286_pre), !dbg !667
   store ptr null, ptr %t8286, !dbg !667
   store ptr %t8293, ptr %t8286, !dbg !667
-  ; plum.off 178408
+  ; plum.off 178464
   %t8294 = load ptr, ptr %t8286, !dbg !668
   %t8295 = getelementptr i8, ptr %t8294, i64 48, !dbg !668
   %t8296 = load i64, ptr %t8295, !dbg !668
@@ -55359,7 +55359,7 @@ L8301:
   br label %L8302, !dbg !668
 L8302:
   %t8312 = load i1, ptr %t8299, !dbg !668
-  ; plum.off 178500
+  ; plum.off 178556
   %t8313 = load ptr, ptr %s0, !dbg !669
   call void @plum_rc_inc(ptr %t8313), !dbg !669
   %t8314 = load i64, ptr %s3, !dbg !669
@@ -60750,7 +60750,7 @@ L11065:
   store ptr %t11068, ptr %t11064, !dbg !796
   br label %L11067, !dbg !796
 L11066:
-  ; plum.off 199084
+  ; plum.off 199140
   %t11070 = load ptr, ptr %s0, !dbg !797
   call void @plum_rc_inc(ptr %t11070), !dbg !797
   %t11071 = load ptr, ptr %s1, !dbg !797
@@ -60773,7 +60773,7 @@ L11066:
   call void @plum_rel_pkg_Dep(ptr %t11069_pre), !dbg !797
   store ptr null, ptr %t11069, !dbg !797
   store ptr %t11084, ptr %t11069, !dbg !797
-  ; plum.off 199157
+  ; plum.off 199213
   %t11085 = load ptr, ptr %s3, !dbg !798
   %t11086 = getelementptr i8, ptr %t11085, i64 24, !dbg !798
   %t11087 = load ptr, ptr %t11086, !dbg !798
@@ -60832,7 +60832,7 @@ Ltail50:
   store ptr %t11111, ptr %t11097, !dbg !798
   br label %L11100, !dbg !798
 L11099:
-  ; plum.off 199323
+  ; plum.off 199379
   %t11112 = load ptr, ptr %t11069, !dbg !799
   %t11113 = getelementptr i8, ptr %t11112, i64 16, !dbg !799
   %t11114 = load ptr, ptr %t11113, !dbg !799
@@ -60865,7 +60865,7 @@ L11120:
   br label %L11121, !dbg !799
 L11121:
   %t11136 = load i1, ptr %t11118, !dbg !799
-  ; plum.off 199508
+  ; plum.off 199564
   %t11138 = load ptr, ptr %t11069, !dbg !800
   %t11139 = getelementptr i8, ptr %t11138, i64 16, !dbg !800
   %t11140 = load ptr, ptr %t11139, !dbg !800
@@ -60875,7 +60875,7 @@ L11121:
   call void @plum_rel_pkg_Manifest(ptr %t11137_pre), !dbg !800
   store ptr null, ptr %t11137, !dbg !800
   store ptr %t11141, ptr %t11137, !dbg !800
-  ; plum.off 199990
+  ; plum.off 200046
   %t11142 = load ptr, ptr %t11137, !dbg !801
   %t11143 = getelementptr i8, ptr %t11142, i64 8, !dbg !801
   %t11144 = load ptr, ptr %t11143, !dbg !801
@@ -60938,7 +60938,7 @@ L11163:
   br label %L11164, !dbg !801
 L11164:
   %t11189 = load i1, ptr %t11161, !dbg !801
-  ; plum.off 200258
+  ; plum.off 200314
   %t11191 = load ptr, ptr %s3, !dbg !802
   %t11192 = getelementptr i8, ptr %t11191, i64 8, !dbg !802
   %t11193 = load ptr, ptr %t11192, !dbg !802
@@ -65276,7 +65276,7 @@ Ltail66:
   store ptr %t13342, ptr %t13327, !dbg !933
   br label %L13330, !dbg !933
 L13329:
-  ; plum.off 185922
+  ; plum.off 185978
   %t13344 = load ptr, ptr %s0, !dbg !934
   call void @plum_rc_inc(ptr %t13344), !dbg !934
   %t13345 = load ptr, ptr %s2, !dbg !934
@@ -65292,13 +65292,13 @@ L13329:
   call void @plum_rel_str(ptr %t13343_pre), !dbg !934
   store ptr null, ptr %t13343, !dbg !934
   store ptr %t13352, ptr %t13343, !dbg !934
-  ; plum.off 185969
+  ; plum.off 186025
   %t13354 = load ptr, ptr %t13343, !dbg !935
   call void @plum_rc_inc(ptr %t13354), !dbg !935
   %t13355 = call ptr @plum_Os_is_directory(ptr %t13354), !dbg !935
   %t13356 = call i1 @plum__prelude__Result_unwrap_or__Bool_Str(ptr %t13355, i1 0), !dbg !935
   store i1 %t13356, ptr %t13353, !dbg !935
-  ; plum.off 186038
+  ; plum.off 186094
   %t13357 = load ptr, ptr %s1, !dbg !936
   %t13360 = call i1 @plum_str_eq(ptr %t13357, ptr @.str13358), !dbg !936
   call void @plum_rel_str(ptr @.str13358), !dbg !936
@@ -65353,7 +65353,7 @@ L13384:
   br label %L13385, !dbg !936
 L13385:
   %t13399 = load i1, ptr %t13382, !dbg !936
-  ; plum.off 186432
+  ; plum.off 186488
   %t13401 = load i1, ptr %t13353, !dbg !937
   %t13402 = xor i1 %t13401, true, !dbg !937
   br i1 %t13402, label %L13404, label %L13405, !dbg !937
@@ -65400,7 +65400,7 @@ L13406:
   call void @plum_rel_str(ptr %t13400_pre), !dbg !937
   store ptr null, ptr %t13400, !dbg !937
   store ptr %t13434, ptr %t13400, !dbg !937
-  ; plum.off 186562
+  ; plum.off 186618
   %t13436 = load ptr, ptr %s1, !dbg !938
   %t13439 = call i1 @plum_str_eq(ptr %t13436, ptr @.str13437), !dbg !938
   call void @plum_rel_str(ptr @.str13437), !dbg !938
@@ -65559,7 +65559,7 @@ L13495:
   call void @plum_rel_str(ptr %t13493_pre), !dbg !940
   store ptr null, ptr %t13493, !dbg !940
   store ptr %t13491, ptr %t13493, !dbg !940
-  ; plum.off 184792
+  ; plum.off 184848
   %t13498 = load ptr, ptr %s0, !dbg !941
   call void @plum_rc_inc(ptr %t13498), !dbg !941
   %t13499 = call ptr @plum_str_concat_reuse(ptr @.str13496, ptr %t13498), !dbg !941
@@ -72177,7 +72177,7 @@ L16802:
   store i1 0, ptr %t16801, !dbg !1054
   br label %L16804, !dbg !1054
 L16803:
-  ; plum.off 205363
+  ; plum.off 205419
   %t16805 = load ptr, ptr %s0, !dbg !1055
   call void @plum_rc_inc(ptr %t16805), !dbg !1055
   %t16806 = load ptr, ptr %s1, !dbg !1055
@@ -72687,7 +72687,7 @@ L17019:
   store ptr %t17022, ptr %t17018, !dbg !1067
   br label %L17021, !dbg !1067
 L17020:
-  ; plum.off 186885
+  ; plum.off 186941
   %t17024 = load ptr, ptr %s0, !dbg !1068
   %t17025 = load i64, ptr %s1, !dbg !1068
   %t17026 = call i64 @plum_array_check_index(ptr %t17024, i64 %t17025), !dbg !1068
@@ -73193,7 +73193,7 @@ entry:
   store ptr %p2, ptr %s2, !dbg !1078
   %t17302 = alloca ptr, !dbg !1078
   store ptr null, ptr %t17302, !dbg !1078
-  ; plum.off 156497
+  ; plum.off 156553
   %t17303 = load ptr, ptr %s1, !dbg !1079
   call void @plum_rc_inc(ptr %t17303), !dbg !1079
   %t17304 = call ptr @plum_project_deps(ptr %t17303), !dbg !1079
@@ -73255,7 +73255,7 @@ entry:
   %t17315 = alloca i1, !dbg !1083
   %t17317 = alloca i1, !dbg !1083
   %t17327 = alloca ptr, !dbg !1083
-  ; plum.off 159663
+  ; plum.off 159719
   %t17316 = load i1, ptr %s1, !dbg !1084
   store i1 1, ptr %t17317, !dbg !1084
   br i1 %t17316, label %L17319, label %L17318, !dbg !1084
@@ -73269,7 +73269,7 @@ L17318:
 L17319:
   %t17325 = load i1, ptr %t17317, !dbg !1084
   store i1 %t17325, ptr %t17315, !dbg !1084
-  ; plum.off 159724
+  ; plum.off 159780
   %t17326 = load i1, ptr %t17315, !dbg !1085
   br i1 %t17326, label %L17328, label %L17329, !dbg !1085
 L17328:
@@ -73294,7 +73294,7 @@ entry:
   store i1 %p0, ptr %s0, !dbg !1087
   %t17338 = alloca ptr, !dbg !1087
   store ptr null, ptr %t17338, !dbg !1087
-  ; plum.off 155287
+  ; plum.off 155343
   %t17339 = call ptr @plum_cc_words(i1 0), !dbg !1088
   %t17338_pre = load ptr, ptr %t17338, !dbg !1088
   call void @plum_rel_Array_Str(ptr %t17338_pre), !dbg !1088
@@ -74176,7 +74176,7 @@ entry:
   %t18088 = alloca ptr, !dbg !1115
   store ptr null, ptr %t18088, !dbg !1115
   %t18103 = alloca ptr, !dbg !1115
-  ; plum.off 167170
+  ; plum.off 167226
   %t17729 = load ptr, ptr %s2, !dbg !1116
   %t17730 = getelementptr i8, ptr %t17729, i64 8, !dbg !1116
   %t17731 = load ptr, ptr %t17730, !dbg !1116
@@ -74185,7 +74185,7 @@ entry:
   call void @plum_rel_Array_Str(ptr %t17728_pre), !dbg !1116
   store ptr null, ptr %t17728, !dbg !1116
   store ptr %t17731, ptr %t17728, !dbg !1116
-  ; plum.off 167199
+  ; plum.off 167255
   %t17733 = load ptr, ptr %s1, !dbg !1117
   call void @plum_rc_inc(ptr %t17733), !dbg !1117
   %t17736 = call ptr @plum_str_concat_reuse(ptr %t17733, ptr @.str17734), !dbg !1117
@@ -74194,20 +74194,20 @@ entry:
   call void @plum_rel_str(ptr %t17732_pre), !dbg !1117
   store ptr null, ptr %t17732, !dbg !1117
   store ptr %t17736, ptr %t17732, !dbg !1117
-  ; plum.off 167303
+  ; plum.off 167359
   %t17737 = load i1, ptr %s6, !dbg !1118
   %t17738 = call i1 @plum_codegen_set_debug_frames(i1 %t17737), !dbg !1118
-  ; plum.off 167517
+  ; plum.off 167573
   %t17739 = load i1, ptr %s5, !dbg !1119
   %t17740 = xor i1 %t17739, true, !dbg !1119
   %t17741 = call i1 @plum_codegen_set_debug_info(i1 %t17740), !dbg !1119
-  ; plum.off 167555
+  ; plum.off 167611
   %t17743 = call ptr @plum_buildcache_start(i1 0), !dbg !1120
   %t17742_pre = load ptr, ptr %t17742, !dbg !1120
   call void @plum_rel_Time_Instant(ptr %t17742_pre), !dbg !1120
   store ptr null, ptr %t17742, !dbg !1120
   store ptr %t17743, ptr %t17742, !dbg !1120
-  ; plum.off 167596
+  ; plum.off 167652
   %t17745 = load i1, ptr %s8, !dbg !1121
   store i1 0, ptr %t17746, !dbg !1121
   br i1 %t17745, label %L17747, label %L17748, !dbg !1121
@@ -74237,7 +74237,7 @@ L17754:
   call void @plum_rel_str(ptr %t17744_pre), !dbg !1121
   store ptr null, ptr %t17744, !dbg !1121
   store ptr %t17762, ptr %t17744, !dbg !1121
-  ; plum.off 167705
+  ; plum.off 167761
   %t17764 = load ptr, ptr %t17744, !dbg !1122
   %t17767 = call i1 @plum_str_eq(ptr %t17764, ptr @.str17765), !dbg !1122
   call void @plum_rel_str(ptr @.str17765), !dbg !1122
@@ -74257,11 +74257,11 @@ L17771:
   call void @plum_rel__prelude__Option_Str(ptr %t17763_pre), !dbg !1122
   store ptr null, ptr %t17763, !dbg !1122
   store ptr %t17775, ptr %t17763, !dbg !1122
-  ; plum.off 167775
+  ; plum.off 167831
   %t17778 = load ptr, ptr %t17742, !dbg !1123
   call void @plum_rc_inc(ptr %t17778), !dbg !1123
   %t17779 = call i1 @plum_buildcache_finish(ptr @.str17776, ptr %t17778), !dbg !1123
-  ; plum.off 167821
+  ; plum.off 167877
   %t17781 = load ptr, ptr %t17763, !dbg !1124
   br label %L17785, !dbg !1124
 L17785:
@@ -74278,7 +74278,7 @@ L17793:
   call void @plum_rel_str(ptr %t17791_pre), !dbg !1124
   store ptr null, ptr %t17791, !dbg !1124
   store ptr %t17789, ptr %t17791, !dbg !1124
-  ; plum.off 167866
+  ; plum.off 167922
   %t17796 = call i1 @plum_buildcache_diagnostic(ptr @.str17794), !dbg !1125
   %t17797 = load ptr, ptr %t17791, !dbg !1125
   call void @plum_rc_inc(ptr %t17797), !dbg !1125
@@ -74290,7 +74290,7 @@ L17798:
   %t17800 = icmp eq i64 %t17799, 1, !dbg !1125
   br i1 %t17800, label %L17801, label %L17784, !dbg !1125
 L17801:
-  ; plum.off 167937
+  ; plum.off 167993
   %t17802 = load ptr, ptr %t17744, !dbg !1126
   %t17805 = call i1 @plum_str_eq(ptr %t17802, ptr @.str17803), !dbg !1126
   call void @plum_rel_str(ptr @.str17803), !dbg !1126
@@ -74304,19 +74304,19 @@ L17808:
 L17809:
   %t17814 = load ptr, ptr %t17806, !dbg !1126
   %t17815 = call i1 @plum_buildcache_diagnostic(ptr %t17814), !dbg !1126
-  ; plum.off 168021
+  ; plum.off 168077
   %t17816 = load ptr, ptr %t17744, !dbg !1127
   %t17819 = call i1 @plum_str_eq(ptr %t17816, ptr @.str17817), !dbg !1127
   call void @plum_rel_str(ptr @.str17817), !dbg !1127
   %t17820 = xor i1 %t17819, true, !dbg !1127
   %t17821 = call i1 @plum_buildcache_begin_reads(i1 %t17820), !dbg !1127
-  ; plum.off 168068
+  ; plum.off 168124
   %t17823 = call ptr @plum_buildcache_start(i1 0), !dbg !1128
   %t17822_pre = load ptr, ptr %t17822, !dbg !1128
   call void @plum_rel_Time_Instant(ptr %t17822_pre), !dbg !1128
   store ptr null, ptr %t17822, !dbg !1128
   store ptr %t17823, ptr %t17822, !dbg !1128
-  ; plum.off 168110
+  ; plum.off 168166
   %t17825 = load ptr, ptr %s7, !dbg !1129
   %t17826 = getelementptr i8, ptr %t17825, i64 8, !dbg !1129
   %t17827 = load ptr, ptr %t17826, !dbg !1129
@@ -74343,7 +74343,7 @@ L17834:
   call void @plum_rel_parser_ProgramNode(ptr %t17824_pre), !dbg !1129
   store ptr null, ptr %t17824, !dbg !1129
   store ptr %t17836, ptr %t17824, !dbg !1129
-  ; plum.off 168207
+  ; plum.off 168263
   %t17842 = load ptr, ptr %t17822, !dbg !1130
   call void @plum_rc_inc(ptr %t17842), !dbg !1130
   %t17843 = call i1 @plum_buildcache_finish(ptr @.str17840, ptr %t17842), !dbg !1130
@@ -74394,7 +74394,7 @@ L17866:
   %t17872 = and i1 %t17868, 1, !dbg !1130
   br i1 %t17872, label %L17873, label %L17852, !dbg !1130
 L17873:
-  ; plum.off 168416
+  ; plum.off 168472
   %t17874 = load ptr, ptr %t17763, !dbg !1131
   call void @plum_rc_inc(ptr %t17874), !dbg !1131
   %t17875 = call i1 @plum__prelude__Option_is_none__Str(ptr %t17874), !dbg !1131
@@ -74411,7 +74411,7 @@ L17878:
   %t17884 = load i1, ptr %t17876, !dbg !1131
   br i1 %t17884, label %L17886, label %L17887, !dbg !1131
 L17886:
-  ; plum.off 168470
+  ; plum.off 168526
   %t17890 = call ptr @plum_buildcache_read_manifest(i1 0), !dbg !1132
   %t17889_pre = load ptr, ptr %t17889, !dbg !1132
   call void @plum_rel_str(ptr %t17889_pre), !dbg !1132
@@ -74462,15 +74462,15 @@ L17887:
   br label %L17888, !dbg !1132
 L17888:
   %t17919 = load i1, ptr %t17885, !dbg !1132
-  ; plum.off 169035
+  ; plum.off 169091
   %t17920 = call i1 @plum_buildcache_begin_reads(i1 0), !dbg !1133
-  ; plum.off 169359
+  ; plum.off 169415
   %t17922 = call ptr @plum_buildcache_start(i1 0), !dbg !1134
   %t17921_pre = load ptr, ptr %t17921, !dbg !1134
   call void @plum_rel_Time_Instant(ptr %t17921_pre), !dbg !1134
   store ptr null, ptr %t17921, !dbg !1134
   store ptr %t17922, ptr %t17921, !dbg !1134
-  ; plum.off 169409
+  ; plum.off 169465
   %t17924 = call ptr @plum_buildcache_root(i1 0), !dbg !1135
   %t17927 = call ptr @plum_Path_join(ptr %t17924, ptr @.str17925), !dbg !1135
   %t17928 = call ptr @plum_buildcache_compiler_hash(i1 0), !dbg !1135
@@ -74479,7 +74479,7 @@ L17888:
   call void @plum_rel_str(ptr %t17923_pre), !dbg !1135
   store ptr null, ptr %t17923, !dbg !1135
   store ptr %t17929, ptr %t17923, !dbg !1135
-  ; plum.off 169522
+  ; plum.off 169578
   %t17931 = load i1, ptr %s8, !dbg !1136
   store i1 0, ptr %t17932, !dbg !1136
   br i1 %t17931, label %L17933, label %L17934, !dbg !1136
@@ -74509,7 +74509,7 @@ L17944:
   call void @plum_rel_str(ptr %t17930_pre), !dbg !1136
   store ptr null, ptr %t17930, !dbg !1136
   store ptr %t17947, ptr %t17930, !dbg !1136
-  ; plum.off 169607
+  ; plum.off 169663
   %t17949 = load ptr, ptr %t17930, !dbg !1137
   %t17950 = load ptr, ptr %s3, !dbg !1137
   %t17951 = call i1 @plum_str_eq(ptr %t17949, ptr %t17950), !dbg !1137
@@ -74544,7 +74544,7 @@ L17955:
   call void @plum_rel_ShimBuild(ptr %t17948_pre), !dbg !1137
   store ptr null, ptr %t17948, !dbg !1137
   store ptr %t17970, ptr %t17948, !dbg !1137
-  ; plum.off 169782
+  ; plum.off 169838
   %t17972 = load ptr, ptr %t17948, !dbg !1138
   %t17973 = getelementptr i8, ptr %t17972, i64 8, !dbg !1138
   %t17974 = load ptr, ptr %t17973, !dbg !1138
@@ -74588,7 +74588,7 @@ L17990:
   call void @plum_rel_ShimBuild(ptr %t17971_pre), !dbg !1138
   store ptr null, ptr %t17971, !dbg !1138
   store ptr %t17999, ptr %t17971, !dbg !1138
-  ; plum.off 169918
+  ; plum.off 169974
   %t18002 = load ptr, ptr %t17921, !dbg !1139
   call void @plum_rc_inc(ptr %t18002), !dbg !1139
   %t18003 = call i1 @plum_buildcache_finish(ptr @.str18000, ptr %t18002), !dbg !1139
@@ -74611,7 +74611,7 @@ L18012:
   store ptr %t18020, ptr %t18011, !dbg !1139
   br label %L18014, !dbg !1139
 L18013:
-  ; plum.off 170070
+  ; plum.off 170126
   %t18022 = load ptr, ptr %t17971, !dbg !1140
   %t18023 = getelementptr i8, ptr %t18022, i64 16, !dbg !1140
   %t18024 = load ptr, ptr %t18023, !dbg !1140
@@ -74620,7 +74620,7 @@ L18013:
   call void @plum_rel_Array_Str(ptr %t18021_pre), !dbg !1140
   store ptr null, ptr %t18021, !dbg !1140
   store ptr %t18024, ptr %t18021, !dbg !1140
-  ; plum.off 170114
+  ; plum.off 170170
   %t18026 = load i1, ptr %s8, !dbg !1141
   store i1 0, ptr %t18027, !dbg !1141
   br i1 %t18026, label %L18028, label %L18029, !dbg !1141
@@ -74703,9 +74703,9 @@ L18075:
   %t18080 = load i1, ptr %t18073, !dbg !1141
   br i1 %t18080, label %L18082, label %L18083, !dbg !1141
 L18082:
-  ; plum.off 170681
+  ; plum.off 170737
   %t18087 = call i1 @plum_buildcache_diagnostic(ptr @.str18085), !dbg !1142
-  ; plum.off 170771
+  ; plum.off 170827
   %t18089 = load ptr, ptr %s3, !dbg !1143
   call void @plum_rc_inc(ptr %t18089), !dbg !1143
   %t18090 = load ptr, ptr %t17780, !dbg !1143
@@ -75336,7 +75336,7 @@ entry:
   %t18409 = alloca i1, !dbg !1161
   %t18429 = alloca i1, !dbg !1161
   %t18442 = alloca i1, !dbg !1161
-  ; plum.off 158228
+  ; plum.off 158284
   %t18333 = load ptr, ptr %s0, !dbg !1162
   call void @plum_rc_inc(ptr %t18333), !dbg !1162
   %t18337 = call ptr @plum_collect_flag(ptr %t18333, ptr @.str18334, i64 0, ptr @.const18336), !dbg !1162
@@ -75344,7 +75344,7 @@ entry:
   call void @plum_rel_Array_Str(ptr %t18332_pre), !dbg !1162
   store ptr null, ptr %t18332, !dbg !1162
   store ptr %t18337, ptr %t18332, !dbg !1162
-  ; plum.off 158289
+  ; plum.off 158345
   %t18339 = load ptr, ptr %s0, !dbg !1163
   call void @plum_rc_inc(ptr %t18339), !dbg !1163
   %t18345 = call i64 @plum_array_len(ptr %t18339), !dbg !1163
@@ -75389,7 +75389,7 @@ L18351:
   %t18369 = call i64 @plum_array_len(ptr %t18346), !dbg !1163
   call void @plum_rel_Array_Str(ptr %t18346), !dbg !1163
   store i64 %t18369, ptr %t18338, !dbg !1163
-  ; plum.off 158363
+  ; plum.off 158419
   %t18370 = load i64, ptr %t18338, !dbg !1164
   %t18371 = icmp sgt i64 %t18370, 0, !dbg !1164
   store i1 0, ptr %t18372, !dbg !1164
@@ -75481,7 +75481,7 @@ L18443:
   store i1 0, ptr %t18442, !dbg !1164
   br label %L18445, !dbg !1164
 L18444:
-  ; plum.off 158732
+  ; plum.off 158788
   %t18448 = call i1 @plum_panic(ptr @.str18446), !dbg !1165
   call void @plum_rel_str(ptr @.str18446), !dbg !1165
   store i1 1, ptr %t18442, !dbg !1165
@@ -86075,7 +86075,7 @@ Ltail126:
   store ptr %t27374, ptr %t27360, !dbg !1241
   br label %L27363, !dbg !1241
 L27362:
-  ; plum.off 180705
+  ; plum.off 180761
   %t27376 = load ptr, ptr %s0, !dbg !1242
   call void @plum_rc_inc(ptr %t27376), !dbg !1242
   %t27377 = load ptr, ptr %s1, !dbg !1242
@@ -86301,12 +86301,12 @@ L27471:
   call void @plum_rel_str(ptr %t27469_pre), !dbg !1244
   store ptr null, ptr %t27469, !dbg !1244
   store ptr %t27467, ptr %t27469, !dbg !1244
-  ; plum.off 182080
+  ; plum.off 182136
   %t27474 = load ptr, ptr %t27469, !dbg !1245
   %t27475 = call ptr @plum_str_concat_reuse(ptr @.str27472, ptr %t27474), !dbg !1245
   %t27476 = call i1 @plum_println(ptr %t27475), !dbg !1245
   call void @plum_rel_str(ptr %t27475), !dbg !1245
-  ; plum.off 182108
+  ; plum.off 182164
   %t27477 = call i1 @plum_Os_exit_with(i64 1), !dbg !1245
   store i64 0, ptr %t27460, !dbg !1245
   br label %L27461, !dbg !1245
@@ -86324,7 +86324,7 @@ L27486:
   call void @plum_rel_str(ptr %t27484_pre), !dbg !1245
   store ptr null, ptr %t27484, !dbg !1245
   store ptr %t27482, ptr %t27484, !dbg !1245
-  ; plum.off 182163
+  ; plum.off 182219
   %t27488 = load ptr, ptr %s0, !dbg !1246
   call void @plum_rc_inc(ptr %t27488), !dbg !1246
   %t27489 = load ptr, ptr %t27484, !dbg !1246
@@ -86339,7 +86339,7 @@ L27486:
   %t27493 = call i1 @plum_str_eq(ptr %t27491, ptr %t27492), !dbg !1246
   br i1 %t27493, label %L27495, label %L27496, !dbg !1246
 L27495:
-  ; plum.off 182496
+  ; plum.off 182552
   %t27498 = load i1, ptr %s1, !dbg !1247
   %t27499 = xor i1 %t27498, true, !dbg !1247
   store i1 0, ptr %t27500, !dbg !1247
@@ -86378,7 +86378,7 @@ L27496:
   %t27518 = xor i1 %t27517, true, !dbg !1247
   br i1 %t27518, label %L27520, label %L27521, !dbg !1247
 L27520:
-  ; plum.off 182637
+  ; plum.off 182693
   %t27525 = load ptr, ptr %s0, !dbg !1248
   call void @plum_rc_inc(ptr %t27525), !dbg !1248
   %t27526 = call ptr @plum_str_concat_reuse(ptr @.str27523, ptr %t27525), !dbg !1248
@@ -86387,7 +86387,7 @@ L27520:
   call void @plum_rel_str(ptr @.str27527), !dbg !1248
   %t27530 = call i1 @plum_println(ptr %t27529), !dbg !1248
   call void @plum_rel_str(ptr %t27529), !dbg !1248
-  ; plum.off 182759
+  ; plum.off 182815
   %t27531 = call i1 @plum_Os_exit_with(i64 1), !dbg !1249
   store i64 0, ptr %t27519, !dbg !1249
   br label %L27522, !dbg !1249
@@ -86395,7 +86395,7 @@ L27521:
   %t27532 = load i1, ptr %s2, !dbg !1249
   br i1 %t27532, label %L27534, label %L27535, !dbg !1249
 L27534:
-  ; plum.off 182838
+  ; plum.off 182894
   %t27537 = load ptr, ptr %s0, !dbg !1250
   %t27538 = call i1 @plum_println(ptr %t27537), !dbg !1250
   store i64 1, ptr %t27533, !dbg !1250
@@ -86404,7 +86404,7 @@ L27535:
   %t27539 = load i1, ptr %s1, !dbg !1250
   br i1 %t27539, label %L27541, label %L27542, !dbg !1250
 L27541:
-  ; plum.off 182889
+  ; plum.off 182945
   %t27544 = load ptr, ptr %s0, !dbg !1251
   call void @plum_rc_inc(ptr %t27544), !dbg !1251
   %t27545 = load ptr, ptr %t27487, !dbg !1251
@@ -86413,7 +86413,7 @@ L27541:
   store i64 1, ptr %t27540, !dbg !1251
   br label %L27543, !dbg !1251
 L27542:
-  ; plum.off 182938
+  ; plum.off 182994
   %t27547 = load ptr, ptr %t27487, !dbg !1252
   call void @plum_rc_inc(ptr %t27547), !dbg !1252
   %t27548 = call i1 @plum__prelude__print(ptr %t27547), !dbg !1252
@@ -95253,7 +95253,7 @@ L32298:
   store ptr %t32300, ptr %t32276, !dbg !1396
   br label %L32279, !dbg !1396
 L32278:
-  ; plum.off 201678
+  ; plum.off 201734
   %t32317 = load ptr, ptr %s2, !dbg !1397
   call void @plum_rc_inc(ptr %t32317), !dbg !1397
   %t32318 = load ptr, ptr %s1, !dbg !1397
@@ -95269,7 +95269,7 @@ L32278:
   call void @plum_rel_str(ptr %t32316_pre), !dbg !1397
   store ptr null, ptr %t32316, !dbg !1397
   store ptr %t32324, ptr %t32316, !dbg !1397
-  ; plum.off 201737
+  ; plum.off 201793
   %t32326 = load ptr, ptr %s1, !dbg !1398
   %t32327 = getelementptr i8, ptr %t32326, i64 24, !dbg !1398
   %t32328 = load ptr, ptr %t32327, !dbg !1398
@@ -95283,14 +95283,14 @@ L32278:
   call void @plum_rel_str(ptr %t32325_pre), !dbg !1398
   store ptr null, ptr %t32325, !dbg !1398
   store ptr %t32332, ptr %t32325, !dbg !1398
-  ; plum.off 201787
+  ; plum.off 201843
   %t32334 = load ptr, ptr %t32316, !dbg !1399
   call void @plum_rc_inc(ptr %t32334), !dbg !1399
   %t32335 = call ptr @plum_Os_is_directory(ptr %t32334), !dbg !1399
   %t32336 = call i1 @plum__prelude__Result_unwrap_or__Bool_Str(ptr %t32335, i1 0), !dbg !1399
   br i1 %t32336, label %L32338, label %L32339, !dbg !1399
 L32338:
-  ; plum.off 201868
+  ; plum.off 201924
   %t32341 = load ptr, ptr %s1, !dbg !1400
   call void @plum_rc_inc(ptr %t32341), !dbg !1400
   %t32342 = load ptr, ptr %t32316, !dbg !1400
@@ -95301,11 +95301,11 @@ L32338:
   store ptr %t32344, ptr %t32337, !dbg !1400
   br label %L32340, !dbg !1400
 L32339:
-  ; plum.off 201950
+  ; plum.off 202006
   %t32345 = load i1, ptr %s3, !dbg !1401
   br i1 %t32345, label %L32347, label %L32348, !dbg !1401
 L32347:
-  ; plum.off 201961
+  ; plum.off 202017
   %t32350 = load ptr, ptr %s1, !dbg !1401
   call void @plum_rc_inc(ptr %t32350), !dbg !1401
   %t32351 = call ptr @plum_pkg_fetch_dep(ptr %t32350), !dbg !1401
@@ -95477,7 +95477,7 @@ L32433:
   store i1 0, ptr %t32432, !dbg !1403
   br label %L32435, !dbg !1403
 L32434:
-  ; plum.off 200781
+  ; plum.off 200837
   %t32436 = load ptr, ptr %s0, !dbg !1404
   %t32437 = load i64, ptr %s2, !dbg !1404
   %t32438 = call i64 @plum_array_check_index(ptr %t32436, i64 %t32437), !dbg !1404
@@ -96952,7 +96952,7 @@ L33102:
   store i64 %t33105, ptr %t33101, !dbg !1459
   br label %L33104, !dbg !1459
 L33103:
-  ; plum.off 195150
+  ; plum.off 195206
   %t33107 = load ptr, ptr %s0, !dbg !1460
   call void @plum_rc_inc(ptr %t33107), !dbg !1460
   %t33108 = load ptr, ptr %s1, !dbg !1460
@@ -96968,7 +96968,7 @@ L33103:
   call void @plum_rel_str(ptr %t33106_pre), !dbg !1460
   store ptr null, ptr %t33106, !dbg !1460
   store ptr %t33115, ptr %t33106, !dbg !1460
-  ; plum.off 195195
+  ; plum.off 195251
   %t33117 = load ptr, ptr %t33106, !dbg !1461
   call void @plum_rc_inc(ptr %t33117), !dbg !1461
   %t33118 = call ptr @plum_Os_is_directory(ptr %t33117), !dbg !1461
@@ -112993,13 +112993,13 @@ L40046:
   call void @plum_rel_str(ptr %t40044_pre), !dbg !1734
   store ptr null, ptr %t40044, !dbg !1734
   store ptr %t40042, ptr %t40044, !dbg !1734
-  ; plum.off 176908
+  ; plum.off 176964
   %t40047 = load ptr, ptr %s0, !dbg !1735
   call void @plum_rc_inc(ptr %t40047), !dbg !1735
   %t40048 = load ptr, ptr %t40044, !dbg !1735
   call void @plum_rc_inc(ptr %t40048), !dbg !1735
   %t40049 = call i1 @plum_buildcache_observe(ptr %t40047, ptr %t40048), !dbg !1735
-  ; plum.off 176951
+  ; plum.off 177007
   %t40051 = load ptr, ptr %t40044, !dbg !1736
   call void @plum_rc_inc(ptr %t40051), !dbg !1736
   %t40052 = load ptr, ptr %s0, !dbg !1736
@@ -113009,7 +113009,7 @@ L40046:
   call void @plum_rel_lexer_LexedSource(ptr %t40050_pre), !dbg !1736
   store ptr null, ptr %t40050, !dbg !1736
   store ptr %t40053, ptr %t40050, !dbg !1736
-  ; plum.off 177013
+  ; plum.off 177069
   %t40054 = load ptr, ptr %s0, !dbg !1737
   call void @plum_rc_inc(ptr %t40054), !dbg !1737
   %t40055 = load ptr, ptr %t40044, !dbg !1737
@@ -113051,7 +113051,7 @@ L40079:
   call void @plum_rel_str(ptr %t40077_pre), !dbg !1737
   store ptr null, ptr %t40077, !dbg !1737
   store ptr %t40075, ptr %t40077, !dbg !1737
-  ; plum.off 177194
+  ; plum.off 177250
   %t40082 = load ptr, ptr %s0, !dbg !1738
   call void @plum_rc_inc(ptr %t40082), !dbg !1738
   %t40083 = call ptr @plum_str_concat_reuse(ptr @.str40080, ptr %t40082), !dbg !1738
@@ -113457,7 +113457,7 @@ Ltail214:
   store ptr %t40255, ptr %t40240, !dbg !1751
   br label %L40243, !dbg !1751
 L40242:
-  ; plum.off 162742
+  ; plum.off 162798
   %t40257 = load ptr, ptr %s1, !dbg !1752
   call void @plum_rc_inc(ptr %t40257), !dbg !1752
   %t40258 = load ptr, ptr %s0, !dbg !1752
@@ -114470,7 +114470,7 @@ L40199:
 @.str41715 = private global { i64, i64, [15185 x i8] } { i64 -1, i64 15184, [15185 x i8] c"// A thin ABI-adapter shim between Plum's `extern \22C\22` surface (Int/\0A// Float/Bool/CStr/qualifying-struct only — no raw pointers, no\0A// out-parameters) and POSIX BSD sockets, whose real API needs\0A// `struct sockaddr`/`struct addrinfo`/`socklen_t *` — none of which fit\0A// Plum's extern type surface, same reason `raylib_shim.c` exists (see\0A// examples/asteroids/native/raylib_shim.c's own doc comment for the\0A// general pattern). Every function here takes/returns only `long long`\0A// (Plum `Int`) or `const char *` (Plum `CStr`), building the real\0A// `sockaddr`/`addrinfo` structs internally before calling through.\0A//\0A// **Unix-only (Linux/macOS) — a deliberate, documented v1 scope\0A// boundary, not an oversight.** Windows' Winsock is a genuinely\0A// different API in the details that matter here (needs `WSAStartup`,\0A// `SOCKET` isn't `int`, `closesocket()` not `close()`) — see DESIGN.md's\0A// \22TCP sockets\22 section for the full reasoning, which mirrors the\0A// existing extern-symbol-resolution Unix-only precedent exactly.\0A//\0A// This shim is compiled into TWO separate places, unlike a per-project\0A// shim (raylib's): once into `plum-interp`/`plumc`'s OWN process (via\0A// their `build.rs`, alongside how `libm` is force-linked in — see\0A// those files' doc comments) so `plum run`'s extern-call resolution\0A// against the CURRENT PROCESS's symbol table finds these symbols too;\0A// and once into every `plumc build` output binary unconditionally\0A// (`clang_compile` in `codegen_cli.rs`), the same way `-lm` is passed\0A// unconditionally — both backends need to agree these functions exist,\0A// same \22both backends behave identically\22 story as everything else.\0A//\0A// **`tcp_recv`'s own real scope trade**: it returns a `CStr` (a\0A// NUL-terminated, shim-owned buffer) rather than an `Int` count, so\0A// received data can become a usable Plum `String` via `.as_string()`\0A// (see DESIGN.md's \22CStr -> String\22 note — `Type::CStr` otherwise has\0A// no way back into a real Plum value). That makes this NUL-terminated,\0A// i.e. NOT binary-safe: an embedded `\5C0` byte in a response silently\0A// truncates it. Acceptable, honestly-documented for a v1 scoped at\0A// line-oriented HTTP/1.1 (headers + mostly-text bodies), not something\0A// that would hold up for arbitrary binary payloads. `tcp_recv` also\0A// deliberately returns `\22\22` — an empty, non-null `CStr` — on BOTH a\0A// clean peer-close (`recv` returns 0) AND a hard socket error (`recv`\0A// returns < 0): a null `CStr` return is a hard runtime abort under\0A// Plum's existing FFI semantics (see DESIGN.md's `CStr` null-return\0A// note), which would crash the whole program on an ordinary connection\0A// close — not acceptable for a `Result`-shaped Net API where \22stop\0A// reading\22 (from either cause) should be an ordinary, catchable\0A// outcome, not a language-level abort. The real distinction (clean\0A// close vs. genuine error) is discarded — a real, documented v1\0A// limitation, not silently swept.\0A//\0A// **`tcp_recv_n`/`tcp_recv_data` are the binary-safe pair**, added\0A// alongside rather than by changing `tcp_recv`, whose contract callers\0A// depend on. They split the answer across two calls because Plum's\0A// extern surface has no out-parameter and no multi-value return: the\0A// first returns a COUNT (and tells a clean close from an error, which\0A// `tcp_recv` cannot), the second hands back the buffer those bytes are\0A// in. Together they carry a length, so nothing has to `strlen` a\0A// payload that may legitimately contain a zero byte.\0A#include <string.h>\0A#include <stdlib.h>\0A#include <stdio.h>\0A#include <limits.h>\0A\0A// Winsock is a different API in the details, not in the shape: the same\0A// `socket`/`bind`/`listen`/`accept`/`send`/`recv` calls with a\0A// different handle type, a different close, a different error\0A// sentinel, and a mandatory one-time initialisation. Those four\0A// differences are abstracted here and NOTHING below is written twice --\0A// the alternative, a whole second copy of each function, is how the two\0A// halves drift apart.\0A//\0A// **Untested.** No Windows toolchain has compiled this. See PORTING.md.\0A#if defined(_WIN32)\0A// winsock2.h must precede windows.h, which ws2tcpip.h pulls in.\0A#include <winsock2.h>\0A#include <ws2tcpip.h>\0A\0Atypedef SOCKET plum_sock;\0A#define PLUM_BAD_SOCK       INVALID_SOCKET\0A#define PLUM_CLOSESOCK(s)   closesocket(s)\0A#define PLUM_SOCKOPT(v)     ((const char *)(v))\0A// Winsock takes an `int` byte count. Preserve the socket API's existing\0A// partial-I/O behavior by limiting each call to its largest representable\0A// count instead of allowing a large Plum Int to wrap when narrowed.\0A#define PLUM_IO_LEN(n)      ((n) > INT_MAX ? INT_MAX : (n))\0A#define PLUM_ADDRLEN(n)     ((int)PLUM_IO_LEN(n))\0A\0A// Winsock refuses every call until the library is initialised, and\0A// there is no natural place to do it once -- this shim has no\0A// initialiser and Plum has no module-load hook. Doing it lazily on each\0A// entry point is the standard answer; `WSAStartup` is reference-counted\0A// and cheap to call repeatedly, and the matching `WSACleanup` is\0A// deliberately never called, because the only correct time to do it is\0A// at process exit, when it buys nothing.\0Astatic int plum_net_init(void) {\0A    static int started = 0;\0A    WSADATA wsa;\0A    if (started) return 0;\0A    if (WSAStartup(MAKEWORD(2, 2), &wsa) != 0) return -1;\0A    started = 1;\0A    return 0;\0A}\0A#else\0A#include <sys/types.h>\0A#include <sys/socket.h>\0A#include <netinet/in.h>\0A#include <netdb.h>\0A#include <arpa/inet.h>\0A#include <unistd.h>\0A\0Atypedef int plum_sock;\0A#define PLUM_BAD_SOCK       (-1)\0A#define PLUM_CLOSESOCK(s)   close(s)\0A#define PLUM_SOCKOPT(v)     (v)\0A#define PLUM_ADDRLEN(n)     (n)\0A#define PLUM_IO_LEN(n)      (n)\0A#define plum_net_init()     0\0A#endif\0A\0A// `INVALID_SOCKET` is `(SOCKET)~0`, which reinterpreted as a signed\0A// 64-bit value is exactly -1 -- so the -1 the Plum wrappers already\0A// treat as failure keeps working on both platforms without a second\0A// sentinel. Checked here rather than assumed.\0Astatic long long plum_sock_out(plum_sock s) {\0A    return (s == PLUM_BAD_SOCK) ? -1 : (long long)s;\0A}\0A\0A// Resolves `host`/`port` via `getaddrinfo` (so both hostnames and\0A// literal IPs work, IPv4 or IPv6) and connects to the first address\0A// that succeeds. Returns the connected fd, or -1 on any failure —\0A// callers (the `Net`/`tcp_connect_to` Plum wrapper) turn that sentinel\0A// into a `Result::Err`, no extern-level error detail is lost here since\0A// there IS no richer detail to lose (a DNS failure and a refused\0A// connection are indistinguishable at this level either way).\0Along long tcp_connect(const char *host, long long port) {\0A    struct addrinfo hints;\0A    if (plum_net_init() != 0) return -1;\0A    memset(&hints, 0, sizeof(hints));\0A    hints.ai_family = AF_UNSPEC;\0A    hints.ai_socktype = SOCK_STREAM;\0A\0A    char port_str[16];\0A    snprintf(port_str, sizeof(port_str), \22%lld\22, port);\0A\0A    struct addrinfo *res = NULL;\0A    if (getaddrinfo(host, port_str, &hints, &res) != 0) {\0A        return -1;\0A    }\0A\0A    long long fd = -1;\0A    for (struct addrinfo *rp = res; rp != NULL; rp = rp->ai_next) {\0A        plum_sock s = socket(rp->ai_family, rp->ai_socktype, rp->ai_protocol);\0A        if (s == PLUM_BAD_SOCK) {\0A            continue;\0A        }\0A        if (connect(s, rp->ai_addr, PLUM_ADDRLEN(rp->ai_addrlen)) == 0) {\0A            fd = (long long)s;\0A            break;\0A        }\0A        PLUM_CLOSESOCK(s);\0A    }\0A    freeaddrinfo(res);\0A    return fd;\0A}\0A\0A// Binds+listens on `port` across all local interfaces (`INADDR_ANY`,\0A// IPv4 only — a real, deliberate v1 scope trade, matches `tcp_connect`\0A// not being IPv6-exclusive-only either way since `getaddrinfo` there\0A// picks whatever resolves). `SO_REUSEADDR` is set so restarting a\0A// server immediately after it exits doesn't hit `EADDRINUSE` from the\0A// kernel's own `TIME_WAIT` hold on the port — standard practice for any\0A// long-lived listener. Returns the listening fd, or -1 on failure.\0Along long tcp_listen(long long port) {\0A    plum_sock s;\0A    if (plum_net_init() != 0) return -1;\0A    s = socket(AF_INET, SOCK_STREAM, 0);\0A    if (s == PLUM_BAD_SOCK) {\0A        return -1;\0A    }\0A    int one = 1;\0A    setsockopt(s, SOL_SOCKET, SO_REUSEADDR, PLUM_SOCKOPT(&one), sizeof(one));\0A\0A    struct sockaddr_in addr;\0A    memset(&addr, 0, sizeof(addr));\0A    addr.sin_family = AF_INET;\0A    addr.sin_addr.s_addr = INADDR_ANY;\0A    addr.sin_port = htons((unsigned short)port);\0A\0A    if (bind(s, (struct sockaddr *)&addr, sizeof(addr)) != 0) {\0A        PLUM_CLOSESOCK(s);\0A        return -1;\0A    }\0A    if (listen(s, 128) != 0) {\0A        PLUM_CLOSESOCK(s);\0A        return -1;\0A    }\0A    return (long long)s;\0A}\0A\0A// `accept(2)`, discarding the peer's own address (Plum has no way to\0A// receive it back — same \22no multi-value FFI return\22 limit that ruled\0A// UDP's `recvfrom` out of this v1 pass entirely, see DESIGN.md). Blocks\0A// until a connection arrives. Returns the new connection's fd, or -1.\0Along long tcp_accept(long long fd) {\0A    return plum_sock_out(accept((plum_sock)fd, NULL, NULL));\0A}\0A\0A// Blocking send of exactly `len` bytes of `buf`. Returns the number of\0A// bytes actually sent, or -1 on error — a short write (fewer bytes sent\0A// than `len`, without an outright error) is possible under real POSIX\0A// semantics and is NOT retried here; the Plum-level wrapper is\0A// responsible for looping if it cares (matches this shim's own\0A// \22thin adapter, no retry policy of its own\22 scope elsewhere).\0Along long tcp_send(long long fd, const char *buf, long long len) {\0A    // Winsock's length is `int`, POSIX's is `size_t`; the macro keeps\0A    // the one narrowing cast in a single place.\0A    return (long long)send((plum_sock)fd, buf, PLUM_ADDRLEN(len), 0);\0A}\0A\0A// --- The receive buffer ---\0A//\0A// **Owned HERE**, grown on demand and reused across calls, valid until\0A// the next call to either receive function. Same convention as\0A// `io_shim.c`, and adopted for the same reason its header gives: the\0A// extern boundary hands Plum no way to free a caller-owned buffer, so\0A// `malloc`-and-hand-over is a leak of one buffer per read.\0A//\0A// `tcp_recv` DID that -- it `malloc`ed a fresh buffer per call and\0A// returned it, and nothing ever freed one. A server looping on reads\0A// leaked its whole traffic volume. Nothing caught it because\0A// `net-smoke` is the only harness that runs socket code and it does not\0A// run under ASan. Both receive functions share this buffer now, which\0A// removes the leak as a side effect of needing the buffer anyway.\0A//\0A// The contract change for `tcp_recv` is real but narrow: its result is\0A// now only valid until the next receive on any socket. Its one caller,\0A// `Net.read`, does `.as_string()` immediately -- which COPIES, because\0A// whatever C handed back may be a static buffer, which is exactly the\0A// case the copy exists for.\0A//\0A// **Thread-local**, which `io_shim.c`'s buffers are not and do not need\0A// to be -- a language server reads its requests on one thread, in order.\0A// Sockets are the opposite: `Http.serve_once` runs inside a `spawn`\0A// while the client reads on another thread, so a shared buffer is two\0A// threads writing one array.\0A//\0A// Measured, not anticipated. A single shared buffer failed `net-smoke`'s\0A// HTTP round trip 1 run in 10, against 10 for 10 on the previous\0A// `malloc`-per-call version -- the old code was leaky AND thread-safe,\0A// and the first version of this fix traded one for the other. One\0A// buffer per reading thread keeps both.\0A//\0A// Never freed, deliberately, and now bounded by the number of threads\0A// that read from a socket rather than by the number of reads -- which\0A// is the actual difference from what this replaced. There is no\0A// portable thread-exit hook to free it from (`pthread_key_t` with a\0A// destructor is POSIX-only, and this file already compiles for\0A// Winsock), and process exit reclaims it.\0A#if defined(_MSC_VER)\0A#define PLUM_TLS __declspec(thread)\0A#else\0A#define PLUM_TLS _Thread_local\0A#endif\0A\0Astatic PLUM_TLS char *recv_buf = NULL;\0Astatic PLUM_TLS size_t recv_cap = 0;\0A\0Astatic int recv_ensure(size_t need) {\0A    if (recv_cap >= need) return 1;\0A    size_t next = recv_cap ? recv_cap : 4096;\0A    while (next < need) next *= 2;\0A    char *bigger = (char *)realloc(recv_buf, next);\0A    if (bigger == NULL) return 0;\0A    recv_buf = bigger;\0A    recv_cap = next;\0A    return 1;\0A}\0A\0A// See this file's own top doc comment for the full \22why CStr, why\0A// always non-null\22 reasoning. Never returns NULL: an allocation failure\0A// falls back to a real (still non-null) empty-string static buffer\0A// rather than ever tripping Plum's null-CStr-return abort.\0A//\0A// Still NUL-terminated and still not binary-safe. That is deliberate\0A// and its contract is unchanged: `Net.read` returns a `String`, and a\0A// `String` is a promise about encoding that arbitrary socket bytes do\0A// not keep. `tcp_recv_n` below is the binary-safe path, added ALONGSIDE\0A// rather than by changing this one.\0Aconst char *tcp_recv(long long fd, long long max_len) {\0A    if (max_len < 0) {\0A        max_len = 0;\0A    }\0A    max_len = PLUM_IO_LEN(max_len);\0A    if (!recv_ensure((size_t)max_len + 1)) {\0A        return \22\22;\0A    }\0A    long long n = (long long)recv((plum_sock)fd, recv_buf, PLUM_ADDRLEN(max_len), 0);\0A    if (n < 0) {\0A        n = 0;\0A    }\0A    recv_buf[n] = '\5C0';\0A    return recv_buf;\0A}\0A\0A// The binary-safe receive: up to `max_len` bytes into the shared buffer,\0A// returning the COUNT rather than a pointer.\0A//\0A// A count is the whole point. A `CStr` return cannot carry a length, so\0A// `tcp_recv` has to NUL-terminate and the caller has to `strlen` -- which\0A// silently truncates any payload containing a zero byte. Splitting the\0A// answer across two calls (`tcp_recv_n` then `tcp_recv_data`) is what\0A// Plum's extern surface allows: no out-parameters, no multi-value\0A// return, and no raw pointers with a separate length.\0A//\0A// Three outcomes, kept DISTINCT, which is the other thing `tcp_recv`\0A// cannot express:\0A//\0A//   > 0   that many bytes are in the buffer\0A//   = 0   the peer closed cleanly -- end of stream, not a failure\0A//   < 0   a real socket error\0A//\0A// `tcp_recv` collapses the last two into `\22\22`, documented as a v1 trade.\0A// A binary reader cannot live with that collapse: an empty read is an\0A// ordinary event in the middle of a length-framed protocol.\0Along long tcp_recv_n(long long fd, long long max_len) {\0A    if (max_len < 0) {\0A        max_len = 0;\0A    }\0A    max_len = PLUM_IO_LEN(max_len);\0A    if (!recv_ensure((size_t)max_len + 1)) {\0A        return -1;\0A    }\0A    long long n = (long long)recv((plum_sock)fd, recv_buf, PLUM_ADDRLEN(max_len), 0);\0A    if (n < 0) {\0A        return -1;\0A    }\0A    recv_buf[n] = '\5C0';\0A    return n;\0A}\0A\0A// The bytes `tcp_recv_n` just read. Valid until the next receive, and\0A// meaningful only together with the count that call returned -- the\0A// buffer is NOT NUL-delimited data, and reading it with `strlen` is\0A// exactly the bug this pair exists to avoid.\0A//\0A// Never NULL, for the same reason nothing else here is: a null `CStr`\0A// return is a hard runtime abort under Plum's FFI semantics.\0Aconst char *tcp_recv_data(void) {\0A    return recv_buf ? recv_buf : \22\22;\0A}\0A\0Avoid tcp_close(long long fd) {\0A    PLUM_CLOSESOCK((plum_sock)fd);\0A}\0A\00" }
 @.const41717 = private global <{ i64, ptr, ptr, i1, [7 x i8] }> <{ i64 -1, ptr @.str41713, ptr @.str41715, i1 1, [7 x i8] zeroinitializer }>
 @.str41718 = private global { i64, i64, [10 x i8] } { i64 -1, i64 9, [10 x i8] c"os_shim.c\00" }
-@.str41720 = private global { i64, i64, [52969 x i8] } { i64 -1, i64 52968, [52969 x i8] c"// Filesystem and self-location primitives, so the compiler stops\0A// shelling out to Unix commands to do them.\0A//\0A// `bootstrap/self_host/main.plum` used to reach these through\0A// `run_process`: `mktemp -d` (5 sites), `rm -rf`/`rm -f` (6), `cp -r`\0A// (1), `mkdir` (1), and `/proc/self/exe` (3). That works on Linux,\0A// works on macOS by luck, and cannot work on Windows, where none of\0A// those programs exist. `/proc/self/exe` is worse than the others: it\0A// is Linux-only, so the language server -- which re-invokes itself\0A// through it -- was already broken on a Mac.\0A//\0A// Replacing them is also just better on the platforms where they DID\0A// work. A `plum build` forked three processes to make a directory,\0A// delete a file, and delete a directory; now it forks one, for `clang`,\0A// which is the only one that was ever doing real work.\0A//\0A// Same shim conventions as its neighbours (see `net_shim.c`'s header\0A// for the general pattern): every function takes and returns only\0A// `long long` (Plum `Int`) or `const char *` (Plum `CStr`), because\0A// Plum's extern surface has no raw pointers, no out-parameters and no\0A// multi-value return.\0A//\0A// Path results borrow fixed-size thread-local buffers. The Plum side\0A// copies immediately into a string cell (`plum_str_new`), before another\0A// native call on that thread can overwrite the result. Other threads\0A// cannot overwrite it during that copy. No per-call malloc or thread-exit\0A// destructor is needed: the buffers themselves have thread storage\0A// duration, rather than pointing at separately allocated heap memory.\0A\0A#include <stdio.h>\0A#include <stdlib.h>\0A#include <string.h>\0A#include <sys/stat.h>\0A#include <dirent.h>\0A#include <stdint.h>\0A#include <stddef.h>\0A#include <wchar.h>\0A#include <ctype.h>\0A#include <errno.h>\0A#include <time.h>\0A\0A#if defined(_WIN32)\0A#include <windows.h>\0A#include <winternl.h>\0A#include <direct.h>\0A#include <io.h>\0A#define PLUM_MKDIR(p) _mkdir(p)\0A#define PLUM_RMDIR(p) _rmdir(p)\0A#else\0A#include <unistd.h>\0A#include <fcntl.h>\0A#include <signal.h>\0A#define PLUM_MKDIR(p) mkdir((p), 0700)\0A#define PLUM_RMDIR(p) rmdir(p)\0A#endif\0A\0A#if defined(__APPLE__)\0A#include <mach-o/dyld.h>\0A#endif\0A\0A#if defined(__linux__) && defined(__has_include)\0A#if __has_include(<linux/if_alg.h>)\0A#define PLUM_CACHE_AF_ALG 1\0A#include <sys/socket.h>\0A#include <linux/if_alg.h>\0A#endif\0A#endif\0A\0A#define PLUM_PATH_MAX 4096\0A\0A#if defined(_MSC_VER)\0A#define PLUM_OS_TLS __declspec(thread)\0A#else\0A#define PLUM_OS_TLS _Thread_local\0A#endif\0A\0A// temp_dir and self_exe share scratch space only within one thread.\0A// Each simultaneous mkdtemp/GetTempFileNameA call has its own template.\0Astatic PLUM_OS_TLS char plum_os_buf[PLUM_PATH_MAX];\0A\0A// Compiler artifact support. Hash files in bounded memory: materializing the\0A// compiler executable as an Array[Int] just to fingerprint it would dominate\0A// a warm run. SHA-256 uses unsigned 32-bit arithmetic (FIPS 180-4).\0Atypedef struct {\0A    uint32_t h[8];\0A    uint64_t bytes;\0A    unsigned char block[64];\0A    size_t used;\0A} plum_cache_sha;\0A\0Astatic uint32_t plum_cache_rotr(uint32_t x, unsigned n) {\0A    return (x >> n) | (x << (32 - n));\0A}\0A\0Astatic void plum_cache_block(plum_cache_sha *s, const unsigned char *p) {\0A    static const uint32_t k[64] = {\0A        0x428a2f98,0x71374491,0xb5c0fbcf,0xe9b5dba5,0x3956c25b,0x59f111f1,0x923f82a4,0xab1c5ed5,\0A        0xd807aa98,0x12835b01,0x243185be,0x550c7dc3,0x72be5d74,0x80deb1fe,0x9bdc06a7,0xc19bf174,\0A        0xe49b69c1,0xefbe4786,0x0fc19dc6,0x240ca1cc,0x2de92c6f,0x4a7484aa,0x5cb0a9dc,0x76f988da,\0A        0x983e5152,0xa831c66d,0xb00327c8,0xbf597fc7,0xc6e00bf3,0xd5a79147,0x06ca6351,0x14292967,\0A        0x27b70a85,0x2e1b2138,0x4d2c6dfc,0x53380d13,0x650a7354,0x766a0abb,0x81c2c92e,0x92722c85,\0A        0xa2bfe8a1,0xa81a664b,0xc24b8b70,0xc76c51a3,0xd192e819,0xd6990624,0xf40e3585,0x106aa070,\0A        0x19a4c116,0x1e376c08,0x2748774c,0x34b0bcb5,0x391c0cb3,0x4ed8aa4a,0x5b9cca4f,0x682e6ff3,\0A        0x748f82ee,0x78a5636f,0x84c87814,0x8cc70208,0x90befffa,0xa4506ceb,0xbef9a3f7,0xc67178f2\0A    };\0A    uint32_t w[64], a,b,c,d,e,f,g,h;\0A    for (unsigned i = 0; i < 16; i++)\0A        w[i] = ((uint32_t)p[i*4] << 24) | ((uint32_t)p[i*4+1] << 16)\0A             | ((uint32_t)p[i*4+2] << 8) | p[i*4+3];\0A    for (unsigned i = 16; i < 64; i++) {\0A        uint32_t x = w[i-15], y = w[i-2];\0A        w[i] = w[i-16] + (plum_cache_rotr(x,7)^plum_cache_rotr(x,18)^(x>>3))\0A             + w[i-7] + (plum_cache_rotr(y,17)^plum_cache_rotr(y,19)^(y>>10));\0A    }\0A    a=s->h[0]; b=s->h[1]; c=s->h[2]; d=s->h[3];\0A    e=s->h[4]; f=s->h[5]; g=s->h[6]; h=s->h[7];\0A    for (unsigned i = 0; i < 64; i++) {\0A        uint32_t t1 = h + (plum_cache_rotr(e,6)^plum_cache_rotr(e,11)^plum_cache_rotr(e,25))\0A                    + ((e&f)^((~e)&g)) + k[i] + w[i];\0A        uint32_t t2 = (plum_cache_rotr(a,2)^plum_cache_rotr(a,13)^plum_cache_rotr(a,22))\0A                    + ((a&b)^(a&c)^(b&c));\0A        h=g; g=f; f=e; e=d+t1; d=c; c=b; b=a; a=t1+t2;\0A    }\0A    s->h[0]+=a; s->h[1]+=b; s->h[2]+=c; s->h[3]+=d;\0A    s->h[4]+=e; s->h[5]+=f; s->h[6]+=g; s->h[7]+=h;\0A}\0A\0Astatic void plum_cache_init(plum_cache_sha *s) {\0A    static const uint32_t h[8] = {0x6a09e667,0xbb67ae85,0x3c6ef372,0xa54ff53a,\0A                                  0x510e527f,0x9b05688c,0x1f83d9ab,0x5be0cd19};\0A    memcpy(s->h,h,sizeof(h)); s->bytes=0; s->used=0;\0A}\0A\0Astatic void plum_cache_update(plum_cache_sha *s, const unsigned char *p, size_t n) {\0A    s->bytes += n;\0A    while (n) {\0A        size_t take = 64 - s->used;\0A        if (take > n) take = n;\0A        memcpy(s->block+s->used,p,take); s->used+=take; p+=take; n-=take;\0A        if (s->used == 64) { plum_cache_block(s,s->block); s->used=0; }\0A    }\0A}\0A\0Astatic void plum_cache_final(plum_cache_sha *s, char out[65]) {\0A    uint64_t bits = s->bytes * 8;\0A    unsigned char pad[128] = {0x80};\0A    size_t n = s->used < 56 ? 56-s->used : 120-s->used;\0A    for (unsigned i = 0; i < 8; i++) pad[n+i]=(unsigned char)(bits >> ((7-i)*8));\0A    plum_cache_update(s,pad,n+8);\0A    for (unsigned i = 0; i < 8; i++) snprintf(out+i*8,9,\22%08x\22,(unsigned)s->h[i]);\0A    out[64]='\5C0';\0A}\0A\0Aconst char *plum_cache_hash_text(const char *p, long long n) {\0A    static char out[65];\0A    if (n < 0) { out[0]='\5C0'; return out; }\0A    plum_cache_sha s; plum_cache_init(&s);\0A    plum_cache_update(&s,(const unsigned char *)p,(size_t)n);\0A    plum_cache_final(&s,out); return out;\0A}\0A\0A// Linux's optional kernel SHA provider uses CPU acceleration when available.\0A// No new library/tool dependency; an unavailable provider falls back to the\0A// portable implementation. Cache correctness is independent of the provider.\0Astatic int plum_cache_kernel_hash(const char *path, char out[65]) {\0A#if defined(PLUM_CACHE_AF_ALG)\0A    struct sockaddr_alg sa;\0A    memset(&sa,0,sizeof(sa)); sa.salg_family=AF_ALG;\0A    memcpy(sa.salg_type,\22hash\22,5); memcpy(sa.salg_name,\22sha256\22,7);\0A    int parent=socket(AF_ALG,SOCK_SEQPACKET,0);\0A    if (parent < 0) return 0;\0A    if (bind(parent,(struct sockaddr *)&sa,sizeof(sa)) != 0) { close(parent); return 0; }\0A    int fd=accept(parent,NULL,NULL); close(parent);\0A    if (fd < 0) return 0;\0A    FILE *f=fopen(path,\22rb\22);\0A    if (!f) { close(fd); return 0; }\0A    unsigned char buf[65536], digest[32]; size_t n; int bad=0;\0A    while ((n=fread(buf,1,sizeof(buf),f)) != 0) {\0A        size_t at=0;\0A        while (at < n) {\0A            ssize_t sent=send(fd,buf+at,n-at,MSG_MORE);\0A            if (sent <= 0) { bad=1; break; }\0A            at+=(size_t)sent;\0A        }\0A        if (bad) break;\0A    }\0A    if (ferror(f)) bad=1;\0A    if (fclose(f) != 0) bad=1;\0A    if (!bad && send(fd,NULL,0,0) != 0) bad=1;\0A    if (!bad && recv(fd,digest,sizeof(digest),0) != (ssize_t)sizeof(digest)) bad=1;\0A    close(fd);\0A    if (bad) return 0;\0A    for (unsigned i=0;i<32;i++) snprintf(out+i*2,3,\22%02x\22,(unsigned)digest[i]);\0A    out[64]='\5C0'; return 1;\0A#else\0A    (void)path; (void)out; return 0;\0A#endif\0A}\0A\0Aconst char *plum_cache_hash_file(const char *path) {\0A    static char out[65];\0A    unsigned char buf[32768]; size_t n;\0A    out[0]='\5C0';\0A    struct stat st;\0A    if (stat(path,&st) == 0 && S_ISREG(st.st_mode) && st.st_size > 1048576\0A        && plum_cache_kernel_hash(path,out)) return out;\0A    FILE *f=fopen(path,\22rb\22);\0A    if (!f) return out;\0A    plum_cache_sha s; plum_cache_init(&s);\0A    while ((n=fread(buf,1,sizeof(buf),f)) != 0) plum_cache_update(&s,buf,n);\0A    int bad=ferror(f); if (fclose(f) != 0) bad=1;\0A    if (!bad) plum_cache_final(&s,out);\0A    return out;\0A}\0A\0A// Saved input paths are byte strings, just like fopen's paths. Windows\0A// argv uses the active ANSI code page, and POSIX filenames need not be\0A// UTF-8 either. Decode the hex envelope without treating it as Unicode.\0Astatic int plum_cache_hex_digit(unsigned char c) {\0A    if (c >= '0' && c <= '9') return c - '0';\0A    if (c >= 'a' && c <= 'f') return c - 'a' + 10;\0A    if (c >= 'A' && c <= 'F') return c - 'A' + 10;\0A    return -1;\0A}\0A\0Aconst char *plum_cache_hash_file_hex(const char *hex) {\0A    size_t n = strlen(hex);\0A    if (n == 0 || n % 2 != 0) return \22\22;\0A    char *path = malloc(n / 2 + 1);\0A    if (!path) return \22\22;\0A    for (size_t i = 0; i < n; i += 2) {\0A        int a = plum_cache_hex_digit((unsigned char)hex[i]);\0A        int b = plum_cache_hex_digit((unsigned char)hex[i + 1]);\0A        // Embedded NUL must not truncate a corrupt manifest's path.\0A        if (a < 0 || b < 0 || (a == 0 && b == 0)) {\0A            free(path); return \22\22;\0A        }\0A        path[i / 2] = (char)((a << 4) | b);\0A    }\0A    path[n / 2] = '\5C0';\0A    const char *digest = plum_cache_hash_file(path);\0A    free(path);\0A    return digest;\0A}\0A\0A// Verify the bytes actually copied, not a prior read of the source path.\0A// A concurrent cleaner can remove an entry at any point; that is a miss.\0Along long plum_cache_copy(const char *src, const char *dst, const char *digest) {\0A    FILE *in=fopen(src,\22rb\22); if (!in) return -1;\0A    FILE *out=fopen(dst,\22wb\22); if (!out) { fclose(in); return -1; }\0A    unsigned char buf[32768]; size_t n; int bad=0; char got[65];\0A    plum_cache_sha s; plum_cache_init(&s);\0A    while ((n=fread(buf,1,sizeof(buf),in)) != 0) {\0A        plum_cache_update(&s,buf,n);\0A        if (fwrite(buf,1,n,out) != n) { bad=1; break; }\0A    }\0A    if (ferror(in)) bad=1;\0A    if (fclose(in) != 0) bad=1;\0A    if (fclose(out) != 0) bad=1;\0A    plum_cache_final(&s,got);\0A    if (digest[0] && strcmp(got,digest) != 0) bad=1;\0A    if (bad) remove(dst);\0A    return bad ? -1 : 0;\0A}\0A\0Aconst char *plum_cache_temp(const char *root) {\0A#if defined(_WIN32)\0A    if (GetTempFileNameA(root,\22pcb\22,0,plum_os_buf) == 0) { plum_os_buf[0]='\5C0'; return plum_os_buf; }\0A    DeleteFileA(plum_os_buf);\0A    if (PLUM_MKDIR(plum_os_buf) != 0) plum_os_buf[0]='\5C0';\0A#else\0A    if (snprintf(plum_os_buf,sizeof(plum_os_buf),\22%s/.partial-XXXXXX\22,root) >= (int)sizeof(plum_os_buf)\0A        || mkdtemp(plum_os_buf) == NULL) plum_os_buf[0]='\5C0';\0A#endif\0A    if (plum_os_buf[0]) {\0A        char owner[PLUM_PATH_MAX];\0A        if (snprintf(owner,sizeof(owner),\22%s/.owner\22,plum_os_buf) < (int)sizeof(owner)) {\0A            FILE *f=fopen(owner,\22w\22);\0A            if (f) {\0A#if defined(_WIN32)\0A                fprintf(f,\22%lu\22,(unsigned long)GetCurrentProcessId());\0A#else\0A                fprintf(f,\22%ld\22,(long)getpid());\0A#endif\0A                fclose(f);\0A            }\0A        }\0A    }\0A    return plum_os_buf;\0A}\0A\0A// Windows native-object adapter. Ask the OS loader which images it actually\0A// selects instead of approximating DLL search rules with SearchPath. Support\0A// the MSYS2 MINGW64 layout only; unknown layouts/modules/delay imports bypass.\0A#if defined(_WIN64)\0A#include <bcrypt.h>\0A\0A#define PLUM_WIN_MODULES 256\0A\0Atypedef struct { wchar_t *path; char digest[65]; } plum_win_image;\0Atypedef struct {\0A    HMODULE dll;\0A    BCRYPT_ALG_HANDLE alg;\0A    NTSTATUS (WINAPI *open)(BCRYPT_ALG_HANDLE *,LPCWSTR,LPCWSTR,ULONG);\0A    NTSTATUS (WINAPI *create)(BCRYPT_ALG_HANDLE,BCRYPT_HASH_HANDLE *,PUCHAR,ULONG,PUCHAR,ULONG,ULONG);\0A    NTSTATUS (WINAPI *update)(BCRYPT_HASH_HANDLE,PUCHAR,ULONG,ULONG);\0A    NTSTATUS (WINAPI *finish)(BCRYPT_HASH_HANDLE,PUCHAR,ULONG,ULONG);\0A    NTSTATUS (WINAPI *destroy)(BCRYPT_HASH_HANDLE);\0A    NTSTATUS (WINAPI *close)(BCRYPT_ALG_HANDLE,ULONG);\0A} plum_win_sha;\0A\0Astatic void plum_win_sha_close(plum_win_sha *s) {\0A    if (s->alg) s->close(s->alg,0);\0A    if (s->dll) FreeLibrary(s->dll);\0A    memset(s,0,sizeof(*s));\0A}\0A\0Astatic void plum_win_sha_open(plum_win_sha *s) {\0A    memset(s,0,sizeof(*s));\0A    s->dll=LoadLibraryExW(L\22bcrypt.dll\22,NULL,LOAD_LIBRARY_SEARCH_SYSTEM32);\0A    if (!s->dll) return;\0A#define PLUM_WIN_PROC(member, name) do { \5C\0A    FARPROC p=GetProcAddress(s->dll,name); \5C\0A    memcpy(&s->member,&p,sizeof(p)); \5C\0A    if (!p) { plum_win_sha_close(s); return; } \5C\0A} while (0)\0A    PLUM_WIN_PROC(open,\22BCryptOpenAlgorithmProvider\22);\0A    PLUM_WIN_PROC(create,\22BCryptCreateHash\22);\0A    PLUM_WIN_PROC(update,\22BCryptHashData\22);\0A    PLUM_WIN_PROC(finish,\22BCryptFinishHash\22);\0A    PLUM_WIN_PROC(destroy,\22BCryptDestroyHash\22);\0A    PLUM_WIN_PROC(close,\22BCryptCloseAlgorithmProvider\22);\0A#undef PLUM_WIN_PROC\0A    if (s->open(&s->alg,BCRYPT_SHA256_ALGORITHM,NULL,0) < 0) plum_win_sha_close(s);\0A}\0A\0Astatic int plum_win_hash(HANDLE f, plum_win_sha *provider, char out[65]) {\0A    LARGE_INTEGER zero; zero.QuadPart=0;\0A    if (!SetFilePointerEx(f,zero,NULL,FILE_BEGIN)) return 0;\0A    BCRYPT_HASH_HANDLE hash=NULL;\0A    int fast=provider && provider->alg && provider->create(provider->alg,&hash,NULL,0,NULL,0,0) >= 0;\0A    plum_cache_sha portable; plum_cache_init(&portable);\0A    unsigned char buf[32768], digest[32]; DWORD n;\0A    int good=1, retry=0;\0A    for (;;) {\0A        if (!ReadFile(f,buf,sizeof(buf),&n,NULL)) { good=0; break; }\0A        if (!n) break;\0A        if (fast) {\0A            if (provider->update(hash,buf,n,0) < 0) { retry=1; break; }\0A        } else plum_cache_update(&portable,buf,n);\0A    }\0A    if (good && fast && !retry) {\0A        if (provider->finish(hash,digest,sizeof(digest),0) < 0) retry=1;\0A        else {\0A            for (unsigned i=0;i<32;i++) snprintf(out+i*2,3,\22%02x\22,(unsigned)digest[i]);\0A            out[64]='\5C0';\0A        }\0A    } else if (good && !fast) plum_cache_final(&portable,out);\0A    if (hash) provider->destroy(hash);\0A    // Restart from byte zero if the optional provider fails partway.\0A    return retry ? plum_win_hash(f,NULL,out) : good;\0A}\0A\0Astatic int plum_win_path(HANDLE file, wchar_t path[PLUM_PATH_MAX]) {\0A    DWORD n=GetFinalPathNameByHandleW(file,path,PLUM_PATH_MAX,FILE_NAME_NORMALIZED|VOLUME_NAME_DOS);\0A    if (!n || n >= PLUM_PATH_MAX) return 0;\0A    if (wcsncmp(path,L\22\5C\5C\5C\5C?\5C\5C\22,4)==0) memmove(path,path+4,(wcslen(path+4)+1)*sizeof(wchar_t));\0A    return wcslen(path)>3 && path[1]==L':' && path[2]==L'\5C\5C';\0A}\0A\0Astatic int plum_win_in_dir(const wchar_t *path, const wchar_t *dir) {\0A    size_t n=wcslen(dir);\0A    return wcslen(path)>n && path[n]==L'\5C\5C'\0A        && CompareStringOrdinal(path,(int)n,dir,(int)n,TRUE)==CSTR_EQUAL;\0A}\0A\0Astatic int plum_win_no_delay(HANDLE file) {\0A    IMAGE_DOS_HEADER dos; IMAGE_NT_HEADERS64 nt; DWORD n; LARGE_INTEGER at;\0A    at.QuadPart=0;\0A    if (!SetFilePointerEx(file,at,NULL,FILE_BEGIN)\0A        || !ReadFile(file,&dos,sizeof(dos),&n,NULL) || n!=sizeof(dos)\0A        || dos.e_magic!=IMAGE_DOS_SIGNATURE || dos.e_lfanew<0) return 0;\0A    at.QuadPart=dos.e_lfanew;\0A    if (!SetFilePointerEx(file,at,NULL,FILE_BEGIN)\0A        || !ReadFile(file,&nt,sizeof(nt),&n,NULL) || n!=sizeof(nt)\0A        || nt.Signature!=IMAGE_NT_SIGNATURE || nt.FileHeader.Machine!=IMAGE_FILE_MACHINE_AMD64\0A        || nt.FileHeader.SizeOfOptionalHeader!=sizeof(nt.OptionalHeader)\0A        || nt.OptionalHeader.Magic!=IMAGE_NT_OPTIONAL_HDR64_MAGIC\0A        || nt.OptionalHeader.NumberOfRvaAndSizes<=IMAGE_DIRECTORY_ENTRY_DELAY_IMPORT) return 0;\0A    return nt.OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_DELAY_IMPORT].Size==0\0A        && nt.OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_DELAY_IMPORT].VirtualAddress==0;\0A}\0A\0Astatic int plum_win_image_add(plum_win_image *images, size_t *count, HANDLE file,\0A                             const wchar_t *bin, const wchar_t *system, plum_win_sha *sha,\0A                             int *llvm, char reason[160]) {\0A    wchar_t path[PLUM_PATH_MAX];\0A    if (!file) { strcpy(reason,\22!loader event has no file handle\22); return 0; }\0A    if (!plum_win_path(file,path)) { strcpy(reason,\22!loader image path unavailable\22); return 0; }\0A    int private_image=plum_win_in_dir(path,bin);\0A    if (!private_image && !plum_win_in_dir(path,system)) {\0A        strcpy(reason,\22!DLL outside supported toolchain/system directories\22); return 0;\0A    }\0A    if (private_image && !plum_win_no_delay(file)) {\0A        strcpy(reason,\22!toolchain image has delay imports or unsupported PE headers\22); return 0;\0A    }\0A    for (size_t i=0;i<*count;i++) if (wcscmp(images[i].path,path)==0) return 1;\0A    if (*count>=PLUM_WIN_MODULES) return 0;\0A    size_t len=wcslen(path);\0A    wchar_t *copy=malloc((len+1)*sizeof(wchar_t));\0A    if (!copy) return 0;\0A    memcpy(copy,path,(len+1)*sizeof(wchar_t));\0A    if (!plum_win_hash(file,sha,images[*count].digest)) { free(copy); return 0; }\0A    images[*count].path=copy; (*count)++;\0A    const wchar_t *name=wcsrchr(path,L'\5C\5C');\0A    if (private_image && name && _wcsnicmp(name+1,L\22libLLVM\22,7)==0) *llvm=1;\0A    return 1;\0A}\0A\0Astatic int plum_win_image_compare(const void *a, const void *b) {\0A    return wcscmp(((const plum_win_image *)a)->path,((const plum_win_image *)b)->path);\0A}\0A#endif\0A\0Aconst char *plum_cache_windows_fingerprint(const char *tool) {\0A    static PLUM_OS_TLS char result[160];\0A    strcpy(result,\22!unsupported Windows toolchain\22);\0A#if defined(_WIN64)\0A    // The process ABI currently uses ANSI paths. Until that ABI is UTF-8\0A    // end-to-end, do not certify ambiguous non-ASCII executable spellings.\0A    size_t len=strlen(tool);\0A    if (!len || len>PLUM_PATH_MAX-32) return result;\0A    for (size_t i=0;i<len;i++) if ((unsigned char)tool[i]>=128 || tool[i]=='\22') return result;\0A    wchar_t exe[PLUM_PATH_MAX], bin[PLUM_PATH_MAX], system[PLUM_PATH_MAX];\0A    if (!MultiByteToWideChar(CP_ACP,0,tool,-1,exe,PLUM_PATH_MAX)) return result;\0A    HANDLE original=CreateFileW(exe,GENERIC_READ,FILE_SHARE_READ|FILE_SHARE_DELETE,NULL,OPEN_EXISTING,0,NULL);\0A    if (original==INVALID_HANDLE_VALUE) return result;\0A    BY_HANDLE_FILE_INFORMATION identity;\0A    int valid=plum_win_path(original,bin) && GetFileInformationByHandle(original,&identity);\0A    wchar_t *base=wcsrchr(bin,L'\5C\5C');\0A    if (!valid || !base || _wcsicmp(base+1,L\22clang.exe\22)!=0) { CloseHandle(original); return result; }\0A    *base=L'\5C0';\0A    size_t dirlen=wcslen(bin);\0A    if (dirlen<12 || _wcsicmp(bin+dirlen-12,L\22\5C\5Cmingw64\5C\5Cbin\22)!=0) { CloseHandle(original); return result; }\0A    DWORD sn=GetSystemDirectoryW(system,PLUM_PATH_MAX);\0A    SYSTEM_INFO machine; GetNativeSystemInfo(&machine);\0A    if (!sn || sn>=PLUM_PATH_MAX || machine.wProcessorArchitecture!=PROCESSOR_ARCHITECTURE_AMD64) {\0A        CloseHandle(original); return result;\0A    }\0A    wchar_t command[PLUM_PATH_MAX+32];\0A    _snwprintf(command,sizeof(command)/sizeof(command[0]),L\22\5C\22%ls\5C\22 --version\22,exe);\0A    SECURITY_ATTRIBUTES sa={sizeof(sa),NULL,TRUE};\0A    HANDLE sink=CreateFileW(L\22NUL\22,GENERIC_READ|GENERIC_WRITE,FILE_SHARE_READ|FILE_SHARE_WRITE,&sa,OPEN_EXISTING,0,NULL);\0A    if (sink==INVALID_HANDLE_VALUE) { CloseHandle(original); return result; }\0A    STARTUPINFOW startup; PROCESS_INFORMATION process;\0A    memset(&startup,0,sizeof(startup)); memset(&process,0,sizeof(process));\0A    startup.cb=sizeof(startup); startup.dwFlags=STARTF_USESTDHANDLES;\0A    startup.hStdInput=sink; startup.hStdOutput=sink; startup.hStdError=sink;\0A    BOOL launched=CreateProcessW(exe,command,NULL,NULL,TRUE,DEBUG_ONLY_THIS_PROCESS|CREATE_NO_WINDOW,NULL,NULL,&startup,&process);\0A    CloseHandle(sink);\0A    if (!launched) { CloseHandle(original); strcpy(result,\22!Windows loader probe could not start\22); return result; }\0A    plum_win_image images[PLUM_WIN_MODULES]; memset(images,0,sizeof(images));\0A    size_t count=0; int llvm=0, exited=0, failed=0, breakpoint=0;\0A    DWORD exit_code=1;\0A    plum_win_sha sha; plum_win_sha_open(&sha);\0A    ULONGLONG deadline=GetTickCount64()+10000;\0A    while (!exited && !failed && GetTickCount64()<deadline) {\0A        DEBUG_EVENT event; memset(&event,0,sizeof(event));\0A        if (!WaitForDebugEvent(&event,100)) {\0A            if (GetLastError()==ERROR_SEM_TIMEOUT) continue;\0A            failed=1; break;\0A        }\0A        DWORD action=DBG_CONTINUE;\0A        switch (event.dwDebugEventCode) {\0A        case CREATE_PROCESS_DEBUG_EVENT: {\0A            HANDLE f=event.u.CreateProcessInfo.hFile;\0A            BY_HANDLE_FILE_INFORMATION actual;\0A            if (!f || !GetFileInformationByHandle(f,&actual)\0A                || actual.dwVolumeSerialNumber!=identity.dwVolumeSerialNumber\0A                || actual.nFileIndexHigh!=identity.nFileIndexHigh || actual.nFileIndexLow!=identity.nFileIndexLow\0A                || !plum_win_image_add(images,&count,f,bin,system,&sha,&llvm,result)) failed=1;\0A            if (f) CloseHandle(f);\0A            break;\0A        }\0A        case LOAD_DLL_DEBUG_EVENT:\0A            if (!plum_win_image_add(images,&count,event.u.LoadDll.hFile,bin,system,&sha,&llvm,result)) failed=1;\0A            if (event.u.LoadDll.hFile) CloseHandle(event.u.LoadDll.hFile);\0A            break;\0A        case EXCEPTION_DEBUG_EVENT:\0A            if (event.u.Exception.ExceptionRecord.ExceptionCode==EXCEPTION_BREAKPOINT && !breakpoint) breakpoint=1;\0A            else { failed=1; action=DBG_EXCEPTION_NOT_HANDLED; }\0A            break;\0A        case EXIT_PROCESS_DEBUG_EVENT: exit_code=event.u.ExitProcess.dwExitCode; exited=1; break;\0A        case RIP_EVENT: failed=1; break;\0A        default: break;\0A        }\0A        if (!ContinueDebugEvent(event.dwProcessId,event.dwThreadId,action)) failed=1;\0A    }\0A    if (!exited) {\0A        TerminateProcess(process.hProcess,1);\0A        // Drain exit events so Windows releases debugger-owned thread/process\0A        // handles too. A failed probe never leaves a live compiler behind.\0A        ULONGLONG end=GetTickCount64()+2000;\0A        while (GetTickCount64()<end) {\0A            DEBUG_EVENT event;\0A            if (!WaitForDebugEvent(&event,100)) continue;\0A            if (event.dwDebugEventCode==LOAD_DLL_DEBUG_EVENT && event.u.LoadDll.hFile) CloseHandle(event.u.LoadDll.hFile);\0A            if (event.dwDebugEventCode==CREATE_PROCESS_DEBUG_EVENT && event.u.CreateProcessInfo.hFile) CloseHandle(event.u.CreateProcessInfo.hFile);\0A            int done=event.dwDebugEventCode==EXIT_PROCESS_DEBUG_EVENT;\0A            ContinueDebugEvent(event.dwProcessId,event.dwThreadId,DBG_CONTINUE);\0A            if (done) break;\0A        }\0A        DebugActiveProcessStop(process.dwProcessId);\0A    }\0A    CloseHandle(process.hThread); CloseHandle(process.hProcess); CloseHandle(original);\0A    plum_win_sha_close(&sha);\0A    if (exited && !failed && exit_code==0 && llvm && count>1) {\0A        qsort(images,count,sizeof(images[0]),plum_win_image_compare);\0A        plum_cache_sha total; plum_cache_init(&total);\0A        const char tag[]=\22plum-msys2-mingw64-loader-v1\22;\0A        plum_cache_update(&total,(const unsigned char *)tag,sizeof(tag));\0A        for (size_t i=0;i<count;i++) {\0A            uint64_t bytes=wcslen(images[i].path)*sizeof(wchar_t);\0A            plum_cache_update(&total,(const unsigned char *)&bytes,sizeof(bytes));\0A            plum_cache_update(&total,(const unsigned char *)images[i].path,(size_t)bytes);\0A            plum_cache_update(&total,(const unsigned char *)images[i].digest,64);\0A        }\0A        plum_cache_final(&total,result);\0A    } else if (!failed) {\0A        snprintf(result,sizeof(result),\22!loader probe incomplete (exit=%lu, LLVM=%d, images=%lu)\22,\0A                 (unsigned long)exit_code,llvm,(unsigned long)count);\0A    }\0A    for (size_t i=0;i<count;i++) free(images[i].path);\0A#else\0A    (void)tool;\0A#endif\0A    return result;\0A}\0A\0Aconst char *plum_cache_tool(const char *name) {\0A    plum_os_buf[0]='\5C0';\0A#if defined(_WIN32)\0A    DWORD n=SearchPathA(NULL,name,\22.exe\22,sizeof(plum_os_buf),plum_os_buf,NULL);\0A    if (n == 0 || n >= sizeof(plum_os_buf)) plum_os_buf[0]='\5C0';\0A#else\0A    if (strchr(name,'/')) {\0A        if (!realpath(name,plum_os_buf)) plum_os_buf[0]='\5C0';\0A    } else {\0A        const char *env=getenv(\22PATH\22); if (!env) return plum_os_buf;\0A        char *paths=strdup(env); if (!paths) return plum_os_buf;\0A        char *p=paths;\0A        while (p) {\0A            char *next=strchr(p,':'); if (next) *next++='\5C0';\0A            char candidate[PLUM_PATH_MAX];\0A            int n=snprintf(candidate,sizeof(candidate),\22%s/%s\22,*p ? p : \22.\22,name);\0A            if (n >= 0 && n < (int)sizeof(candidate) && access(candidate,X_OK) == 0\0A                && realpath(candidate,plum_os_buf)) break;\0A            p=next;\0A        }\0A        free(paths);\0A    }\0A#endif\0A    return plum_os_buf;\0A}\0A\0A// Inspect trusted Clang JSON AST output, not C source spellings: adjacent\0A// literals and escapes can conceal assembler file-reading directives.\0A// Ordinary asm symbol labels are safe only when their emitted names have\0A// no quoting/whitespace/control characters that could inject assembly.\0Astatic const char *plum_cache_json_value(const char *p) {\0A    while (*p && isspace((unsigned char)*p)) p++;\0A    if (*p++ != ':') return NULL;\0A    while (*p && isspace((unsigned char)*p)) p++;\0A    return *p == '\22' ? p+1 : NULL;\0A}\0Along long plum_cache_safe_ast(const char *ast) {\0A    if (*ast != '{' || !strstr(ast,\22\5C\22TranslationUnitDecl\5C\22\22)) return 0;\0A    const char *p=ast;\0A    while ((p=strstr(p,\22\5C\22kind\5C\22\22)) != NULL) {\0A        p+=6; const char *value=plum_cache_json_value(p);\0A        if (!value) continue;\0A        const char *end=strchr(value,'\22'); if (!end) return 0;\0A        size_t size=(size_t)(end-value);\0A        for (size_t i=0; i+3<=size; i++) {\0A            if (!memcmp(value+i,\22Asm\22,3)\0A                && !(size == 12 && !memcmp(value,\22AsmLabelAttr\22,12))) return 0;\0A        }\0A        p=end+1;\0A    }\0A    p=ast;\0A    while ((p=strstr(p,\22\5C\22mangledName\5C\22\22)) != NULL) {\0A        p+=13; const char *value=plum_cache_json_value(p);\0A        if (!value) return 0;\0A        for (; *value && *value != '\22'; value++) {\0A            unsigned char c=(unsigned char)*value;\0A            if (!((c>='a' && c<='z') || (c>='A' && c<='Z')\0A                || (c>='0' && c<='9') || c=='_' || c=='.' || c=='$')) return 0;\0A        }\0A        if (*value != '\22') return 0;\0A    }\0A    return 1;\0A}\0A\0A// Generated LLVM contains quoted IR strings and identifiers, and comments.\0A// Only a bare `asm` token can introduce assembly. Do not mistake embedded\0A// C source or an application's string data for an LLVM assembly operand.\0Astatic int plum_cache_ir_word(unsigned char c) {\0A    return (c>='a' && c<='z') || (c>='A' && c<='Z') || (c>='0' && c<='9')\0A        || c=='_' || c=='.' || c=='$' || c=='-' || c=='@' || c=='%' || c=='!';\0A}\0Along long plum_cache_safe_ir(const char *ir) {\0A    const char *p=ir;\0A    while (*p) {\0A        if (*p == ';') { while (*p && *p!='\5Cn') p++; }\0A        else if (*p == '\22') {\0A            p++;\0A            while (*p && *p!='\22') {\0A                if (*p=='\5C\5C') { p++; if (!*p) return 0; }\0A                p++;\0A            }\0A            if (!*p) return 0;\0A            p++;\0A        } else if (plum_cache_ir_word((unsigned char)*p)) {\0A            const char *start=p;\0A            while (plum_cache_ir_word((unsigned char)*p)) p++;\0A            if (p-start == 3 && !memcmp(start,\22asm\22,3)) return 0;\0A        } else { p++; }\0A    }\0A    return 1;\0A}\0A\0A// Windows headers contain unused inline assembly and produce enormous JSON\0A// ASTs. Inspect the emitted C IR at the SAME target/optimization settings.\0A// Assembly tokens remain forbidden. Reject quoted globals too: escaped asm\0A// labels can otherwise inject assembler directives through emitted symbols.\0A// This is deliberately stricter than accepting arbitrary LLVM symbol names.\0Along long plum_cache_safe_c_ir(const char *ir) {\0A    if (!plum_cache_safe_ir(ir)) return 0;\0A    const char *p=ir;\0A    while (*p) {\0A        if (*p==';') { while (*p && *p!='\5Cn') p++; }\0A        else if (*p=='@' && p[1]=='\22') return 0;\0A        else if (*p=='\22') {\0A            p++;\0A            while (*p && *p!='\22') {\0A                if (*p=='\5C\5C') { p++; if (!*p) return 0; }\0A                p++;\0A            }\0A            if (!*p) return 0;\0A            p++;\0A        } else p++;\0A    }\0A    return 1;\0A}\0A\0A// Creates a fresh, empty, private directory and returns its path.\0A// Returns \22\22 -- an empty, non-null CStr -- on failure, because a null\0A// CStr return is a hard runtime abort under Plum's FFI semantics (see\0A// `net_shim.c`'s `tcp_recv` note, the same trade for the same reason).\0Aconst char *os_temp_dir(void) {\0A#if defined(_WIN32)\0A    char base[PLUM_PATH_MAX];\0A    DWORD n = GetTempPathA((DWORD)sizeof(base), base);\0A    if (n == 0 || n >= sizeof(base)) { plum_os_buf[0] = '\5C0'; return plum_os_buf; }\0A    // `GetTempFileNameA` creates a FILE; the directory of the same name\0A    // is what is wanted, so the file is removed and a directory put in\0A    // its place. The name is still unique -- that is what the call\0A    // bought -- and the window between the two is not a security\0A    // boundary this compiler relies on.\0A    if (GetTempFileNameA(base, \22plum\22, 0, plum_os_buf) == 0) { plum_os_buf[0] = '\5C0'; return plum_os_buf; }\0A    DeleteFileA(plum_os_buf);\0A    if (PLUM_MKDIR(plum_os_buf) != 0) { plum_os_buf[0] = '\5C0'; }\0A    return plum_os_buf;\0A#else\0A    const char *tmp = getenv(\22TMPDIR\22);\0A    if (tmp == NULL || tmp[0] == '\5C0') tmp = \22/tmp\22;\0A    if (snprintf(plum_os_buf, sizeof(plum_os_buf), \22%s/plum-XXXXXX\22, tmp) >= (int)sizeof(plum_os_buf)) {\0A        plum_os_buf[0] = '\5C0';\0A        return plum_os_buf;\0A    }\0A    if (mkdtemp(plum_os_buf) == NULL) plum_os_buf[0] = '\5C0';\0A    return plum_os_buf;\0A#endif\0A}\0A\0A// The path of the running executable. Three genuinely different calls\0A// for one question; there is no portable spelling.\0Aconst char *os_self_exe(void) {\0A    plum_os_buf[0] = '\5C0';\0A#if defined(_WIN32)\0A    DWORD n = GetModuleFileNameA(NULL, plum_os_buf, (DWORD)sizeof(plum_os_buf));\0A    if (n == 0 || n >= sizeof(plum_os_buf)) plum_os_buf[0] = '\5C0';\0A#elif defined(__APPLE__)\0A    uint32_t n = (uint32_t)sizeof(plum_os_buf);\0A    if (_NSGetExecutablePath(plum_os_buf, &n) != 0) plum_os_buf[0] = '\5C0';\0A#else\0A    ssize_t n = readlink(\22/proc/self/exe\22, plum_os_buf, sizeof(plum_os_buf) - 1);\0A    // readlink does not terminate its output and a full buffer may be\0A    // truncated. Report failure rather than a successful path prefix.\0A    if (n < 0 || (size_t)n >= sizeof(plum_os_buf) - 1) {\0A        plum_os_buf[0] = '\5C0';\0A    } else { plum_os_buf[n] = '\5C0'; }\0A#endif\0A    return plum_os_buf;\0A}\0A\0A// 0 on success, -1 on failure, matching the other shims' Int-sentinel\0A// convention rather than C's.\0Along long os_make_dir(const char *path) {\0A    return PLUM_MKDIR(path) == 0 ? 0 : -1;\0A}\0A\0Along long os_remove_file(const char *path) {\0A    return remove(path) == 0 ? 0 : -1;\0A}\0A\0A// `rename`, which is ATOMIC within a filesystem: the destination is\0A// either the old file or the new one, never a half-written mixture.\0A// That is the whole reason this exists -- `plum fmt --write` builds the\0A// formatted text beside the original and renames it into place, so an\0A// interrupted run cannot leave somebody's source truncated.\0A//\0A// Across filesystems `rename` fails rather than copying, and the\0A// caller is told so rather than being silently given a slower,\0A// non-atomic fallback it did not ask for.\0Along long os_rename_file(const char *from, const char *to) {\0A    return rename(from, to) == 0 ? 0 : -1;\0A}\0A\0Astatic int plum_is_dir(const char *path) {\0A    struct stat st;\0A    if (stat(path, &st) != 0) return 0;\0A    return S_ISDIR(st.st_mode) ? 1 : 0;\0A}\0A\0Astatic int plum_join(char *out, size_t cap, const char *a, const char *b) {\0A    int n = snprintf(out, cap, \22%s/%s\22, a, b);\0A    return (n > 0 && (size_t)n < cap) ? 0 : -1;\0A}\0A\0A// Removal has a deliberately separate traversal from copying: every child\0A// operation is relative to a held directory, never a reconstructed pathname.\0A// A bounded depth also bounds native stack, enumeration storage and handles.\0A// Exhaustion is an error, never a reason to fall back to path-based removal.\0A#define PLUM_REMOVE_DEPTH 128\0A\0A#if !defined(_WIN32)\0Astatic int plum_remove_at(int parent, const char *name, unsigned depth) {\0A    struct stat st;\0A    if (fstatat(parent, name, &st, AT_SYMLINK_NOFOLLOW) != 0) return -1;\0A    if (!S_ISDIR(st.st_mode)) return unlinkat(parent, name, 0);\0A    if (depth >= PLUM_REMOVE_DEPTH) return -1;\0A\0A    int fd = openat(parent, name, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC);\0A    if (fd < 0) return -1;\0A    // Pin the checked object. A replacement directory is not the directory\0A    // we inspected; a replacement symlink cannot pass O_NOFOLLOW at all.\0A    struct stat opened;\0A    if (fstat(fd, &opened) != 0 || opened.st_dev != st.st_dev || opened.st_ino != st.st_ino) {\0A        close(fd);\0A        return -1;\0A    }\0A    DIR *dir = fdopendir(fd);\0A    if (dir == NULL) { close(fd); return -1; }\0A    int rc = 0;\0A    for (;;) {\0A        errno = 0;\0A        struct dirent *entry = readdir(dir);\0A        if (entry == NULL) { if (errno != 0) rc = -1; break; }\0A        if (strcmp(entry->d_name, \22.\22) == 0 || strcmp(entry->d_name, \22..\22) == 0) continue;\0A        if (plum_remove_at(fd, entry->d_name, depth + 1) != 0) { rc = -1; break; }\0A    }\0A    // Detect replacement after walking the original. The final unlinkat\0A    // never follows a symlink, including a swap after this identity check.\0A    if (rc == 0 && (fstatat(parent, name, &st, AT_SYMLINK_NOFOLLOW) != 0 ||\0A                   st.st_dev != opened.st_dev || st.st_ino != opened.st_ino)) rc = -1;\0A    if (rc == 0 && unlinkat(parent, name, AT_REMOVEDIR) != 0) rc = -1;\0A    if (closedir(dir) != 0) rc = -1; // owns fd after fdopendir succeeds\0A    return rc;\0A}\0A\0Astatic int plum_remove_tree(const char *path) {\0A    size_t n = strlen(path);\0A    if (n == 0) return -1;\0A    char *copy = (char *)malloc(n + 1);\0A    if (copy == NULL) return -1;\0A    memcpy(copy, path, n + 1);\0A    // Only trim separators. realpath/lexical dot elimination would resolve\0A    // the link before we can remove it. Never turn '/' into an empty path.\0A    while (n > 1 && copy[n - 1] == '/') copy[--n] = 0;\0A    char *slash = strrchr(copy, '/');\0A    const char *name = slash ? slash + 1 : copy;\0A    if (*name == 0 || strcmp(name, \22.\22) == 0 || strcmp(name, \22..\22) == 0) {\0A        free(copy);\0A        return -1;\0A    }\0A    // Ancestors in the caller's path resolve once to acquire this parent.\0A    // All traversal below it uses single-component names and held fds.\0A    int parent;\0A    if (slash == NULL) parent = open(\22.\22, O_RDONLY | O_DIRECTORY | O_CLOEXEC);\0A    else if (slash == copy) parent = open(\22/\22, O_RDONLY | O_DIRECTORY | O_CLOEXEC);\0A    else {\0A        *slash = 0;\0A        parent = open(copy, O_RDONLY | O_DIRECTORY | O_CLOEXEC);\0A    }\0A    int rc = parent < 0 ? -1 : plum_remove_at(parent, name, 0);\0A    if (parent >= 0 && close(parent) != 0) rc = -1;\0A    free(copy);\0A    return rc;\0A}\0A#else\0A// NtCreateFile supplies the directory-relative open missing from CreateFile.\0A// Resolve it per call, without a mutable global or a new linker dependency.\0Atypedef NTSTATUS (NTAPI *PlumRemoveOpen)(PHANDLE, ACCESS_MASK, POBJECT_ATTRIBUTES,\0A    PIO_STATUS_BLOCK, PLARGE_INTEGER, ULONG, ULONG, ULONG, ULONG, PVOID, ULONG);\0A\0Astatic HANDLE plum_remove_child(PlumRemoveOpen open_child, HANDLE parent,\0A                                WCHAR *name, DWORD bytes, ULONG object_flags) {\0A    if (bytes == 0 || bytes > 65534 || bytes % sizeof(WCHAR) != 0) return INVALID_HANDLE_VALUE;\0A    UNICODE_STRING text = {(USHORT)bytes, (USHORT)bytes, name};\0A    OBJECT_ATTRIBUTES attrs = {0};\0A    attrs.Length = sizeof(attrs);\0A    attrs.RootDirectory = parent;\0A    attrs.Attributes = object_flags;\0A    attrs.ObjectName = &text;\0A    IO_STATUS_BLOCK status;\0A    HANDLE child = INVALID_HANDLE_VALUE;\0A    // Denying write/delete sharing pins the entry and prevents changing an\0A    // opened ordinary directory into a reparse point while we enumerate it.\0A    NTSTATUS rc = open_child(&child, DELETE | FILE_LIST_DIRECTORY | FILE_READ_ATTRIBUTES | SYNCHRONIZE,\0A        &attrs, &status, NULL, 0, FILE_SHARE_READ, FILE_OPEN, FILE_OPEN_REPARSE_POINT | FILE_SYNCHRONOUS_IO_NONALERT, NULL, 0);\0A    return rc < 0 ? INVALID_HANDLE_VALUE : child;\0A}\0A\0Astatic int plum_remove_handle(PlumRemoveOpen open_child, HANDLE handle, unsigned depth) {\0A    FILE_ATTRIBUTE_TAG_INFO attrs;\0A    if (!GetFileInformationByHandleEx(handle, FileAttributeTagInfo, &attrs, sizeof(attrs))) return -1;\0A    if ((attrs.FileAttributes & FILE_ATTRIBUTE_DIRECTORY) &&\0A        !(attrs.FileAttributes & FILE_ATTRIBUTE_REPARSE_POINT)) {\0A        if (depth >= PLUM_REMOVE_DEPTH) return -1;\0A        // malloc is suitably aligned for FILE_ID_BOTH_DIR_INFO. One bounded\0A        // buffer per active directory, not one allocation per entry.\0A        unsigned char *buffer = (unsigned char *)malloc(4096);\0A        if (buffer == NULL) return -1;\0A        int rc = 0;\0A        for (;;) {\0A            if (!GetFileInformationByHandleEx(handle, FileIdBothDirectoryInfo, buffer, 4096)) {\0A                if (GetLastError() != ERROR_NO_MORE_FILES) rc = -1;\0A                break;\0A            }\0A            DWORD offset = 0;\0A            for (;;) {\0A                FILE_ID_BOTH_DIR_INFO *entry = (FILE_ID_BOTH_DIR_INFO *)(buffer + offset);\0A                DWORD bytes = entry->FileNameLength;\0A                if (bytes == 0 || bytes % sizeof(WCHAR) != 0 ||\0A                    bytes > 4096 - offset - offsetof(FILE_ID_BOTH_DIR_INFO, FileName)) { rc = -1; break; }\0A                WCHAR *name = entry->FileName;\0A                if (!((bytes == 2 && name[0] == L'.') ||\0A                      (bytes == 4 && name[0] == L'.' && name[1] == L'.'))) {\0A                    HANDLE child = plum_remove_child(open_child, handle, name, bytes, 0);\0A                    if (child == INVALID_HANDLE_VALUE) { rc = -1; break; }\0A                    if (plum_remove_handle(open_child, child, depth + 1) != 0) rc = -1;\0A                    if (!CloseHandle(child)) rc = -1;\0A                    if (rc != 0) break;\0A                }\0A                if (entry->NextEntryOffset == 0) break;\0A                DWORD next = entry->NextEntryOffset;\0A                if (next % 8 != 0 || next < offsetof(FILE_ID_BOTH_DIR_INFO, FileName) + bytes ||\0A                    next > 4096 - offset - sizeof(FILE_ID_BOTH_DIR_INFO)) { rc = -1; break; }\0A                offset += next;\0A            }\0A            if (rc != 0) break;\0A        }\0A        free(buffer);\0A        if (rc != 0) return -1;\0A    }\0A    FILE_DISPOSITION_INFO disposition = {TRUE};\0A    return SetFileInformationByHandle(handle, FileDispositionInfo, &disposition, sizeof(disposition)) ? 0 : -1;\0A}\0A\0Astatic int plum_remove_tree(const char *path) {\0A    HMODULE ntdll = GetModuleHandleW(L\22ntdll.dll\22);\0A    PlumRemoveOpen open_child = ntdll ? (PlumRemoveOpen)(void *)GetProcAddress(ntdll, \22NtCreateFile\22) : NULL;\0A    if (open_child == NULL) return -1;\0A    int n = MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, path, -1, NULL, 0);\0A    if (n <= 1) return -1;\0A    WCHAR *wide = (WCHAR *)malloc((size_t)n * sizeof(WCHAR));\0A    if (wide == NULL) return -1;\0A    if (!MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, path, -1, wide, n)) { free(wide); return -1; }\0A    --n;\0A    while (n > 0 && (wide[n - 1] == L'/' || wide[n - 1] == L'\5C\5C')) wide[--n] = 0;\0A    WCHAR *name = wide + n;\0A    while (name > wide && name[-1] != L'/' && name[-1] != L'\5C\5C') --name;\0A    if (name == wide && n > 2 && wide[1] == L':') name = wide + 2;\0A    if (n == 0 || wide[n - 1] == L':' || wcscmp(name, L\22.\22) == 0 || wcscmp(name, L\22..\22) == 0) {\0A        free(wide);\0A        return -1;\0A    }\0A    // Split before acquiring the root too: a single native child name avoids\0A    // Win32's trailing-dot/space normalization and follows no final reparse\0A    // point. Only the caller-supplied ancestors resolve normally.\0A    DWORD bytes = (DWORD)((wide + n - name) * sizeof(WCHAR));\0A    WCHAR first = *name;\0A    *name = 0;\0A    HANDLE parent = CreateFileW(name == wide ? L\22.\22 : wide,\0A        FILE_LIST_DIRECTORY | FILE_READ_ATTRIBUTES | SYNCHRONIZE, FILE_SHARE_READ,\0A        NULL, OPEN_EXISTING, FILE_FLAG_BACKUP_SEMANTICS, NULL);\0A    *name = first;\0A    if (parent == INVALID_HANDLE_VALUE) { free(wide); return -1; }\0A    // Keep Win32 root-name lookup case-insensitive. Enumeration supplies\0A    // exact child names, so those opens also support case-sensitive trees.\0A    HANDLE handle = plum_remove_child(open_child, parent, name, bytes, OBJ_CASE_INSENSITIVE);\0A    int parent_closed = CloseHandle(parent);\0A    free(wide);\0A    if (handle == INVALID_HANDLE_VALUE) return -1;\0A    if (!parent_closed) { CloseHandle(handle); return -1; }\0A    int rc = plum_remove_handle(open_child, handle, 0);\0A    if (!CloseHandle(handle)) rc = -1;\0A    return rc;\0A}\0A#endif\0A\0Along long os_remove_tree(const char *path) {\0A    return plum_remove_tree(path) == 0 ? 0 : -1;\0A}\0A\0Astatic int plum_copy_file(const char *src, const char *dst) {\0A    FILE *in, *out;\0A    char buf[65536];\0A    size_t n;\0A    int rc = 0;\0A\0A    in = fopen(src, \22rb\22);\0A    if (in == NULL) return -1;\0A    out = fopen(dst, \22wb\22);\0A    if (out == NULL) { fclose(in); return -1; }\0A    while ((n = fread(buf, 1, sizeof(buf), in)) > 0) {\0A        if (fwrite(buf, 1, n, out) != n) { rc = -1; break; }\0A    }\0A    if (ferror(in)) rc = -1;\0A    if (fclose(out) != 0) rc = -1;\0A    fclose(in);\0A    return rc;\0A}\0A\0A// Resolve an existing directory to its filesystem path. Resolving the\0A// directory itself (rather than only normalising its spelling) catches\0A// aliases such as `.` and symlinks before a copy can write through them.\0Astatic int plum_resolve_dir(const char *path, char *out, size_t cap) {\0A#if defined(_WIN32)\0A    HANDLE h = CreateFileA(path, FILE_READ_ATTRIBUTES,\0A                           FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,\0A                           NULL, OPEN_EXISTING, FILE_FLAG_BACKUP_SEMANTICS, NULL);\0A    DWORD n;\0A    if (h == INVALID_HANDLE_VALUE) return -1;\0A    n = GetFinalPathNameByHandleA(h, out, (DWORD)cap, FILE_NAME_NORMALIZED | VOLUME_NAME_DOS);\0A    CloseHandle(h);\0A    if (n == 0 || n >= cap) return -1;\0A    for (char *p = out; *p; p++) {\0A        if (*p == '\5C\5C') *p = '/';\0A        *p = (char)tolower((unsigned char)*p);\0A    }\0A    return 0;\0A#else\0A    return realpath(path, out) != NULL ? 0 : -1;\0A#endif\0A}\0A\0A// Directories overlap when either is the other or an ancestor of it.\0A// The separators at the prefix boundary avoid confusing `/a/bc` with `/a/b`.\0Astatic int plum_paths_overlap(const char *a, const char *b) {\0A    char resolved_a[PLUM_PATH_MAX];\0A    char resolved_b[PLUM_PATH_MAX];\0A    size_t a_len, b_len;\0A    if (plum_resolve_dir(a, resolved_a, sizeof(resolved_a)) != 0 ||\0A        plum_resolve_dir(b, resolved_b, sizeof(resolved_b)) != 0) return -1;\0A    a_len = strlen(resolved_a);\0A    b_len = strlen(resolved_b);\0A#if defined(_WIN32)\0A    int same = _stricmp(resolved_a, resolved_b) == 0;\0A    int a_prefix = _strnicmp(resolved_a, resolved_b, a_len) == 0 &&\0A                   (resolved_b[a_len] == '\5C0' || resolved_a[a_len - 1] == '/' || resolved_b[a_len] == '/');\0A    int b_prefix = _strnicmp(resolved_b, resolved_a, b_len) == 0 &&\0A                   (resolved_a[b_len] == '\5C0' || resolved_b[b_len - 1] == '/' || resolved_a[b_len] == '/');\0A#else\0A    int same = strcmp(resolved_a, resolved_b) == 0;\0A    int a_prefix = strncmp(resolved_a, resolved_b, a_len) == 0 &&\0A                   (resolved_b[a_len] == '\5C0' || resolved_a[a_len - 1] == '/' || resolved_b[a_len] == '/');\0A    int b_prefix = strncmp(resolved_b, resolved_a, b_len) == 0 &&\0A                   (resolved_a[b_len] == '\5C0' || resolved_b[b_len - 1] == '/' || resolved_a[b_len] == '/');\0A#endif\0A    return same || a_prefix || b_prefix;\0A}\0A\0A// Copies the CONTENTS of `src` into `dst`, which must already exist --\0A// the semantics of `cp -r src/. dst`, which is what this replaced, and\0A// deliberately not `cp -r src dst` (that would nest a directory).\0A//\0A// File MODES are not preserved. The one caller copies a project into a\0A// scratch directory to type-check it, where nothing is executed; if a\0A// caller ever needs the executable bit, this is the line to revisit\0A// rather than a thing to assume.\0Astatic int plum_copy_tree(const char *src, const char *dst) {\0A    DIR *d;\0A    struct dirent *e;\0A    char *s;\0A    char *t;\0A    int rc = 0;\0A\0A    // Refuse self-copy and either direction of overlap before reading or\0A    // creating any destination entry. Otherwise recursion can be unbounded,\0A    // and a file copied onto itself is truncated by fopen(\22wb\22).\0A    if (plum_paths_overlap(src, dst) != 0) return -1;\0A\0A    d = opendir(src);\0A    if (d == NULL) return -1;\0A    s = (char *)malloc(PLUM_PATH_MAX);\0A    t = (char *)malloc(PLUM_PATH_MAX);\0A    if (s == NULL || t == NULL) { free(s); free(t); closedir(d); return -1; }\0A\0A    while ((e = readdir(d)) != NULL) {\0A        if (strcmp(e->d_name, \22.\22) == 0 || strcmp(e->d_name, \22..\22) == 0) continue;\0A        if (plum_join(s, PLUM_PATH_MAX, src, e->d_name) != 0) { rc = -1; continue; }\0A        if (plum_join(t, PLUM_PATH_MAX, dst, e->d_name) != 0) { rc = -1; continue; }\0A        if (plum_is_dir(s)) {\0A            if (PLUM_MKDIR(t) != 0 && !plum_is_dir(t)) { rc = -1; continue; }\0A            if (plum_copy_tree(s, t) != 0) rc = -1;\0A        } else {\0A            if (plum_copy_file(s, t) != 0) rc = -1;\0A        }\0A    }\0A    free(s);\0A    free(t);\0A    closedir(d);\0A    return rc;\0A}\0A\0Along long os_copy_tree(const char *src, const char *dst) {\0A    return plum_copy_tree(src, dst) == 0 ? 0 : -1;\0A}\0A\0A// --- File metadata (issue #24) ---\0A//\0A// `stat(2)`, the rest of it. `path_is_dir` in `dir_shim.c` was the first\0A// caller and stays where it is; these are its siblings, here because\0A// this is the filesystem shim.\0A//\0A// Loaded into a thread-local record and then read field by field, so\0A// `Os.stat` costs ONE `stat` rather than one per field. Plum's extern\0A// surface has no multi-value return, which is the same constraint\0A// `tcp_recv_n`/`tcp_recv_data` and `file_read_n`/`file_read_data` work\0A// around the same way.\0A//\0A// Thread-local rather than plain static: `net_shim.c` learned what a\0A// shared buffer costs when two threads use it at once, and a per-thread\0A// record is cheap enough not to repeat that.\0A#include <errno.h>\0A#include <time.h>\0A\0Astatic PLUM_OS_TLS long long stat_size = 0;\0Astatic PLUM_OS_TLS long long stat_mtime = 0;\0Astatic PLUM_OS_TLS long long stat_is_dir = 0;\0A\0A// 0 on success, -1 if the path cannot be stat'ed at all (most commonly\0A// because it is not there). Follows symlinks, matching `path_is_dir`.\0Along long os_stat_load(const char *path) {\0A    struct stat st;\0A    if (stat(path, &st) != 0) {\0A        stat_size = 0;\0A        stat_mtime = 0;\0A        stat_is_dir = 0;\0A        return -1;\0A    }\0A    stat_size = (long long)st.st_size;\0A    stat_mtime = (long long)st.st_mtime;\0A    stat_is_dir = S_ISDIR(st.st_mode) ? 1 : 0;\0A    return 0;\0A}\0A\0Along long os_stat_size(void) { return stat_size; }\0Along long os_stat_mtime(void) { return stat_mtime; }\0Along long os_stat_is_dir(void) { return stat_is_dir; }\0A\0A// Retention is best effort and runs after compilation. Only complete hash\0A// entries are eviction candidates; staging is protected by its live owner.\0A// Cache roots must be private to this host/user (not a shared network store).\0Atypedef struct { char *path; uint64_t bytes; time_t age; } plum_cache_entry;\0A\0Astatic int plum_cache_stat_private(const char *path, struct stat *st) {\0A#if defined(_WIN32)\0A    DWORD attrs=GetFileAttributesA(path);\0A    if (attrs == INVALID_FILE_ATTRIBUTES || (attrs & FILE_ATTRIBUTE_REPARSE_POINT)) return -1;\0A    return stat(path,st);\0A#else\0A    return lstat(path,st);\0A#endif\0A}\0A\0Astatic uint64_t plum_cache_tree_bytes(const char *path) {\0A    struct stat st;\0A    if (plum_cache_stat_private(path,&st) != 0) return 0;\0A    if (S_ISREG(st.st_mode)) return st.st_size > 0 ? (uint64_t)st.st_size : 0;\0A    if (!S_ISDIR(st.st_mode)) return 0;\0A    DIR *d=opendir(path); if (!d) return 0;\0A    uint64_t bytes=0; struct dirent *e; char child[PLUM_PATH_MAX];\0A    while ((e=readdir(d)) != NULL) {\0A        if (!strcmp(e->d_name,\22.\22) || !strcmp(e->d_name,\22..\22)) continue;\0A        if (plum_join(child,sizeof(child),path,e->d_name) == 0) bytes+=plum_cache_tree_bytes(child);\0A    }\0A    closedir(d); return bytes;\0A}\0A\0Astatic int plum_cache_owner_gone(const char *path) {\0A    char owner[PLUM_PATH_MAX]; long pid=0;\0A    if (plum_join(owner,sizeof(owner),path,\22.owner\22) != 0) return 0;\0A    FILE *f=fopen(owner,\22r\22); if (!f) return 0;\0A    int parsed=fscanf(f,\22%ld\22,&pid); fclose(f);\0A    if (parsed != 1 || pid <= 0 || pid > 2147483647L) return 0;\0A#if defined(_WIN32)\0A    HANDLE process=OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION,FALSE,(DWORD)pid);\0A    if (!process) return GetLastError() == ERROR_INVALID_PARAMETER;\0A    DWORD code=STILL_ACTIVE;\0A    int gone=GetExitCodeProcess(process,&code) && code != STILL_ACTIVE;\0A    CloseHandle(process); return gone;\0A#else\0A    return kill((pid_t)pid,0) != 0 && errno == ESRCH;\0A#endif\0A}\0A\0Astatic int plum_cache_oldest(const void *a, const void *b) {\0A    const plum_cache_entry *x=a, *y=b;\0A    if (x->age != y->age) return x->age < y->age ? -1 : 1;\0A    return strcmp(x->path,y->path);\0A}\0A\0Along long plum_cache_prune(const char *root, long long limit) {\0A    if (limit < 0) return 0;\0A    const char *kinds[]={\22ir\22,\22obj\22,\22shims\22};\0A    plum_cache_entry *entries=NULL; size_t count=0, capacity=0;\0A    uint64_t total=0; long long removed=0; time_t now=time(NULL);\0A    char parent[PLUM_PATH_MAX], path[PLUM_PATH_MAX]; struct stat st;\0A    for (size_t k=0;k<3;k++) {\0A        if (plum_join(parent,sizeof(parent),root,kinds[k]) != 0\0A            || plum_cache_stat_private(parent,&st) != 0 || !S_ISDIR(st.st_mode)) continue;\0A        DIR *d=opendir(parent); if (!d) continue;\0A        struct dirent *e;\0A        while ((e=readdir(d)) != NULL) {\0A            if (plum_join(path,sizeof(path),parent,e->d_name) != 0\0A                || plum_cache_stat_private(path,&st) != 0 || !S_ISDIR(st.st_mode)) continue;\0A            // Windows GetTempFileName uses pcb*.tmp; POSIX uses .partial-*.\0A            if (!strncmp(e->d_name,\22.partial-\22,9) || !strncmp(e->d_name,\22pcb\22,3)) {\0A                if (now > st.st_mtime && now-st.st_mtime > 86400 && plum_cache_owner_gone(path)) {\0A                    if (plum_remove_tree(path) == 0) removed++;\0A                }\0A                continue;\0A            }\0A            if (strlen(e->d_name) != 64) continue;\0A            int hex=1;\0A            for (size_t i=0;i<64;i++) {\0A                if (!((e->d_name[i]>='0' && e->d_name[i]<='9')\0A                    || (e->d_name[i]>='a' && e->d_name[i]<='f'))) { hex=0; break; }\0A            }\0A            if (!hex) continue;\0A            if (count == capacity) {\0A                size_t next=capacity ? capacity*2 : 32;\0A                plum_cache_entry *grown=realloc(entries,next*sizeof(*entries));\0A                if (!grown) break;\0A                entries=grown; capacity=next;\0A            }\0A            char *saved=strdup(path); if (!saved) break;\0A            uint64_t bytes=plum_cache_tree_bytes(path);\0A            entries[count++]=(plum_cache_entry){saved,bytes,st.st_mtime}; total+=bytes;\0A        }\0A        closedir(d);\0A    }\0A    if (count > 1) qsort(entries,count,sizeof(*entries),plum_cache_oldest);\0A    for (size_t i=0;i<count;i++) {\0A        if (total > (uint64_t)limit && plum_remove_tree(entries[i].path) == 0) {\0A            total=total >= entries[i].bytes ? total-entries[i].bytes : 0; removed++;\0A        }\0A        free(entries[i].path);\0A    }\0A    free(entries); return removed;\0A}\0A\0A// Three-way, and the third case is the point: 1 present, 0 absent, -1\0A// CANNOT SAY.\0A//\0A// \22Does this exist\22 and \22can I see whether this exists\22 are different\0A// questions, and collapsing them is how a permission error becomes a\0A// silent \22no\22. Only `ENOENT` and `ENOTDIR` mean absent -- the latter\0A// because a path under a non-directory (`a/b` where `a` is a file)\0A// cannot exist either. Anything else is a real failure to report.\0Along long os_path_exists(const char *path) {\0A    struct stat st;\0A    if (stat(path, &st) == 0) {\0A        return 1;\0A    }\0A    if (errno == ENOENT || errno == ENOTDIR) {\0A        return 0;\0A    }\0A    return -1;\0A}\0A\0A// --- Working directory (issue #17) ---\0A//\0A// Its own buffer rather than `plum_os_buf`: that one holds the result of\0A// `os_temp_dir`/`os_self_exe`, and a caller holding one of those across\0A// a `cwd()` would silently get the wrong string back.\0Astatic PLUM_OS_TLS char plum_cwd_buf[PLUM_PATH_MAX];\0A\0A// \22\22 on failure, never NULL -- a null `CStr` return is a hard runtime\0A// abort under Plum's FFI semantics, the same trade every other shim\0A// here makes.\0Aconst char *os_cwd(void) {\0A#if defined(_WIN32)\0A    if (_getcwd(plum_cwd_buf, (int)sizeof(plum_cwd_buf)) == NULL) plum_cwd_buf[0] = '\5C0';\0A#else\0A    if (getcwd(plum_cwd_buf, sizeof(plum_cwd_buf)) == NULL) plum_cwd_buf[0] = '\5C0';\0A#endif\0A    return plum_cwd_buf;\0A}\0A\0Along long os_chdir(const char *path) {\0A#if defined(_WIN32)\0A    return _chdir(path) == 0 ? 0 : -1;\0A#else\0A    return chdir(path) == 0 ? 0 : -1;\0A#endif\0A}\0A\00" }
+@.str41720 = private global { i64, i64, [53129 x i8] } { i64 -1, i64 53128, [53129 x i8] c"// Filesystem and self-location primitives, so the compiler stops\0A// shelling out to Unix commands to do them.\0A//\0A// `bootstrap/self_host/main.plum` used to reach these through\0A// `run_process`: `mktemp -d` (5 sites), `rm -rf`/`rm -f` (6), `cp -r`\0A// (1), `mkdir` (1), and `/proc/self/exe` (3). That works on Linux,\0A// works on macOS by luck, and cannot work on Windows, where none of\0A// those programs exist. `/proc/self/exe` is worse than the others: it\0A// is Linux-only, so the language server -- which re-invokes itself\0A// through it -- was already broken on a Mac.\0A//\0A// Replacing them is also just better on the platforms where they DID\0A// work. A `plum build` forked three processes to make a directory,\0A// delete a file, and delete a directory; now it forks one, for `clang`,\0A// which is the only one that was ever doing real work.\0A//\0A// Same shim conventions as its neighbours (see `net_shim.c`'s header\0A// for the general pattern): every function takes and returns only\0A// `long long` (Plum `Int`) or `const char *` (Plum `CStr`), because\0A// Plum's extern surface has no raw pointers, no out-parameters and no\0A// multi-value return.\0A//\0A// Path results borrow fixed-size thread-local buffers. The Plum side\0A// copies immediately into a string cell (`plum_str_new`), before another\0A// native call on that thread can overwrite the result. Other threads\0A// cannot overwrite it during that copy. No per-call malloc or thread-exit\0A// destructor is needed: the buffers themselves have thread storage\0A// duration, rather than pointing at separately allocated heap memory.\0A\0A#include <stdio.h>\0A#include <stdlib.h>\0A#include <string.h>\0A#include <sys/stat.h>\0A#include <dirent.h>\0A#include <stdint.h>\0A#include <stddef.h>\0A#include <wchar.h>\0A#include <ctype.h>\0A#include <errno.h>\0A#include <time.h>\0A\0A#if defined(_WIN32)\0A#include <windows.h>\0A#include <winternl.h>\0A#include <direct.h>\0A#include <io.h>\0A#define PLUM_MKDIR(p) _mkdir(p)\0A#define PLUM_RMDIR(p) _rmdir(p)\0A#else\0A#include <unistd.h>\0A#include <fcntl.h>\0A#include <signal.h>\0A#define PLUM_MKDIR(p) mkdir((p), 0700)\0A#define PLUM_RMDIR(p) rmdir(p)\0A#endif\0A\0A#if defined(__APPLE__)\0A#include <mach-o/dyld.h>\0A#endif\0A\0A#if defined(__linux__) && defined(__has_include)\0A#if __has_include(<linux/if_alg.h>)\0A#define PLUM_CACHE_AF_ALG 1\0A#include <sys/socket.h>\0A#include <linux/if_alg.h>\0A#endif\0A#endif\0A\0A#define PLUM_PATH_MAX 4096\0A\0A#if defined(_MSC_VER)\0A#define PLUM_OS_TLS __declspec(thread)\0A#else\0A#define PLUM_OS_TLS _Thread_local\0A#endif\0A\0A// temp_dir and self_exe share scratch space only within one thread.\0A// Each simultaneous mkdtemp/GetTempFileNameA call has its own template.\0Astatic PLUM_OS_TLS char plum_os_buf[PLUM_PATH_MAX];\0A\0A// Compiler artifact support. Hash files in bounded memory: materializing the\0A// compiler executable as an Array[Int] just to fingerprint it would dominate\0A// a warm run. SHA-256 uses unsigned 32-bit arithmetic (FIPS 180-4).\0Atypedef struct {\0A    uint32_t h[8];\0A    uint64_t bytes;\0A    unsigned char block[64];\0A    size_t used;\0A} plum_cache_sha;\0A\0Astatic uint32_t plum_cache_rotr(uint32_t x, unsigned n) {\0A    return (x >> n) | (x << (32 - n));\0A}\0A\0Astatic void plum_cache_block(plum_cache_sha *s, const unsigned char *p) {\0A    static const uint32_t k[64] = {\0A        0x428a2f98,0x71374491,0xb5c0fbcf,0xe9b5dba5,0x3956c25b,0x59f111f1,0x923f82a4,0xab1c5ed5,\0A        0xd807aa98,0x12835b01,0x243185be,0x550c7dc3,0x72be5d74,0x80deb1fe,0x9bdc06a7,0xc19bf174,\0A        0xe49b69c1,0xefbe4786,0x0fc19dc6,0x240ca1cc,0x2de92c6f,0x4a7484aa,0x5cb0a9dc,0x76f988da,\0A        0x983e5152,0xa831c66d,0xb00327c8,0xbf597fc7,0xc6e00bf3,0xd5a79147,0x06ca6351,0x14292967,\0A        0x27b70a85,0x2e1b2138,0x4d2c6dfc,0x53380d13,0x650a7354,0x766a0abb,0x81c2c92e,0x92722c85,\0A        0xa2bfe8a1,0xa81a664b,0xc24b8b70,0xc76c51a3,0xd192e819,0xd6990624,0xf40e3585,0x106aa070,\0A        0x19a4c116,0x1e376c08,0x2748774c,0x34b0bcb5,0x391c0cb3,0x4ed8aa4a,0x5b9cca4f,0x682e6ff3,\0A        0x748f82ee,0x78a5636f,0x84c87814,0x8cc70208,0x90befffa,0xa4506ceb,0xbef9a3f7,0xc67178f2\0A    };\0A    uint32_t w[64], a,b,c,d,e,f,g,h;\0A    for (unsigned i = 0; i < 16; i++)\0A        w[i] = ((uint32_t)p[i*4] << 24) | ((uint32_t)p[i*4+1] << 16)\0A             | ((uint32_t)p[i*4+2] << 8) | p[i*4+3];\0A    for (unsigned i = 16; i < 64; i++) {\0A        uint32_t x = w[i-15], y = w[i-2];\0A        w[i] = w[i-16] + (plum_cache_rotr(x,7)^plum_cache_rotr(x,18)^(x>>3))\0A             + w[i-7] + (plum_cache_rotr(y,17)^plum_cache_rotr(y,19)^(y>>10));\0A    }\0A    a=s->h[0]; b=s->h[1]; c=s->h[2]; d=s->h[3];\0A    e=s->h[4]; f=s->h[5]; g=s->h[6]; h=s->h[7];\0A    for (unsigned i = 0; i < 64; i++) {\0A        uint32_t t1 = h + (plum_cache_rotr(e,6)^plum_cache_rotr(e,11)^plum_cache_rotr(e,25))\0A                    + ((e&f)^((~e)&g)) + k[i] + w[i];\0A        uint32_t t2 = (plum_cache_rotr(a,2)^plum_cache_rotr(a,13)^plum_cache_rotr(a,22))\0A                    + ((a&b)^(a&c)^(b&c));\0A        h=g; g=f; f=e; e=d+t1; d=c; c=b; b=a; a=t1+t2;\0A    }\0A    s->h[0]+=a; s->h[1]+=b; s->h[2]+=c; s->h[3]+=d;\0A    s->h[4]+=e; s->h[5]+=f; s->h[6]+=g; s->h[7]+=h;\0A}\0A\0Astatic void plum_cache_init(plum_cache_sha *s) {\0A    static const uint32_t h[8] = {0x6a09e667,0xbb67ae85,0x3c6ef372,0xa54ff53a,\0A                                  0x510e527f,0x9b05688c,0x1f83d9ab,0x5be0cd19};\0A    memcpy(s->h,h,sizeof(h)); s->bytes=0; s->used=0;\0A}\0A\0Astatic void plum_cache_update(plum_cache_sha *s, const unsigned char *p, size_t n) {\0A    s->bytes += n;\0A    while (n) {\0A        size_t take = 64 - s->used;\0A        if (take > n) take = n;\0A        memcpy(s->block+s->used,p,take); s->used+=take; p+=take; n-=take;\0A        if (s->used == 64) { plum_cache_block(s,s->block); s->used=0; }\0A    }\0A}\0A\0Astatic void plum_cache_final(plum_cache_sha *s, char out[65]) {\0A    uint64_t bits = s->bytes * 8;\0A    unsigned char pad[128] = {0x80};\0A    size_t n = s->used < 56 ? 56-s->used : 120-s->used;\0A    for (unsigned i = 0; i < 8; i++) pad[n+i]=(unsigned char)(bits >> ((7-i)*8));\0A    plum_cache_update(s,pad,n+8);\0A    for (unsigned i = 0; i < 8; i++) snprintf(out+i*8,9,\22%08x\22,(unsigned)s->h[i]);\0A    out[64]='\5C0';\0A}\0A\0Aconst char *plum_cache_hash_text(const char *p, long long n) {\0A    static char out[65];\0A    if (n < 0) { out[0]='\5C0'; return out; }\0A    plum_cache_sha s; plum_cache_init(&s);\0A    plum_cache_update(&s,(const unsigned char *)p,(size_t)n);\0A    plum_cache_final(&s,out); return out;\0A}\0A\0A// Linux's optional kernel SHA provider uses CPU acceleration when available.\0A// No new library/tool dependency; an unavailable provider falls back to the\0A// portable implementation. Cache correctness is independent of the provider.\0Astatic int plum_cache_kernel_hash(const char *path, char out[65]) {\0A#if defined(PLUM_CACHE_AF_ALG)\0A    struct sockaddr_alg sa;\0A    memset(&sa,0,sizeof(sa)); sa.salg_family=AF_ALG;\0A    memcpy(sa.salg_type,\22hash\22,5); memcpy(sa.salg_name,\22sha256\22,7);\0A    int parent=socket(AF_ALG,SOCK_SEQPACKET,0);\0A    if (parent < 0) return 0;\0A    if (bind(parent,(struct sockaddr *)&sa,sizeof(sa)) != 0) { close(parent); return 0; }\0A    int fd=accept(parent,NULL,NULL); close(parent);\0A    if (fd < 0) return 0;\0A    FILE *f=fopen(path,\22rb\22);\0A    if (!f) { close(fd); return 0; }\0A    unsigned char buf[65536], digest[32]; size_t n; int bad=0;\0A    while ((n=fread(buf,1,sizeof(buf),f)) != 0) {\0A        size_t at=0;\0A        while (at < n) {\0A            ssize_t sent=send(fd,buf+at,n-at,MSG_MORE);\0A            if (sent <= 0) { bad=1; break; }\0A            at+=(size_t)sent;\0A        }\0A        if (bad) break;\0A    }\0A    if (ferror(f)) bad=1;\0A    if (fclose(f) != 0) bad=1;\0A    if (!bad && send(fd,NULL,0,0) != 0) bad=1;\0A    if (!bad && recv(fd,digest,sizeof(digest),0) != (ssize_t)sizeof(digest)) bad=1;\0A    close(fd);\0A    if (bad) return 0;\0A    for (unsigned i=0;i<32;i++) snprintf(out+i*2,3,\22%02x\22,(unsigned)digest[i]);\0A    out[64]='\5C0'; return 1;\0A#else\0A    (void)path; (void)out; return 0;\0A#endif\0A}\0A\0Aconst char *plum_cache_hash_file(const char *path) {\0A    static char out[65];\0A    unsigned char buf[32768]; size_t n;\0A    out[0]='\5C0';\0A    struct stat st;\0A    if (stat(path,&st) == 0 && S_ISREG(st.st_mode) && st.st_size > 1048576\0A        && plum_cache_kernel_hash(path,out)) return out;\0A    FILE *f=fopen(path,\22rb\22);\0A    if (!f) return out;\0A    plum_cache_sha s; plum_cache_init(&s);\0A    while ((n=fread(buf,1,sizeof(buf),f)) != 0) plum_cache_update(&s,buf,n);\0A    int bad=ferror(f); if (fclose(f) != 0) bad=1;\0A    if (!bad) plum_cache_final(&s,out);\0A    return out;\0A}\0A\0A// Saved input paths are byte strings, just like fopen's paths. Windows\0A// argv uses the active ANSI code page, and POSIX filenames need not be\0A// UTF-8 either. Decode the hex envelope without treating it as Unicode.\0Astatic int plum_cache_hex_digit(unsigned char c) {\0A    if (c >= '0' && c <= '9') return c - '0';\0A    if (c >= 'a' && c <= 'f') return c - 'a' + 10;\0A    if (c >= 'A' && c <= 'F') return c - 'A' + 10;\0A    return -1;\0A}\0A\0Aconst char *plum_cache_hash_file_hex(const char *hex) {\0A    size_t n = strlen(hex);\0A    if (n == 0 || n % 2 != 0) return \22\22;\0A    char *path = malloc(n / 2 + 1);\0A    if (!path) return \22\22;\0A    for (size_t i = 0; i < n; i += 2) {\0A        int a = plum_cache_hex_digit((unsigned char)hex[i]);\0A        int b = plum_cache_hex_digit((unsigned char)hex[i + 1]);\0A        // Embedded NUL must not truncate a corrupt manifest's path.\0A        if (a < 0 || b < 0 || (a == 0 && b == 0)) {\0A            free(path); return \22\22;\0A        }\0A        path[i / 2] = (char)((a << 4) | b);\0A    }\0A    path[n / 2] = '\5C0';\0A    const char *digest = plum_cache_hash_file(path);\0A    free(path);\0A    return digest;\0A}\0A\0A// Verify the bytes actually copied, not a prior read of the source path.\0A// A concurrent cleaner can remove an entry at any point; that is a miss.\0Along long plum_cache_copy(const char *src, const char *dst, const char *digest) {\0A    FILE *in=fopen(src,\22rb\22); if (!in) return -1;\0A    FILE *out=fopen(dst,\22wb\22); if (!out) { fclose(in); return -1; }\0A    unsigned char buf[32768]; size_t n; int bad=0; char got[65];\0A    plum_cache_sha s; plum_cache_init(&s);\0A    while ((n=fread(buf,1,sizeof(buf),in)) != 0) {\0A        plum_cache_update(&s,buf,n);\0A        if (fwrite(buf,1,n,out) != n) { bad=1; break; }\0A    }\0A    if (ferror(in)) bad=1;\0A    if (fclose(in) != 0) bad=1;\0A    if (fclose(out) != 0) bad=1;\0A    plum_cache_final(&s,got);\0A    if (digest[0] && strcmp(got,digest) != 0) bad=1;\0A    if (bad) remove(dst);\0A    return bad ? -1 : 0;\0A}\0A\0Aconst char *plum_cache_temp(const char *root) {\0A#if defined(_WIN32)\0A    if (GetTempFileNameA(root,\22pcb\22,0,plum_os_buf) == 0) { plum_os_buf[0]='\5C0'; return plum_os_buf; }\0A    DeleteFileA(plum_os_buf);\0A    if (PLUM_MKDIR(plum_os_buf) != 0) plum_os_buf[0]='\5C0';\0A#else\0A    if (snprintf(plum_os_buf,sizeof(plum_os_buf),\22%s/.partial-XXXXXX\22,root) >= (int)sizeof(plum_os_buf)\0A        || mkdtemp(plum_os_buf) == NULL) plum_os_buf[0]='\5C0';\0A#endif\0A    if (plum_os_buf[0]) {\0A        char owner[PLUM_PATH_MAX];\0A        if (snprintf(owner,sizeof(owner),\22%s/.owner\22,plum_os_buf) < (int)sizeof(owner)) {\0A            FILE *f=fopen(owner,\22w\22);\0A            if (f) {\0A#if defined(_WIN32)\0A                fprintf(f,\22%lu\22,(unsigned long)GetCurrentProcessId());\0A#else\0A                fprintf(f,\22%ld\22,(long)getpid());\0A#endif\0A                fclose(f);\0A            }\0A        }\0A    }\0A    return plum_os_buf;\0A}\0A\0A// Windows native-object adapter. Ask the OS loader which images it actually\0A// selects instead of approximating DLL search rules with SearchPath. Support\0A// the MSYS2 MINGW64 layout only; unknown layouts/modules/delay imports bypass.\0A#if defined(_WIN64)\0A#include <bcrypt.h>\0A\0A#define PLUM_WIN_MODULES 256\0A#ifndef PLUM_WIN_IMAGE_TRACE\0A#define PLUM_WIN_IMAGE_TRACE(path, digest) ((void)0)\0A#endif\0A\0Atypedef struct { wchar_t *path; char digest[65]; } plum_win_image;\0Atypedef struct {\0A    HMODULE dll;\0A    BCRYPT_ALG_HANDLE alg;\0A    NTSTATUS (WINAPI *open)(BCRYPT_ALG_HANDLE *,LPCWSTR,LPCWSTR,ULONG);\0A    NTSTATUS (WINAPI *create)(BCRYPT_ALG_HANDLE,BCRYPT_HASH_HANDLE *,PUCHAR,ULONG,PUCHAR,ULONG,ULONG);\0A    NTSTATUS (WINAPI *update)(BCRYPT_HASH_HANDLE,PUCHAR,ULONG,ULONG);\0A    NTSTATUS (WINAPI *finish)(BCRYPT_HASH_HANDLE,PUCHAR,ULONG,ULONG);\0A    NTSTATUS (WINAPI *destroy)(BCRYPT_HASH_HANDLE);\0A    NTSTATUS (WINAPI *close)(BCRYPT_ALG_HANDLE,ULONG);\0A} plum_win_sha;\0A\0Astatic void plum_win_sha_close(plum_win_sha *s) {\0A    if (s->alg) s->close(s->alg,0);\0A    if (s->dll) FreeLibrary(s->dll);\0A    memset(s,0,sizeof(*s));\0A}\0A\0Astatic void plum_win_sha_open(plum_win_sha *s) {\0A    memset(s,0,sizeof(*s));\0A    s->dll=LoadLibraryExW(L\22bcrypt.dll\22,NULL,LOAD_LIBRARY_SEARCH_SYSTEM32);\0A    if (!s->dll) return;\0A#define PLUM_WIN_PROC(member, name) do { \5C\0A    FARPROC p=GetProcAddress(s->dll,name); \5C\0A    memcpy(&s->member,&p,sizeof(p)); \5C\0A    if (!p) { plum_win_sha_close(s); return; } \5C\0A} while (0)\0A    PLUM_WIN_PROC(open,\22BCryptOpenAlgorithmProvider\22);\0A    PLUM_WIN_PROC(create,\22BCryptCreateHash\22);\0A    PLUM_WIN_PROC(update,\22BCryptHashData\22);\0A    PLUM_WIN_PROC(finish,\22BCryptFinishHash\22);\0A    PLUM_WIN_PROC(destroy,\22BCryptDestroyHash\22);\0A    PLUM_WIN_PROC(close,\22BCryptCloseAlgorithmProvider\22);\0A#undef PLUM_WIN_PROC\0A    if (s->open(&s->alg,BCRYPT_SHA256_ALGORITHM,NULL,0) < 0) plum_win_sha_close(s);\0A}\0A\0Astatic int plum_win_hash(HANDLE f, plum_win_sha *provider, char out[65]) {\0A    LARGE_INTEGER zero; zero.QuadPart=0;\0A    if (!SetFilePointerEx(f,zero,NULL,FILE_BEGIN)) return 0;\0A    BCRYPT_HASH_HANDLE hash=NULL;\0A    int fast=provider && provider->alg && provider->create(provider->alg,&hash,NULL,0,NULL,0,0) >= 0;\0A    plum_cache_sha portable; plum_cache_init(&portable);\0A    unsigned char buf[32768], digest[32]; DWORD n;\0A    int good=1, retry=0;\0A    for (;;) {\0A        if (!ReadFile(f,buf,sizeof(buf),&n,NULL)) { good=0; break; }\0A        if (!n) break;\0A        if (fast) {\0A            if (provider->update(hash,buf,n,0) < 0) { retry=1; break; }\0A        } else plum_cache_update(&portable,buf,n);\0A    }\0A    if (good && fast && !retry) {\0A        if (provider->finish(hash,digest,sizeof(digest),0) < 0) retry=1;\0A        else {\0A            for (unsigned i=0;i<32;i++) snprintf(out+i*2,3,\22%02x\22,(unsigned)digest[i]);\0A            out[64]='\5C0';\0A        }\0A    } else if (good && !fast) plum_cache_final(&portable,out);\0A    if (hash) provider->destroy(hash);\0A    // Restart from byte zero if the optional provider fails partway.\0A    return retry ? plum_win_hash(f,NULL,out) : good;\0A}\0A\0Astatic int plum_win_path(HANDLE file, wchar_t path[PLUM_PATH_MAX]) {\0A    DWORD n=GetFinalPathNameByHandleW(file,path,PLUM_PATH_MAX,FILE_NAME_NORMALIZED|VOLUME_NAME_DOS);\0A    if (!n || n >= PLUM_PATH_MAX) return 0;\0A    if (wcsncmp(path,L\22\5C\5C\5C\5C?\5C\5C\22,4)==0) memmove(path,path+4,(wcslen(path+4)+1)*sizeof(wchar_t));\0A    return wcslen(path)>3 && path[1]==L':' && path[2]==L'\5C\5C';\0A}\0A\0Astatic int plum_win_in_dir(const wchar_t *path, const wchar_t *dir) {\0A    size_t n=wcslen(dir);\0A    return wcslen(path)>n && path[n]==L'\5C\5C'\0A        && CompareStringOrdinal(path,(int)n,dir,(int)n,TRUE)==CSTR_EQUAL;\0A}\0A\0Astatic int plum_win_no_delay(HANDLE file) {\0A    IMAGE_DOS_HEADER dos; IMAGE_NT_HEADERS64 nt; DWORD n; LARGE_INTEGER at;\0A    at.QuadPart=0;\0A    if (!SetFilePointerEx(file,at,NULL,FILE_BEGIN)\0A        || !ReadFile(file,&dos,sizeof(dos),&n,NULL) || n!=sizeof(dos)\0A        || dos.e_magic!=IMAGE_DOS_SIGNATURE || dos.e_lfanew<0) return 0;\0A    at.QuadPart=dos.e_lfanew;\0A    if (!SetFilePointerEx(file,at,NULL,FILE_BEGIN)\0A        || !ReadFile(file,&nt,sizeof(nt),&n,NULL) || n!=sizeof(nt)\0A        || nt.Signature!=IMAGE_NT_SIGNATURE || nt.FileHeader.Machine!=IMAGE_FILE_MACHINE_AMD64\0A        || nt.FileHeader.SizeOfOptionalHeader!=sizeof(nt.OptionalHeader)\0A        || nt.OptionalHeader.Magic!=IMAGE_NT_OPTIONAL_HDR64_MAGIC\0A        || nt.OptionalHeader.NumberOfRvaAndSizes<=IMAGE_DIRECTORY_ENTRY_DELAY_IMPORT) return 0;\0A    return nt.OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_DELAY_IMPORT].Size==0\0A        && nt.OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_DELAY_IMPORT].VirtualAddress==0;\0A}\0A\0Astatic int plum_win_image_add(plum_win_image *images, size_t *count, HANDLE file,\0A                             const wchar_t *bin, const wchar_t *system, plum_win_sha *sha,\0A                             int *llvm, char reason[160]) {\0A    wchar_t path[PLUM_PATH_MAX];\0A    if (!file) { strcpy(reason,\22!loader event has no file handle\22); return 0; }\0A    if (!plum_win_path(file,path)) { strcpy(reason,\22!loader image path unavailable\22); return 0; }\0A    int private_image=plum_win_in_dir(path,bin);\0A    if (!private_image && !plum_win_in_dir(path,system)) {\0A        strcpy(reason,\22!DLL outside supported toolchain/system directories\22); return 0;\0A    }\0A    if (private_image && !plum_win_no_delay(file)) {\0A        strcpy(reason,\22!toolchain image has delay imports or unsupported PE headers\22); return 0;\0A    }\0A    for (size_t i=0;i<*count;i++) if (wcscmp(images[i].path,path)==0) return 1;\0A    if (*count>=PLUM_WIN_MODULES) return 0;\0A    size_t len=wcslen(path);\0A    wchar_t *copy=malloc((len+1)*sizeof(wchar_t));\0A    if (!copy) return 0;\0A    memcpy(copy,path,(len+1)*sizeof(wchar_t));\0A    if (!plum_win_hash(file,sha,images[*count].digest)) { free(copy); return 0; }\0A    images[*count].path=copy; (*count)++;\0A    const wchar_t *name=wcsrchr(path,L'\5C\5C');\0A    if (private_image && name && _wcsnicmp(name+1,L\22libLLVM\22,7)==0) *llvm=1;\0A    return 1;\0A}\0A\0Astatic int plum_win_image_compare(const void *a, const void *b) {\0A    return wcscmp(((const plum_win_image *)a)->path,((const plum_win_image *)b)->path);\0A}\0A#endif\0A\0Aconst char *plum_cache_windows_fingerprint(const char *tool) {\0A    static PLUM_OS_TLS char result[160];\0A    strcpy(result,\22!unsupported Windows toolchain\22);\0A#if defined(_WIN64)\0A    // The process ABI currently uses ANSI paths. Until that ABI is UTF-8\0A    // end-to-end, do not certify ambiguous non-ASCII executable spellings.\0A    size_t len=strlen(tool);\0A    if (!len || len>PLUM_PATH_MAX-32) return result;\0A    for (size_t i=0;i<len;i++) if ((unsigned char)tool[i]>=128 || tool[i]=='\22') return result;\0A    wchar_t exe[PLUM_PATH_MAX], bin[PLUM_PATH_MAX]={0}, system[PLUM_PATH_MAX];\0A    if (!MultiByteToWideChar(CP_ACP,0,tool,-1,exe,PLUM_PATH_MAX)) return result;\0A    HANDLE original=CreateFileW(exe,GENERIC_READ,FILE_SHARE_READ|FILE_SHARE_DELETE,NULL,OPEN_EXISTING,0,NULL);\0A    if (original==INVALID_HANDLE_VALUE) return result;\0A    BY_HANDLE_FILE_INFORMATION identity;\0A    int valid=plum_win_path(original,bin) && GetFileInformationByHandle(original,&identity);\0A    wchar_t *base=wcsrchr(bin,L'\5C\5C');\0A    if (!valid || !base || _wcsicmp(base+1,L\22clang.exe\22)!=0) { CloseHandle(original); return result; }\0A    *base=L'\5C0';\0A    size_t dirlen=wcslen(bin);\0A    if (dirlen<12 || _wcsicmp(bin+dirlen-12,L\22\5C\5Cmingw64\5C\5Cbin\22)!=0) { CloseHandle(original); return result; }\0A    DWORD sn=GetSystemDirectoryW(system,PLUM_PATH_MAX);\0A    SYSTEM_INFO machine; GetNativeSystemInfo(&machine);\0A    if (!sn || sn>=PLUM_PATH_MAX || machine.wProcessorArchitecture!=PROCESSOR_ARCHITECTURE_AMD64) {\0A        CloseHandle(original); return result;\0A    }\0A    wchar_t command[PLUM_PATH_MAX+32];\0A    _snwprintf(command,sizeof(command)/sizeof(command[0]),L\22\5C\22%ls\5C\22 --version\22,exe);\0A    SECURITY_ATTRIBUTES sa={sizeof(sa),NULL,TRUE};\0A    HANDLE sink=CreateFileW(L\22NUL\22,GENERIC_READ|GENERIC_WRITE,FILE_SHARE_READ|FILE_SHARE_WRITE,&sa,OPEN_EXISTING,0,NULL);\0A    if (sink==INVALID_HANDLE_VALUE) { CloseHandle(original); return result; }\0A    STARTUPINFOW startup; PROCESS_INFORMATION process;\0A    memset(&startup,0,sizeof(startup)); memset(&process,0,sizeof(process));\0A    startup.cb=sizeof(startup); startup.dwFlags=STARTF_USESTDHANDLES;\0A    startup.hStdInput=sink; startup.hStdOutput=sink; startup.hStdError=sink;\0A    BOOL launched=CreateProcessW(exe,command,NULL,NULL,TRUE,DEBUG_ONLY_THIS_PROCESS|CREATE_NO_WINDOW,NULL,NULL,&startup,&process);\0A    CloseHandle(sink);\0A    if (!launched) { CloseHandle(original); strcpy(result,\22!Windows loader probe could not start\22); return result; }\0A    plum_win_image images[PLUM_WIN_MODULES]; memset(images,0,sizeof(images));\0A    size_t count=0; int llvm=0, exited=0, failed=0, breakpoint=0;\0A    DWORD exit_code=1;\0A    plum_win_sha sha; plum_win_sha_open(&sha);\0A    ULONGLONG deadline=GetTickCount64()+10000;\0A    while (!exited && !failed && GetTickCount64()<deadline) {\0A        DEBUG_EVENT event; memset(&event,0,sizeof(event));\0A        if (!WaitForDebugEvent(&event,100)) {\0A            if (GetLastError()==ERROR_SEM_TIMEOUT) continue;\0A            failed=1; break;\0A        }\0A        DWORD action=DBG_CONTINUE;\0A        switch (event.dwDebugEventCode) {\0A        case CREATE_PROCESS_DEBUG_EVENT: {\0A            HANDLE f=event.u.CreateProcessInfo.hFile;\0A            BY_HANDLE_FILE_INFORMATION actual;\0A            if (!f || !GetFileInformationByHandle(f,&actual)\0A                || actual.dwVolumeSerialNumber!=identity.dwVolumeSerialNumber\0A                || actual.nFileIndexHigh!=identity.nFileIndexHigh || actual.nFileIndexLow!=identity.nFileIndexLow\0A                || !plum_win_image_add(images,&count,f,bin,system,&sha,&llvm,result)) failed=1;\0A            if (f) CloseHandle(f);\0A            break;\0A        }\0A        case LOAD_DLL_DEBUG_EVENT:\0A            if (!plum_win_image_add(images,&count,event.u.LoadDll.hFile,bin,system,&sha,&llvm,result)) failed=1;\0A            if (event.u.LoadDll.hFile) CloseHandle(event.u.LoadDll.hFile);\0A            break;\0A        case EXCEPTION_DEBUG_EVENT:\0A            if (event.u.Exception.ExceptionRecord.ExceptionCode==EXCEPTION_BREAKPOINT && !breakpoint) breakpoint=1;\0A            else { failed=1; action=DBG_EXCEPTION_NOT_HANDLED; }\0A            break;\0A        case EXIT_PROCESS_DEBUG_EVENT: exit_code=event.u.ExitProcess.dwExitCode; exited=1; break;\0A        case RIP_EVENT: failed=1; break;\0A        default: break;\0A        }\0A        if (!ContinueDebugEvent(event.dwProcessId,event.dwThreadId,action)) failed=1;\0A    }\0A    if (!exited) {\0A        TerminateProcess(process.hProcess,1);\0A        // Drain exit events so Windows releases debugger-owned thread/process\0A        // handles too. A failed probe never leaves a live compiler behind.\0A        ULONGLONG end=GetTickCount64()+2000;\0A        while (GetTickCount64()<end) {\0A            DEBUG_EVENT event;\0A            if (!WaitForDebugEvent(&event,100)) continue;\0A            if (event.dwDebugEventCode==LOAD_DLL_DEBUG_EVENT && event.u.LoadDll.hFile) CloseHandle(event.u.LoadDll.hFile);\0A            if (event.dwDebugEventCode==CREATE_PROCESS_DEBUG_EVENT && event.u.CreateProcessInfo.hFile) CloseHandle(event.u.CreateProcessInfo.hFile);\0A            int done=event.dwDebugEventCode==EXIT_PROCESS_DEBUG_EVENT;\0A            ContinueDebugEvent(event.dwProcessId,event.dwThreadId,DBG_CONTINUE);\0A            if (done) break;\0A        }\0A        DebugActiveProcessStop(process.dwProcessId);\0A    }\0A    CloseHandle(process.hThread); CloseHandle(process.hProcess); CloseHandle(original);\0A    plum_win_sha_close(&sha);\0A    if (exited && !failed && exit_code==0 && llvm && count>1) {\0A        qsort(images,count,sizeof(images[0]),plum_win_image_compare);\0A        plum_cache_sha total; plum_cache_init(&total);\0A        const char tag[]=\22plum-msys2-mingw64-loader-v1\22;\0A        plum_cache_update(&total,(const unsigned char *)tag,sizeof(tag));\0A        for (size_t i=0;i<count;i++) {\0A            PLUM_WIN_IMAGE_TRACE(images[i].path,images[i].digest);\0A            uint64_t bytes=wcslen(images[i].path)*sizeof(wchar_t);\0A            plum_cache_update(&total,(const unsigned char *)&bytes,sizeof(bytes));\0A            plum_cache_update(&total,(const unsigned char *)images[i].path,(size_t)bytes);\0A            plum_cache_update(&total,(const unsigned char *)images[i].digest,64);\0A        }\0A        plum_cache_final(&total,result);\0A    } else if (!failed) {\0A        snprintf(result,sizeof(result),\22!loader probe incomplete (exit=%lu, LLVM=%d, images=%lu)\22,\0A                 (unsigned long)exit_code,llvm,(unsigned long)count);\0A    }\0A    for (size_t i=0;i<count;i++) free(images[i].path);\0A#else\0A    (void)tool;\0A#endif\0A    return result;\0A}\0A\0Aconst char *plum_cache_tool(const char *name) {\0A    plum_os_buf[0]='\5C0';\0A#if defined(_WIN32)\0A    DWORD n=SearchPathA(NULL,name,\22.exe\22,sizeof(plum_os_buf),plum_os_buf,NULL);\0A    if (n == 0 || n >= sizeof(plum_os_buf)) plum_os_buf[0]='\5C0';\0A#else\0A    if (strchr(name,'/')) {\0A        if (!realpath(name,plum_os_buf)) plum_os_buf[0]='\5C0';\0A    } else {\0A        const char *env=getenv(\22PATH\22); if (!env) return plum_os_buf;\0A        char *paths=strdup(env); if (!paths) return plum_os_buf;\0A        char *p=paths;\0A        while (p) {\0A            char *next=strchr(p,':'); if (next) *next++='\5C0';\0A            char candidate[PLUM_PATH_MAX];\0A            int n=snprintf(candidate,sizeof(candidate),\22%s/%s\22,*p ? p : \22.\22,name);\0A            if (n >= 0 && n < (int)sizeof(candidate) && access(candidate,X_OK) == 0\0A                && realpath(candidate,plum_os_buf)) break;\0A            p=next;\0A        }\0A        free(paths);\0A    }\0A#endif\0A    return plum_os_buf;\0A}\0A\0A// Inspect trusted Clang JSON AST output, not C source spellings: adjacent\0A// literals and escapes can conceal assembler file-reading directives.\0A// Ordinary asm symbol labels are safe only when their emitted names have\0A// no quoting/whitespace/control characters that could inject assembly.\0Astatic const char *plum_cache_json_value(const char *p) {\0A    while (*p && isspace((unsigned char)*p)) p++;\0A    if (*p++ != ':') return NULL;\0A    while (*p && isspace((unsigned char)*p)) p++;\0A    return *p == '\22' ? p+1 : NULL;\0A}\0Along long plum_cache_safe_ast(const char *ast) {\0A    if (*ast != '{' || !strstr(ast,\22\5C\22TranslationUnitDecl\5C\22\22)) return 0;\0A    const char *p=ast;\0A    while ((p=strstr(p,\22\5C\22kind\5C\22\22)) != NULL) {\0A        p+=6; const char *value=plum_cache_json_value(p);\0A        if (!value) continue;\0A        const char *end=strchr(value,'\22'); if (!end) return 0;\0A        size_t size=(size_t)(end-value);\0A        for (size_t i=0; i+3<=size; i++) {\0A            if (!memcmp(value+i,\22Asm\22,3)\0A                && !(size == 12 && !memcmp(value,\22AsmLabelAttr\22,12))) return 0;\0A        }\0A        p=end+1;\0A    }\0A    p=ast;\0A    while ((p=strstr(p,\22\5C\22mangledName\5C\22\22)) != NULL) {\0A        p+=13; const char *value=plum_cache_json_value(p);\0A        if (!value) return 0;\0A        for (; *value && *value != '\22'; value++) {\0A            unsigned char c=(unsigned char)*value;\0A            if (!((c>='a' && c<='z') || (c>='A' && c<='Z')\0A                || (c>='0' && c<='9') || c=='_' || c=='.' || c=='$')) return 0;\0A        }\0A        if (*value != '\22') return 0;\0A    }\0A    return 1;\0A}\0A\0A// Generated LLVM contains quoted IR strings and identifiers, and comments.\0A// Only a bare `asm` token can introduce assembly. Do not mistake embedded\0A// C source or an application's string data for an LLVM assembly operand.\0Astatic int plum_cache_ir_word(unsigned char c) {\0A    return (c>='a' && c<='z') || (c>='A' && c<='Z') || (c>='0' && c<='9')\0A        || c=='_' || c=='.' || c=='$' || c=='-' || c=='@' || c=='%' || c=='!';\0A}\0Along long plum_cache_safe_ir(const char *ir) {\0A    const char *p=ir;\0A    while (*p) {\0A        if (*p == ';') { while (*p && *p!='\5Cn') p++; }\0A        else if (*p == '\22') {\0A            p++;\0A            while (*p && *p!='\22') {\0A                if (*p=='\5C\5C') { p++; if (!*p) return 0; }\0A                p++;\0A            }\0A            if (!*p) return 0;\0A            p++;\0A        } else if (plum_cache_ir_word((unsigned char)*p)) {\0A            const char *start=p;\0A            while (plum_cache_ir_word((unsigned char)*p)) p++;\0A            if (p-start == 3 && !memcmp(start,\22asm\22,3)) return 0;\0A        } else { p++; }\0A    }\0A    return 1;\0A}\0A\0A// Windows headers contain unused inline assembly and produce enormous JSON\0A// ASTs. Inspect the emitted C IR at the SAME target/optimization settings.\0A// Assembly tokens remain forbidden. Reject quoted globals too: escaped asm\0A// labels can otherwise inject assembler directives through emitted symbols.\0A// This is deliberately stricter than accepting arbitrary LLVM symbol names.\0Along long plum_cache_safe_c_ir(const char *ir) {\0A    if (!plum_cache_safe_ir(ir)) return 0;\0A    const char *p=ir;\0A    while (*p) {\0A        if (*p==';') { while (*p && *p!='\5Cn') p++; }\0A        else if (*p=='@' && p[1]=='\22') return 0;\0A        else if (*p=='\22') {\0A            p++;\0A            while (*p && *p!='\22') {\0A                if (*p=='\5C\5C') { p++; if (!*p) return 0; }\0A                p++;\0A            }\0A            if (!*p) return 0;\0A            p++;\0A        } else p++;\0A    }\0A    return 1;\0A}\0A\0A// Creates a fresh, empty, private directory and returns its path.\0A// Returns \22\22 -- an empty, non-null CStr -- on failure, because a null\0A// CStr return is a hard runtime abort under Plum's FFI semantics (see\0A// `net_shim.c`'s `tcp_recv` note, the same trade for the same reason).\0Aconst char *os_temp_dir(void) {\0A#if defined(_WIN32)\0A    char base[PLUM_PATH_MAX];\0A    DWORD n = GetTempPathA((DWORD)sizeof(base), base);\0A    if (n == 0 || n >= sizeof(base)) { plum_os_buf[0] = '\5C0'; return plum_os_buf; }\0A    // `GetTempFileNameA` creates a FILE; the directory of the same name\0A    // is what is wanted, so the file is removed and a directory put in\0A    // its place. The name is still unique -- that is what the call\0A    // bought -- and the window between the two is not a security\0A    // boundary this compiler relies on.\0A    if (GetTempFileNameA(base, \22plum\22, 0, plum_os_buf) == 0) { plum_os_buf[0] = '\5C0'; return plum_os_buf; }\0A    DeleteFileA(plum_os_buf);\0A    if (PLUM_MKDIR(plum_os_buf) != 0) { plum_os_buf[0] = '\5C0'; }\0A    return plum_os_buf;\0A#else\0A    const char *tmp = getenv(\22TMPDIR\22);\0A    if (tmp == NULL || tmp[0] == '\5C0') tmp = \22/tmp\22;\0A    if (snprintf(plum_os_buf, sizeof(plum_os_buf), \22%s/plum-XXXXXX\22, tmp) >= (int)sizeof(plum_os_buf)) {\0A        plum_os_buf[0] = '\5C0';\0A        return plum_os_buf;\0A    }\0A    if (mkdtemp(plum_os_buf) == NULL) plum_os_buf[0] = '\5C0';\0A    return plum_os_buf;\0A#endif\0A}\0A\0A// The path of the running executable. Three genuinely different calls\0A// for one question; there is no portable spelling.\0Aconst char *os_self_exe(void) {\0A    plum_os_buf[0] = '\5C0';\0A#if defined(_WIN32)\0A    DWORD n = GetModuleFileNameA(NULL, plum_os_buf, (DWORD)sizeof(plum_os_buf));\0A    if (n == 0 || n >= sizeof(plum_os_buf)) plum_os_buf[0] = '\5C0';\0A#elif defined(__APPLE__)\0A    uint32_t n = (uint32_t)sizeof(plum_os_buf);\0A    if (_NSGetExecutablePath(plum_os_buf, &n) != 0) plum_os_buf[0] = '\5C0';\0A#else\0A    ssize_t n = readlink(\22/proc/self/exe\22, plum_os_buf, sizeof(plum_os_buf) - 1);\0A    // readlink does not terminate its output and a full buffer may be\0A    // truncated. Report failure rather than a successful path prefix.\0A    if (n < 0 || (size_t)n >= sizeof(plum_os_buf) - 1) {\0A        plum_os_buf[0] = '\5C0';\0A    } else { plum_os_buf[n] = '\5C0'; }\0A#endif\0A    return plum_os_buf;\0A}\0A\0A// 0 on success, -1 on failure, matching the other shims' Int-sentinel\0A// convention rather than C's.\0Along long os_make_dir(const char *path) {\0A    return PLUM_MKDIR(path) == 0 ? 0 : -1;\0A}\0A\0Along long os_remove_file(const char *path) {\0A    return remove(path) == 0 ? 0 : -1;\0A}\0A\0A// `rename`, which is ATOMIC within a filesystem: the destination is\0A// either the old file or the new one, never a half-written mixture.\0A// That is the whole reason this exists -- `plum fmt --write` builds the\0A// formatted text beside the original and renames it into place, so an\0A// interrupted run cannot leave somebody's source truncated.\0A//\0A// Across filesystems `rename` fails rather than copying, and the\0A// caller is told so rather than being silently given a slower,\0A// non-atomic fallback it did not ask for.\0Along long os_rename_file(const char *from, const char *to) {\0A    return rename(from, to) == 0 ? 0 : -1;\0A}\0A\0Astatic int plum_is_dir(const char *path) {\0A    struct stat st;\0A    if (stat(path, &st) != 0) return 0;\0A    return S_ISDIR(st.st_mode) ? 1 : 0;\0A}\0A\0Astatic int plum_join(char *out, size_t cap, const char *a, const char *b) {\0A    int n = snprintf(out, cap, \22%s/%s\22, a, b);\0A    return (n > 0 && (size_t)n < cap) ? 0 : -1;\0A}\0A\0A// Removal has a deliberately separate traversal from copying: every child\0A// operation is relative to a held directory, never a reconstructed pathname.\0A// A bounded depth also bounds native stack, enumeration storage and handles.\0A// Exhaustion is an error, never a reason to fall back to path-based removal.\0A#define PLUM_REMOVE_DEPTH 128\0A\0A#if !defined(_WIN32)\0Astatic int plum_remove_at(int parent, const char *name, unsigned depth) {\0A    struct stat st;\0A    if (fstatat(parent, name, &st, AT_SYMLINK_NOFOLLOW) != 0) return -1;\0A    if (!S_ISDIR(st.st_mode)) return unlinkat(parent, name, 0);\0A    if (depth >= PLUM_REMOVE_DEPTH) return -1;\0A\0A    int fd = openat(parent, name, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC);\0A    if (fd < 0) return -1;\0A    // Pin the checked object. A replacement directory is not the directory\0A    // we inspected; a replacement symlink cannot pass O_NOFOLLOW at all.\0A    struct stat opened;\0A    if (fstat(fd, &opened) != 0 || opened.st_dev != st.st_dev || opened.st_ino != st.st_ino) {\0A        close(fd);\0A        return -1;\0A    }\0A    DIR *dir = fdopendir(fd);\0A    if (dir == NULL) { close(fd); return -1; }\0A    int rc = 0;\0A    for (;;) {\0A        errno = 0;\0A        struct dirent *entry = readdir(dir);\0A        if (entry == NULL) { if (errno != 0) rc = -1; break; }\0A        if (strcmp(entry->d_name, \22.\22) == 0 || strcmp(entry->d_name, \22..\22) == 0) continue;\0A        if (plum_remove_at(fd, entry->d_name, depth + 1) != 0) { rc = -1; break; }\0A    }\0A    // Detect replacement after walking the original. The final unlinkat\0A    // never follows a symlink, including a swap after this identity check.\0A    if (rc == 0 && (fstatat(parent, name, &st, AT_SYMLINK_NOFOLLOW) != 0 ||\0A                   st.st_dev != opened.st_dev || st.st_ino != opened.st_ino)) rc = -1;\0A    if (rc == 0 && unlinkat(parent, name, AT_REMOVEDIR) != 0) rc = -1;\0A    if (closedir(dir) != 0) rc = -1; // owns fd after fdopendir succeeds\0A    return rc;\0A}\0A\0Astatic int plum_remove_tree(const char *path) {\0A    size_t n = strlen(path);\0A    if (n == 0) return -1;\0A    char *copy = (char *)malloc(n + 1);\0A    if (copy == NULL) return -1;\0A    memcpy(copy, path, n + 1);\0A    // Only trim separators. realpath/lexical dot elimination would resolve\0A    // the link before we can remove it. Never turn '/' into an empty path.\0A    while (n > 1 && copy[n - 1] == '/') copy[--n] = 0;\0A    char *slash = strrchr(copy, '/');\0A    const char *name = slash ? slash + 1 : copy;\0A    if (*name == 0 || strcmp(name, \22.\22) == 0 || strcmp(name, \22..\22) == 0) {\0A        free(copy);\0A        return -1;\0A    }\0A    // Ancestors in the caller's path resolve once to acquire this parent.\0A    // All traversal below it uses single-component names and held fds.\0A    int parent;\0A    if (slash == NULL) parent = open(\22.\22, O_RDONLY | O_DIRECTORY | O_CLOEXEC);\0A    else if (slash == copy) parent = open(\22/\22, O_RDONLY | O_DIRECTORY | O_CLOEXEC);\0A    else {\0A        *slash = 0;\0A        parent = open(copy, O_RDONLY | O_DIRECTORY | O_CLOEXEC);\0A    }\0A    int rc = parent < 0 ? -1 : plum_remove_at(parent, name, 0);\0A    if (parent >= 0 && close(parent) != 0) rc = -1;\0A    free(copy);\0A    return rc;\0A}\0A#else\0A// NtCreateFile supplies the directory-relative open missing from CreateFile.\0A// Resolve it per call, without a mutable global or a new linker dependency.\0Atypedef NTSTATUS (NTAPI *PlumRemoveOpen)(PHANDLE, ACCESS_MASK, POBJECT_ATTRIBUTES,\0A    PIO_STATUS_BLOCK, PLARGE_INTEGER, ULONG, ULONG, ULONG, ULONG, PVOID, ULONG);\0A\0Astatic HANDLE plum_remove_child(PlumRemoveOpen open_child, HANDLE parent,\0A                                WCHAR *name, DWORD bytes, ULONG object_flags) {\0A    if (bytes == 0 || bytes > 65534 || bytes % sizeof(WCHAR) != 0) return INVALID_HANDLE_VALUE;\0A    UNICODE_STRING text = {(USHORT)bytes, (USHORT)bytes, name};\0A    OBJECT_ATTRIBUTES attrs = {0};\0A    attrs.Length = sizeof(attrs);\0A    attrs.RootDirectory = parent;\0A    attrs.Attributes = object_flags;\0A    attrs.ObjectName = &text;\0A    IO_STATUS_BLOCK status;\0A    HANDLE child = INVALID_HANDLE_VALUE;\0A    // Denying write/delete sharing pins the entry and prevents changing an\0A    // opened ordinary directory into a reparse point while we enumerate it.\0A    NTSTATUS rc = open_child(&child, DELETE | FILE_LIST_DIRECTORY | FILE_READ_ATTRIBUTES | SYNCHRONIZE,\0A        &attrs, &status, NULL, 0, FILE_SHARE_READ, FILE_OPEN, FILE_OPEN_REPARSE_POINT | FILE_SYNCHRONOUS_IO_NONALERT, NULL, 0);\0A    return rc < 0 ? INVALID_HANDLE_VALUE : child;\0A}\0A\0Astatic int plum_remove_handle(PlumRemoveOpen open_child, HANDLE handle, unsigned depth) {\0A    FILE_ATTRIBUTE_TAG_INFO attrs;\0A    if (!GetFileInformationByHandleEx(handle, FileAttributeTagInfo, &attrs, sizeof(attrs))) return -1;\0A    if ((attrs.FileAttributes & FILE_ATTRIBUTE_DIRECTORY) &&\0A        !(attrs.FileAttributes & FILE_ATTRIBUTE_REPARSE_POINT)) {\0A        if (depth >= PLUM_REMOVE_DEPTH) return -1;\0A        // malloc is suitably aligned for FILE_ID_BOTH_DIR_INFO. One bounded\0A        // buffer per active directory, not one allocation per entry.\0A        unsigned char *buffer = (unsigned char *)malloc(4096);\0A        if (buffer == NULL) return -1;\0A        int rc = 0;\0A        for (;;) {\0A            if (!GetFileInformationByHandleEx(handle, FileIdBothDirectoryInfo, buffer, 4096)) {\0A                if (GetLastError() != ERROR_NO_MORE_FILES) rc = -1;\0A                break;\0A            }\0A            DWORD offset = 0;\0A            for (;;) {\0A                FILE_ID_BOTH_DIR_INFO *entry = (FILE_ID_BOTH_DIR_INFO *)(buffer + offset);\0A                DWORD bytes = entry->FileNameLength;\0A                if (bytes == 0 || bytes % sizeof(WCHAR) != 0 ||\0A                    bytes > 4096 - offset - offsetof(FILE_ID_BOTH_DIR_INFO, FileName)) { rc = -1; break; }\0A                WCHAR *name = entry->FileName;\0A                if (!((bytes == 2 && name[0] == L'.') ||\0A                      (bytes == 4 && name[0] == L'.' && name[1] == L'.'))) {\0A                    HANDLE child = plum_remove_child(open_child, handle, name, bytes, 0);\0A                    if (child == INVALID_HANDLE_VALUE) { rc = -1; break; }\0A                    if (plum_remove_handle(open_child, child, depth + 1) != 0) rc = -1;\0A                    if (!CloseHandle(child)) rc = -1;\0A                    if (rc != 0) break;\0A                }\0A                if (entry->NextEntryOffset == 0) break;\0A                DWORD next = entry->NextEntryOffset;\0A                if (next % 8 != 0 || next < offsetof(FILE_ID_BOTH_DIR_INFO, FileName) + bytes ||\0A                    next > 4096 - offset - sizeof(FILE_ID_BOTH_DIR_INFO)) { rc = -1; break; }\0A                offset += next;\0A            }\0A            if (rc != 0) break;\0A        }\0A        free(buffer);\0A        if (rc != 0) return -1;\0A    }\0A    FILE_DISPOSITION_INFO disposition = {TRUE};\0A    return SetFileInformationByHandle(handle, FileDispositionInfo, &disposition, sizeof(disposition)) ? 0 : -1;\0A}\0A\0Astatic int plum_remove_tree(const char *path) {\0A    HMODULE ntdll = GetModuleHandleW(L\22ntdll.dll\22);\0A    PlumRemoveOpen open_child = ntdll ? (PlumRemoveOpen)(void *)GetProcAddress(ntdll, \22NtCreateFile\22) : NULL;\0A    if (open_child == NULL) return -1;\0A    int n = MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, path, -1, NULL, 0);\0A    if (n <= 1) return -1;\0A    WCHAR *wide = (WCHAR *)malloc((size_t)n * sizeof(WCHAR));\0A    if (wide == NULL) return -1;\0A    if (!MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, path, -1, wide, n)) { free(wide); return -1; }\0A    --n;\0A    while (n > 0 && (wide[n - 1] == L'/' || wide[n - 1] == L'\5C\5C')) wide[--n] = 0;\0A    WCHAR *name = wide + n;\0A    while (name > wide && name[-1] != L'/' && name[-1] != L'\5C\5C') --name;\0A    if (name == wide && n > 2 && wide[1] == L':') name = wide + 2;\0A    if (n == 0 || wide[n - 1] == L':' || wcscmp(name, L\22.\22) == 0 || wcscmp(name, L\22..\22) == 0) {\0A        free(wide);\0A        return -1;\0A    }\0A    // Split before acquiring the root too: a single native child name avoids\0A    // Win32's trailing-dot/space normalization and follows no final reparse\0A    // point. Only the caller-supplied ancestors resolve normally.\0A    DWORD bytes = (DWORD)((wide + n - name) * sizeof(WCHAR));\0A    WCHAR first = *name;\0A    *name = 0;\0A    HANDLE parent = CreateFileW(name == wide ? L\22.\22 : wide,\0A        FILE_LIST_DIRECTORY | FILE_READ_ATTRIBUTES | SYNCHRONIZE, FILE_SHARE_READ,\0A        NULL, OPEN_EXISTING, FILE_FLAG_BACKUP_SEMANTICS, NULL);\0A    *name = first;\0A    if (parent == INVALID_HANDLE_VALUE) { free(wide); return -1; }\0A    // Keep Win32 root-name lookup case-insensitive. Enumeration supplies\0A    // exact child names, so those opens also support case-sensitive trees.\0A    HANDLE handle = plum_remove_child(open_child, parent, name, bytes, OBJ_CASE_INSENSITIVE);\0A    int parent_closed = CloseHandle(parent);\0A    free(wide);\0A    if (handle == INVALID_HANDLE_VALUE) return -1;\0A    if (!parent_closed) { CloseHandle(handle); return -1; }\0A    int rc = plum_remove_handle(open_child, handle, 0);\0A    if (!CloseHandle(handle)) rc = -1;\0A    return rc;\0A}\0A#endif\0A\0Along long os_remove_tree(const char *path) {\0A    return plum_remove_tree(path) == 0 ? 0 : -1;\0A}\0A\0Astatic int plum_copy_file(const char *src, const char *dst) {\0A    FILE *in, *out;\0A    char buf[65536];\0A    size_t n;\0A    int rc = 0;\0A\0A    in = fopen(src, \22rb\22);\0A    if (in == NULL) return -1;\0A    out = fopen(dst, \22wb\22);\0A    if (out == NULL) { fclose(in); return -1; }\0A    while ((n = fread(buf, 1, sizeof(buf), in)) > 0) {\0A        if (fwrite(buf, 1, n, out) != n) { rc = -1; break; }\0A    }\0A    if (ferror(in)) rc = -1;\0A    if (fclose(out) != 0) rc = -1;\0A    fclose(in);\0A    return rc;\0A}\0A\0A// Resolve an existing directory to its filesystem path. Resolving the\0A// directory itself (rather than only normalising its spelling) catches\0A// aliases such as `.` and symlinks before a copy can write through them.\0Astatic int plum_resolve_dir(const char *path, char *out, size_t cap) {\0A#if defined(_WIN32)\0A    HANDLE h = CreateFileA(path, FILE_READ_ATTRIBUTES,\0A                           FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,\0A                           NULL, OPEN_EXISTING, FILE_FLAG_BACKUP_SEMANTICS, NULL);\0A    DWORD n;\0A    if (h == INVALID_HANDLE_VALUE) return -1;\0A    n = GetFinalPathNameByHandleA(h, out, (DWORD)cap, FILE_NAME_NORMALIZED | VOLUME_NAME_DOS);\0A    CloseHandle(h);\0A    if (n == 0 || n >= cap) return -1;\0A    for (char *p = out; *p; p++) {\0A        if (*p == '\5C\5C') *p = '/';\0A        *p = (char)tolower((unsigned char)*p);\0A    }\0A    return 0;\0A#else\0A    return realpath(path, out) != NULL ? 0 : -1;\0A#endif\0A}\0A\0A// Directories overlap when either is the other or an ancestor of it.\0A// The separators at the prefix boundary avoid confusing `/a/bc` with `/a/b`.\0Astatic int plum_paths_overlap(const char *a, const char *b) {\0A    char resolved_a[PLUM_PATH_MAX];\0A    char resolved_b[PLUM_PATH_MAX];\0A    size_t a_len, b_len;\0A    if (plum_resolve_dir(a, resolved_a, sizeof(resolved_a)) != 0 ||\0A        plum_resolve_dir(b, resolved_b, sizeof(resolved_b)) != 0) return -1;\0A    a_len = strlen(resolved_a);\0A    b_len = strlen(resolved_b);\0A#if defined(_WIN32)\0A    int same = _stricmp(resolved_a, resolved_b) == 0;\0A    int a_prefix = _strnicmp(resolved_a, resolved_b, a_len) == 0 &&\0A                   (resolved_b[a_len] == '\5C0' || resolved_a[a_len - 1] == '/' || resolved_b[a_len] == '/');\0A    int b_prefix = _strnicmp(resolved_b, resolved_a, b_len) == 0 &&\0A                   (resolved_a[b_len] == '\5C0' || resolved_b[b_len - 1] == '/' || resolved_a[b_len] == '/');\0A#else\0A    int same = strcmp(resolved_a, resolved_b) == 0;\0A    int a_prefix = strncmp(resolved_a, resolved_b, a_len) == 0 &&\0A                   (resolved_b[a_len] == '\5C0' || resolved_a[a_len - 1] == '/' || resolved_b[a_len] == '/');\0A    int b_prefix = strncmp(resolved_b, resolved_a, b_len) == 0 &&\0A                   (resolved_a[b_len] == '\5C0' || resolved_b[b_len - 1] == '/' || resolved_a[b_len] == '/');\0A#endif\0A    return same || a_prefix || b_prefix;\0A}\0A\0A// Copies the CONTENTS of `src` into `dst`, which must already exist --\0A// the semantics of `cp -r src/. dst`, which is what this replaced, and\0A// deliberately not `cp -r src dst` (that would nest a directory).\0A//\0A// File MODES are not preserved. The one caller copies a project into a\0A// scratch directory to type-check it, where nothing is executed; if a\0A// caller ever needs the executable bit, this is the line to revisit\0A// rather than a thing to assume.\0Astatic int plum_copy_tree(const char *src, const char *dst) {\0A    DIR *d;\0A    struct dirent *e;\0A    char *s;\0A    char *t;\0A    int rc = 0;\0A\0A    // Refuse self-copy and either direction of overlap before reading or\0A    // creating any destination entry. Otherwise recursion can be unbounded,\0A    // and a file copied onto itself is truncated by fopen(\22wb\22).\0A    if (plum_paths_overlap(src, dst) != 0) return -1;\0A\0A    d = opendir(src);\0A    if (d == NULL) return -1;\0A    s = (char *)malloc(PLUM_PATH_MAX);\0A    t = (char *)malloc(PLUM_PATH_MAX);\0A    if (s == NULL || t == NULL) { free(s); free(t); closedir(d); return -1; }\0A\0A    while ((e = readdir(d)) != NULL) {\0A        if (strcmp(e->d_name, \22.\22) == 0 || strcmp(e->d_name, \22..\22) == 0) continue;\0A        if (plum_join(s, PLUM_PATH_MAX, src, e->d_name) != 0) { rc = -1; continue; }\0A        if (plum_join(t, PLUM_PATH_MAX, dst, e->d_name) != 0) { rc = -1; continue; }\0A        if (plum_is_dir(s)) {\0A            if (PLUM_MKDIR(t) != 0 && !plum_is_dir(t)) { rc = -1; continue; }\0A            if (plum_copy_tree(s, t) != 0) rc = -1;\0A        } else {\0A            if (plum_copy_file(s, t) != 0) rc = -1;\0A        }\0A    }\0A    free(s);\0A    free(t);\0A    closedir(d);\0A    return rc;\0A}\0A\0Along long os_copy_tree(const char *src, const char *dst) {\0A    return plum_copy_tree(src, dst) == 0 ? 0 : -1;\0A}\0A\0A// --- File metadata (issue #24) ---\0A//\0A// `stat(2)`, the rest of it. `path_is_dir` in `dir_shim.c` was the first\0A// caller and stays where it is; these are its siblings, here because\0A// this is the filesystem shim.\0A//\0A// Loaded into a thread-local record and then read field by field, so\0A// `Os.stat` costs ONE `stat` rather than one per field. Plum's extern\0A// surface has no multi-value return, which is the same constraint\0A// `tcp_recv_n`/`tcp_recv_data` and `file_read_n`/`file_read_data` work\0A// around the same way.\0A//\0A// Thread-local rather than plain static: `net_shim.c` learned what a\0A// shared buffer costs when two threads use it at once, and a per-thread\0A// record is cheap enough not to repeat that.\0A#include <errno.h>\0A#include <time.h>\0A\0Astatic PLUM_OS_TLS long long stat_size = 0;\0Astatic PLUM_OS_TLS long long stat_mtime = 0;\0Astatic PLUM_OS_TLS long long stat_is_dir = 0;\0A\0A// 0 on success, -1 if the path cannot be stat'ed at all (most commonly\0A// because it is not there). Follows symlinks, matching `path_is_dir`.\0Along long os_stat_load(const char *path) {\0A    struct stat st;\0A    if (stat(path, &st) != 0) {\0A        stat_size = 0;\0A        stat_mtime = 0;\0A        stat_is_dir = 0;\0A        return -1;\0A    }\0A    stat_size = (long long)st.st_size;\0A    stat_mtime = (long long)st.st_mtime;\0A    stat_is_dir = S_ISDIR(st.st_mode) ? 1 : 0;\0A    return 0;\0A}\0A\0Along long os_stat_size(void) { return stat_size; }\0Along long os_stat_mtime(void) { return stat_mtime; }\0Along long os_stat_is_dir(void) { return stat_is_dir; }\0A\0A// Retention is best effort and runs after compilation. Only complete hash\0A// entries are eviction candidates; staging is protected by its live owner.\0A// Cache roots must be private to this host/user (not a shared network store).\0Atypedef struct { char *path; uint64_t bytes; time_t age; } plum_cache_entry;\0A\0Astatic int plum_cache_stat_private(const char *path, struct stat *st) {\0A#if defined(_WIN32)\0A    DWORD attrs=GetFileAttributesA(path);\0A    if (attrs == INVALID_FILE_ATTRIBUTES || (attrs & FILE_ATTRIBUTE_REPARSE_POINT)) return -1;\0A    return stat(path,st);\0A#else\0A    return lstat(path,st);\0A#endif\0A}\0A\0Astatic uint64_t plum_cache_tree_bytes(const char *path) {\0A    struct stat st;\0A    if (plum_cache_stat_private(path,&st) != 0) return 0;\0A    if (S_ISREG(st.st_mode)) return st.st_size > 0 ? (uint64_t)st.st_size : 0;\0A    if (!S_ISDIR(st.st_mode)) return 0;\0A    DIR *d=opendir(path); if (!d) return 0;\0A    uint64_t bytes=0; struct dirent *e; char child[PLUM_PATH_MAX];\0A    while ((e=readdir(d)) != NULL) {\0A        if (!strcmp(e->d_name,\22.\22) || !strcmp(e->d_name,\22..\22)) continue;\0A        if (plum_join(child,sizeof(child),path,e->d_name) == 0) bytes+=plum_cache_tree_bytes(child);\0A    }\0A    closedir(d); return bytes;\0A}\0A\0Astatic int plum_cache_owner_gone(const char *path) {\0A    char owner[PLUM_PATH_MAX]; long pid=0;\0A    if (plum_join(owner,sizeof(owner),path,\22.owner\22) != 0) return 0;\0A    FILE *f=fopen(owner,\22r\22); if (!f) return 0;\0A    int parsed=fscanf(f,\22%ld\22,&pid); fclose(f);\0A    if (parsed != 1 || pid <= 0 || pid > 2147483647L) return 0;\0A#if defined(_WIN32)\0A    HANDLE process=OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION,FALSE,(DWORD)pid);\0A    if (!process) return GetLastError() == ERROR_INVALID_PARAMETER;\0A    DWORD code=STILL_ACTIVE;\0A    int gone=GetExitCodeProcess(process,&code) && code != STILL_ACTIVE;\0A    CloseHandle(process); return gone;\0A#else\0A    return kill((pid_t)pid,0) != 0 && errno == ESRCH;\0A#endif\0A}\0A\0Astatic int plum_cache_oldest(const void *a, const void *b) {\0A    const plum_cache_entry *x=a, *y=b;\0A    if (x->age != y->age) return x->age < y->age ? -1 : 1;\0A    return strcmp(x->path,y->path);\0A}\0A\0Along long plum_cache_prune(const char *root, long long limit) {\0A    if (limit < 0) return 0;\0A    const char *kinds[]={\22ir\22,\22obj\22,\22shims\22};\0A    plum_cache_entry *entries=NULL; size_t count=0, capacity=0;\0A    uint64_t total=0; long long removed=0; time_t now=time(NULL);\0A    char parent[PLUM_PATH_MAX], path[PLUM_PATH_MAX]; struct stat st;\0A    for (size_t k=0;k<3;k++) {\0A        if (plum_join(parent,sizeof(parent),root,kinds[k]) != 0\0A            || plum_cache_stat_private(parent,&st) != 0 || !S_ISDIR(st.st_mode)) continue;\0A        DIR *d=opendir(parent); if (!d) continue;\0A        struct dirent *e;\0A        while ((e=readdir(d)) != NULL) {\0A            if (plum_join(path,sizeof(path),parent,e->d_name) != 0\0A                || plum_cache_stat_private(path,&st) != 0 || !S_ISDIR(st.st_mode)) continue;\0A            // Windows GetTempFileName uses pcb*.tmp; POSIX uses .partial-*.\0A            if (!strncmp(e->d_name,\22.partial-\22,9) || !strncmp(e->d_name,\22pcb\22,3)) {\0A                if (now > st.st_mtime && now-st.st_mtime > 86400 && plum_cache_owner_gone(path)) {\0A                    if (plum_remove_tree(path) == 0) removed++;\0A                }\0A                continue;\0A            }\0A            if (strlen(e->d_name) != 64) continue;\0A            int hex=1;\0A            for (size_t i=0;i<64;i++) {\0A                if (!((e->d_name[i]>='0' && e->d_name[i]<='9')\0A                    || (e->d_name[i]>='a' && e->d_name[i]<='f'))) { hex=0; break; }\0A            }\0A            if (!hex) continue;\0A            if (count == capacity) {\0A                size_t next=capacity ? capacity*2 : 32;\0A                plum_cache_entry *grown=realloc(entries,next*sizeof(*entries));\0A                if (!grown) break;\0A                entries=grown; capacity=next;\0A            }\0A            char *saved=strdup(path); if (!saved) break;\0A            uint64_t bytes=plum_cache_tree_bytes(path);\0A            entries[count++]=(plum_cache_entry){saved,bytes,st.st_mtime}; total+=bytes;\0A        }\0A        closedir(d);\0A    }\0A    if (count > 1) qsort(entries,count,sizeof(*entries),plum_cache_oldest);\0A    for (size_t i=0;i<count;i++) {\0A        if (total > (uint64_t)limit && plum_remove_tree(entries[i].path) == 0) {\0A            total=total >= entries[i].bytes ? total-entries[i].bytes : 0; removed++;\0A        }\0A        free(entries[i].path);\0A    }\0A    free(entries); return removed;\0A}\0A\0A// Three-way, and the third case is the point: 1 present, 0 absent, -1\0A// CANNOT SAY.\0A//\0A// \22Does this exist\22 and \22can I see whether this exists\22 are different\0A// questions, and collapsing them is how a permission error becomes a\0A// silent \22no\22. Only `ENOENT` and `ENOTDIR` mean absent -- the latter\0A// because a path under a non-directory (`a/b` where `a` is a file)\0A// cannot exist either. Anything else is a real failure to report.\0Along long os_path_exists(const char *path) {\0A    struct stat st;\0A    if (stat(path, &st) == 0) {\0A        return 1;\0A    }\0A    if (errno == ENOENT || errno == ENOTDIR) {\0A        return 0;\0A    }\0A    return -1;\0A}\0A\0A// --- Working directory (issue #17) ---\0A//\0A// Its own buffer rather than `plum_os_buf`: that one holds the result of\0A// `os_temp_dir`/`os_self_exe`, and a caller holding one of those across\0A// a `cwd()` would silently get the wrong string back.\0Astatic PLUM_OS_TLS char plum_cwd_buf[PLUM_PATH_MAX];\0A\0A// \22\22 on failure, never NULL -- a null `CStr` return is a hard runtime\0A// abort under Plum's FFI semantics, the same trade every other shim\0A// here makes.\0Aconst char *os_cwd(void) {\0A#if defined(_WIN32)\0A    if (_getcwd(plum_cwd_buf, (int)sizeof(plum_cwd_buf)) == NULL) plum_cwd_buf[0] = '\5C0';\0A#else\0A    if (getcwd(plum_cwd_buf, sizeof(plum_cwd_buf)) == NULL) plum_cwd_buf[0] = '\5C0';\0A#endif\0A    return plum_cwd_buf;\0A}\0A\0Along long os_chdir(const char *path) {\0A#if defined(_WIN32)\0A    return _chdir(path) == 0 ? 0 : -1;\0A#else\0A    return chdir(path) == 0 ? 0 : -1;\0A#endif\0A}\0A\00" }
 @.const41722 = private global <{ i64, ptr, ptr, i1, [7 x i8] }> <{ i64 -1, ptr @.str41718, ptr @.str41720, i1 1, [7 x i8] zeroinitializer }>
 @.str41723 = private global { i64, i64, [15 x i8] } { i64 -1, i64 14, [15 x i8] c"process_shim.c\00" }
 @.str41725 = private global { i64, i64, [47927 x i8] } { i64 -1, i64 47926, [47927 x i8] c"// A thin ABI-adapter shim for running a child process and capturing\0A// its exit code + stdout + stderr — needed for `plum build` to shell\0A// out to `clang` (already how THIS compiler's own native codegen\0A// works, see `codegen_cli.rs`'s `clang_compile`) from a Plum program\0A// itself, the other hard blocker (alongside `dir_shim.c`) toward ever\0A// self-hosting. Same `net_shim.c`/`dir_shim.c` shim pattern (see their\0A// own doc comments) — Plum's extern surface has no raw pointers, no\0A// arrays, and no multi-value return, so a \22run a process, get back\0A// THREE things (exit code/stdout/stderr)\22 operation needs the same\0A// two adaptations those files already established:\0A//\0A// **A handle-based, multi-call return** (mirrors `net_shim.c`'s socket\0A// fds, `dir_shim.c`'s directory handles): `process_run` blocks until\0A// the child exits, captures everything, and returns an opaque `Int`\0A// handle; `process_exit_code`/`process_stdout`/`process_stderr` read\0A// the ALREADY-CAPTURED result back out, any number of times, until\0A// `process_free` releases it. No result is ever recomputed or re-read\0A// from the child (which has already exited by the time `process_run`\0A// returns) — these are just accessors into a small in-process table.\0A//\0A// **Arguments packed into a single delimited `CStr`** (extern has no\0A// `Array[String]` at all): each argument separated by a TAB character.\0A// The natural choice here would be a rarer control byte (e.g. ASCII\0A// Unit Separator, `0x1F`) — genuinely safer against a real argument\0A// containing it — but Plum's own string-literal lexer only supports\0A// `\5Cn`/`\5Ct`/`\5Cr`/`\5C\5C`/`\5C\22` escapes, no `\5CxNN` hex byte escape, so the\0A// PLUM-side wrapper that joins an `Array[String]` into this shim's\0A// input literally cannot produce anything else. A real, honest trade\0A// forced by that limitation, not the ideal choice — a tab character\0A// appearing inside a real file path or flag is still rare, just not\0A// AS rare as a genuinely obscure control byte would have been. An\0A// argument that DOES contain a literal tab will be mis-split — not\0A// handled, not worth more complexity for something this unlikely.\0A//\0A// **Captures stdout/stderr via TEMP FILES, not pipes — deliberately.**\0A// A naive `pipe()` + `fork()` + `waitpid()` implementation has a\0A// classic, well-known deadlock: if the child writes more than the\0A// pipe's kernel buffer (~64KB on Linux) to a pipe NOBODY is draining\0A// yet (because the parent is blocked in `waitpid` first), the child\0A// blocks on `write()`, the parent blocks on `waitpid()` waiting for a\0A// child that's now blocked on the parent — a real hang, not a\0A// hypothetical (draining pipes concurrently, e.g. via `select()`/\0A// `poll()`, avoids it but adds real complexity this shim doesn't need\0A// to take on). Redirecting the child's stdout/stderr to real temp\0A// files via `dup2` sidesteps the whole class of bug: a file has no\0A// fixed-size buffer to fill, so there is no writer/reader ordering\0A// dependency at all — the parent just reads both files back, in full,\0A// AFTER `waitpid` confirms the child is done.\0A//\0A// **Not thread-safe** (a single, static, unlocked slot table) —\0A// acceptable for v1: every other blocking `native_stdlib` primitive\0A// (`net_shim.c`'s sockets included) is already scoped to single-\0A// threaded/sequential use, and a compiler shelling out to `clang` one\0A// invocation at a time (the actual motivating use case) never needs\0A// concurrent calls anyway.\0A//\0A// **Windows support is written but UNVERIFIED.** Everything above\0A// describes the POSIX path, which is tested by every harness in this\0A// repo. The Windows path below has never been compiled by a Windows\0A// toolchain, let alone run; it is a starting point, not working code,\0A// and is marked as such in PORTING.md. It keeps the temp-file capture\0A// strategy verbatim, because the pipe-deadlock reasoning above is not\0A// platform-specific -- Windows anonymous pipes have a fixed buffer and\0A// the identical failure mode.\0A//\0A// The two paths are split behind ONE function, `plum_spawn_capture`.\0A// Slot bookkeeping, argument splitting, reading the captured output\0A// back and cleaning up are shared and were not touched, so the POSIX\0A// behaviour is unchanged by the port rather than merely believed to\0A// be.\0A#include <stdio.h>\0A#include <stdlib.h>\0A#include <string.h>\0A#include <stdint.h>\0A#include <limits.h>\0A#include <wchar.h>\0A\0A#if defined(_WIN32)\0A#include <windows.h>\0A#else\0A#include <unistd.h>\0A#include <sys/wait.h>\0A#include <errno.h>\0A#include <fcntl.h>\0A#include <signal.h>\0A#include <time.h>\0A#endif\0A\0A#define PLUM_PROC_PATH_MAX 4096\0A\0A#define PLUM_PROC_ARG_SEP '\5Ct'\0A#define PLUM_PROC_MAX_SLOTS 256\0A\0A// The extra state an ASYNCHRONOUS child needs, and a synchronous run\0A// does not have to carry. NULL on a slot filled by `process_run`.\0A//\0A// A running child is the one case where the captured output cannot be\0A// read yet, so the PATHS have to outlive the spawn call -- which is\0A// the whole difference between this and the blocking path. Everything\0A// else here is what has to be closed or deleted once the child is\0A// gone, held so that `process_child_free` can do it without asking\0A// the caller to.\0Atypedef struct {\0A    long long pid;       // POSIX: pid_t. Windows: (intptr_t)HANDLE.\0A    void *h_out;         // Windows only: the child's stdout file handle.\0A    void *h_err;         // Windows only: the child's stderr file handle.\0A    char *out_path;\0A    char *err_path;\0A    char *in_path;       // Windows only; POSIX unlinks it at spawn.\0A    int finished;        // exit status collected, output read back\0A    // The policy `process_child_free` applies to a child still running.\0A    // 0 kills and reaps it. There is no way to set this from Plum yet\0A    // and that is deliberate -- it exists so that offering one later is\0A    // an addition rather than a redesign. See DESIGN.md.\0A    int drop_policy;\0A} PlumChildState;\0A\0Atypedef struct {\0A    int in_use;\0A    long long exit_code;\0A    char *out_data;\0A    char *err_data;\0A    PlumChildState *child;\0A} PlumProcessSlot;\0A\0Astatic PlumProcessSlot plum_process_slots[PLUM_PROC_MAX_SLOTS];\0A\0A// Defined further down with the asynchronous children. Declared here\0A// because `process_free` has to hand a spawned slot over to it, and\0A// that appears first.\0Avoid process_child_free(long long handle);\0Along long process_terminate(long long handle, long long hard);\0A\0Astatic char *plum_strdup_or_null(const char *s) {\0A    if (s == NULL) return NULL;\0A    size_t n = strlen(s) + 1;\0A    char *p = malloc(n);\0A    if (p != NULL) memcpy(p, s, n);\0A    return p;\0A}\0A\0Astatic char *plum_read_whole_file_or_empty(const char *path) {\0A    FILE *fp = fopen(path, \22rb\22);\0A    if (fp == NULL) {\0A        return strdup(\22\22);\0A    }\0A    fseek(fp, 0, SEEK_END);\0A    long size = ftell(fp);\0A    rewind(fp);\0A    if (size < 0) {\0A        fclose(fp);\0A        return strdup(\22\22);\0A    }\0A    char *buf = malloc((size_t)size + 1);\0A    if (buf == NULL) {\0A        fclose(fp);\0A        return strdup(\22\22);\0A    }\0A    size_t n = fread(buf, 1, (size_t)size, fp);\0A    buf[n] = '\5C0';\0A    fclose(fp);\0A    return buf;\0A}\0A\0A// A sentinel distinct from every real exit code. It cannot be -1:\0A// `process_run` already uses -1 as the exit code of a child killed by a\0A// signal, which is a SUCCESSFUL run with an unusual outcome, not a\0A// failure to start anything.\0A#define PLUM_SPAWN_FAILED (-1000000000LL)\0A\0A// `stdin_mode`: -1 inherit the parent's stdin, 0 empty (`/dev/null` /\0A// `NUL`), 1 feed `stdin_data` of length `stdin_len`.\0A// `fail_on_exec`: when set, an `execvp` failure is `PLUM_SPAWN_FAILED`\0A// rather than a child that exited 127 -- so `Process.run` can tell\0A// \22never started\22 from \22started and the program itself returned 127\22.\0A\0Astatic char **plum_split_args(const char *program, const char *args_joined, long long argc, char **copy_out) {\0A    char *args_copy = strdup(args_joined != NULL ? args_joined : \22\22);\0A    char **argv = (char **)malloc(sizeof(char *) * (size_t)(argc + 2));\0A    if (args_copy == NULL || argv == NULL) {\0A        free(args_copy);\0A        free(argv);\0A        *copy_out = NULL;\0A        return NULL;\0A    }\0A    argv[0] = (char *)program;\0A    long long idx = 1;\0A    if (argc > 0) {\0A        argv[idx++] = args_copy;\0A        for (char *c = args_copy; *c != '\5C0'; c++) {\0A            if (*c == PLUM_PROC_ARG_SEP) {\0A                *c = '\5C0';\0A                if (idx <= argc) {\0A                    argv[idx++] = c + 1;\0A                }\0A            }\0A        }\0A    }\0A    argv[idx] = NULL;\0A    *copy_out = args_copy;\0A    return argv;\0A}\0A\0Astatic char **plum_split_joined(const char *joined, long long n, char **copy_out) {\0A    if (n <= 0) {\0A        *copy_out = NULL;\0A        return NULL;\0A    }\0A    char *copy = strdup(joined != NULL ? joined : \22\22);\0A    char **items = (char **)malloc(sizeof(char *) * (size_t)(n + 1));\0A    if (copy == NULL || items == NULL) {\0A        free(copy);\0A        free(items);\0A        *copy_out = NULL;\0A        return NULL;\0A    }\0A    long long idx = 0;\0A    items[idx++] = copy;\0A    for (char *c = copy; *c != '\5C0'; c++) {\0A        if (*c == PLUM_PROC_ARG_SEP) {\0A            *c = '\5C0';\0A            if (idx < n) {\0A                items[idx++] = c + 1;\0A            }\0A        }\0A    }\0A    items[idx] = NULL;\0A    *copy_out = copy;\0A    return items;\0A}\0A\0A#if !defined(_WIN32)\0A\0Astatic void plum_apply_env(char **envp) {\0A    if (envp == NULL) return;\0A    for (int i = 0; envp[i] != NULL; i++) {\0A        char *eq = strchr(envp[i], '=');\0A        if (eq == NULL) continue;\0A        *eq = '\5C0';\0A        setenv(envp[i], eq + 1, 1);\0A        *eq = '=';\0A    }\0A}\0A\0A// Runs `argv` to completion with stdout and stderr captured into two\0A// fresh temp files, whose paths are written into the caller's buffers.\0A// Returns the child's exit code, or `PLUM_SPAWN_FAILED` if the child\0A// could never be started -- in which case no temp files are left behind\0A// and the path buffers hold nothing worth reading.\0A//\0A// This is the ONLY platform-specific part of this shim. Everything\0A// around it is shared.\0A\0Astatic long long plum_spawn_capture(const char *program, char **argv, char *out_path, char *err_path,\0A                                    char **envp, const char *stdin_data, long long stdin_len,\0A                                    int stdin_mode, int fail_on_exec, PlumChildState *async) {\0A    const char *tmp = getenv(\22TMPDIR\22);\0A    if (tmp == NULL || tmp[0] == '\5C0') tmp = \22/tmp\22;\0A    if (snprintf(out_path, PLUM_PROC_PATH_MAX, \22%s/plum_proc_out_XXXXXX\22, tmp) >= PLUM_PROC_PATH_MAX ||\0A        snprintf(err_path, PLUM_PROC_PATH_MAX, \22%s/plum_proc_err_XXXXXX\22, tmp) >= PLUM_PROC_PATH_MAX) {\0A        return PLUM_SPAWN_FAILED;\0A    }\0A\0A    int out_fd = mkstemp(out_path);\0A    int err_fd = (out_fd >= 0) ? mkstemp(err_path) : -1;\0A    if (out_fd < 0 || err_fd < 0) {\0A        if (out_fd >= 0) {\0A            close(out_fd);\0A            unlink(out_path);\0A        }\0A        return PLUM_SPAWN_FAILED;\0A    }\0A\0A    int in_fd = -1;\0A    char in_path[PLUM_PROC_PATH_MAX];\0A    in_path[0] = '\5C0';\0A    if (stdin_mode == 0) {\0A        in_fd = open(\22/dev/null\22, O_RDONLY);\0A        if (in_fd < 0) {\0A            close(out_fd); close(err_fd);\0A            unlink(out_path); unlink(err_path);\0A            return PLUM_SPAWN_FAILED;\0A        }\0A    } else if (stdin_mode > 0) {\0A        if (snprintf(in_path, PLUM_PROC_PATH_MAX, \22%s/plum_proc_in_XXXXXX\22, tmp) >= PLUM_PROC_PATH_MAX) {\0A            close(out_fd); close(err_fd);\0A            unlink(out_path); unlink(err_path);\0A            return PLUM_SPAWN_FAILED;\0A        }\0A        in_fd = mkstemp(in_path);\0A        if (in_fd < 0) {\0A            close(out_fd); close(err_fd);\0A            unlink(out_path); unlink(err_path);\0A            return PLUM_SPAWN_FAILED;\0A        }\0A        long long left = stdin_len;\0A        const char *p = stdin_data != NULL ? stdin_data : \22\22;\0A        while (left > 0) {\0A            ssize_t w = write(in_fd, p, (size_t)left);\0A            if (w <= 0) {\0A                close(in_fd); close(out_fd); close(err_fd);\0A                unlink(in_path); unlink(out_path); unlink(err_path);\0A                return PLUM_SPAWN_FAILED;\0A            }\0A            p += w;\0A            left -= w;\0A        }\0A        if (lseek(in_fd, 0, SEEK_SET) < 0) {\0A            close(in_fd); close(out_fd); close(err_fd);\0A            unlink(in_path); unlink(out_path); unlink(err_path);\0A            return PLUM_SPAWN_FAILED;\0A        }\0A    }\0A\0A    int errpipe[2] = {-1, -1};\0A    if (fail_on_exec) {\0A        if (pipe(errpipe) != 0) {\0A            if (in_fd >= 0) close(in_fd);\0A            if (in_path[0] != '\5C0') unlink(in_path);\0A            close(out_fd); close(err_fd);\0A            unlink(out_path); unlink(err_path);\0A            return PLUM_SPAWN_FAILED;\0A        }\0A        fcntl(errpipe[1], F_SETFD, FD_CLOEXEC);\0A    }\0A\0A    pid_t pid = fork();\0A    if (pid < 0) {\0A        if (in_fd >= 0) close(in_fd);\0A        if (in_path[0] != '\5C0') unlink(in_path);\0A        if (errpipe[0] >= 0) { close(errpipe[0]); close(errpipe[1]); }\0A        close(out_fd);\0A        close(err_fd);\0A        unlink(out_path);\0A        unlink(err_path);\0A        return PLUM_SPAWN_FAILED;\0A    }\0A    if (pid == 0) {\0A        if (in_fd >= 0) {\0A            dup2(in_fd, STDIN_FILENO);\0A            close(in_fd);\0A        }\0A        dup2(out_fd, STDOUT_FILENO);\0A        dup2(err_fd, STDERR_FILENO);\0A        close(out_fd);\0A        close(err_fd);\0A        if (fail_on_exec) close(errpipe[0]);\0A        plum_apply_env(envp);\0A        execvp(program, argv);\0A        if (fail_on_exec) {\0A            int e = errno;\0A            (void)write(errpipe[1], &e, sizeof(e));\0A        }\0A        _exit(127); // only reached if execvp itself failed\0A    }\0A\0A    if (in_fd >= 0) close(in_fd);\0A    if (in_path[0] != '\5C0') unlink(in_path);\0A    close(out_fd);\0A    close(err_fd);\0A    if (fail_on_exec) {\0A        close(errpipe[1]);\0A        int exec_err = 0;\0A        ssize_t n = read(errpipe[0], &exec_err, sizeof(exec_err));\0A        close(errpipe[0]);\0A        if (n == (ssize_t)sizeof(exec_err)) {\0A            int status = 0;\0A            waitpid(pid, &status, 0);\0A            unlink(out_path);\0A            unlink(err_path);\0A            return PLUM_SPAWN_FAILED;\0A        }\0A    }\0A    // Asynchronous: the child is running, and the caller collects its\0A    // status later through `process_poll`. Everything above still ran,\0A    // including the exec-failure handshake -- a `spawn` that could not\0A    // start the program must fail HERE, not at the first poll, or the\0A    // error surfaces detached from the call that caused it.\0A    if (async != NULL) {\0A        async->pid = (long long)pid;\0A        return 0;\0A    }\0A    int status = 0;\0A    waitpid(pid, &status, 0);\0A    return WIFEXITED(status) ? (long long)WEXITSTATUS(status) : -1;\0A}\0A\0A#else\0A\0A// Windows has no `argv`. `CreateProcess` takes ONE command-line string\0A// and the child pulls its arguments back out, so every argument has to\0A// be quoted here in a way the child's own parser will undo. Getting\0A// this wrong is not cosmetic: a Windows path routinely contains a\0A// space (`C:\5CUsers\5CSome Name\5C...`), and an unquoted one silently\0A// becomes two arguments.\0A//\0A// The rule below is the documented, `CommandLineToArgvW`-compatible\0A// one, and the backslash handling is the part that looks wrong and is\0A// not: a backslash is only an escape when it PRECEDES a quote, so runs\0A// of backslashes are doubled in that position and left alone\0A// everywhere else. `\5C` at the end of an argument is such a position,\0A// because the closing quote follows it.\0A//\0A// `_spawnvp` would have been shorter and is not used: the CRT joins\0A// `argv` with plain spaces and adds no quoting of its own, so it has\0A// this identical problem plus a layer of indirection over it.\0Astatic int plum_win_needs_quotes(const char *s) {\0A    if (*s == '\5C0') return 1; // an empty argument must survive as one\0A    for (const char *c = s; *c != '\5C0'; c++) {\0A        if (*c == ' ' || *c == '\5Ct' || *c == '\22') return 1;\0A    }\0A    return 0;\0A}\0A\0A// Appends one quoted argument. Returns 0 on success, -1 if it would not\0A// fit -- never a truncated command line, which would run something\0A// other than what was asked for.\0Astatic int plum_win_append_arg(char *buf, size_t cap, size_t *len, const char *arg) {\0A    size_t n = *len;\0A    size_t backslashes;\0A    const char *c;\0A\0A#define PLUM_PUT(ch) do { if (n + 1 >= cap) return -1; buf[n++] = (ch); } while (0)\0A\0A    if (n > 0) PLUM_PUT(' ');\0A\0A    if (!plum_win_needs_quotes(arg)) {\0A        for (c = arg; *c != '\5C0'; c++) PLUM_PUT(*c);\0A        *len = n;\0A        return 0;\0A    }\0A\0A    PLUM_PUT('\22');\0A    for (c = arg; *c != '\5C0'; c++) {\0A        backslashes = 0;\0A        while (*c == '\5C\5C') { backslashes++; c++; }\0A        if (*c == '\5C0') {\0A            // Trailing backslashes precede the closing quote, so they\0A            // must be doubled or they would escape it.\0A            for (size_t i = 0; i < backslashes * 2; i++) PLUM_PUT('\5C\5C');\0A            break;\0A        }\0A        if (*c == '\22') {\0A            for (size_t i = 0; i < backslashes * 2 + 1; i++) PLUM_PUT('\5C\5C');\0A            PLUM_PUT('\22');\0A        } else {\0A            for (size_t i = 0; i < backslashes; i++) PLUM_PUT('\5C\5C');\0A            PLUM_PUT(*c);\0A        }\0A    }\0A    PLUM_PUT('\22');\0A\0A#undef PLUM_PUT\0A\0A    *len = n;\0A    return 0;\0A}\0A\0A// `GetTempFileNameA` creates the file, which is what is wanted here --\0A// the handle is opened over it immediately afterwards.\0Astatic HANDLE plum_win_temp_handle(const char *prefix, char *path_out) {\0A    char base[PLUM_PROC_PATH_MAX];\0A    SECURITY_ATTRIBUTES sa;\0A    DWORD n = GetTempPathA((DWORD)sizeof(base), base);\0A    if (n == 0 || n >= sizeof(base)) return INVALID_HANDLE_VALUE;\0A    if (GetTempFileNameA(base, prefix, 0, path_out) == 0) return INVALID_HANDLE_VALUE;\0A\0A    sa.nLength = sizeof(sa);\0A    sa.lpSecurityDescriptor = NULL;\0A    sa.bInheritHandle = TRUE; // the child must be able to write to it\0A    return CreateFileA(path_out, GENERIC_WRITE, FILE_SHARE_READ | FILE_SHARE_WRITE,\0A                       &sa, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);\0A}\0A\0A// Strict conversion at the OS boundary: never let the active ANSI code\0A// page interpret Plum bytes, or replace malformed UTF-8 with other text.\0Astatic wchar_t *plum_win_utf16(const char *text, int max_units) {\0A    int n = MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, text, -1, NULL, 0);\0A    if (n <= 0 || n > max_units || (size_t)n > SIZE_MAX / sizeof(wchar_t)) return NULL;\0A    wchar_t *wide = malloc((size_t)n * sizeof(wchar_t));\0A    if (wide == NULL) return NULL;\0A    if (MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, text, -1, wide, n) != n) {\0A        free(wide);\0A        return NULL;\0A    }\0A    return wide;\0A}\0A\0A// Quoting only examines ASCII syntax, so it is safe to quote UTF-8\0A// before converting. Both spawn paths use this one command-line builder.\0Astatic wchar_t *plum_win_command_line(char **argv) {\0A    // A valid command line has at most 32766 UTF-16 units. Each unit\0A    // takes at most three UTF-8 bytes, so even rejected input needs no\0A    // more than this bounded quoting buffer.\0A    const size_t max_bytes = 3 * 32766 + 1;\0A    size_t cap = 1, len = 0;\0A    for (size_t i = 0; argv[i] != NULL; i++) {\0A        size_t n = strlen(argv[i]);\0A        if (n >= max_bytes) return NULL;\0A        size_t growth = n * 2 + 3;\0A        cap = growth > max_bytes - cap ? max_bytes : cap + growth;\0A    }\0A    char *quoted = malloc(cap);\0A    if (quoted == NULL) return NULL;\0A    for (size_t i = 0; argv[i] != NULL; i++) {\0A        if (plum_win_append_arg(quoted, cap, &len, argv[i]) != 0) {\0A            free(quoted);\0A            return NULL;\0A        }\0A    }\0A    quoted[len] = '\5C0';\0A    // Count UTF-16 units before allocating the wide command line.\0A    wchar_t *wide = plum_win_utf16(quoted, 32767);\0A    free(quoted);\0A    return wide;\0A}\0A\0Atypedef struct {\0A    wchar_t *text;\0A    int key_len;\0A    size_t order; // later entries win, including duplicate overlay keys\0A    int owned;   // parent entries borrow the GetEnvironmentStringsW snapshot\0A} PlumWinEnvEntry;\0A\0Astatic int plum_win_env_key_compare(const PlumWinEnvEntry *a, const PlumWinEnvEntry *b) {\0A    return CompareStringOrdinal(a->text, a->key_len, b->text, b->key_len, TRUE) - CSTR_EQUAL;\0A}\0A\0Astatic int plum_win_env_compare(const void *left, const void *right) {\0A    const PlumWinEnvEntry *a = left, *b = right;\0A    int cmp = plum_win_env_key_compare(a, b);\0A    if (cmp != 0) return cmp;\0A    return (a->order > b->order) - (a->order < b->order);\0A}\0A\0A// Success with *out == NULL means inherit. A requested overlay either\0A// produces a sorted, unique UTF-16 block or fails; OOM must not silently\0A// change which environment the child receives. All scratch storage is\0A// released here; only the final block survives until CreateProcessW.\0Astatic int plum_win_env_block(char **extra, wchar_t **out) {\0A    wchar_t *parent = NULL, *block = NULL;\0A    PlumWinEnvEntry *entries = NULL;\0A    size_t count = 0, used = 0, units = 1;\0A    int result = -1;\0A    *out = NULL;\0A    if (extra == NULL || extra[0] == NULL) return 0;\0A    parent = GetEnvironmentStringsW();\0A    if (parent == NULL) goto done;\0A    for (const wchar_t *p = parent; *p; p += wcslen(p) + 1) count++;\0A    for (size_t i = 0; extra[i] != NULL; i++) {\0A        if (count == SIZE_MAX) goto done;\0A        count++;\0A    }\0A    if (count > SIZE_MAX / sizeof(*entries)) goto done;\0A    entries = calloc(count, sizeof(*entries));\0A    if (entries == NULL) goto done;\0A    for (wchar_t *p = parent; *p; p += wcslen(p) + 1) {\0A        entries[used].text = p;\0A        entries[used].order = used;\0A        used++;\0A    }\0A    for (size_t i = 0; extra[i] != NULL; i++) {\0A        wchar_t *wide = plum_win_utf16(extra[i], INT_MAX);\0A        if (wide == NULL) goto done;\0A        entries[used].text = wide;\0A        entries[used].order = used;\0A        entries[used].owned = 1;\0A        used++;\0A        // Overlay names must be nonempty. Leading '=' is reserved for\0A        // Windows' inherited per-drive current-directory entries.\0A        if (*wide == L'=' || wcschr(wide, L'=') == NULL) goto done;\0A    }\0A    for (size_t i = 0; i < used; i++) {\0A        wchar_t *p = entries[i].text;\0A        // Preserve inherited entries such as '=C:=C:\5C\5Cwork'.\0A        wchar_t *eq = wcschr(p + (*p == L'='), L'=');\0A        if (eq == NULL || eq == p || eq - p > INT_MAX) goto done;\0A        entries[i].key_len = (int)(eq - p);\0A    }\0A    qsort(entries, used, sizeof(*entries), plum_win_env_compare);\0A    for (size_t i = 0; i < used; i++) {\0A        if (i + 1 < used && plum_win_env_key_compare(&entries[i], &entries[i + 1]) == 0) continue;\0A        size_t n = wcslen(entries[i].text) + 1;\0A        if (n > SIZE_MAX - units) goto done;\0A        units += n;\0A    }\0A    if (units > SIZE_MAX / sizeof(*block)) goto done;\0A    block = malloc(units * sizeof(*block));\0A    if (block == NULL) goto done;\0A    size_t pos = 0;\0A    for (size_t i = 0; i < used; i++) {\0A        if (i + 1 < used && plum_win_env_key_compare(&entries[i], &entries[i + 1]) == 0) continue;\0A        size_t n = wcslen(entries[i].text) + 1;\0A        memcpy(block + pos, entries[i].text, n * sizeof(*block));\0A        pos += n;\0A    }\0A    block[pos] = L'\5C0';\0A    *out = block;\0A    result = 0;\0Adone:\0A    for (size_t i = 0; i < used; i++) {\0A        if (entries[i].owned) free(entries[i].text);\0A    }\0A    free(entries);\0A    if (parent != NULL) FreeEnvironmentStringsW(parent);\0A    return result;\0A}\0A\0Astatic long long plum_spawn_capture(const char *program, char **argv, char *out_path, char *err_path,\0A                                    char **envp, const char *stdin_data, long long stdin_len,\0A                                    int stdin_mode, int fail_on_exec, PlumChildState *async) {\0A    wchar_t *cmdline = plum_win_command_line(argv);\0A    wchar_t *env_block = NULL;\0A    HANDLE ho, he;\0A    STARTUPINFOW si;\0A    PROCESS_INFORMATION pi;\0A    DWORD code = 0;\0A    if (cmdline == NULL) return PLUM_SPAWN_FAILED;\0A    if (plum_win_env_block(envp, &env_block) != 0) {\0A        free(cmdline);\0A        return PLUM_SPAWN_FAILED;\0A    }\0A\0A    ho = plum_win_temp_handle(\22plo\22, out_path);\0A    he = (ho != INVALID_HANDLE_VALUE) ? plum_win_temp_handle(\22ple\22, err_path) : INVALID_HANDLE_VALUE;\0A    if (ho == INVALID_HANDLE_VALUE || he == INVALID_HANDLE_VALUE) {\0A        if (ho != INVALID_HANDLE_VALUE) { CloseHandle(ho); DeleteFileA(out_path); }\0A        free(cmdline);\0A        free(env_block);\0A        return PLUM_SPAWN_FAILED;\0A    }\0A\0A    HANDLE hi = INVALID_HANDLE_VALUE;\0A    int hi_owned = 0;\0A    char in_path[PLUM_PROC_PATH_MAX];\0A    in_path[0] = '\5C0';\0A    if (stdin_mode < 0) {\0A        hi = GetStdHandle(STD_INPUT_HANDLE);\0A    } else if (stdin_mode == 0) {\0A        SECURITY_ATTRIBUTES sa;\0A        sa.nLength = sizeof(sa);\0A        sa.lpSecurityDescriptor = NULL;\0A        sa.bInheritHandle = TRUE;\0A        hi = CreateFileA(\22NUL\22, GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE,\0A                         &sa, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);\0A        hi_owned = 1;\0A    } else {\0A        HANDLE hw = plum_win_temp_handle(\22pli\22, in_path);\0A        DWORD written = 0;\0A        SECURITY_ATTRIBUTES sa;\0A        if (hw == INVALID_HANDLE_VALUE) {\0A            CloseHandle(ho); CloseHandle(he);\0A            DeleteFileA(out_path); DeleteFileA(err_path);\0A            free(cmdline);\0A            free(env_block);\0A            return PLUM_SPAWN_FAILED;\0A        }\0A        if (stdin_len > 0 && stdin_data != NULL) {\0A            if (!WriteFile(hw, stdin_data, (DWORD)stdin_len, &written, NULL) || written != (DWORD)stdin_len) {\0A                CloseHandle(hw); CloseHandle(ho); CloseHandle(he);\0A                DeleteFileA(in_path); DeleteFileA(out_path); DeleteFileA(err_path);\0A                free(cmdline);\0A                free(env_block);\0A                return PLUM_SPAWN_FAILED;\0A            }\0A        }\0A        CloseHandle(hw);\0A        sa.nLength = sizeof(sa);\0A        sa.lpSecurityDescriptor = NULL;\0A        sa.bInheritHandle = TRUE;\0A        hi = CreateFileA(in_path, GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE,\0A                         &sa, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);\0A        hi_owned = 1;\0A    }\0A    if (hi == INVALID_HANDLE_VALUE) {\0A        if (hi_owned) { /* already invalid */ }\0A        CloseHandle(ho); CloseHandle(he);\0A        DeleteFileA(out_path); DeleteFileA(err_path);\0A        if (in_path[0] != '\5C0') DeleteFileA(in_path);\0A        free(cmdline);\0A        free(env_block);\0A        return PLUM_SPAWN_FAILED;\0A    }\0A\0A    ZeroMemory(&si, sizeof(si));\0A    si.cb = sizeof(si);\0A    si.dwFlags = STARTF_USESTDHANDLES;\0A    si.hStdInput = hi;\0A    si.hStdOutput = ho;\0A    si.hStdError = he;\0A    ZeroMemory(&pi, sizeof(pi));\0A\0A    // `lpApplicationName` is NULL so that `CreateProcess` searches PATH\0A    // and appends `.exe`, which is what makes `clang` resolve the same\0A    // way it does everywhere else. The ambiguity that normally makes\0A    // that risky -- an unquoted program path containing spaces -- does\0A    // not apply, because the program was quoted above like any other\0A    // argument.\0A    if (!CreateProcessW(NULL, cmdline, NULL, NULL, TRUE, CREATE_UNICODE_ENVIRONMENT, env_block, NULL, &si, &pi)) {\0A        CloseHandle(ho);\0A        CloseHandle(he);\0A        if (hi_owned) CloseHandle(hi);\0A        DeleteFileA(out_path);\0A        DeleteFileA(err_path);\0A        if (in_path[0] != '\5C0') DeleteFileA(in_path);\0A        free(cmdline);\0A        free(env_block);\0A        return PLUM_SPAWN_FAILED;\0A    }\0A\0A    free(cmdline);\0A    free(env_block);\0A    CloseHandle(pi.hThread);\0A\0A    // Asynchronous: keep the process handle to wait on, and keep the\0A    // two file handles OPEN -- they are the child's stdout and stderr,\0A    // and closing them here would close the child's own descriptors.\0A    // The input file cannot be deleted yet either: Windows refuses to\0A    // unlink a file that is open, which is why POSIX can unlink it at\0A    // spawn and this cannot.\0A    if (async != NULL) {\0A        async->pid = (long long)(intptr_t)pi.hProcess;\0A        async->h_out = (void *)ho;\0A        async->h_err = (void *)he;\0A        if (hi_owned) CloseHandle(hi);\0A        if (in_path[0] != '\5C0') async->in_path = plum_strdup_or_null(in_path);\0A        (void)program;\0A        (void)fail_on_exec;\0A        return 0;\0A    }\0A\0A    WaitForSingleObject(pi.hProcess, INFINITE);\0A    if (!GetExitCodeProcess(pi.hProcess, &code)) code = (DWORD)-1;\0A    CloseHandle(pi.hProcess);\0A\0A    // Closed only after the child has exited, so everything it wrote is\0A    // flushed and the files can be read back in full.\0A    CloseHandle(ho);\0A    CloseHandle(he);\0A    if (hi_owned) CloseHandle(hi);\0A    if (in_path[0] != '\5C0') DeleteFileA(in_path);\0A    (void)program;\0A    (void)fail_on_exec;\0A    return (long long)(int)code;\0A}\0A\0A#endif\0A\0A// `args_joined` holds `argc` arguments (NOT including `program` itself,\0A// which becomes `argv[0]`), separated by `PLUM_PROC_ARG_SEP`. Blocks\0A// until the child exits. Returns a handle, or -1 if the process could\0A// never even be started (no free slot, `fork`/temp-file-creation\0A// failure) — NOT for the child's own exit code being non-zero, which\0A// is a normal, successful `process_run` outcome retrievable via `\0A// process_exit_code` (a failing compile is expected/routine, not a\0A// shim-level error).\0Along long process_run(const char *program, const char *args_joined, long long argc) {\0A    long long slot = -1;\0A    for (long long i = 0; i < PLUM_PROC_MAX_SLOTS; i++) {\0A        if (!plum_process_slots[i].in_use) {\0A            slot = i;\0A            break;\0A        }\0A    }\0A    if (slot < 0) {\0A        return -1;\0A    }\0A\0A    char *args_copy = NULL;\0A    char **argv = plum_split_args(program, args_joined, argc, &args_copy);\0A    if (argv == NULL) {\0A        return -1;\0A    }\0A\0A    char out_path[PLUM_PROC_PATH_MAX];\0A    char err_path[PLUM_PROC_PATH_MAX];\0A    long long code = plum_spawn_capture(program, argv, out_path, err_path, NULL, NULL, 0, -1, 0, NULL);\0A    if (code == PLUM_SPAWN_FAILED) {\0A        free(args_copy);\0A        free(argv);\0A        return -1;\0A    }\0A\0A    plum_process_slots[slot].in_use = 1;\0A    plum_process_slots[slot].exit_code = code;\0A    plum_process_slots[slot].out_data = plum_read_whole_file_or_empty(out_path);\0A    plum_process_slots[slot].err_data = plum_read_whole_file_or_empty(err_path);\0A\0A    remove(out_path);\0A    remove(err_path);\0A    free(args_copy);\0A    free(argv);\0A    return slot;\0A}\0A\0A// Structured run: argv (not a shell), optional env overlay (`NAME=value`\0A// entries, TAB-joined like args), optional stdin bytes. `has_stdin` of\0A// 0 feeds the child an empty stdin; 1 feeds `stdin_data` of length\0A// `stdin_len`. Exec failure is a launch error (handle -1), not exit 127.\0Along long process_run_ex(const char *program, const char *args_joined, long long argc,\0A                         const char *env_joined, long long envc,\0A                         const char *stdin_data, long long stdin_len, long long has_stdin) {\0A    long long slot = -1;\0A    for (long long i = 0; i < PLUM_PROC_MAX_SLOTS; i++) {\0A        if (!plum_process_slots[i].in_use) {\0A            slot = i;\0A            break;\0A        }\0A    }\0A    if (slot < 0) {\0A        return -1;\0A    }\0A\0A    char *args_copy = NULL;\0A    char **argv = plum_split_args(program, args_joined, argc, &args_copy);\0A    if (argv == NULL) {\0A        return -1;\0A    }\0A    char *env_copy = NULL;\0A    char **envp = plum_split_joined(env_joined, envc, &env_copy);\0A    if (envc > 0 && envp == NULL) {\0A        free(args_copy);\0A        free(argv);\0A        return -1;\0A    }\0A\0A    char out_path[PLUM_PROC_PATH_MAX];\0A    char err_path[PLUM_PROC_PATH_MAX];\0A    int stdin_mode = has_stdin ? 1 : 0;\0A    long long code = plum_spawn_capture(program, argv, out_path, err_path, envp,\0A                                        stdin_data, stdin_len, stdin_mode, 1, NULL);\0A    if (code == PLUM_SPAWN_FAILED) {\0A        free(args_copy);\0A        free(argv);\0A        free(env_copy);\0A        free(envp);\0A        return -1;\0A    }\0A\0A    plum_process_slots[slot].in_use = 1;\0A    plum_process_slots[slot].exit_code = code;\0A    plum_process_slots[slot].out_data = plum_read_whole_file_or_empty(out_path);\0A    plum_process_slots[slot].err_data = plum_read_whole_file_or_empty(err_path);\0A\0A    remove(out_path);\0A    remove(err_path);\0A    free(args_copy);\0A    free(argv);\0A    free(env_copy);\0A    free(envp);\0A    return slot;\0A}\0A\0Along long process_exit_code(long long handle) {\0A    if (handle < 0 || handle >= PLUM_PROC_MAX_SLOTS || !plum_process_slots[handle].in_use) {\0A        return -1;\0A    }\0A    return plum_process_slots[handle].exit_code;\0A}\0A\0Aconst char *process_stdout_data(long long handle) {\0A    if (handle < 0 || handle >= PLUM_PROC_MAX_SLOTS || !plum_process_slots[handle].in_use) {\0A        return \22\22;\0A    }\0A    return plum_process_slots[handle].out_data;\0A}\0A\0Aconst char *process_stderr_data(long long handle) {\0A    if (handle < 0 || handle >= PLUM_PROC_MAX_SLOTS || !plum_process_slots[handle].in_use) {\0A        return \22\22;\0A    }\0A    return plum_process_slots[handle].err_data;\0A}\0A\0Avoid process_free(long long handle) {\0A    if (handle < 0 || handle >= PLUM_PROC_MAX_SLOTS || !plum_process_slots[handle].in_use) {\0A        return;\0A    }\0A    // A slot filled by `process_spawn` carries more than these two\0A    // buffers, so it is released by the function that knows about all\0A    // of it rather than half-released here.\0A    if (plum_process_slots[handle].child != NULL) {\0A        process_child_free(handle);\0A        return;\0A    }\0A    free(plum_process_slots[handle].out_data);\0A    free(plum_process_slots[handle].err_data);\0A    plum_process_slots[handle].in_use = 0;\0A}\0A\0A// --- Asynchronous children (issue #7) ---\0A//\0A// `process_run` blocks, which is the right shape for a compiler\0A// shelling out to `clang` and the wrong one for an application that\0A// wants to stay responsive while something runs. These add the other\0A// shape: start it, look in on it, stop it.\0A//\0A// The temp-file capture is what makes this cheap. A pipe-based child\0A// would need somebody draining it the whole time the child runs -- the\0A// deadlock this file's header describes -- so `poll` could not be a\0A// question you ask occasionally. A file has no fixed buffer, so nothing\0A// has to be read until the child is gone, and `poll` really is just\0A// `waitpid(WNOHANG)`.\0A//\0A// **The status is collected exactly once.** The transition from running\0A// to finished reads both files, deletes them, and fills the same\0A// `out_data`/`err_data` the blocking path fills -- so\0A// `process_exit_code`, `process_stdout_data` and `process_stderr_data`\0A// work unchanged afterwards, and work repeatedly. There is deliberately\0A// no way to read a child's output before it exits: that would mean\0A// defining what a partial read of a file somebody is still writing\0A// means, and no caller has asked for it.\0A\0Astatic void plum_child_collect(long long handle, long long code) {\0A    PlumProcessSlot *slot = &plum_process_slots[handle];\0A    PlumChildState *c = slot->child;\0A    if (c == NULL || c->finished) return;\0A    slot->exit_code = code;\0A    slot->out_data = plum_read_whole_file_or_empty(c->out_path);\0A    slot->err_data = plum_read_whole_file_or_empty(c->err_path);\0A    if (c->out_path != NULL) remove(c->out_path);\0A    if (c->err_path != NULL) remove(c->err_path);\0A    if (c->in_path != NULL) remove(c->in_path);\0A#if defined(_WIN32)\0A    // Closed only now, so everything the child wrote is flushed before\0A    // the files are read back -- the same ordering the blocking path\0A    // depends on.\0A    if (c->h_out != NULL) CloseHandle((HANDLE)c->h_out);\0A    if (c->h_err != NULL) CloseHandle((HANDLE)c->h_err);\0A    c->h_out = NULL;\0A    c->h_err = NULL;\0A    if (c->pid != 0) CloseHandle((HANDLE)(intptr_t)c->pid);\0A    c->pid = 0;\0A#endif\0A    c->finished = 1;\0A}\0A\0Astatic PlumProcessSlot *plum_slot_of(long long handle) {\0A    if (handle < 0 || handle >= PLUM_PROC_MAX_SLOTS || !plum_process_slots[handle].in_use) {\0A        return NULL;\0A    }\0A    return &plum_process_slots[handle];\0A}\0A\0A// Starts `program` without waiting for it. Same argument, environment\0A// and stdin packing as `process_run_ex`; same -1 for a child that could\0A// not be started at all, including a program that does not exist.\0Along long process_spawn(const char *program, const char *args_joined, long long argc,\0A                        const char *env_joined, long long envc,\0A                        const char *stdin_data, long long stdin_len, long long has_stdin) {\0A    long long slot = -1;\0A    for (long long i = 0; i < PLUM_PROC_MAX_SLOTS; i++) {\0A        if (!plum_process_slots[i].in_use) { slot = i; break; }\0A    }\0A    if (slot < 0) return -1;\0A\0A    char *args_copy = NULL;\0A    char **argv = plum_split_args(program, args_joined, argc, &args_copy);\0A    if (argv == NULL) return -1;\0A    char *env_copy = NULL;\0A    char **envp = plum_split_joined(env_joined, envc, &env_copy);\0A    if (envc > 0 && envp == NULL) {\0A        free(args_copy);\0A        free(argv);\0A        return -1;\0A    }\0A\0A    PlumChildState *child = calloc(1, sizeof(PlumChildState));\0A    if (child == NULL) {\0A        free(args_copy); free(argv); free(env_copy); free(envp);\0A        return -1;\0A    }\0A\0A    char out_path[PLUM_PROC_PATH_MAX];\0A    char err_path[PLUM_PROC_PATH_MAX];\0A    int stdin_mode = has_stdin ? 1 : 0;\0A    long long rc = plum_spawn_capture(program, argv, out_path, err_path, envp,\0A                                      stdin_data, stdin_len, stdin_mode, 1, child);\0A    free(args_copy); free(argv); free(env_copy); free(envp);\0A    if (rc == PLUM_SPAWN_FAILED) {\0A        free(child->in_path);\0A        free(child);\0A        return -1;\0A    }\0A\0A    child->out_path = plum_strdup_or_null(out_path);\0A    child->err_path = plum_strdup_or_null(err_path);\0A    plum_process_slots[slot].in_use = 1;\0A    plum_process_slots[slot].exit_code = -1;\0A    plum_process_slots[slot].out_data = NULL;\0A    plum_process_slots[slot].err_data = NULL;\0A    plum_process_slots[slot].child = child;\0A    return slot;\0A}\0A\0A// 1 if the child has exited (its result is now readable), 0 if it is\0A// still running, -1 if the handle is not a live child.\0Along long process_poll(long long handle) {\0A    PlumProcessSlot *slot = plum_slot_of(handle);\0A    if (slot == NULL || slot->child == NULL) return -1;\0A    if (slot->child->finished) return 1;\0A#if defined(_WIN32)\0A    HANDLE h = (HANDLE)(intptr_t)slot->child->pid;\0A    DWORD w = WaitForSingleObject(h, 0);\0A    if (w == WAIT_TIMEOUT) return 0;\0A    if (w != WAIT_OBJECT_0) return -1;\0A    DWORD code = 0;\0A    if (!GetExitCodeProcess(h, &code)) code = (DWORD)-1;\0A    plum_child_collect(handle, (long long)(int)code);\0A    return 1;\0A#else\0A    int status = 0;\0A    pid_t r = waitpid((pid_t)slot->child->pid, &status, WNOHANG);\0A    if (r == 0) return 0;\0A    if (r < 0) return -1;\0A    plum_child_collect(handle, WIFEXITED(status) ? (long long)WEXITSTATUS(status) : -1);\0A    return 1;\0A#endif\0A}\0A\0A// Waits for the child. A negative `timeout_nanos` waits forever.\0A// Returns 1 if it exited, 0 if the timeout expired first, -1 on error.\0A//\0A// A bounded wait POLLS with a capped backoff rather than using a timed\0A// wait primitive, because POSIX has no portable one: `waitpid` cannot\0A// take a deadline, and the alternatives (`sigtimedwait` on SIGCHLD,\0A// `pidfd_open`) are per-platform and interact with any other signal\0A// handling in the program. The backoff starts at 1ms and caps at 20ms,\0A// so a short wait stays responsive and a long one costs about fifty\0A// wakeups a second. An UNBOUNDED wait does not poll at all -- it blocks\0A// in `waitpid`, which is the case that would otherwise spin for hours.\0Along long process_child_wait(long long handle, long long timeout_nanos) {\0A    PlumProcessSlot *slot = plum_slot_of(handle);\0A    if (slot == NULL || slot->child == NULL) return -1;\0A    if (slot->child->finished) return 1;\0A\0A    if (timeout_nanos < 0) {\0A#if defined(_WIN32)\0A        HANDLE h = (HANDLE)(intptr_t)slot->child->pid;\0A        if (WaitForSingleObject(h, INFINITE) != WAIT_OBJECT_0) return -1;\0A        DWORD code = 0;\0A        if (!GetExitCodeProcess(h, &code)) code = (DWORD)-1;\0A        plum_child_collect(handle, (long long)(int)code);\0A        return 1;\0A#else\0A        int status = 0;\0A        pid_t r;\0A        do { r = waitpid((pid_t)slot->child->pid, &status, 0); } while (r < 0 && errno == EINTR);\0A        if (r < 0) return -1;\0A        plum_child_collect(handle, WIFEXITED(status) ? (long long)WEXITSTATUS(status) : -1);\0A        return 1;\0A#endif\0A    }\0A\0A#if defined(_WIN32)\0A    {\0A        HANDLE h = (HANDLE)(intptr_t)slot->child->pid;\0A        long long ms = timeout_nanos / 1000000LL;\0A        if (timeout_nanos % 1000000LL != 0) ms++;\0A        DWORD w = WaitForSingleObject(h, ms > 0x7FFFFFFELL ? 0x7FFFFFFE : (DWORD)ms);\0A        if (w == WAIT_TIMEOUT) return 0;\0A        if (w != WAIT_OBJECT_0) return -1;\0A        DWORD code = 0;\0A        if (!GetExitCodeProcess(h, &code)) code = (DWORD)-1;\0A        plum_child_collect(handle, (long long)(int)code);\0A        return 1;\0A    }\0A#else\0A    {\0A        long long waited = 0;\0A        long long step = 1000000LL; // 1ms\0A        for (;;) {\0A            long long r = process_poll(handle);\0A            if (r != 0) return r;\0A            if (waited >= timeout_nanos) return 0;\0A            long long left = timeout_nanos - waited;\0A            long long nap = step < left ? step : left;\0A            struct timespec req;\0A            req.tv_sec = (time_t)(nap / 1000000000LL);\0A            req.tv_nsec = (long)(nap % 1000000000LL);\0A            while (nanosleep(&req, &req) != 0 && errno == EINTR) { }\0A            waited += nap;\0A            step *= 2;\0A            if (step > 20000000LL) step = 20000000LL;\0A        }\0A    }\0A#endif\0A}\0A\0A// Asks the child to stop. `hard` of 0 is a polite request the child can\0A// handle or ignore (SIGTERM, and on Windows the only thing there is);\0A// non-zero cannot be refused (SIGKILL, `TerminateProcess`).\0A//\0A// Windows has no SIGTERM, so both spellings are `TerminateProcess` --\0A// a real difference, documented rather than papered over: a program\0A// that relies on a child cleaning up after a polite terminate will not\0A// get that on Windows.\0A//\0A// Returns 0 on success, -1 if the handle is not a live child. Signalling\0A// a child that has ALREADY exited is success, not failure: the caller\0A// asked for it to be gone and it is.\0Along long process_terminate(long long handle, long long hard) {\0A    PlumProcessSlot *slot = plum_slot_of(handle);\0A    if (slot == NULL || slot->child == NULL) return -1;\0A    if (slot->child->finished) return 0;\0A#if defined(_WIN32)\0A    (void)hard;\0A    return TerminateProcess((HANDLE)(intptr_t)slot->child->pid, 1) ? 0 : -1;\0A#else\0A    return kill((pid_t)slot->child->pid, hard ? SIGKILL : SIGTERM) == 0 ? 0 : -1;\0A#endif\0A}\0A\0A// The operating system's identifier for the child, for a caller that\0A// has to report it or hand it to something else. Windows reports the\0A// process id rather than the handle, which is what a user would\0A// recognise in Task Manager.\0Along long process_child_pid(long long handle) {\0A    PlumProcessSlot *slot = plum_slot_of(handle);\0A    if (slot == NULL || slot->child == NULL) return -1;\0A#if defined(_WIN32)\0A    if (slot->child->pid == 0) return -1;\0A    return (long long)GetProcessId((HANDLE)(intptr_t)slot->child->pid);\0A#else\0A    return slot->child->pid;\0A#endif\0A}\0A\0A// Releases the slot, and is what the `Child` handle runs when the value\0A// dies.\0A//\0A// A child still running is KILLED and reaped. The alternative -- leave\0A// it alive -- sounds gentler and is not: nothing can reach that process\0A// again, since the value that could poll it, wait for it, signal it or\0A// read its output has just been destroyed. It would also leak the\0A// temp files it is still writing to, and on POSIX leave a zombie until\0A// this program exits, because the only process that could reap it has\0A// stopped tracking it.\0A//\0A// `drop_policy` is where a future choice would live. It is not settable\0A// from Plum today.\0Avoid process_child_free(long long handle) {\0A    PlumProcessSlot *slot = plum_slot_of(handle);\0A    if (slot == NULL) return;\0A    PlumChildState *c = slot->child;\0A    if (c != NULL) {\0A        if (!c->finished) {\0A            (void)process_terminate(handle, 1);\0A#if defined(_WIN32)\0A            HANDLE h = (HANDLE)(intptr_t)c->pid;\0A            WaitForSingleObject(h, 5000);\0A            DWORD code = 0;\0A            if (!GetExitCodeProcess(h, &code)) code = (DWORD)-1;\0A            plum_child_collect(handle, (long long)(int)code);\0A#else\0A            int status = 0;\0A            pid_t r;\0A            do { r = waitpid((pid_t)c->pid, &status, 0); } while (r < 0 && errno == EINTR);\0A            plum_child_collect(handle, (r > 0 && WIFEXITED(status)) ? (long long)WEXITSTATUS(status) : -1);\0A#endif\0A        }\0A        free(c->out_path);\0A        free(c->err_path);\0A        free(c->in_path);\0A        free(c);\0A        slot->child = NULL;\0A    }\0A    free(slot->out_data);\0A    free(slot->err_data);\0A    slot->out_data = NULL;\0A    slot->err_data = NULL;\0A    slot->in_use = 0;\0A}\0A\0A// The inherited-stdio counterpart to `plum_spawn_capture`, and the\0A// second place this file needs a platform split. It was missed when the\0A// first one was written -- the POSIX `fork`/`waitpid` here sat outside\0A// any guard and was found by the Windows CI leg, which is what that leg\0A// is for.\0A#if !defined(_WIN32)\0A\0Astatic long long plum_spawn_inherit(const char *program, char **argv) {\0A    pid_t pid = fork();\0A    if (pid < 0) return -1;\0A    if (pid == 0) {\0A        execvp(program, argv);\0A        _exit(127);\0A    }\0A    int status = 0;\0A    if (waitpid(pid, &status, 0) < 0) return -1;\0A    if (WIFEXITED(status)) return WEXITSTATUS(status);\0A    // 128 + signal is the shell convention, kept so `plum run` reports\0A    // a killed child the way anything else in a pipeline would.\0A    if (WIFSIGNALED(status)) return 128 + WTERMSIG(status);\0A    return -1;\0A}\0A\0A#else\0A\0Astatic long long plum_spawn_inherit(const char *program, char **argv) {\0A    wchar_t *cmdline = plum_win_command_line(argv);\0A    STARTUPINFOW si;\0A    PROCESS_INFORMATION pi;\0A    DWORD code = 0;\0A    if (cmdline == NULL) return -1;\0A\0A    // No `STARTF_USESTDHANDLES`: leaving the field unset is what makes\0A    // the child inherit this process's console, which is the entire\0A    // point of this function as against `plum_spawn_capture`.\0A    ZeroMemory(&si, sizeof(si));\0A    si.cb = sizeof(si);\0A    ZeroMemory(&pi, sizeof(pi));\0A\0A    if (!CreateProcessW(NULL, cmdline, NULL, NULL, TRUE, 0, NULL, NULL, &si, &pi)) {\0A        free(cmdline);\0A        return -1;\0A    }\0A    free(cmdline);\0A    CloseHandle(pi.hThread);\0A\0A    WaitForSingleObject(pi.hProcess, INFINITE);\0A    if (!GetExitCodeProcess(pi.hProcess, &code)) code = (DWORD)-1;\0A    CloseHandle(pi.hProcess);\0A    (void)program;\0A    return (long long)(int)code;\0A}\0A\0A#endif\0A\0A// Runs a command with stdio INHERITED — no capture, no temp files — and\0A// returns its exit status. `process_run` above is for a caller that\0A// wants the output as a value; this is for a caller that wants the\0A// child to simply BE the program: `plum run` streaming its output as it\0A// happens, and a child that can read stdin.\0A//\0A// Deliberately separate rather than a flag on `process_run`: that one's\0A// whole design is the temp-file capture described above, and threading\0A// \22except don't\22 through it would leave every path harder to read.\0Along long process_run_inherit(const char *program, const char *args_joined, long long argc) {\0A    char *args_copy = strdup(args_joined);\0A    char **argv = malloc(sizeof(char *) * (size_t)(argc + 2));\0A    if (args_copy == NULL || argv == NULL) {\0A        free(args_copy);\0A        free(argv);\0A        return -1;\0A    }\0A    // Same separator-splitting as `process_run` above; see its own note\0A    // on why the first element is special-cased.\0A    argv[0] = (char *)program;\0A    long long idx = 1;\0A    if (argc > 0) {\0A        argv[idx++] = args_copy;\0A        for (char *c = args_copy; *c != '\5C0'; c++) {\0A            if (*c == PLUM_PROC_ARG_SEP) {\0A                *c = '\5C0';\0A                if (idx <= argc) {\0A                    argv[idx++] = c + 1;\0A                }\0A            }\0A        }\0A    }\0A    argv[idx] = NULL;\0A\0A    long long code = plum_spawn_inherit(program, argv);\0A    free(args_copy);\0A    free(argv);\0A    return code;\0A}\0A\00" }
@@ -114700,7 +114700,7 @@ L41869:
   call void @plum_rel_str(ptr %t41867_pre), !dbg !1761
   store ptr null, ptr %t41867, !dbg !1761
   store ptr %t41865, ptr %t41867, !dbg !1761
-  ; plum.off 154803
+  ; plum.off 154859
   %t41871 = load ptr, ptr %t41867, !dbg !1762
   %t41874 = call ptr @plum_str_split(ptr %t41871, ptr @.str41872), !dbg !1762
   call void @plum_rel_str(ptr @.str41872), !dbg !1762
@@ -115265,7 +115265,7 @@ entry:
   %t42177 = alloca ptr, !dbg !1777
   store ptr null, ptr %t42177, !dbg !1777
   %t42184 = alloca ptr, !dbg !1777
-  ; plum.off 153243
+  ; plum.off 153299
   %t42178 = load ptr, ptr %s0, !dbg !1778
   %t42181 = call ptr @plum_str_split(ptr %t42178, ptr @.str42179), !dbg !1778
   call void @plum_rel_str(ptr @.str42179), !dbg !1778
@@ -115341,13 +115341,13 @@ entry:
   store ptr null, ptr %t42318, !dbg !1780
   %t42327 = alloca i1, !dbg !1780
   %t42375 = alloca ptr, !dbg !1780
-  ; plum.off 189029
+  ; plum.off 189085
   %t42197 = call ptr @plum_buildcache_compiler_hash(i1 0), !dbg !1781
   %t42196_pre = load ptr, ptr %t42196, !dbg !1781
   call void @plum_rel_str(ptr %t42196_pre), !dbg !1781
   store ptr null, ptr %t42196, !dbg !1781
   store ptr %t42197, ptr %t42196, !dbg !1781
-  ; plum.off 189078
+  ; plum.off 189134
   %t42199 = call ptr @plum_Os_cwd(i1 0), !dbg !1782
   %t42202 = call ptr @plum__prelude__Result_unwrap_or__Str_Str(ptr %t42199, ptr @.str42200), !dbg !1782
   %t42198_pre = load ptr, ptr %t42198, !dbg !1782
@@ -115372,7 +115372,7 @@ L42216:
   store ptr @.str42219, ptr %t42215, !dbg !1782
   br label %L42218, !dbg !1782
 L42217:
-  ; plum.off 189183
+  ; plum.off 189239
   %t42224 = load ptr, ptr %t42196, !dbg !1783
   call void @plum_rc_inc(ptr %t42224), !dbg !1783
   %t42225 = call ptr @plum_buildcache_frame(ptr %t42224), !dbg !1783
@@ -115418,9 +115418,9 @@ L42241:
   call void @plum_rel_Array_Str(ptr %t42221_pre), !dbg !1783
   store ptr null, ptr %t42221, !dbg !1783
   store ptr %t42238, ptr %t42221, !dbg !1783
-  ; plum.off 189376
+  ; plum.off 189432
   store i1 1, ptr %t42242, !dbg !1784
-  ; plum.off 189406
+  ; plum.off 189462
   %t42243 = load ptr, ptr %s1, !dbg !1785
   %t42244 = getelementptr i8, ptr %t42243, i64 16, !dbg !1785
   %t42245 = load ptr, ptr %t42244, !dbg !1785
@@ -115441,7 +115441,7 @@ L42250:
   %t42256 = load ptr, ptr %t42255, !dbg !1785
   call void @plum_rc_inc(ptr %t42256), !dbg !1785
   store ptr %t42256, ptr %t42247, !dbg !1785
-  ; plum.off 189441
+  ; plum.off 189497
   %t42258 = load ptr, ptr %t42221, !dbg !1786
   %t42261 = call ptr @plum_array_push_grow(ptr %t42258, i1 1, ptr @plum_rel_Array_Str), !dbg !1786
   %t42262 = call i64 @plum_array_len(ptr %t42261), !dbg !1786
@@ -115451,7 +115451,7 @@ L42250:
   %t42266 = getelementptr i8, ptr %t42265, i64 16, !dbg !1786
   store ptr @.str42259, ptr %t42266, !dbg !1786
   store ptr %t42261, ptr %t42221, !dbg !1786
-  ; plum.off 189478
+  ; plum.off 189534
   %t42267 = load ptr, ptr %t42221, !dbg !1787
   %t42268 = load ptr, ptr %t42247, !dbg !1787
   %t42269 = getelementptr i8, ptr %t42268, i64 8, !dbg !1787
@@ -115466,7 +115466,7 @@ L42250:
   %t42277 = getelementptr i8, ptr %t42276, i64 16, !dbg !1787
   store ptr %t42271, ptr %t42277, !dbg !1787
   store ptr %t42272, ptr %t42221, !dbg !1787
-  ; plum.off 189536
+  ; plum.off 189592
   %t42278 = load ptr, ptr %t42221, !dbg !1788
   %t42279 = load ptr, ptr %t42247, !dbg !1788
   %t42280 = getelementptr i8, ptr %t42279, i64 16, !dbg !1788
@@ -115481,7 +115481,7 @@ L42250:
   %t42288 = getelementptr i8, ptr %t42287, i64 16, !dbg !1788
   store ptr %t42282, ptr %t42288, !dbg !1788
   store ptr %t42283, ptr %t42221, !dbg !1788
-  ; plum.off 189594
+  ; plum.off 189650
   %t42289 = load ptr, ptr %t42221, !dbg !1789
   %t42290 = load ptr, ptr %t42247, !dbg !1789
   %t42291 = getelementptr i8, ptr %t42290, i64 16, !dbg !1789
@@ -115504,7 +115504,7 @@ L42250:
   br label %L42249, !dbg !1789
 L42251:
   call void @plum_rel_Array_pkg_Dep(ptr %t42245), !dbg !1789
-  ; plum.off 189675
+  ; plum.off 189731
   %t42303 = load ptr, ptr %s1, !dbg !1790
   %t42304 = getelementptr i8, ptr %t42303, i64 8, !dbg !1790
   %t42305 = load ptr, ptr %t42304, !dbg !1790
@@ -115525,7 +115525,7 @@ L42310:
   %t42316 = load ptr, ptr %t42315, !dbg !1790
   call void @plum_rc_inc(ptr %t42316), !dbg !1790
   store ptr %t42316, ptr %t42307, !dbg !1790
-  ; plum.off 189711
+  ; plum.off 189767
   %t42319 = load ptr, ptr %t42307, !dbg !1791
   %t42320 = getelementptr i8, ptr %t42319, i64 8, !dbg !1791
   %t42321 = load ptr, ptr %t42320, !dbg !1791
@@ -115535,13 +115535,13 @@ L42310:
   call void @plum_rel_str(ptr %t42318_pre), !dbg !1791
   store ptr null, ptr %t42318, !dbg !1791
   store ptr %t42322, ptr %t42318, !dbg !1791
-  ; plum.off 189766
+  ; plum.off 189822
   %t42323 = load ptr, ptr %t42318, !dbg !1792
   %t42326 = call i1 @plum_str_eq(ptr %t42323, ptr @.str42324), !dbg !1792
   call void @plum_rel_str(ptr @.str42324), !dbg !1792
   br i1 %t42326, label %L42328, label %L42329, !dbg !1792
 L42328:
-  ; plum.off 189784
+  ; plum.off 189840
   store i1 0, ptr %t42242, !dbg !1792
   store i1 0, ptr %t42327, !dbg !1792
   br label %L42330, !dbg !1792
@@ -115550,7 +115550,7 @@ L42329:
   br label %L42330, !dbg !1792
 L42330:
   %t42332 = load i1, ptr %t42327, !dbg !1792
-  ; plum.off 189829
+  ; plum.off 189885
   %t42333 = load ptr, ptr %t42221, !dbg !1793
   %t42336 = call ptr @plum_array_push_grow(ptr %t42333, i1 1, ptr @plum_rel_Array_Str), !dbg !1793
   %t42337 = call i64 @plum_array_len(ptr %t42336), !dbg !1793
@@ -115560,7 +115560,7 @@ L42330:
   %t42341 = getelementptr i8, ptr %t42340, i64 16, !dbg !1793
   store ptr @.str42334, ptr %t42341, !dbg !1793
   store ptr %t42336, ptr %t42221, !dbg !1793
-  ; plum.off 189866
+  ; plum.off 189922
   %t42342 = load ptr, ptr %t42221, !dbg !1794
   %t42343 = load ptr, ptr %t42307, !dbg !1794
   %t42344 = getelementptr i8, ptr %t42343, i64 16, !dbg !1794
@@ -115575,7 +115575,7 @@ L42330:
   %t42352 = getelementptr i8, ptr %t42351, i64 16, !dbg !1794
   store ptr %t42346, ptr %t42352, !dbg !1794
   store ptr %t42347, ptr %t42221, !dbg !1794
-  ; plum.off 189931
+  ; plum.off 189987
   %t42353 = load ptr, ptr %t42221, !dbg !1795
   %t42354 = load ptr, ptr %t42307, !dbg !1795
   %t42355 = getelementptr i8, ptr %t42354, i64 8, !dbg !1795
@@ -115590,7 +115590,7 @@ L42330:
   %t42363 = getelementptr i8, ptr %t42362, i64 16, !dbg !1795
   store ptr %t42357, ptr %t42363, !dbg !1795
   store ptr %t42358, ptr %t42221, !dbg !1795
-  ; plum.off 189989
+  ; plum.off 190045
   %t42364 = load ptr, ptr %t42221, !dbg !1796
   %t42365 = load ptr, ptr %t42318, !dbg !1796
   call void @plum_rc_inc(ptr %t42365), !dbg !1796
@@ -116517,13 +116517,13 @@ entry:
   store ptr null, ptr %t42869, !dbg !1833
   %t42874 = alloca ptr, !dbg !1833
   store ptr null, ptr %t42874, !dbg !1833
-  ; plum.off 160713
+  ; plum.off 160769
   %t42797 = call ptr @plum_shims_shim_files(i1 0), !dbg !1834
   %t42796_pre = load ptr, ptr %t42796, !dbg !1834
   call void @plum_rel_Array_shims_ShimFile(ptr %t42796_pre), !dbg !1834
   store ptr null, ptr %t42796, !dbg !1834
   store ptr %t42797, ptr %t42796, !dbg !1834
-  ; plum.off 160751
+  ; plum.off 160807
   %t42799 = load ptr, ptr %t42796, !dbg !1835
   call void @plum_rc_inc(ptr %t42799), !dbg !1835
   %t42800 = load ptr, ptr %s0, !dbg !1835
@@ -116548,7 +116548,7 @@ L42811:
   store ptr %t42814, ptr %t42810, !dbg !1835
   br label %L42813, !dbg !1835
 L42812:
-  ; plum.off 160862
+  ; plum.off 160918
   %t42816 = load ptr, ptr %s0, !dbg !1836
   call void @plum_rc_inc(ptr %t42816), !dbg !1836
   %t42817 = call ptr @plum_Path_dirname(ptr %t42816), !dbg !1836
@@ -116567,7 +116567,7 @@ L42822:
   store ptr %t42825, ptr %t42821, !dbg !1836
   br label %L42824, !dbg !1836
 L42823:
-  ; plum.off 160975
+  ; plum.off 161031
   %t42827 = load ptr, ptr %t42815, !dbg !1837
   call void @plum_rc_inc(ptr %t42827), !dbg !1837
   %t42828 = call ptr @plum_buildcache_temp(ptr %t42827), !dbg !1837
@@ -116585,7 +116585,7 @@ L42834:
   store ptr %t42837, ptr %t42833, !dbg !1837
   br label %L42836, !dbg !1837
 L42835:
-  ; plum.off 161087
+  ; plum.off 161143
   %t42839 = load ptr, ptr %t42826, !dbg !1838
   call void @plum_rc_inc(ptr %t42839), !dbg !1838
   %t42840 = call ptr @plum_write_shims(ptr %t42839, i1 1), !dbg !1838
@@ -116593,7 +116593,7 @@ L42835:
   call void @plum_rel_ShimBuild(ptr %t42838_pre), !dbg !1838
   store ptr null, ptr %t42838, !dbg !1838
   store ptr %t42840, ptr %t42838, !dbg !1838
-  ; plum.off 161142
+  ; plum.off 161198
   %t42841 = load ptr, ptr %t42838, !dbg !1839
   %t42842 = getelementptr i8, ptr %t42841, i64 8, !dbg !1839
   %t42843 = load ptr, ptr %t42842, !dbg !1839
@@ -116603,7 +116603,7 @@ L42835:
   call void @plum_rel_str(ptr @.str42844), !dbg !1839
   br i1 %t42846, label %L42848, label %L42849, !dbg !1839
 L42848:
-  ; plum.off 161338
+  ; plum.off 161394
   %t42851 = load ptr, ptr %t42796, !dbg !1840
   call void @plum_rc_inc(ptr %t42851), !dbg !1840
   %t42852 = load ptr, ptr %s0, !dbg !1840
@@ -116619,7 +116619,7 @@ L42848:
   %t42860 = xor i1 %t42859, true, !dbg !1840
   br i1 %t42860, label %L42862, label %L42863, !dbg !1840
 L42862:
-  ; plum.off 161415
+  ; plum.off 161471
   %t42866 = load ptr, ptr %s0, !dbg !1841
   call void @plum_rc_inc(ptr %t42866), !dbg !1841
   %t42867 = call ptr @plum_Os_remove_tree(ptr %t42866), !dbg !1841
@@ -116634,7 +116634,7 @@ L42863:
   br label %L42864, !dbg !1841
 L42864:
   %t42868 = load i1, ptr %t42861, !dbg !1841
-  ; plum.off 161508
+  ; plum.off 161564
   %t42870 = load ptr, ptr %t42826, !dbg !1842
   call void @plum_rc_inc(ptr %t42870), !dbg !1842
   %t42871 = load ptr, ptr %s0, !dbg !1842
@@ -116651,7 +116651,7 @@ L42849:
   br label %L42850, !dbg !1842
 L42850:
   %t42873 = load i1, ptr %t42847, !dbg !1842
-  ; plum.off 161602
+  ; plum.off 161658
   %t42875 = load ptr, ptr %t42826, !dbg !1843
   call void @plum_rc_inc(ptr %t42875), !dbg !1843
   %t42876 = call ptr @plum_Os_remove_tree(ptr %t42875), !dbg !1843
@@ -153112,7 +153112,7 @@ entry:
   %t49829 = alloca i1, !dbg !1977
   %t49851 = alloca ptr, !dbg !1977
   store ptr null, ptr %t49851, !dbg !1977
-  ; plum.off 183596
+  ; plum.off 183652
   %t49793 = load ptr, ptr %s0, !dbg !1978
   call void @plum_rc_inc(ptr %t49793), !dbg !1978
   %t49796 = call ptr @plum_str_concat_reuse(ptr %t49793, ptr @.str49794), !dbg !1978
@@ -153141,7 +153141,7 @@ L49811:
   call void @plum_rel_str(ptr %t49809_pre), !dbg !1978
   store ptr null, ptr %t49809, !dbg !1978
   store ptr %t49807, ptr %t49809, !dbg !1978
-  ; plum.off 183687
+  ; plum.off 183743
   %t49814 = load ptr, ptr %t49809, !dbg !1979
   %t49815 = call ptr @plum_str_concat_reuse(ptr @.str49812, ptr %t49814), !dbg !1979
   %t49816 = call i1 @plum_println(ptr %t49815), !dbg !1979
@@ -153193,12 +153193,12 @@ L49853:
   call void @plum_rel_str(ptr %t49851_pre), !dbg !1979
   store ptr null, ptr %t49851, !dbg !1979
   store ptr %t49849, ptr %t49851, !dbg !1979
-  ; plum.off 183866
+  ; plum.off 183922
   %t49854 = load ptr, ptr %t49792, !dbg !1980
   call void @plum_rc_inc(ptr %t49854), !dbg !1980
   %t49855 = call ptr @plum_Os_remove_file(ptr %t49854), !dbg !1980
   call void @plum_rel__prelude__Result_Unit_Str(ptr %t49855), !dbg !1980
-  ; plum.off 183887
+  ; plum.off 183943
   %t49858 = load ptr, ptr %t49851, !dbg !1980
   %t49859 = call ptr @plum_str_concat_reuse(ptr @.str49856, ptr %t49858), !dbg !1980
   %t49860 = call i1 @plum_println(ptr %t49859), !dbg !1980
@@ -181353,7 +181353,7 @@ entry:
   %t66213 = alloca ptr, !dbg !2593
   store ptr null, ptr %t66213, !dbg !2593
   %t66220 = alloca ptr, !dbg !2593
-  ; plum.off 188720
+  ; plum.off 188776
   %t66214 = load ptr, ptr %s0, !dbg !2594
   call void @plum_rc_inc(ptr %t66214), !dbg !2594
   %t66217 = call ptr @plum_Path_join(ptr %t66214, ptr @.str66215), !dbg !2594
@@ -182048,7 +182048,7 @@ Ltail440:
   store ptr %t66567, ptr %t66552, !dbg !2617
   br label %L66555, !dbg !2617
 L66554:
-  ; plum.off 162070
+  ; plum.off 162126
   %t66569 = load ptr, ptr %s1, !dbg !2618
   call void @plum_rc_inc(ptr %t66569), !dbg !2618
   %t66570 = load ptr, ptr %s0, !dbg !2618
@@ -183062,7 +183062,7 @@ L67121:
 L67122:
   %t67126 = load i1, ptr %t67120, !dbg !2644
   store i1 %t67126, ptr %t67114, !dbg !2644
-  ; plum.off 151012
+  ; plum.off 151068
   %t67128 = load i1, ptr %t67114, !dbg !2645
   store i1 1, ptr %t67129, !dbg !2645
   br i1 %t67128, label %L67131, label %L67130, !dbg !2645
@@ -183100,11 +183100,11 @@ L67139:
 L67131:
   %t67153 = load i1, ptr %t67129, !dbg !2645
   store i1 %t67153, ptr %t67127, !dbg !2645
-  ; plum.off 151142
+  ; plum.off 151198
   %t67156 = load ptr, ptr %t67041, !dbg !2646
   call void @plum_rc_inc(ptr %t67156), !dbg !2646
   %t67157 = call i1 @plum_buildcache_finish(ptr @.str67154, ptr %t67156), !dbg !2646
-  ; plum.off 151218
+  ; plum.off 151274
   %t67158 = load i1, ptr %t67114, !dbg !2647
   br i1 %t67158, label %L67160, label %L67161, !dbg !2647
 L67160:
@@ -183140,13 +183140,13 @@ L67174:
   br label %L67162, !dbg !2647
 L67162:
   %t67187 = load i1, ptr %t67159, !dbg !2647
-  ; plum.off 151473
+  ; plum.off 151529
   %t67189 = call ptr @plum_buildcache_start(i1 0), !dbg !2648
   %t67188_pre = load ptr, ptr %t67188, !dbg !2648
   call void @plum_rel_Time_Instant(ptr %t67188_pre), !dbg !2648
   store ptr null, ptr %t67188, !dbg !2648
   store ptr %t67189, ptr %t67188, !dbg !2648
-  ; plum.off 151530
+  ; plum.off 151586
   %t67191 = load i1, ptr %t67114, !dbg !2649
   br i1 %t67191, label %L67193, label %L67194, !dbg !2649
 L67193:
@@ -183218,7 +183218,7 @@ L67232:
   store ptr %t67247, ptr %t67231, !dbg !2649
   br label %L67234, !dbg !2649
 L67233:
-  ; plum.off 151776
+  ; plum.off 151832
   %t67248 = load i1, ptr %t67127, !dbg !2650
   br i1 %t67248, label %L67250, label %L67251, !dbg !2650
 L67250:
@@ -183254,7 +183254,7 @@ L67195:
   call void @plum_rel_str(ptr %t67190_pre), !dbg !2650
   store ptr null, ptr %t67190, !dbg !2650
   store ptr %t67265, ptr %t67190, !dbg !2650
-  ; plum.off 151886
+  ; plum.off 151942
   %t67268 = load ptr, ptr %t67188, !dbg !2651
   call void @plum_rc_inc(ptr %t67268), !dbg !2651
   %t67269 = call i1 @plum_buildcache_finish(ptr @.str67266, ptr %t67268), !dbg !2651
@@ -360674,45 +360674,45 @@ entry:
 !3 = !DISubroutineType(types: !4)
 !4 = !{null}
 !5 = !DIFile(filename: "main.plum", directory: "bootstrap/self_host")
-!6 = distinct !DISubprogram(name: "main", scope: !5, file: !5, line: 4224, type: !3, scopeLine: 4224, spFlags: DISPFlagDefinition, unit: !1)
-!7 = !DILocation(line: 4224, column: 1, scope: !6)
-!8 = !DILocation(line: 4063, column: 1, scope: !6)
-!9 = !DILocation(line: 4064, column: 1, scope: !6)
-!10 = !DILocation(line: 4070, column: 1, scope: !6)
-!11 = !DILocation(line: 4076, column: 1, scope: !6)
-!12 = !DILocation(line: 4084, column: 1, scope: !6)
-!13 = !DILocation(line: 4099, column: 1, scope: !6)
-!14 = !DILocation(line: 4100, column: 1, scope: !6)
-!15 = !DILocation(line: 4131, column: 1, scope: !6)
-!16 = !DILocation(line: 4132, column: 1, scope: !6)
-!17 = !DILocation(line: 4133, column: 1, scope: !6)
-!18 = !DILocation(line: 4136, column: 1, scope: !6)
-!19 = !DILocation(line: 4140, column: 1, scope: !6)
-!20 = !DILocation(line: 4142, column: 1, scope: !6)
-!21 = !DILocation(line: 4146, column: 1, scope: !6)
-!22 = !DILocation(line: 4148, column: 1, scope: !6)
-!23 = !DILocation(line: 4150, column: 1, scope: !6)
-!24 = !DILocation(line: 4154, column: 1, scope: !6)
-!25 = !DILocation(line: 4158, column: 1, scope: !6)
-!26 = !DILocation(line: 4175, column: 1, scope: !6)
-!27 = !DILocation(line: 4176, column: 1, scope: !6)
-!28 = !DILocation(line: 4178, column: 1, scope: !6)
-!29 = !DILocation(line: 4180, column: 1, scope: !6)
-!30 = !DILocation(line: 4185, column: 1, scope: !6)
-!31 = !DILocation(line: 4186, column: 1, scope: !6)
-!32 = !DILocation(line: 4187, column: 1, scope: !6)
-!33 = !DILocation(line: 4189, column: 1, scope: !6)
-!34 = !DILocation(line: 4193, column: 1, scope: !6)
-!35 = !DILocation(line: 4205, column: 1, scope: !6)
-!36 = !DILocation(line: 4219, column: 1, scope: !6)
-!37 = !DILocation(line: 4222, column: 1, scope: !6)
-!38 = !DILocation(line: 4229, column: 1, scope: !6)
-!39 = !DILocation(line: 4230, column: 1, scope: !6)
-!40 = !DILocation(line: 4232, column: 1, scope: !6)
-!41 = !DILocation(line: 4234, column: 1, scope: !6)
-!42 = !DILocation(line: 4250, column: 1, scope: !6)
-!43 = !DILocation(line: 4255, column: 1, scope: !6)
-!44 = !DILocation(line: 4257, column: 1, scope: !6)
+!6 = distinct !DISubprogram(name: "main", scope: !5, file: !5, line: 4225, type: !3, scopeLine: 4225, spFlags: DISPFlagDefinition, unit: !1)
+!7 = !DILocation(line: 4225, column: 1, scope: !6)
+!8 = !DILocation(line: 4064, column: 1, scope: !6)
+!9 = !DILocation(line: 4065, column: 1, scope: !6)
+!10 = !DILocation(line: 4071, column: 1, scope: !6)
+!11 = !DILocation(line: 4077, column: 1, scope: !6)
+!12 = !DILocation(line: 4085, column: 1, scope: !6)
+!13 = !DILocation(line: 4100, column: 1, scope: !6)
+!14 = !DILocation(line: 4101, column: 1, scope: !6)
+!15 = !DILocation(line: 4132, column: 1, scope: !6)
+!16 = !DILocation(line: 4133, column: 1, scope: !6)
+!17 = !DILocation(line: 4134, column: 1, scope: !6)
+!18 = !DILocation(line: 4137, column: 1, scope: !6)
+!19 = !DILocation(line: 4141, column: 1, scope: !6)
+!20 = !DILocation(line: 4143, column: 1, scope: !6)
+!21 = !DILocation(line: 4147, column: 1, scope: !6)
+!22 = !DILocation(line: 4149, column: 1, scope: !6)
+!23 = !DILocation(line: 4151, column: 1, scope: !6)
+!24 = !DILocation(line: 4155, column: 1, scope: !6)
+!25 = !DILocation(line: 4159, column: 1, scope: !6)
+!26 = !DILocation(line: 4176, column: 1, scope: !6)
+!27 = !DILocation(line: 4177, column: 1, scope: !6)
+!28 = !DILocation(line: 4179, column: 1, scope: !6)
+!29 = !DILocation(line: 4181, column: 1, scope: !6)
+!30 = !DILocation(line: 4186, column: 1, scope: !6)
+!31 = !DILocation(line: 4187, column: 1, scope: !6)
+!32 = !DILocation(line: 4188, column: 1, scope: !6)
+!33 = !DILocation(line: 4190, column: 1, scope: !6)
+!34 = !DILocation(line: 4194, column: 1, scope: !6)
+!35 = !DILocation(line: 4206, column: 1, scope: !6)
+!36 = !DILocation(line: 4220, column: 1, scope: !6)
+!37 = !DILocation(line: 4223, column: 1, scope: !6)
+!38 = !DILocation(line: 4230, column: 1, scope: !6)
+!39 = !DILocation(line: 4231, column: 1, scope: !6)
+!40 = !DILocation(line: 4233, column: 1, scope: !6)
+!41 = !DILocation(line: 4235, column: 1, scope: !6)
+!42 = !DILocation(line: 4251, column: 1, scope: !6)
+!43 = !DILocation(line: 4256, column: 1, scope: !6)
+!44 = !DILocation(line: 4258, column: 1, scope: !6)
 !45 = !DIFile(filename: "<Os>", directory: ".")
 !46 = distinct !DISubprogram(name: "Os.platform", scope: !45, file: !45, line: 1, type: !3, scopeLine: 1, spFlags: DISPFlagDefinition, unit: !1)
 !47 = !DILocation(line: 1, column: 1, scope: !46)
@@ -360779,27 +360779,27 @@ entry:
 !108 = !DILocation(line: 137, column: 1, scope: !105)
 !109 = !DILocation(line: 138, column: 1, scope: !105)
 !110 = !DILocation(line: 139, column: 1, scope: !105)
-!111 = distinct !DISubprogram(name: "cmd_fetch", scope: !5, file: !5, line: 3756, type: !3, scopeLine: 3756, spFlags: DISPFlagDefinition, unit: !1)
-!112 = !DILocation(line: 3756, column: 1, scope: !111)
-!113 = !DILocation(line: 3747, column: 1, scope: !111)
-!114 = !DILocation(line: 3750, column: 1, scope: !111)
-!115 = !DILocation(line: 3751, column: 1, scope: !111)
-!116 = distinct !DISubprogram(name: "cmd_vendor", scope: !5, file: !5, line: 3764, type: !3, scopeLine: 3764, spFlags: DISPFlagDefinition, unit: !1)
-!117 = !DILocation(line: 3764, column: 1, scope: !116)
-!118 = !DILocation(line: 3760, column: 1, scope: !116)
-!119 = !DILocation(line: 3761, column: 1, scope: !116)
-!120 = !DILocation(line: 3762, column: 1, scope: !116)
-!121 = !DILocation(line: 3763, column: 1, scope: !116)
-!122 = distinct !DISubprogram(name: "cmd_cache_list", scope: !5, file: !5, line: 3782, type: !3, scopeLine: 3782, spFlags: DISPFlagDefinition, unit: !1)
-!123 = !DILocation(line: 3782, column: 1, scope: !122)
-!124 = !DILocation(line: 3779, column: 1, scope: !122)
-!125 = !DILocation(line: 3780, column: 1, scope: !122)
-!126 = !DILocation(line: 3781, column: 1, scope: !122)
-!127 = distinct !DISubprogram(name: "cmd_cache_clean", scope: !5, file: !5, line: 3817, type: !3, scopeLine: 3817, spFlags: DISPFlagDefinition, unit: !1)
-!128 = !DILocation(line: 3817, column: 1, scope: !127)
-!129 = !DILocation(line: 3814, column: 1, scope: !127)
-!130 = !DILocation(line: 3815, column: 1, scope: !127)
-!131 = !DILocation(line: 3816, column: 1, scope: !127)
+!111 = distinct !DISubprogram(name: "cmd_fetch", scope: !5, file: !5, line: 3757, type: !3, scopeLine: 3757, spFlags: DISPFlagDefinition, unit: !1)
+!112 = !DILocation(line: 3757, column: 1, scope: !111)
+!113 = !DILocation(line: 3748, column: 1, scope: !111)
+!114 = !DILocation(line: 3751, column: 1, scope: !111)
+!115 = !DILocation(line: 3752, column: 1, scope: !111)
+!116 = distinct !DISubprogram(name: "cmd_vendor", scope: !5, file: !5, line: 3765, type: !3, scopeLine: 3765, spFlags: DISPFlagDefinition, unit: !1)
+!117 = !DILocation(line: 3765, column: 1, scope: !116)
+!118 = !DILocation(line: 3761, column: 1, scope: !116)
+!119 = !DILocation(line: 3762, column: 1, scope: !116)
+!120 = !DILocation(line: 3763, column: 1, scope: !116)
+!121 = !DILocation(line: 3764, column: 1, scope: !116)
+!122 = distinct !DISubprogram(name: "cmd_cache_list", scope: !5, file: !5, line: 3783, type: !3, scopeLine: 3783, spFlags: DISPFlagDefinition, unit: !1)
+!123 = !DILocation(line: 3783, column: 1, scope: !122)
+!124 = !DILocation(line: 3780, column: 1, scope: !122)
+!125 = !DILocation(line: 3781, column: 1, scope: !122)
+!126 = !DILocation(line: 3782, column: 1, scope: !122)
+!127 = distinct !DISubprogram(name: "cmd_cache_clean", scope: !5, file: !5, line: 3818, type: !3, scopeLine: 3818, spFlags: DISPFlagDefinition, unit: !1)
+!128 = !DILocation(line: 3818, column: 1, scope: !127)
+!129 = !DILocation(line: 3815, column: 1, scope: !127)
+!130 = !DILocation(line: 3816, column: 1, scope: !127)
+!131 = !DILocation(line: 3817, column: 1, scope: !127)
 !132 = distinct !DISubprogram(name: "buildcache.list_cache", scope: !64, file: !64, line: 174, type: !3, scopeLine: 174, spFlags: DISPFlagDefinition, unit: !1)
 !133 = !DILocation(line: 174, column: 1, scope: !132)
 !134 = !DILocation(line: 172, column: 1, scope: !132)
@@ -360870,12 +360870,12 @@ entry:
 !199 = !DILocation(line: 220, column: 1, scope: !192)
 !200 = !DILocation(line: 223, column: 1, scope: !192)
 !201 = !DILocation(line: 224, column: 1, scope: !192)
-!202 = distinct !DISubprogram(name: "cmd_new", scope: !5, file: !5, line: 4034, type: !3, scopeLine: 4034, spFlags: DISPFlagDefinition, unit: !1)
-!203 = !DILocation(line: 4034, column: 1, scope: !202)
-!204 = !DILocation(line: 4041, column: 1, scope: !202)
-!205 = !DILocation(line: 4042, column: 1, scope: !202)
-!206 = !DILocation(line: 4043, column: 1, scope: !202)
-!207 = !DILocation(line: 4044, column: 1, scope: !202)
+!202 = distinct !DISubprogram(name: "cmd_new", scope: !5, file: !5, line: 4035, type: !3, scopeLine: 4035, spFlags: DISPFlagDefinition, unit: !1)
+!203 = !DILocation(line: 4035, column: 1, scope: !202)
+!204 = !DILocation(line: 4042, column: 1, scope: !202)
+!205 = !DILocation(line: 4043, column: 1, scope: !202)
+!206 = !DILocation(line: 4044, column: 1, scope: !202)
+!207 = !DILocation(line: 4045, column: 1, scope: !202)
 !208 = distinct !DISubprogram(name: "typecheck.check_program", scope: !51, file: !51, line: 449, type: !3, scopeLine: 449, spFlags: DISPFlagDefinition, unit: !1)
 !209 = !DILocation(line: 449, column: 1, scope: !208)
 !210 = !DILocation(line: 446, column: 1, scope: !208)
@@ -360889,8 +360889,8 @@ entry:
 !218 = !DILocation(line: 7017, column: 1, scope: !213)
 !219 = !DILocation(line: 7018, column: 1, scope: !213)
 !220 = !DILocation(line: 7019, column: 1, scope: !213)
-!221 = distinct !DISubprogram(name: "collect_project", scope: !5, file: !5, line: 3713, type: !3, scopeLine: 3713, spFlags: DISPFlagDefinition, unit: !1)
-!222 = !DILocation(line: 3713, column: 1, scope: !221)
+!221 = distinct !DISubprogram(name: "collect_project", scope: !5, file: !5, line: 3714, type: !3, scopeLine: 3714, spFlags: DISPFlagDefinition, unit: !1)
+!222 = !DILocation(line: 3714, column: 1, scope: !221)
 !223 = distinct !DISubprogram(name: "<prelude>.Result.unwrap_or", scope: !61, file: !61, line: 1, type: !3, scopeLine: 1, spFlags: DISPFlagDefinition, unit: !1)
 !224 = !DILocation(line: 1, column: 1, scope: !223)
 !225 = distinct !DISubprogram(name: "Os.is_directory", scope: !45, file: !45, line: 1, type: !3, scopeLine: 1, spFlags: DISPFlagDefinition, unit: !1)
@@ -360912,30 +360912,30 @@ entry:
 !241 = !DILocation(line: 2511, column: 1, scope: !228)
 !242 = !DILocation(line: 2512, column: 1, scope: !228)
 !243 = !DILocation(line: 2518, column: 1, scope: !228)
-!244 = distinct !DISubprogram(name: "wants_release", scope: !5, file: !5, line: 3233, type: !3, scopeLine: 3233, spFlags: DISPFlagDefinition, unit: !1)
-!245 = !DILocation(line: 3233, column: 1, scope: !244)
-!246 = distinct !DISubprogram(name: "wants_trace", scope: !5, file: !5, line: 3245, type: !3, scopeLine: 3245, spFlags: DISPFlagDefinition, unit: !1)
-!247 = !DILocation(line: 3245, column: 1, scope: !246)
-!248 = distinct !DISubprogram(name: "build_project", scope: !5, file: !5, line: 3350, type: !3, scopeLine: 3350, spFlags: DISPFlagDefinition, unit: !1)
-!249 = !DILocation(line: 3350, column: 1, scope: !248)
-!250 = !DILocation(line: 3346, column: 1, scope: !248)
-!251 = !DILocation(line: 3347, column: 1, scope: !248)
-!252 = !DILocation(line: 3348, column: 1, scope: !248)
-!253 = !DILocation(line: 3349, column: 1, scope: !248)
+!244 = distinct !DISubprogram(name: "wants_release", scope: !5, file: !5, line: 3234, type: !3, scopeLine: 3234, spFlags: DISPFlagDefinition, unit: !1)
+!245 = !DILocation(line: 3234, column: 1, scope: !244)
+!246 = distinct !DISubprogram(name: "wants_trace", scope: !5, file: !5, line: 3246, type: !3, scopeLine: 3246, spFlags: DISPFlagDefinition, unit: !1)
+!247 = !DILocation(line: 3246, column: 1, scope: !246)
+!248 = distinct !DISubprogram(name: "build_project", scope: !5, file: !5, line: 3351, type: !3, scopeLine: 3351, spFlags: DISPFlagDefinition, unit: !1)
+!249 = !DILocation(line: 3351, column: 1, scope: !248)
+!250 = !DILocation(line: 3347, column: 1, scope: !248)
+!251 = !DILocation(line: 3348, column: 1, scope: !248)
+!252 = !DILocation(line: 3349, column: 1, scope: !248)
+!253 = !DILocation(line: 3350, column: 1, scope: !248)
 !254 = distinct !DISubprogram(name: "codegen.set_debug_frames", scope: !54, file: !54, line: 582, type: !3, scopeLine: 582, spFlags: DISPFlagDefinition, unit: !1)
 !255 = !DILocation(line: 582, column: 1, scope: !254)
 !256 = distinct !DISubprogram(name: "codegen.set_debug_info", scope: !54, file: !54, line: 696, type: !3, scopeLine: 696, spFlags: DISPFlagDefinition, unit: !1)
 !257 = !DILocation(line: 696, column: 1, scope: !256)
 !258 = distinct !DISubprogram(name: "codegen.cg_emit_program", scope: !54, file: !54, line: 7025, type: !3, scopeLine: 7025, spFlags: DISPFlagDefinition, unit: !1)
 !259 = !DILocation(line: 7025, column: 1, scope: !258)
-!260 = distinct !DISubprogram(name: "cmd_fmt", scope: !5, file: !5, line: 3495, type: !3, scopeLine: 3495, spFlags: DISPFlagDefinition, unit: !1)
-!261 = !DILocation(line: 3495, column: 1, scope: !260)
-!262 = !DILocation(line: 3488, column: 1, scope: !260)
-!263 = !DILocation(line: 3489, column: 1, scope: !260)
-!264 = !DILocation(line: 3490, column: 1, scope: !260)
-!265 = !DILocation(line: 3491, column: 1, scope: !260)
-!266 = !DILocation(line: 3493, column: 1, scope: !260)
-!267 = !DILocation(line: 3494, column: 1, scope: !260)
+!260 = distinct !DISubprogram(name: "cmd_fmt", scope: !5, file: !5, line: 3496, type: !3, scopeLine: 3496, spFlags: DISPFlagDefinition, unit: !1)
+!261 = !DILocation(line: 3496, column: 1, scope: !260)
+!262 = !DILocation(line: 3489, column: 1, scope: !260)
+!263 = !DILocation(line: 3490, column: 1, scope: !260)
+!264 = !DILocation(line: 3491, column: 1, scope: !260)
+!265 = !DILocation(line: 3492, column: 1, scope: !260)
+!266 = !DILocation(line: 3494, column: 1, scope: !260)
+!267 = !DILocation(line: 3495, column: 1, scope: !260)
 !268 = distinct !DISubprogram(name: "cmd_spans", scope: !5, file: !5, line: 2145, type: !3, scopeLine: 2145, spFlags: DISPFlagDefinition, unit: !1)
 !269 = !DILocation(line: 2145, column: 1, scope: !268)
 !270 = !DILocation(line: 2149, column: 1, scope: !268)
@@ -360945,12 +360945,12 @@ entry:
 !274 = !DILocation(line: 2153, column: 1, scope: !268)
 !275 = !DILocation(line: 2154, column: 1, scope: !268)
 !276 = !DILocation(line: 2157, column: 1, scope: !268)
-!277 = distinct !DISubprogram(name: "relex_items", scope: !5, file: !5, line: 3465, type: !3, scopeLine: 3465, spFlags: DISPFlagDefinition, unit: !1)
-!278 = !DILocation(line: 3465, column: 1, scope: !277)
-!279 = !DILocation(line: 3461, column: 1, scope: !277)
-!280 = !DILocation(line: 3462, column: 1, scope: !277)
-!281 = !DILocation(line: 3463, column: 1, scope: !277)
-!282 = !DILocation(line: 3464, column: 1, scope: !277)
+!277 = distinct !DISubprogram(name: "relex_items", scope: !5, file: !5, line: 3466, type: !3, scopeLine: 3466, spFlags: DISPFlagDefinition, unit: !1)
+!278 = !DILocation(line: 3466, column: 1, scope: !277)
+!279 = !DILocation(line: 3462, column: 1, scope: !277)
+!280 = !DILocation(line: 3463, column: 1, scope: !277)
+!281 = !DILocation(line: 3464, column: 1, scope: !277)
+!282 = !DILocation(line: 3465, column: 1, scope: !277)
 !283 = !DIFile(filename: "lexer.plum", directory: "bootstrap/self_host/lexer")
 !284 = distinct !DISubprogram(name: "lexer.token_texts", scope: !283, file: !283, line: 674, type: !3, scopeLine: 674, spFlags: DISPFlagDefinition, unit: !1)
 !285 = !DILocation(line: 674, column: 1, scope: !284)
@@ -360960,14 +360960,14 @@ entry:
 !289 = !DILocation(line: 684, column: 1, scope: !288)
 !290 = !DILocation(line: 682, column: 1, scope: !288)
 !291 = !DILocation(line: 683, column: 1, scope: !288)
-!292 = distinct !DISubprogram(name: "run_project", scope: !5, file: !5, line: 3379, type: !3, scopeLine: 3379, spFlags: DISPFlagDefinition, unit: !1)
-!293 = !DILocation(line: 3379, column: 1, scope: !292)
-!294 = !DILocation(line: 3382, column: 1, scope: !292)
-!295 = !DILocation(line: 3387, column: 1, scope: !292)
-!296 = !DILocation(line: 3388, column: 1, scope: !292)
-!297 = !DILocation(line: 3391, column: 1, scope: !292)
-!298 = !DILocation(line: 3392, column: 1, scope: !292)
-!299 = !DILocation(line: 3393, column: 1, scope: !292)
+!292 = distinct !DISubprogram(name: "run_project", scope: !5, file: !5, line: 3380, type: !3, scopeLine: 3380, spFlags: DISPFlagDefinition, unit: !1)
+!293 = !DILocation(line: 3380, column: 1, scope: !292)
+!294 = !DILocation(line: 3383, column: 1, scope: !292)
+!295 = !DILocation(line: 3388, column: 1, scope: !292)
+!296 = !DILocation(line: 3389, column: 1, scope: !292)
+!297 = !DILocation(line: 3392, column: 1, scope: !292)
+!298 = !DILocation(line: 3393, column: 1, scope: !292)
+!299 = !DILocation(line: 3394, column: 1, scope: !292)
 !300 = distinct !DISubprogram(name: "lexer.tokenize_spanned_at", scope: !283, file: !283, line: 599, type: !3, scopeLine: 599, spFlags: DISPFlagDefinition, unit: !1)
 !301 = !DILocation(line: 599, column: 1, scope: !300)
 !302 = !DILocation(line: 580, column: 1, scope: !300)
@@ -361038,32 +361038,32 @@ entry:
 !367 = !DILocation(line: 213, column: 1, scope: !365)
 !368 = !DILocation(line: 216, column: 1, scope: !365)
 !369 = !DILocation(line: 230, column: 1, scope: !365)
-!370 = distinct !DISubprogram(name: "dep_closure", scope: !5, file: !5, line: 3880, type: !3, scopeLine: 3880, spFlags: DISPFlagDefinition, unit: !1)
-!371 = !DILocation(line: 3880, column: 1, scope: !370)
+!370 = distinct !DISubprogram(name: "dep_closure", scope: !5, file: !5, line: 3881, type: !3, scopeLine: 3881, spFlags: DISPFlagDefinition, unit: !1)
+!371 = !DILocation(line: 3881, column: 1, scope: !370)
 !372 = !DIFile(filename: "<Path>", directory: ".")
 !373 = distinct !DISubprogram(name: "Path.clean", scope: !372, file: !372, line: 1, type: !3, scopeLine: 1, spFlags: DISPFlagDefinition, unit: !1)
 !374 = !DILocation(line: 1, column: 1, scope: !373)
-!375 = distinct !DISubprogram(name: "report_fetched", scope: !5, file: !5, line: 3838, type: !3, scopeLine: 3838, spFlags: DISPFlagDefinition, unit: !1)
-!376 = !DILocation(line: 3838, column: 1, scope: !375)
-!377 = !DILocation(line: 3826, column: 1, scope: !375)
-!378 = !DILocation(line: 3834, column: 1, scope: !375)
-!379 = !DILocation(line: 3835, column: 1, scope: !375)
-!380 = distinct !DISubprogram(name: "vendor_deps", scope: !5, file: !5, line: 3772, type: !3, scopeLine: 3772, spFlags: DISPFlagDefinition, unit: !1)
-!381 = !DILocation(line: 3772, column: 1, scope: !380)
-!382 = !DILocation(line: 3770, column: 1, scope: !380)
+!375 = distinct !DISubprogram(name: "report_fetched", scope: !5, file: !5, line: 3839, type: !3, scopeLine: 3839, spFlags: DISPFlagDefinition, unit: !1)
+!376 = !DILocation(line: 3839, column: 1, scope: !375)
+!377 = !DILocation(line: 3827, column: 1, scope: !375)
+!378 = !DILocation(line: 3835, column: 1, scope: !375)
+!379 = !DILocation(line: 3836, column: 1, scope: !375)
+!380 = distinct !DISubprogram(name: "vendor_deps", scope: !5, file: !5, line: 3773, type: !3, scopeLine: 3773, spFlags: DISPFlagDefinition, unit: !1)
+!381 = !DILocation(line: 3773, column: 1, scope: !380)
+!382 = !DILocation(line: 3771, column: 1, scope: !380)
 !383 = !DIFile(filename: "fetch.plum", directory: "bootstrap/self_host/pkg")
 !384 = distinct !DISubprogram(name: "pkg.cached_packages", scope: !383, file: !383, line: 96, type: !3, scopeLine: 96, spFlags: DISPFlagDefinition, unit: !1)
 !385 = !DILocation(line: 96, column: 1, scope: !384)
 !386 = distinct !DISubprogram(name: "pkg.cache_root", scope: !383, file: !383, line: 68, type: !3, scopeLine: 68, spFlags: DISPFlagDefinition, unit: !1)
 !387 = !DILocation(line: 68, column: 1, scope: !386)
 !388 = !DILocation(line: 76, column: 1, scope: !386)
-!389 = distinct !DISubprogram(name: "report_cached_packages", scope: !5, file: !5, line: 3789, type: !3, scopeLine: 3789, spFlags: DISPFlagDefinition, unit: !1)
-!390 = !DILocation(line: 3789, column: 1, scope: !389)
-!391 = !DILocation(line: 3788, column: 1, scope: !389)
-!392 = distinct !DISubprogram(name: "cached_file_count", scope: !5, file: !5, line: 3798, type: !3, scopeLine: 3798, spFlags: DISPFlagDefinition, unit: !1)
-!393 = !DILocation(line: 3798, column: 1, scope: !392)
-!394 = distinct !DISubprogram(name: "cached_byte_count", scope: !5, file: !5, line: 3794, type: !3, scopeLine: 3794, spFlags: DISPFlagDefinition, unit: !1)
-!395 = !DILocation(line: 3794, column: 1, scope: !394)
+!389 = distinct !DISubprogram(name: "report_cached_packages", scope: !5, file: !5, line: 3790, type: !3, scopeLine: 3790, spFlags: DISPFlagDefinition, unit: !1)
+!390 = !DILocation(line: 3790, column: 1, scope: !389)
+!391 = !DILocation(line: 3789, column: 1, scope: !389)
+!392 = distinct !DISubprogram(name: "cached_file_count", scope: !5, file: !5, line: 3799, type: !3, scopeLine: 3799, spFlags: DISPFlagDefinition, unit: !1)
+!393 = !DILocation(line: 3799, column: 1, scope: !392)
+!394 = distinct !DISubprogram(name: "cached_byte_count", scope: !5, file: !5, line: 3795, type: !3, scopeLine: 3795, spFlags: DISPFlagDefinition, unit: !1)
+!395 = !DILocation(line: 3795, column: 1, scope: !394)
 !396 = distinct !DISubprogram(name: "pkg.clear_package_cache", scope: !383, file: !383, line: 137, type: !3, scopeLine: 137, spFlags: DISPFlagDefinition, unit: !1)
 !397 = !DILocation(line: 137, column: 1, scope: !396)
 !398 = distinct !DISubprogram(name: "buildcache.root", scope: !64, file: !64, line: 62, type: !3, scopeLine: 62, spFlags: DISPFlagDefinition, unit: !1)
@@ -361121,8 +361121,8 @@ entry:
 !450 = !DILocation(line: 568, column: 1, scope: !445)
 !451 = !DILocation(line: 569, column: 1, scope: !445)
 !452 = !DILocation(line: 570, column: 1, scope: !445)
-!453 = distinct !DISubprogram(name: "collect_own", scope: !5, file: !5, line: 3735, type: !3, scopeLine: 3735, spFlags: DISPFlagDefinition, unit: !1)
-!454 = !DILocation(line: 3735, column: 1, scope: !453)
+!453 = distinct !DISubprogram(name: "collect_own", scope: !5, file: !5, line: 3736, type: !3, scopeLine: 3736, spFlags: DISPFlagDefinition, unit: !1)
+!454 = !DILocation(line: 3736, column: 1, scope: !453)
 !455 = distinct !DISubprogram(name: "doc_modules", scope: !5, file: !5, line: 742, type: !3, scopeLine: 742, spFlags: DISPFlagDefinition, unit: !1)
 !456 = !DILocation(line: 742, column: 1, scope: !455)
 !457 = !DILocation(line: 740, column: 1, scope: !455)
@@ -361175,15 +361175,15 @@ entry:
 !504 = !DILocation(line: 287, column: 1, scope: !503)
 !505 = distinct !DISubprogram(name: "typecheck.builtin_methods", scope: !51, file: !51, line: 2648, type: !3, scopeLine: 2648, spFlags: DISPFlagDefinition, unit: !1)
 !506 = !DILocation(line: 2648, column: 1, scope: !505)
-!507 = distinct !DISubprogram(name: "new_failed", scope: !5, file: !5, line: 4054, type: !3, scopeLine: 4054, spFlags: DISPFlagDefinition, unit: !1)
-!508 = !DILocation(line: 4054, column: 1, scope: !507)
-!509 = !DILocation(line: 4054, column: 1, scope: !507)
-!510 = distinct !DISubprogram(name: "mkdir_ok", scope: !5, file: !5, line: 4056, type: !3, scopeLine: 4056, spFlags: DISPFlagDefinition, unit: !1)
-!511 = !DILocation(line: 4056, column: 1, scope: !510)
+!507 = distinct !DISubprogram(name: "new_failed", scope: !5, file: !5, line: 4055, type: !3, scopeLine: 4055, spFlags: DISPFlagDefinition, unit: !1)
+!508 = !DILocation(line: 4055, column: 1, scope: !507)
+!509 = !DILocation(line: 4055, column: 1, scope: !507)
+!510 = distinct !DISubprogram(name: "mkdir_ok", scope: !5, file: !5, line: 4057, type: !3, scopeLine: 4057, spFlags: DISPFlagDefinition, unit: !1)
+!511 = !DILocation(line: 4057, column: 1, scope: !510)
 !512 = distinct !DISubprogram(name: "Os.write_file", scope: !45, file: !45, line: 1, type: !3, scopeLine: 1, spFlags: DISPFlagDefinition, unit: !1)
 !513 = !DILocation(line: 1, column: 1, scope: !512)
-!514 = distinct !DISubprogram(name: "new_template", scope: !5, file: !5, line: 4026, type: !3, scopeLine: 4026, spFlags: DISPFlagDefinition, unit: !1)
-!515 = !DILocation(line: 4026, column: 1, scope: !514)
+!514 = distinct !DISubprogram(name: "new_template", scope: !5, file: !5, line: 4027, type: !3, scopeLine: 4027, spFlags: DISPFlagDefinition, unit: !1)
+!515 = !DILocation(line: 4027, column: 1, scope: !514)
 !516 = !DIFile(filename: "context.plum", directory: "bootstrap/self_host/typecheck")
 !517 = distinct !DISubprogram(name: "typecheck.build_context", scope: !516, file: !516, line: 186, type: !3, scopeLine: 186, spFlags: DISPFlagDefinition, unit: !1)
 !518 = !DILocation(line: 186, column: 1, scope: !517)
@@ -361208,20 +361208,20 @@ entry:
 !537 = !DILocation(line: 40, column: 1, scope: !536)
 !538 = distinct !DISubprogram(name: "parser.PRELUDE_MODULE", scope: !48, file: !48, line: 260, type: !3, scopeLine: 260, spFlags: DISPFlagDefinition, unit: !1)
 !539 = !DILocation(line: 260, column: 1, scope: !538)
-!540 = distinct !DISubprogram(name: "parse_source_files", scope: !5, file: !5, line: 3658, type: !3, scopeLine: 3658, spFlags: DISPFlagDefinition, unit: !1)
-!541 = !DILocation(line: 3658, column: 1, scope: !540)
-!542 = !DILocation(line: 3653, column: 1, scope: !540)
-!543 = !DILocation(line: 3654, column: 1, scope: !540)
-!544 = !DILocation(line: 3655, column: 1, scope: !540)
-!545 = distinct !DISubprogram(name: "prepare_inputs", scope: !5, file: !5, line: 3647, type: !3, scopeLine: 3647, spFlags: DISPFlagDefinition, unit: !1)
-!546 = !DILocation(line: 3647, column: 1, scope: !545)
-!547 = !DILocation(line: 3639, column: 1, scope: !545)
-!548 = !DILocation(line: 3640, column: 1, scope: !545)
-!549 = !DILocation(line: 3641, column: 1, scope: !545)
-!550 = !DILocation(line: 3642, column: 1, scope: !545)
-!551 = !DILocation(line: 3643, column: 1, scope: !545)
-!552 = !DILocation(line: 3645, column: 1, scope: !545)
-!553 = !DILocation(line: 3646, column: 1, scope: !545)
+!540 = distinct !DISubprogram(name: "parse_source_files", scope: !5, file: !5, line: 3659, type: !3, scopeLine: 3659, spFlags: DISPFlagDefinition, unit: !1)
+!541 = !DILocation(line: 3659, column: 1, scope: !540)
+!542 = !DILocation(line: 3654, column: 1, scope: !540)
+!543 = !DILocation(line: 3655, column: 1, scope: !540)
+!544 = !DILocation(line: 3656, column: 1, scope: !540)
+!545 = distinct !DISubprogram(name: "prepare_inputs", scope: !5, file: !5, line: 3648, type: !3, scopeLine: 3648, spFlags: DISPFlagDefinition, unit: !1)
+!546 = !DILocation(line: 3648, column: 1, scope: !545)
+!547 = !DILocation(line: 3640, column: 1, scope: !545)
+!548 = !DILocation(line: 3641, column: 1, scope: !545)
+!549 = !DILocation(line: 3642, column: 1, scope: !545)
+!550 = !DILocation(line: 3643, column: 1, scope: !545)
+!551 = !DILocation(line: 3644, column: 1, scope: !545)
+!552 = !DILocation(line: 3646, column: 1, scope: !545)
+!553 = !DILocation(line: 3647, column: 1, scope: !545)
 !554 = distinct !DISubprogram(name: "discover_tests", scope: !5, file: !5, line: 2361, type: !3, scopeLine: 2361, spFlags: DISPFlagDefinition, unit: !1)
 !555 = !DILocation(line: 2361, column: 1, scope: !554)
 !556 = !DILocation(line: 2340, column: 1, scope: !554)
@@ -361251,31 +361251,31 @@ entry:
 !580 = distinct !DISubprogram(name: "output_path", scope: !5, file: !5, line: 2634, type: !3, scopeLine: 2634, spFlags: DISPFlagDefinition, unit: !1)
 !581 = !DILocation(line: 2634, column: 1, scope: !580)
 !582 = !DILocation(line: 2638, column: 1, scope: !580)
-!583 = distinct !DISubprogram(name: "compile_prepared", scope: !5, file: !5, line: 3254, type: !3, scopeLine: 3254, spFlags: DISPFlagDefinition, unit: !1)
-!584 = !DILocation(line: 3254, column: 1, scope: !583)
-!585 = !DILocation(line: 3251, column: 1, scope: !583)
-!586 = !DILocation(line: 3257, column: 1, scope: !583)
-!587 = !DILocation(line: 3258, column: 1, scope: !583)
-!588 = !DILocation(line: 3259, column: 1, scope: !583)
-!589 = distinct !DISubprogram(name: "link_args_resolved", scope: !5, file: !5, line: 3084, type: !3, scopeLine: 3084, spFlags: DISPFlagDefinition, unit: !1)
-!590 = !DILocation(line: 3084, column: 1, scope: !589)
-!591 = !DILocation(line: 3063, column: 1, scope: !589)
-!592 = !DILocation(line: 3070, column: 1, scope: !589)
-!593 = !DILocation(line: 3071, column: 1, scope: !589)
-!594 = !DILocation(line: 3072, column: 1, scope: !589)
-!595 = !DILocation(line: 3073, column: 1, scope: !589)
-!596 = !DILocation(line: 3074, column: 1, scope: !589)
-!597 = !DILocation(line: 3075, column: 1, scope: !589)
-!598 = !DILocation(line: 3076, column: 1, scope: !589)
-!599 = !DILocation(line: 3077, column: 1, scope: !589)
-!600 = !DILocation(line: 3078, column: 1, scope: !589)
-!601 = !DILocation(line: 3079, column: 1, scope: !589)
-!602 = !DILocation(line: 3080, column: 1, scope: !589)
-!603 = !DILocation(line: 3081, column: 1, scope: !589)
-!604 = !DILocation(line: 3082, column: 1, scope: !589)
-!605 = distinct !DISubprogram(name: "fail_cmd", scope: !5, file: !5, line: 3342, type: !3, scopeLine: 3342, spFlags: DISPFlagDefinition, unit: !1)
-!606 = !DILocation(line: 3342, column: 1, scope: !605)
-!607 = !DILocation(line: 3341, column: 1, scope: !605)
+!583 = distinct !DISubprogram(name: "compile_prepared", scope: !5, file: !5, line: 3255, type: !3, scopeLine: 3255, spFlags: DISPFlagDefinition, unit: !1)
+!584 = !DILocation(line: 3255, column: 1, scope: !583)
+!585 = !DILocation(line: 3252, column: 1, scope: !583)
+!586 = !DILocation(line: 3258, column: 1, scope: !583)
+!587 = !DILocation(line: 3259, column: 1, scope: !583)
+!588 = !DILocation(line: 3260, column: 1, scope: !583)
+!589 = distinct !DISubprogram(name: "link_args_resolved", scope: !5, file: !5, line: 3085, type: !3, scopeLine: 3085, spFlags: DISPFlagDefinition, unit: !1)
+!590 = !DILocation(line: 3085, column: 1, scope: !589)
+!591 = !DILocation(line: 3064, column: 1, scope: !589)
+!592 = !DILocation(line: 3071, column: 1, scope: !589)
+!593 = !DILocation(line: 3072, column: 1, scope: !589)
+!594 = !DILocation(line: 3073, column: 1, scope: !589)
+!595 = !DILocation(line: 3074, column: 1, scope: !589)
+!596 = !DILocation(line: 3075, column: 1, scope: !589)
+!597 = !DILocation(line: 3076, column: 1, scope: !589)
+!598 = !DILocation(line: 3077, column: 1, scope: !589)
+!599 = !DILocation(line: 3078, column: 1, scope: !589)
+!600 = !DILocation(line: 3079, column: 1, scope: !589)
+!601 = !DILocation(line: 3080, column: 1, scope: !589)
+!602 = !DILocation(line: 3081, column: 1, scope: !589)
+!603 = !DILocation(line: 3082, column: 1, scope: !589)
+!604 = !DILocation(line: 3083, column: 1, scope: !589)
+!605 = distinct !DISubprogram(name: "fail_cmd", scope: !5, file: !5, line: 3343, type: !3, scopeLine: 3343, spFlags: DISPFlagDefinition, unit: !1)
+!606 = !DILocation(line: 3343, column: 1, scope: !605)
+!607 = !DILocation(line: 3342, column: 1, scope: !605)
 !608 = distinct !DISubprogram(name: "codegen.cg_emit_program_entry", scope: !54, file: !54, line: 7095, type: !3, scopeLine: 7095, spFlags: DISPFlagDefinition, unit: !1)
 !609 = !DILocation(line: 7095, column: 1, scope: !608)
 !610 = !DILocation(line: 7032, column: 1, scope: !608)
@@ -361314,16 +361314,16 @@ entry:
 !643 = !DILocation(line: 7081, column: 1, scope: !608)
 !644 = !DILocation(line: 7093, column: 1, scope: !608)
 !645 = !DILocation(line: 7094, column: 1, scope: !608)
-!646 = distinct !DISubprogram(name: "fmt_has_flag", scope: !5, file: !5, line: 3500, type: !3, scopeLine: 3500, spFlags: DISPFlagDefinition, unit: !1)
-!647 = !DILocation(line: 3500, column: 1, scope: !646)
-!648 = distinct !DISubprogram(name: "fmt_target", scope: !5, file: !5, line: 3505, type: !3, scopeLine: 3505, spFlags: DISPFlagDefinition, unit: !1)
-!649 = !DILocation(line: 3505, column: 1, scope: !648)
-!650 = distinct !DISubprogram(name: "fmt_files", scope: !5, file: !5, line: 3513, type: !3, scopeLine: 3513, spFlags: DISPFlagDefinition, unit: !1)
-!651 = !DILocation(line: 3513, column: 1, scope: !650)
-!652 = distinct !DISubprogram(name: "fmt_each", scope: !5, file: !5, line: 3534, type: !3, scopeLine: 3534, spFlags: DISPFlagDefinition, unit: !1)
-!653 = !DILocation(line: 3534, column: 1, scope: !652)
-!654 = !DILocation(line: 3529, column: 1, scope: !652)
-!655 = !DILocation(line: 3533, column: 1, scope: !652)
+!646 = distinct !DISubprogram(name: "fmt_has_flag", scope: !5, file: !5, line: 3501, type: !3, scopeLine: 3501, spFlags: DISPFlagDefinition, unit: !1)
+!647 = !DILocation(line: 3501, column: 1, scope: !646)
+!648 = distinct !DISubprogram(name: "fmt_target", scope: !5, file: !5, line: 3506, type: !3, scopeLine: 3506, spFlags: DISPFlagDefinition, unit: !1)
+!649 = !DILocation(line: 3506, column: 1, scope: !648)
+!650 = distinct !DISubprogram(name: "fmt_files", scope: !5, file: !5, line: 3514, type: !3, scopeLine: 3514, spFlags: DISPFlagDefinition, unit: !1)
+!651 = !DILocation(line: 3514, column: 1, scope: !650)
+!652 = distinct !DISubprogram(name: "fmt_each", scope: !5, file: !5, line: 3535, type: !3, scopeLine: 3535, spFlags: DISPFlagDefinition, unit: !1)
+!653 = !DILocation(line: 3535, column: 1, scope: !652)
+!654 = !DILocation(line: 3530, column: 1, scope: !652)
+!655 = !DILocation(line: 3534, column: 1, scope: !652)
 !656 = distinct !DISubprogram(name: "parser.record_spans", scope: !48, file: !48, line: 1090, type: !3, scopeLine: 1090, spFlags: DISPFlagDefinition, unit: !1)
 !657 = !DILocation(line: 1090, column: 1, scope: !656)
 !658 = !DILocation(line: 1090, column: 1, scope: !656)
@@ -361333,11 +361333,11 @@ entry:
 !662 = !DILocation(line: 1, column: 1, scope: !661)
 !663 = distinct !DISubprogram(name: "spans_text", scope: !5, file: !5, line: 2164, type: !3, scopeLine: 2164, spFlags: DISPFlagDefinition, unit: !1)
 !664 = !DILocation(line: 2164, column: 1, scope: !663)
-!665 = distinct !DISubprogram(name: "relex_items_acc", scope: !5, file: !5, line: 3476, type: !3, scopeLine: 3476, spFlags: DISPFlagDefinition, unit: !1)
-!666 = !DILocation(line: 3476, column: 1, scope: !665)
-!667 = !DILocation(line: 3471, column: 1, scope: !665)
-!668 = !DILocation(line: 3472, column: 1, scope: !665)
-!669 = !DILocation(line: 3473, column: 1, scope: !665)
+!665 = distinct !DISubprogram(name: "relex_items_acc", scope: !5, file: !5, line: 3477, type: !3, scopeLine: 3477, spFlags: DISPFlagDefinition, unit: !1)
+!666 = !DILocation(line: 3477, column: 1, scope: !665)
+!667 = !DILocation(line: 3472, column: 1, scope: !665)
+!668 = !DILocation(line: 3473, column: 1, scope: !665)
+!669 = !DILocation(line: 3474, column: 1, scope: !665)
 !670 = distinct !DISubprogram(name: "lexer.token_texts_acc", scope: !283, file: !283, line: 679, type: !3, scopeLine: 679, spFlags: DISPFlagDefinition, unit: !1)
 !671 = !DILocation(line: 679, column: 1, scope: !670)
 !672 = distinct !DISubprogram(name: "lexer.relex_acc", scope: !283, file: !283, line: 695, type: !3, scopeLine: 695, spFlags: DISPFlagDefinition, unit: !1)
@@ -361348,8 +361348,8 @@ entry:
 !677 = distinct !DISubprogram(name: "Os.temp_dir", scope: !45, file: !45, line: 1, type: !3, scopeLine: 1, spFlags: DISPFlagDefinition, unit: !1)
 !678 = !DILocation(line: 1, column: 1, scope: !677)
 !679 = !DILocation(line: 1, column: 1, scope: !677)
-!680 = distinct !DISubprogram(name: "tab_join", scope: !5, file: !5, line: 3376, type: !3, scopeLine: 3376, spFlags: DISPFlagDefinition, unit: !1)
-!681 = !DILocation(line: 3376, column: 1, scope: !680)
+!680 = distinct !DISubprogram(name: "tab_join", scope: !5, file: !5, line: 3377, type: !3, scopeLine: 3377, spFlags: DISPFlagDefinition, unit: !1)
+!681 = !DILocation(line: 3377, column: 1, scope: !680)
 !682 = distinct !DISubprogram(name: "lexer.skip_ws_and_comments", scope: !283, file: !283, line: 163, type: !3, scopeLine: 163, spFlags: DISPFlagDefinition, unit: !1)
 !683 = !DILocation(line: 163, column: 1, scope: !682)
 !684 = distinct !DISubprogram(name: "lexer.lex_one", scope: !283, file: !283, line: 513, type: !3, scopeLine: 513, spFlags: DISPFlagDefinition, unit: !1)
@@ -361463,14 +361463,14 @@ entry:
 !792 = !DILocation(line: 241, column: 1, scope: !790)
 !793 = distinct !DISubprogram(name: "pkg.no_manifest", scope: !104, file: !104, line: 111, type: !3, scopeLine: 111, spFlags: DISPFlagDefinition, unit: !1)
 !794 = !DILocation(line: 111, column: 1, scope: !793)
-!795 = distinct !DISubprogram(name: "add_deps", scope: !5, file: !5, line: 3904, type: !3, scopeLine: 3904, spFlags: DISPFlagDefinition, unit: !1)
-!796 = !DILocation(line: 3904, column: 1, scope: !795)
-!797 = !DILocation(line: 3886, column: 1, scope: !795)
-!798 = !DILocation(line: 3887, column: 1, scope: !795)
-!799 = !DILocation(line: 3890, column: 1, scope: !795)
-!800 = !DILocation(line: 3893, column: 1, scope: !795)
-!801 = !DILocation(line: 3900, column: 1, scope: !795)
-!802 = !DILocation(line: 3903, column: 1, scope: !795)
+!795 = distinct !DISubprogram(name: "add_deps", scope: !5, file: !5, line: 3905, type: !3, scopeLine: 3905, spFlags: DISPFlagDefinition, unit: !1)
+!796 = !DILocation(line: 3905, column: 1, scope: !795)
+!797 = !DILocation(line: 3887, column: 1, scope: !795)
+!798 = !DILocation(line: 3888, column: 1, scope: !795)
+!799 = !DILocation(line: 3891, column: 1, scope: !795)
+!800 = !DILocation(line: 3894, column: 1, scope: !795)
+!801 = !DILocation(line: 3901, column: 1, scope: !795)
+!802 = !DILocation(line: 3904, column: 1, scope: !795)
 !803 = distinct !DISubprogram(name: "pkg.read", scope: !104, file: !104, line: 125, type: !3, scopeLine: 125, spFlags: DISPFlagDefinition, unit: !1)
 !804 = !DILocation(line: 125, column: 1, scope: !803)
 !805 = !DILocation(line: 122, column: 1, scope: !803)
@@ -361514,8 +361514,8 @@ entry:
 !843 = !DILocation(line: 1, column: 1, scope: !842)
 !844 = distinct !DISubprogram(name: "pkg.cached_package_size", scope: !383, file: !383, line: 118, type: !3, scopeLine: 118, spFlags: DISPFlagDefinition, unit: !1)
 !845 = !DILocation(line: 118, column: 1, scope: !844)
-!846 = distinct !DISubprogram(name: "cached_files_under", scope: !5, file: !5, line: 3800, type: !3, scopeLine: 3800, spFlags: DISPFlagDefinition, unit: !1)
-!847 = !DILocation(line: 3800, column: 1, scope: !846)
+!846 = distinct !DISubprogram(name: "cached_files_under", scope: !5, file: !5, line: 3801, type: !3, scopeLine: 3801, spFlags: DISPFlagDefinition, unit: !1)
+!847 = !DILocation(line: 3801, column: 1, scope: !846)
 !848 = distinct !DISubprogram(name: "buildcache.tree_size", scope: !64, file: !64, line: 186, type: !3, scopeLine: 186, spFlags: DISPFlagDefinition, unit: !1)
 !849 = !DILocation(line: 186, column: 1, scope: !848)
 !850 = !DILocation(line: 191, column: 1, scope: !848)
@@ -361600,18 +361600,18 @@ entry:
 !929 = !DILocation(line: 648, column: 1, scope: !928)
 !930 = distinct !DISubprogram(name: "typecheck.builtin_functions", scope: !51, file: !51, line: 356, type: !3, scopeLine: 356, spFlags: DISPFlagDefinition, unit: !1)
 !931 = !DILocation(line: 356, column: 1, scope: !930)
-!932 = distinct !DISubprogram(name: "source_root", scope: !5, file: !5, line: 3627, type: !3, scopeLine: 3627, spFlags: DISPFlagDefinition, unit: !1)
-!933 = !DILocation(line: 3627, column: 1, scope: !932)
-!934 = !DILocation(line: 3620, column: 1, scope: !932)
-!935 = !DILocation(line: 3621, column: 1, scope: !932)
-!936 = !DILocation(line: 3622, column: 1, scope: !932)
-!937 = !DILocation(line: 3625, column: 1, scope: !932)
-!938 = !DILocation(line: 3626, column: 1, scope: !932)
-!939 = distinct !DISubprogram(name: "source_entries", scope: !5, file: !5, line: 3599, type: !3, scopeLine: 3599, spFlags: DISPFlagDefinition, unit: !1)
-!940 = !DILocation(line: 3599, column: 1, scope: !939)
-!941 = !DILocation(line: 3602, column: 1, scope: !939)
-!942 = distinct !DISubprogram(name: "collect_path_items", scope: !5, file: !5, line: 3593, type: !3, scopeLine: 3593, spFlags: DISPFlagDefinition, unit: !1)
-!943 = !DILocation(line: 3593, column: 1, scope: !942)
+!932 = distinct !DISubprogram(name: "source_root", scope: !5, file: !5, line: 3628, type: !3, scopeLine: 3628, spFlags: DISPFlagDefinition, unit: !1)
+!933 = !DILocation(line: 3628, column: 1, scope: !932)
+!934 = !DILocation(line: 3621, column: 1, scope: !932)
+!935 = !DILocation(line: 3622, column: 1, scope: !932)
+!936 = !DILocation(line: 3623, column: 1, scope: !932)
+!937 = !DILocation(line: 3626, column: 1, scope: !932)
+!938 = !DILocation(line: 3627, column: 1, scope: !932)
+!939 = distinct !DISubprogram(name: "source_entries", scope: !5, file: !5, line: 3600, type: !3, scopeLine: 3600, spFlags: DISPFlagDefinition, unit: !1)
+!940 = !DILocation(line: 3600, column: 1, scope: !939)
+!941 = !DILocation(line: 3603, column: 1, scope: !939)
+!942 = distinct !DISubprogram(name: "collect_path_items", scope: !5, file: !5, line: 3594, type: !3, scopeLine: 3594, spFlags: DISPFlagDefinition, unit: !1)
+!943 = !DILocation(line: 3594, column: 1, scope: !942)
 !944 = distinct !DISubprogram(name: "lexer.offset_of_acc", scope: !283, file: !283, line: 727, type: !3, scopeLine: 727, spFlags: DISPFlagDefinition, unit: !1)
 !945 = !DILocation(line: 727, column: 1, scope: !944)
 !946 = distinct !DISubprogram(name: "is_ident_char", scope: !5, file: !5, line: 246, type: !3, scopeLine: 246, spFlags: DISPFlagDefinition, unit: !1)
@@ -361717,26 +361717,26 @@ entry:
 !1046 = !DILocation(line: 802, column: 1, scope: !1039)
 !1047 = !DILocation(line: 803, column: 1, scope: !1039)
 !1048 = !DILocation(line: 804, column: 1, scope: !1039)
-!1049 = distinct !DISubprogram(name: "source_group_end", scope: !5, file: !5, line: 3664, type: !3, scopeLine: 3664, spFlags: DISPFlagDefinition, unit: !1)
-!1050 = !DILocation(line: 3664, column: 1, scope: !1049)
-!1051 = distinct !DISubprogram(name: "parse_source_group", scope: !5, file: !5, line: 3668, type: !3, scopeLine: 3668, spFlags: DISPFlagDefinition, unit: !1)
-!1052 = !DILocation(line: 3668, column: 1, scope: !1051)
-!1053 = distinct !DISubprogram(name: "reject_module_clash", scope: !5, file: !5, line: 4002, type: !3, scopeLine: 4002, spFlags: DISPFlagDefinition, unit: !1)
-!1054 = !DILocation(line: 4002, column: 1, scope: !1053)
-!1055 = !DILocation(line: 3999, column: 1, scope: !1053)
-!1056 = distinct !DISubprogram(name: "module_names", scope: !5, file: !5, line: 4008, type: !3, scopeLine: 4008, spFlags: DISPFlagDefinition, unit: !1)
-!1057 = !DILocation(line: 4008, column: 1, scope: !1056)
+!1049 = distinct !DISubprogram(name: "source_group_end", scope: !5, file: !5, line: 3665, type: !3, scopeLine: 3665, spFlags: DISPFlagDefinition, unit: !1)
+!1050 = !DILocation(line: 3665, column: 1, scope: !1049)
+!1051 = distinct !DISubprogram(name: "parse_source_group", scope: !5, file: !5, line: 3669, type: !3, scopeLine: 3669, spFlags: DISPFlagDefinition, unit: !1)
+!1052 = !DILocation(line: 3669, column: 1, scope: !1051)
+!1053 = distinct !DISubprogram(name: "reject_module_clash", scope: !5, file: !5, line: 4003, type: !3, scopeLine: 4003, spFlags: DISPFlagDefinition, unit: !1)
+!1054 = !DILocation(line: 4003, column: 1, scope: !1053)
+!1055 = !DILocation(line: 4000, column: 1, scope: !1053)
+!1056 = distinct !DISubprogram(name: "module_names", scope: !5, file: !5, line: 4009, type: !3, scopeLine: 4009, spFlags: DISPFlagDefinition, unit: !1)
+!1057 = !DILocation(line: 4009, column: 1, scope: !1056)
 !1058 = distinct !DISubprogram(name: "buildcache.start", scope: !64, file: !64, line: 32, type: !3, scopeLine: 32, spFlags: DISPFlagDefinition, unit: !1)
 !1059 = !DILocation(line: 32, column: 1, scope: !1058)
-!1060 = distinct !DISubprogram(name: "project_deps", scope: !5, file: !5, line: 3109, type: !3, scopeLine: 3109, spFlags: DISPFlagDefinition, unit: !1)
-!1061 = !DILocation(line: 3109, column: 1, scope: !1060)
+!1060 = distinct !DISubprogram(name: "project_deps", scope: !5, file: !5, line: 3110, type: !3, scopeLine: 3110, spFlags: DISPFlagDefinition, unit: !1)
+!1061 = !DILocation(line: 3110, column: 1, scope: !1060)
 !1062 = distinct !DISubprogram(name: "buildcache.finish", scope: !64, file: !64, line: 36, type: !3, scopeLine: 36, spFlags: DISPFlagDefinition, unit: !1)
 !1063 = !DILocation(line: 36, column: 1, scope: !1062)
-!1064 = distinct !DISubprogram(name: "source_path_files", scope: !5, file: !5, line: 3609, type: !3, scopeLine: 3609, spFlags: DISPFlagDefinition, unit: !1)
-!1065 = !DILocation(line: 3609, column: 1, scope: !1064)
-!1066 = distinct !DISubprogram(name: "source_deps", scope: !5, file: !5, line: 3635, type: !3, scopeLine: 3635, spFlags: DISPFlagDefinition, unit: !1)
-!1067 = !DILocation(line: 3635, column: 1, scope: !1066)
-!1068 = !DILocation(line: 3633, column: 1, scope: !1066)
+!1064 = distinct !DISubprogram(name: "source_path_files", scope: !5, file: !5, line: 3610, type: !3, scopeLine: 3610, spFlags: DISPFlagDefinition, unit: !1)
+!1065 = !DILocation(line: 3610, column: 1, scope: !1064)
+!1066 = distinct !DISubprogram(name: "source_deps", scope: !5, file: !5, line: 3636, type: !3, scopeLine: 3636, spFlags: DISPFlagDefinition, unit: !1)
+!1067 = !DILocation(line: 3636, column: 1, scope: !1066)
+!1068 = !DILocation(line: 3634, column: 1, scope: !1066)
 !1069 = distinct !DISubprogram(name: "takes_no_args", scope: !5, file: !5, line: 2376, type: !3, scopeLine: 2376, spFlags: DISPFlagDefinition, unit: !1)
 !1070 = !DILocation(line: 2376, column: 1, scope: !1069)
 !1071 = distinct !DISubprogram(name: "returns_unit", scope: !5, file: !5, line: 2386, type: !3, scopeLine: 2386, spFlags: DISPFlagDefinition, unit: !1)
@@ -361745,26 +361745,26 @@ entry:
 !1074 = !DILocation(line: 2367, column: 1, scope: !1073)
 !1075 = distinct !DISubprogram(name: "test_dispatch_arms", scope: !5, file: !5, line: 2536, type: !3, scopeLine: 2536, spFlags: DISPFlagDefinition, unit: !1)
 !1076 = !DILocation(line: 2536, column: 1, scope: !1075)
-!1077 = distinct !DISubprogram(name: "link_args", scope: !5, file: !5, line: 3059, type: !3, scopeLine: 3059, spFlags: DISPFlagDefinition, unit: !1)
-!1078 = !DILocation(line: 3059, column: 1, scope: !1077)
-!1079 = !DILocation(line: 3058, column: 1, scope: !1077)
-!1080 = distinct !DISubprogram(name: "write_shims", scope: !5, file: !5, line: 3131, type: !3, scopeLine: 3131, spFlags: DISPFlagDefinition, unit: !1)
-!1081 = !DILocation(line: 3131, column: 1, scope: !1080)
-!1082 = distinct !DISubprogram(name: "needs_tls", scope: !5, file: !5, line: 3119, type: !3, scopeLine: 3119, spFlags: DISPFlagDefinition, unit: !1)
-!1083 = !DILocation(line: 3119, column: 1, scope: !1082)
-!1084 = !DILocation(line: 3117, column: 1, scope: !1082)
-!1085 = !DILocation(line: 3118, column: 1, scope: !1082)
-!1086 = distinct !DISubprogram(name: "cc_prefix_args", scope: !5, file: !5, line: 3033, type: !3, scopeLine: 3033, spFlags: DISPFlagDefinition, unit: !1)
-!1087 = !DILocation(line: 3033, column: 1, scope: !1086)
-!1088 = !DILocation(line: 3032, column: 1, scope: !1086)
-!1089 = distinct !DISubprogram(name: "cc_mode_args", scope: !5, file: !5, line: 3227, type: !3, scopeLine: 3227, spFlags: DISPFlagDefinition, unit: !1)
-!1090 = !DILocation(line: 3227, column: 1, scope: !1089)
-!1091 = distinct !DISubprogram(name: "platform_libs", scope: !5, file: !5, line: 2966, type: !3, scopeLine: 2966, spFlags: DISPFlagDefinition, unit: !1)
-!1092 = !DILocation(line: 2966, column: 1, scope: !1091)
+!1077 = distinct !DISubprogram(name: "link_args", scope: !5, file: !5, line: 3060, type: !3, scopeLine: 3060, spFlags: DISPFlagDefinition, unit: !1)
+!1078 = !DILocation(line: 3060, column: 1, scope: !1077)
+!1079 = !DILocation(line: 3059, column: 1, scope: !1077)
+!1080 = distinct !DISubprogram(name: "write_shims", scope: !5, file: !5, line: 3132, type: !3, scopeLine: 3132, spFlags: DISPFlagDefinition, unit: !1)
+!1081 = !DILocation(line: 3132, column: 1, scope: !1080)
+!1082 = distinct !DISubprogram(name: "needs_tls", scope: !5, file: !5, line: 3120, type: !3, scopeLine: 3120, spFlags: DISPFlagDefinition, unit: !1)
+!1083 = !DILocation(line: 3120, column: 1, scope: !1082)
+!1084 = !DILocation(line: 3118, column: 1, scope: !1082)
+!1085 = !DILocation(line: 3119, column: 1, scope: !1082)
+!1086 = distinct !DISubprogram(name: "cc_prefix_args", scope: !5, file: !5, line: 3034, type: !3, scopeLine: 3034, spFlags: DISPFlagDefinition, unit: !1)
+!1087 = !DILocation(line: 3034, column: 1, scope: !1086)
+!1088 = !DILocation(line: 3033, column: 1, scope: !1086)
+!1089 = distinct !DISubprogram(name: "cc_mode_args", scope: !5, file: !5, line: 3228, type: !3, scopeLine: 3228, spFlags: DISPFlagDefinition, unit: !1)
+!1090 = !DILocation(line: 3228, column: 1, scope: !1089)
+!1091 = distinct !DISubprogram(name: "platform_libs", scope: !5, file: !5, line: 2967, type: !3, scopeLine: 2967, spFlags: DISPFlagDefinition, unit: !1)
+!1092 = !DILocation(line: 2967, column: 1, scope: !1091)
 !1093 = distinct !DISubprogram(name: "run_process", scope: !5, file: !5, line: 1707, type: !3, scopeLine: 1707, spFlags: DISPFlagDefinition, unit: !1)
 !1094 = !DILocation(line: 1707, column: 1, scope: !1093)
-!1095 = distinct !DISubprogram(name: "cc_program", scope: !5, file: !5, line: 3028, type: !3, scopeLine: 3028, spFlags: DISPFlagDefinition, unit: !1)
-!1096 = !DILocation(line: 3028, column: 1, scope: !1095)
+!1095 = distinct !DISubprogram(name: "cc_program", scope: !5, file: !5, line: 3029, type: !3, scopeLine: 3029, spFlags: DISPFlagDefinition, unit: !1)
+!1096 = !DILocation(line: 3029, column: 1, scope: !1095)
 !1097 = distinct !DISubprogram(name: "run_tests", scope: !5, file: !5, line: 2430, type: !3, scopeLine: 2430, spFlags: DISPFlagDefinition, unit: !1)
 !1098 = !DILocation(line: 2430, column: 1, scope: !1097)
 !1099 = !DILocation(line: 2415, column: 1, scope: !1097)
@@ -361780,38 +361780,38 @@ entry:
 !1109 = !DILocation(line: 2654, column: 1, scope: !1108)
 !1110 = distinct !DISubprogram(name: "target_os", scope: !5, file: !5, line: 2695, type: !3, scopeLine: 2695, spFlags: DISPFlagDefinition, unit: !1)
 !1111 = !DILocation(line: 2695, column: 1, scope: !1110)
-!1112 = distinct !DISubprogram(name: "target_error", scope: !5, file: !5, line: 2995, type: !3, scopeLine: 2995, spFlags: DISPFlagDefinition, unit: !1)
-!1113 = !DILocation(line: 2995, column: 1, scope: !1112)
-!1114 = distinct !DISubprogram(name: "compile_with_scratch", scope: !5, file: !5, line: 3290, type: !3, scopeLine: 3290, spFlags: DISPFlagDefinition, unit: !1)
-!1115 = !DILocation(line: 3290, column: 1, scope: !1114)
-!1116 = !DILocation(line: 3267, column: 1, scope: !1114)
-!1117 = !DILocation(line: 3268, column: 1, scope: !1114)
-!1118 = !DILocation(line: 3270, column: 1, scope: !1114)
-!1119 = !DILocation(line: 3274, column: 1, scope: !1114)
-!1120 = !DILocation(line: 3275, column: 1, scope: !1114)
-!1121 = !DILocation(line: 3276, column: 1, scope: !1114)
-!1122 = !DILocation(line: 3277, column: 1, scope: !1114)
-!1123 = !DILocation(line: 3278, column: 1, scope: !1114)
-!1124 = !DILocation(line: 3279, column: 1, scope: !1114)
-!1125 = !DILocation(line: 3280, column: 1, scope: !1114)
-!1126 = !DILocation(line: 3282, column: 1, scope: !1114)
-!1127 = !DILocation(line: 3283, column: 1, scope: !1114)
-!1128 = !DILocation(line: 3284, column: 1, scope: !1114)
-!1129 = !DILocation(line: 3285, column: 1, scope: !1114)
-!1130 = !DILocation(line: 3286, column: 1, scope: !1114)
-!1131 = !DILocation(line: 3293, column: 1, scope: !1114)
-!1132 = !DILocation(line: 3294, column: 1, scope: !1114)
-!1133 = !DILocation(line: 3302, column: 1, scope: !1114)
-!1134 = !DILocation(line: 3307, column: 1, scope: !1114)
-!1135 = !DILocation(line: 3308, column: 1, scope: !1114)
-!1136 = !DILocation(line: 3309, column: 1, scope: !1114)
-!1137 = !DILocation(line: 3310, column: 1, scope: !1114)
-!1138 = !DILocation(line: 3312, column: 1, scope: !1114)
-!1139 = !DILocation(line: 3313, column: 1, scope: !1114)
-!1140 = !DILocation(line: 3316, column: 1, scope: !1114)
-!1141 = !DILocation(line: 3317, column: 1, scope: !1114)
-!1142 = !DILocation(line: 3324, column: 1, scope: !1114)
-!1143 = !DILocation(line: 3325, column: 1, scope: !1114)
+!1112 = distinct !DISubprogram(name: "target_error", scope: !5, file: !5, line: 2996, type: !3, scopeLine: 2996, spFlags: DISPFlagDefinition, unit: !1)
+!1113 = !DILocation(line: 2996, column: 1, scope: !1112)
+!1114 = distinct !DISubprogram(name: "compile_with_scratch", scope: !5, file: !5, line: 3291, type: !3, scopeLine: 3291, spFlags: DISPFlagDefinition, unit: !1)
+!1115 = !DILocation(line: 3291, column: 1, scope: !1114)
+!1116 = !DILocation(line: 3268, column: 1, scope: !1114)
+!1117 = !DILocation(line: 3269, column: 1, scope: !1114)
+!1118 = !DILocation(line: 3271, column: 1, scope: !1114)
+!1119 = !DILocation(line: 3275, column: 1, scope: !1114)
+!1120 = !DILocation(line: 3276, column: 1, scope: !1114)
+!1121 = !DILocation(line: 3277, column: 1, scope: !1114)
+!1122 = !DILocation(line: 3278, column: 1, scope: !1114)
+!1123 = !DILocation(line: 3279, column: 1, scope: !1114)
+!1124 = !DILocation(line: 3280, column: 1, scope: !1114)
+!1125 = !DILocation(line: 3281, column: 1, scope: !1114)
+!1126 = !DILocation(line: 3283, column: 1, scope: !1114)
+!1127 = !DILocation(line: 3284, column: 1, scope: !1114)
+!1128 = !DILocation(line: 3285, column: 1, scope: !1114)
+!1129 = !DILocation(line: 3286, column: 1, scope: !1114)
+!1130 = !DILocation(line: 3287, column: 1, scope: !1114)
+!1131 = !DILocation(line: 3294, column: 1, scope: !1114)
+!1132 = !DILocation(line: 3295, column: 1, scope: !1114)
+!1133 = !DILocation(line: 3303, column: 1, scope: !1114)
+!1134 = !DILocation(line: 3308, column: 1, scope: !1114)
+!1135 = !DILocation(line: 3309, column: 1, scope: !1114)
+!1136 = !DILocation(line: 3310, column: 1, scope: !1114)
+!1137 = !DILocation(line: 3311, column: 1, scope: !1114)
+!1138 = !DILocation(line: 3313, column: 1, scope: !1114)
+!1139 = !DILocation(line: 3314, column: 1, scope: !1114)
+!1140 = !DILocation(line: 3317, column: 1, scope: !1114)
+!1141 = !DILocation(line: 3318, column: 1, scope: !1114)
+!1142 = !DILocation(line: 3325, column: 1, scope: !1114)
+!1143 = !DILocation(line: 3326, column: 1, scope: !1114)
 !1144 = distinct !DISubprogram(name: "buildcache.enabled", scope: !64, file: !64, line: 64, type: !3, scopeLine: 64, spFlags: DISPFlagDefinition, unit: !1)
 !1145 = !DILocation(line: 64, column: 1, scope: !1144)
 !1146 = distinct !DISubprogram(name: "buildcache.prune", scope: !64, file: !64, line: 247, type: !3, scopeLine: 247, spFlags: DISPFlagDefinition, unit: !1)
@@ -361828,12 +361828,12 @@ entry:
 !1157 = !DILocation(line: 103, column: 1, scope: !1154)
 !1158 = distinct !DISubprogram(name: "collect_flag", scope: !5, file: !5, line: 2674, type: !3, scopeLine: 2674, spFlags: DISPFlagDefinition, unit: !1)
 !1159 = !DILocation(line: 2674, column: 1, scope: !1158)
-!1160 = distinct !DISubprogram(name: "command_native_tls", scope: !5, file: !5, line: 3099, type: !3, scopeLine: 3099, spFlags: DISPFlagDefinition, unit: !1)
-!1161 = !DILocation(line: 3099, column: 1, scope: !1160)
-!1162 = !DILocation(line: 3090, column: 1, scope: !1160)
-!1163 = !DILocation(line: 3091, column: 1, scope: !1160)
-!1164 = !DILocation(line: 3092, column: 1, scope: !1160)
-!1165 = !DILocation(line: 3099, column: 1, scope: !1160)
+!1160 = distinct !DISubprogram(name: "command_native_tls", scope: !5, file: !5, line: 3100, type: !3, scopeLine: 3100, spFlags: DISPFlagDefinition, unit: !1)
+!1161 = !DILocation(line: 3100, column: 1, scope: !1160)
+!1162 = !DILocation(line: 3091, column: 1, scope: !1160)
+!1163 = !DILocation(line: 3092, column: 1, scope: !1160)
+!1164 = !DILocation(line: 3093, column: 1, scope: !1160)
+!1165 = !DILocation(line: 3100, column: 1, scope: !1160)
 !1166 = distinct !DISubprogram(name: "pkg.native_needs_tls", scope: !104, file: !104, line: 259, type: !3, scopeLine: 259, spFlags: DISPFlagDefinition, unit: !1)
 !1167 = !DILocation(line: 259, column: 1, scope: !1166)
 !1168 = distinct !DISubprogram(name: "codegen.cg_dbg_reset", scope: !54, file: !54, line: 709, type: !3, scopeLine: 709, spFlags: DISPFlagDefinition, unit: !1)
@@ -361908,19 +361908,19 @@ entry:
 !1237 = distinct !DISubprogram(name: "codegen.cg_sym", scope: !54, file: !54, line: 358, type: !3, scopeLine: 358, spFlags: DISPFlagDefinition, unit: !1)
 !1238 = !DILocation(line: 358, column: 1, scope: !1237)
 !1239 = !DILocation(line: 357, column: 1, scope: !1237)
-!1240 = distinct !DISubprogram(name: "fmt_walk", scope: !5, file: !5, line: 3523, type: !3, scopeLine: 3523, spFlags: DISPFlagDefinition, unit: !1)
-!1241 = !DILocation(line: 3523, column: 1, scope: !1240)
-!1242 = !DILocation(line: 3519, column: 1, scope: !1240)
-!1243 = distinct !DISubprogram(name: "fmt_one", scope: !5, file: !5, line: 3545, type: !3, scopeLine: 3545, spFlags: DISPFlagDefinition, unit: !1)
-!1244 = !DILocation(line: 3545, column: 1, scope: !1243)
-!1245 = !DILocation(line: 3547, column: 1, scope: !1243)
-!1246 = !DILocation(line: 3549, column: 1, scope: !1243)
-!1247 = !DILocation(line: 3554, column: 1, scope: !1243)
-!1248 = !DILocation(line: 3556, column: 1, scope: !1243)
-!1249 = !DILocation(line: 3557, column: 1, scope: !1243)
-!1250 = !DILocation(line: 3560, column: 1, scope: !1243)
-!1251 = !DILocation(line: 3561, column: 1, scope: !1243)
-!1252 = !DILocation(line: 3562, column: 1, scope: !1243)
+!1240 = distinct !DISubprogram(name: "fmt_walk", scope: !5, file: !5, line: 3524, type: !3, scopeLine: 3524, spFlags: DISPFlagDefinition, unit: !1)
+!1241 = !DILocation(line: 3524, column: 1, scope: !1240)
+!1242 = !DILocation(line: 3520, column: 1, scope: !1240)
+!1243 = distinct !DISubprogram(name: "fmt_one", scope: !5, file: !5, line: 3546, type: !3, scopeLine: 3546, spFlags: DISPFlagDefinition, unit: !1)
+!1244 = !DILocation(line: 3546, column: 1, scope: !1243)
+!1245 = !DILocation(line: 3548, column: 1, scope: !1243)
+!1246 = !DILocation(line: 3550, column: 1, scope: !1243)
+!1247 = !DILocation(line: 3555, column: 1, scope: !1243)
+!1248 = !DILocation(line: 3557, column: 1, scope: !1243)
+!1249 = !DILocation(line: 3558, column: 1, scope: !1243)
+!1250 = !DILocation(line: 3561, column: 1, scope: !1243)
+!1251 = !DILocation(line: 3562, column: 1, scope: !1243)
+!1252 = !DILocation(line: 3563, column: 1, scope: !1243)
 !1253 = distinct !DISubprogram(name: "lexer.gap_is_trivia", scope: !283, file: !283, line: 655, type: !3, scopeLine: 655, spFlags: DISPFlagDefinition, unit: !1)
 !1254 = !DILocation(line: 655, column: 1, scope: !1253)
 !1255 = distinct !DISubprogram(name: "lexer.slice_chars", scope: !283, file: !283, line: 634, type: !3, scopeLine: 634, spFlags: DISPFlagDefinition, unit: !1)
@@ -362063,16 +362063,16 @@ entry:
 !1392 = !DILocation(line: 250, column: 1, scope: !1389)
 !1393 = !DILocation(line: 252, column: 1, scope: !1389)
 !1394 = !DILocation(line: 253, column: 1, scope: !1389)
-!1395 = distinct !DISubprogram(name: "resolve_dep", scope: !5, file: !5, line: 3952, type: !3, scopeLine: 3952, spFlags: DISPFlagDefinition, unit: !1)
-!1396 = !DILocation(line: 3952, column: 1, scope: !1395)
-!1397 = !DILocation(line: 3931, column: 1, scope: !1395)
-!1398 = !DILocation(line: 3932, column: 1, scope: !1395)
-!1399 = !DILocation(line: 3933, column: 1, scope: !1395)
-!1400 = !DILocation(line: 3934, column: 1, scope: !1395)
-!1401 = !DILocation(line: 3937, column: 1, scope: !1395)
-!1402 = distinct !DISubprogram(name: "reject_dep_namespace", scope: !5, file: !5, line: 3916, type: !3, scopeLine: 3916, spFlags: DISPFlagDefinition, unit: !1)
-!1403 = !DILocation(line: 3916, column: 1, scope: !1402)
-!1404 = !DILocation(line: 3913, column: 1, scope: !1402)
+!1395 = distinct !DISubprogram(name: "resolve_dep", scope: !5, file: !5, line: 3953, type: !3, scopeLine: 3953, spFlags: DISPFlagDefinition, unit: !1)
+!1396 = !DILocation(line: 3953, column: 1, scope: !1395)
+!1397 = !DILocation(line: 3932, column: 1, scope: !1395)
+!1398 = !DILocation(line: 3933, column: 1, scope: !1395)
+!1399 = !DILocation(line: 3934, column: 1, scope: !1395)
+!1400 = !DILocation(line: 3935, column: 1, scope: !1395)
+!1401 = !DILocation(line: 3938, column: 1, scope: !1395)
+!1402 = distinct !DISubprogram(name: "reject_dep_namespace", scope: !5, file: !5, line: 3917, type: !3, scopeLine: 3917, spFlags: DISPFlagDefinition, unit: !1)
+!1403 = !DILocation(line: 3917, column: 1, scope: !1402)
+!1404 = !DILocation(line: 3914, column: 1, scope: !1402)
 !1405 = distinct !DISubprogram(name: "pkg.manifest_path", scope: !104, file: !104, line: 113, type: !3, scopeLine: 113, spFlags: DISPFlagDefinition, unit: !1)
 !1406 = !DILocation(line: 113, column: 1, scope: !1405)
 !1407 = distinct !DISubprogram(name: "Path.normalize_in", scope: !372, file: !372, line: 1, type: !3, scopeLine: 1, spFlags: DISPFlagDefinition, unit: !1)
@@ -362126,10 +362126,10 @@ entry:
 !1455 = !DILocation(line: 128, column: 1, scope: !1454)
 !1456 = !DILocation(line: 124, column: 1, scope: !1454)
 !1457 = !DILocation(line: 125, column: 1, scope: !1454)
-!1458 = distinct !DISubprogram(name: "cached_files_in", scope: !5, file: !5, line: 3810, type: !3, scopeLine: 3810, spFlags: DISPFlagDefinition, unit: !1)
-!1459 = !DILocation(line: 3810, column: 1, scope: !1458)
-!1460 = !DILocation(line: 3806, column: 1, scope: !1458)
-!1461 = !DILocation(line: 3807, column: 1, scope: !1458)
+!1458 = distinct !DISubprogram(name: "cached_files_in", scope: !5, file: !5, line: 3811, type: !3, scopeLine: 3811, spFlags: DISPFlagDefinition, unit: !1)
+!1459 = !DILocation(line: 3811, column: 1, scope: !1458)
+!1460 = !DILocation(line: 3807, column: 1, scope: !1458)
+!1461 = !DILocation(line: 3808, column: 1, scope: !1458)
 !1462 = distinct !DISubprogram(name: "Os.stat", scope: !45, file: !45, line: 1, type: !3, scopeLine: 1, spFlags: DISPFlagDefinition, unit: !1)
 !1463 = !DILocation(line: 1, column: 1, scope: !1462)
 !1464 = distinct !DISubprogram(name: "Path.drop_trailing_seps", scope: !372, file: !372, line: 1, type: !3, scopeLine: 1, spFlags: DISPFlagDefinition, unit: !1)
@@ -362401,12 +362401,12 @@ entry:
 !1730 = !DILocation(line: 77, column: 1, scope: !1729)
 !1731 = distinct !DISubprogram(name: "typecheck.typed_params", scope: !51, file: !51, line: 819, type: !3, scopeLine: 819, spFlags: DISPFlagDefinition, unit: !1)
 !1732 = !DILocation(line: 819, column: 1, scope: !1731)
-!1733 = distinct !DISubprogram(name: "parse_file_items", scope: !5, file: !5, line: 3434, type: !3, scopeLine: 3434, spFlags: DISPFlagDefinition, unit: !1)
-!1734 = !DILocation(line: 3434, column: 1, scope: !1733)
-!1735 = !DILocation(line: 3441, column: 1, scope: !1733)
-!1736 = !DILocation(line: 3442, column: 1, scope: !1733)
-!1737 = !DILocation(line: 3443, column: 1, scope: !1733)
-!1738 = !DILocation(line: 3446, column: 1, scope: !1733)
+!1733 = distinct !DISubprogram(name: "parse_file_items", scope: !5, file: !5, line: 3435, type: !3, scopeLine: 3435, spFlags: DISPFlagDefinition, unit: !1)
+!1734 = !DILocation(line: 3435, column: 1, scope: !1733)
+!1735 = !DILocation(line: 3442, column: 1, scope: !1733)
+!1736 = !DILocation(line: 3443, column: 1, scope: !1733)
+!1737 = !DILocation(line: 3444, column: 1, scope: !1733)
+!1738 = !DILocation(line: 3447, column: 1, scope: !1733)
 !1739 = !DIFile(filename: "<Time>", directory: ".")
 !1740 = distinct !DISubprogram(name: "Time.instant", scope: !1739, file: !1739, line: 1, type: !3, scopeLine: 1, spFlags: DISPFlagDefinition, unit: !1)
 !1741 = !DILocation(line: 1, column: 1, scope: !1740)
@@ -362414,23 +362414,23 @@ entry:
 !1743 = !DILocation(line: 1, column: 1, scope: !1742)
 !1744 = distinct !DISubprogram(name: "Time.since", scope: !1739, file: !1739, line: 1, type: !3, scopeLine: 1, spFlags: DISPFlagDefinition, unit: !1)
 !1745 = !DILocation(line: 1, column: 1, scope: !1744)
-!1746 = distinct !DISubprogram(name: "source_walk", scope: !5, file: !5, line: 3614, type: !3, scopeLine: 3614, spFlags: DISPFlagDefinition, unit: !1)
-!1747 = !DILocation(line: 3614, column: 1, scope: !1746)
+!1746 = distinct !DISubprogram(name: "source_walk", scope: !5, file: !5, line: 3615, type: !3, scopeLine: 3615, spFlags: DISPFlagDefinition, unit: !1)
+!1747 = !DILocation(line: 3615, column: 1, scope: !1746)
 !1748 = distinct !DISubprogram(name: "<prelude>.Array.is_empty", scope: !61, file: !61, line: 1, type: !3, scopeLine: 1, spFlags: DISPFlagDefinition, unit: !1)
 !1749 = !DILocation(line: 1, column: 1, scope: !1748)
-!1750 = distinct !DISubprogram(name: "write_shims_acc", scope: !5, file: !5, line: 3183, type: !3, scopeLine: 3183, spFlags: DISPFlagDefinition, unit: !1)
-!1751 = !DILocation(line: 3183, column: 1, scope: !1750)
-!1752 = !DILocation(line: 3180, column: 1, scope: !1750)
+!1750 = distinct !DISubprogram(name: "write_shims_acc", scope: !5, file: !5, line: 3184, type: !3, scopeLine: 3184, spFlags: DISPFlagDefinition, unit: !1)
+!1751 = !DILocation(line: 3184, column: 1, scope: !1750)
+!1752 = !DILocation(line: 3181, column: 1, scope: !1750)
 !1753 = !DIFile(filename: "shims.plum", directory: "bootstrap/self_host/shims")
 !1754 = distinct !DISubprogram(name: "shims.shim_files", scope: !1753, file: !1753, line: 25, type: !3, scopeLine: 25, spFlags: DISPFlagDefinition, unit: !1)
 !1755 = !DILocation(line: 25, column: 1, scope: !1754)
-!1756 = distinct !DISubprogram(name: "declares_tls", scope: !5, file: !5, line: 3126, type: !3, scopeLine: 3126, spFlags: DISPFlagDefinition, unit: !1)
-!1757 = !DILocation(line: 3126, column: 1, scope: !1756)
+!1756 = distinct !DISubprogram(name: "declares_tls", scope: !5, file: !5, line: 3127, type: !3, scopeLine: 3127, spFlags: DISPFlagDefinition, unit: !1)
+!1757 = !DILocation(line: 3127, column: 1, scope: !1756)
 !1758 = distinct !DISubprogram(name: "buildcache.diagnostic", scope: !64, file: !64, line: 28, type: !3, scopeLine: 28, spFlags: DISPFlagDefinition, unit: !1)
 !1759 = !DILocation(line: 28, column: 1, scope: !1758)
-!1760 = distinct !DISubprogram(name: "cc_words", scope: !5, file: !5, line: 3015, type: !3, scopeLine: 3015, spFlags: DISPFlagDefinition, unit: !1)
-!1761 = !DILocation(line: 3015, column: 1, scope: !1760)
-!1762 = !DILocation(line: 3019, column: 1, scope: !1760)
+!1760 = distinct !DISubprogram(name: "cc_words", scope: !5, file: !5, line: 3016, type: !3, scopeLine: 3016, spFlags: DISPFlagDefinition, unit: !1)
+!1761 = !DILocation(line: 3016, column: 1, scope: !1760)
+!1762 = !DILocation(line: 3020, column: 1, scope: !1760)
 !1763 = !DIFile(filename: "<Process>", directory: ".")
 !1764 = distinct !DISubprogram(name: "Process.run", scope: !1763, file: !1763, line: 1, type: !3, scopeLine: 1, spFlags: DISPFlagDefinition, unit: !1)
 !1765 = !DILocation(line: 1, column: 1, scope: !1764)
@@ -362442,29 +362442,29 @@ entry:
 !1771 = distinct !DISubprogram(name: "target_os_components", scope: !5, file: !5, line: 2704, type: !3, scopeLine: 2704, spFlags: DISPFlagDefinition, unit: !1)
 !1772 = !DILocation(line: 2704, column: 1, scope: !1771)
 !1773 = !DILocation(line: 2700, column: 1, scope: !1771)
-!1774 = distinct !DISubprogram(name: "known_64_bit_arches", scope: !5, file: !5, line: 2977, type: !3, scopeLine: 2977, spFlags: DISPFlagDefinition, unit: !1)
-!1775 = !DILocation(line: 2977, column: 1, scope: !1774)
-!1776 = distinct !DISubprogram(name: "target_arch", scope: !5, file: !5, line: 2984, type: !3, scopeLine: 2984, spFlags: DISPFlagDefinition, unit: !1)
-!1777 = !DILocation(line: 2984, column: 1, scope: !1776)
-!1778 = !DILocation(line: 2983, column: 1, scope: !1776)
-!1779 = distinct !DISubprogram(name: "ir_input_key", scope: !5, file: !5, line: 3699, type: !3, scopeLine: 3699, spFlags: DISPFlagDefinition, unit: !1)
-!1780 = !DILocation(line: 3699, column: 1, scope: !1779)
-!1781 = !DILocation(line: 3679, column: 1, scope: !1779)
-!1782 = !DILocation(line: 3680, column: 1, scope: !1779)
-!1783 = !DILocation(line: 3683, column: 1, scope: !1779)
-!1784 = !DILocation(line: 3684, column: 1, scope: !1779)
-!1785 = !DILocation(line: 3685, column: 1, scope: !1779)
-!1786 = !DILocation(line: 3686, column: 1, scope: !1779)
-!1787 = !DILocation(line: 3687, column: 1, scope: !1779)
-!1788 = !DILocation(line: 3688, column: 1, scope: !1779)
-!1789 = !DILocation(line: 3689, column: 1, scope: !1779)
-!1790 = !DILocation(line: 3691, column: 1, scope: !1779)
-!1791 = !DILocation(line: 3692, column: 1, scope: !1779)
-!1792 = !DILocation(line: 3693, column: 1, scope: !1779)
-!1793 = !DILocation(line: 3694, column: 1, scope: !1779)
-!1794 = !DILocation(line: 3695, column: 1, scope: !1779)
-!1795 = !DILocation(line: 3696, column: 1, scope: !1779)
-!1796 = !DILocation(line: 3697, column: 1, scope: !1779)
+!1774 = distinct !DISubprogram(name: "known_64_bit_arches", scope: !5, file: !5, line: 2978, type: !3, scopeLine: 2978, spFlags: DISPFlagDefinition, unit: !1)
+!1775 = !DILocation(line: 2978, column: 1, scope: !1774)
+!1776 = distinct !DISubprogram(name: "target_arch", scope: !5, file: !5, line: 2985, type: !3, scopeLine: 2985, spFlags: DISPFlagDefinition, unit: !1)
+!1777 = !DILocation(line: 2985, column: 1, scope: !1776)
+!1778 = !DILocation(line: 2984, column: 1, scope: !1776)
+!1779 = distinct !DISubprogram(name: "ir_input_key", scope: !5, file: !5, line: 3700, type: !3, scopeLine: 3700, spFlags: DISPFlagDefinition, unit: !1)
+!1780 = !DILocation(line: 3700, column: 1, scope: !1779)
+!1781 = !DILocation(line: 3680, column: 1, scope: !1779)
+!1782 = !DILocation(line: 3681, column: 1, scope: !1779)
+!1783 = !DILocation(line: 3684, column: 1, scope: !1779)
+!1784 = !DILocation(line: 3685, column: 1, scope: !1779)
+!1785 = !DILocation(line: 3686, column: 1, scope: !1779)
+!1786 = !DILocation(line: 3687, column: 1, scope: !1779)
+!1787 = !DILocation(line: 3688, column: 1, scope: !1779)
+!1788 = !DILocation(line: 3689, column: 1, scope: !1779)
+!1789 = !DILocation(line: 3690, column: 1, scope: !1779)
+!1790 = !DILocation(line: 3692, column: 1, scope: !1779)
+!1791 = !DILocation(line: 3693, column: 1, scope: !1779)
+!1792 = !DILocation(line: 3694, column: 1, scope: !1779)
+!1793 = !DILocation(line: 3695, column: 1, scope: !1779)
+!1794 = !DILocation(line: 3696, column: 1, scope: !1779)
+!1795 = !DILocation(line: 3697, column: 1, scope: !1779)
+!1796 = !DILocation(line: 3698, column: 1, scope: !1779)
 !1797 = distinct !DISubprogram(name: "buildcache.load_ir", scope: !64, file: !64, line: 108, type: !3, scopeLine: 108, spFlags: DISPFlagDefinition, unit: !1)
 !1798 = !DILocation(line: 108, column: 1, scope: !1797)
 !1799 = !DILocation(line: 112, column: 1, scope: !1797)
@@ -362500,18 +362500,18 @@ entry:
 !1829 = !DILocation(line: 162, column: 1, scope: !1827)
 !1830 = !DILocation(line: 165, column: 1, scope: !1827)
 !1831 = !DILocation(line: 166, column: 1, scope: !1827)
-!1832 = distinct !DISubprogram(name: "shared_shims", scope: !5, file: !5, line: 3158, type: !3, scopeLine: 3158, spFlags: DISPFlagDefinition, unit: !1)
-!1833 = !DILocation(line: 3158, column: 1, scope: !1832)
-!1834 = !DILocation(line: 3138, column: 1, scope: !1832)
-!1835 = !DILocation(line: 3139, column: 1, scope: !1832)
-!1836 = !DILocation(line: 3142, column: 1, scope: !1832)
-!1837 = !DILocation(line: 3145, column: 1, scope: !1832)
-!1838 = !DILocation(line: 3148, column: 1, scope: !1832)
-!1839 = !DILocation(line: 3149, column: 1, scope: !1832)
-!1840 = !DILocation(line: 3152, column: 1, scope: !1832)
-!1841 = !DILocation(line: 3153, column: 1, scope: !1832)
-!1842 = !DILocation(line: 3155, column: 1, scope: !1832)
-!1843 = !DILocation(line: 3157, column: 1, scope: !1832)
+!1832 = distinct !DISubprogram(name: "shared_shims", scope: !5, file: !5, line: 3159, type: !3, scopeLine: 3159, spFlags: DISPFlagDefinition, unit: !1)
+!1833 = !DILocation(line: 3159, column: 1, scope: !1832)
+!1834 = !DILocation(line: 3139, column: 1, scope: !1832)
+!1835 = !DILocation(line: 3140, column: 1, scope: !1832)
+!1836 = !DILocation(line: 3143, column: 1, scope: !1832)
+!1837 = !DILocation(line: 3146, column: 1, scope: !1832)
+!1838 = !DILocation(line: 3149, column: 1, scope: !1832)
+!1839 = !DILocation(line: 3150, column: 1, scope: !1832)
+!1840 = !DILocation(line: 3153, column: 1, scope: !1832)
+!1841 = !DILocation(line: 3154, column: 1, scope: !1832)
+!1842 = !DILocation(line: 3156, column: 1, scope: !1832)
+!1843 = !DILocation(line: 3158, column: 1, scope: !1832)
 !1844 = distinct !DISubprogram(name: "compile_cached_objects", scope: !5, file: !5, line: 2887, type: !3, scopeLine: 2887, spFlags: DISPFlagDefinition, unit: !1)
 !1845 = !DILocation(line: 2887, column: 1, scope: !1844)
 !1846 = !DILocation(line: 2857, column: 1, scope: !1844)
@@ -362644,11 +362644,11 @@ entry:
 !1973 = !DIFile(filename: "fmt.plum", directory: "bootstrap/self_host/fmt")
 !1974 = distinct !DISubprogram(name: "fmt.format", scope: !1973, file: !1973, line: 441, type: !3, scopeLine: 441, spFlags: DISPFlagDefinition, unit: !1)
 !1975 = !DILocation(line: 441, column: 1, scope: !1974)
-!1976 = distinct !DISubprogram(name: "fmt_write", scope: !5, file: !5, line: 3578, type: !3, scopeLine: 3578, spFlags: DISPFlagDefinition, unit: !1)
-!1977 = !DILocation(line: 3578, column: 1, scope: !1976)
-!1978 = !DILocation(line: 3577, column: 1, scope: !1976)
-!1979 = !DILocation(line: 3579, column: 1, scope: !1976)
-!1980 = !DILocation(line: 3582, column: 1, scope: !1976)
+!1976 = distinct !DISubprogram(name: "fmt_write", scope: !5, file: !5, line: 3579, type: !3, scopeLine: 3579, spFlags: DISPFlagDefinition, unit: !1)
+!1977 = !DILocation(line: 3579, column: 1, scope: !1976)
+!1978 = !DILocation(line: 3578, column: 1, scope: !1976)
+!1979 = !DILocation(line: 3580, column: 1, scope: !1976)
+!1980 = !DILocation(line: 3583, column: 1, scope: !1976)
 !1981 = distinct !DISubprogram(name: "lexer.scan_digit_run", scope: !283, file: !283, line: 172, type: !3, scopeLine: 172, spFlags: DISPFlagDefinition, unit: !1)
 !1982 = !DILocation(line: 172, column: 1, scope: !1981)
 !1983 = distinct !DISubprogram(name: "lexer.scan_exponent", scope: !283, file: !283, line: 206, type: !3, scopeLine: 206, spFlags: DISPFlagDefinition, unit: !1)
@@ -362812,8 +362812,8 @@ entry:
 !2141 = !DILocation(line: 328, column: 1, scope: !2140)
 !2142 = distinct !DISubprogram(name: "pkg.is_library_name", scope: !104, file: !104, line: 293, type: !3, scopeLine: 293, spFlags: DISPFlagDefinition, unit: !1)
 !2143 = !DILocation(line: 293, column: 1, scope: !2142)
-!2144 = distinct !DISubprogram(name: "dep_path", scope: !5, file: !5, line: 3957, type: !3, scopeLine: 3957, spFlags: DISPFlagDefinition, unit: !1)
-!2145 = !DILocation(line: 3957, column: 1, scope: !2144)
+!2144 = distinct !DISubprogram(name: "dep_path", scope: !5, file: !5, line: 3958, type: !3, scopeLine: 3958, spFlags: DISPFlagDefinition, unit: !1)
+!2145 = !DILocation(line: 3958, column: 1, scope: !2144)
 !2146 = distinct !DISubprogram(name: "pkg.cache_dir", scope: !383, file: !383, line: 150, type: !3, scopeLine: 150, spFlags: DISPFlagDefinition, unit: !1)
 !2147 = !DILocation(line: 150, column: 1, scope: !2146)
 !2148 = distinct !DISubprogram(name: "pkg.verify_cached", scope: !383, file: !383, line: 327, type: !3, scopeLine: 327, spFlags: DISPFlagDefinition, unit: !1)
@@ -363244,8 +363244,8 @@ entry:
 !2573 = distinct !DISubprogram(name: "buildcache.make_dirs", scope: !64, file: !64, line: 45, type: !3, scopeLine: 45, spFlags: DISPFlagDefinition, unit: !1)
 !2574 = !DILocation(line: 45, column: 1, scope: !2573)
 !2575 = !DILocation(line: 48, column: 1, scope: !2573)
-!2576 = distinct !DISubprogram(name: "non_empty", scope: !5, file: !5, line: 3026, type: !3, scopeLine: 3026, spFlags: DISPFlagDefinition, unit: !1)
-!2577 = !DILocation(line: 3026, column: 1, scope: !2576)
+!2576 = distinct !DISubprogram(name: "non_empty", scope: !5, file: !5, line: 3027, type: !3, scopeLine: 3027, spFlags: DISPFlagDefinition, unit: !1)
+!2577 = !DILocation(line: 3027, column: 1, scope: !2576)
 !2578 = distinct !DISubprogram(name: "Process.join_args_acc", scope: !1763, file: !1763, line: 1, type: !3, scopeLine: 1, spFlags: DISPFlagDefinition, unit: !1)
 !2579 = !DILocation(line: 1, column: 1, scope: !2578)
 !2580 = distinct !DISubprogram(name: "Path.is_absolute_in", scope: !372, file: !372, line: 1, type: !3, scopeLine: 1, spFlags: DISPFlagDefinition, unit: !1)
@@ -363260,9 +363260,9 @@ entry:
 !2589 = !DILocation(line: 1, column: 1, scope: !2588)
 !2590 = distinct !DISubprogram(name: "buildcache.frame", scope: !64, file: !64, line: 25, type: !3, scopeLine: 25, spFlags: DISPFlagDefinition, unit: !1)
 !2591 = !DILocation(line: 25, column: 1, scope: !2590)
-!2592 = distinct !DISubprogram(name: "manifest_input", scope: !5, file: !5, line: 3672, type: !3, scopeLine: 3672, spFlags: DISPFlagDefinition, unit: !1)
-!2593 = !DILocation(line: 3672, column: 1, scope: !2592)
-!2594 = !DILocation(line: 3671, column: 1, scope: !2592)
+!2592 = distinct !DISubprogram(name: "manifest_input", scope: !5, file: !5, line: 3673, type: !3, scopeLine: 3673, spFlags: DISPFlagDefinition, unit: !1)
+!2593 = !DILocation(line: 3673, column: 1, scope: !2592)
+!2594 = !DILocation(line: 3672, column: 1, scope: !2592)
 !2595 = distinct !DISubprogram(name: "buildcache.file_hash", scope: !64, file: !64, line: 18, type: !3, scopeLine: 18, spFlags: DISPFlagDefinition, unit: !1)
 !2596 = !DILocation(line: 18, column: 1, scope: !2595)
 !2597 = distinct !DISubprogram(name: "buildcache.hash", scope: !64, file: !64, line: 17, type: !3, scopeLine: 17, spFlags: DISPFlagDefinition, unit: !1)
@@ -363284,21 +363284,21 @@ entry:
 !2613 = distinct !DISubprogram(name: "Os.self_exe", scope: !45, file: !45, line: 1, type: !3, scopeLine: 1, spFlags: DISPFlagDefinition, unit: !1)
 !2614 = !DILocation(line: 1, column: 1, scope: !2613)
 !2615 = !DILocation(line: 1, column: 1, scope: !2613)
-!2616 = distinct !DISubprogram(name: "verify_shims", scope: !5, file: !5, line: 3172, type: !3, scopeLine: 3172, spFlags: DISPFlagDefinition, unit: !1)
-!2617 = !DILocation(line: 3172, column: 1, scope: !2616)
-!2618 = !DILocation(line: 3169, column: 1, scope: !2616)
+!2616 = distinct !DISubprogram(name: "verify_shims", scope: !5, file: !5, line: 3173, type: !3, scopeLine: 3173, spFlags: DISPFlagDefinition, unit: !1)
+!2617 = !DILocation(line: 3173, column: 1, scope: !2616)
+!2618 = !DILocation(line: 3170, column: 1, scope: !2616)
 !2619 = distinct !DISubprogram(name: "buildcache.native_fingerprint", scope: !67, file: !67, line: 106, type: !3, scopeLine: 106, spFlags: DISPFlagDefinition, unit: !1)
 !2620 = !DILocation(line: 106, column: 1, scope: !2619)
 !2621 = !DILocation(line: 96, column: 1, scope: !2619)
 !2622 = !DILocation(line: 103, column: 1, scope: !2619)
 !2623 = !DILocation(line: 104, column: 1, scope: !2619)
-!2624 = distinct !DISubprogram(name: "target_args", scope: !5, file: !5, line: 3039, type: !3, scopeLine: 3039, spFlags: DISPFlagDefinition, unit: !1)
-!2625 = !DILocation(line: 3039, column: 1, scope: !2624)
+!2624 = distinct !DISubprogram(name: "target_args", scope: !5, file: !5, line: 3040, type: !3, scopeLine: 3040, spFlags: DISPFlagDefinition, unit: !1)
+!2625 = !DILocation(line: 3040, column: 1, scope: !2624)
 !2626 = distinct !DISubprogram(name: "buildcache.object_program", scope: !67, file: !67, line: 27, type: !3, scopeLine: 27, spFlags: DISPFlagDefinition, unit: !1)
 !2627 = !DILocation(line: 27, column: 1, scope: !2626)
 !2628 = !DILocation(line: 26, column: 1, scope: !2626)
-!2629 = distinct !DISubprogram(name: "cached_object_loop", scope: !5, file: !5, line: 2959, type: !3, scopeLine: 2959, spFlags: DISPFlagDefinition, unit: !1)
-!2630 = !DILocation(line: 2959, column: 1, scope: !2629)
+!2629 = distinct !DISubprogram(name: "cached_object_loop", scope: !5, file: !5, line: 2960, type: !3, scopeLine: 2960, spFlags: DISPFlagDefinition, unit: !1)
+!2630 = !DILocation(line: 2960, column: 1, scope: !2629)
 !2631 = !DILocation(line: 2913, column: 1, scope: !2629)
 !2632 = !DILocation(line: 2914, column: 1, scope: !2629)
 !2633 = !DILocation(line: 2915, column: 1, scope: !2629)
@@ -363313,13 +363313,13 @@ entry:
 !2642 = !DILocation(line: 2937, column: 1, scope: !2629)
 !2643 = !DILocation(line: 2938, column: 1, scope: !2629)
 !2644 = !DILocation(line: 2941, column: 1, scope: !2629)
-!2645 = !DILocation(line: 2945, column: 1, scope: !2629)
-!2646 = !DILocation(line: 2946, column: 1, scope: !2629)
-!2647 = !DILocation(line: 2947, column: 1, scope: !2629)
-!2648 = !DILocation(line: 2951, column: 1, scope: !2629)
-!2649 = !DILocation(line: 2952, column: 1, scope: !2629)
-!2650 = !DILocation(line: 2955, column: 1, scope: !2629)
-!2651 = !DILocation(line: 2957, column: 1, scope: !2629)
+!2645 = !DILocation(line: 2946, column: 1, scope: !2629)
+!2646 = !DILocation(line: 2947, column: 1, scope: !2629)
+!2647 = !DILocation(line: 2948, column: 1, scope: !2629)
+!2648 = !DILocation(line: 2952, column: 1, scope: !2629)
+!2649 = !DILocation(line: 2953, column: 1, scope: !2629)
+!2650 = !DILocation(line: 2956, column: 1, scope: !2629)
+!2651 = !DILocation(line: 2958, column: 1, scope: !2629)
 !2652 = distinct !DISubprogram(name: "Os.remove_file", scope: !45, file: !45, line: 1, type: !3, scopeLine: 1, spFlags: DISPFlagDefinition, unit: !1)
 !2653 = !DILocation(line: 1, column: 1, scope: !2652)
 !2654 = distinct !DISubprogram(name: "compile_two_phase", scope: !5, file: !5, line: 2799, type: !3, scopeLine: 2799, spFlags: DISPFlagDefinition, unit: !1)

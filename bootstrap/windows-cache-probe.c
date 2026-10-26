@@ -1,4 +1,6 @@
 // Exercise the actual Windows loader adapter independently of Plum/cache keys.
+#include <stdio.h>
+#define PLUM_WIN_IMAGE_TRACE(path, digest) fprintf(stderr,"loader image: %ls %s\n",path,digest)
 #include "../native_stdlib/os_shim.c"
 
 int main(int argc, char **argv) {

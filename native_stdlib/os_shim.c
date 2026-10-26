@@ -296,6 +296,9 @@ const char *plum_cache_temp(const char *root) {
 #include <bcrypt.h>
 
 #define PLUM_WIN_MODULES 256
+#ifndef PLUM_WIN_IMAGE_TRACE
+#define PLUM_WIN_IMAGE_TRACE(path, digest) ((void)0)
+#endif
 
 typedef struct { wchar_t *path; char digest[65]; } plum_win_image;
 typedef struct {
@@ -431,7 +434,7 @@ const char *plum_cache_windows_fingerprint(const char *tool) {
     size_t len=strlen(tool);
     if (!len || len>PLUM_PATH_MAX-32) return result;
     for (size_t i=0;i<len;i++) if ((unsigned char)tool[i]>=128 || tool[i]=='"') return result;
-    wchar_t exe[PLUM_PATH_MAX], bin[PLUM_PATH_MAX], system[PLUM_PATH_MAX];
+    wchar_t exe[PLUM_PATH_MAX], bin[PLUM_PATH_MAX]={0}, system[PLUM_PATH_MAX];
     if (!MultiByteToWideChar(CP_ACP,0,tool,-1,exe,PLUM_PATH_MAX)) return result;
     HANDLE original=CreateFileW(exe,GENERIC_READ,FILE_SHARE_READ|FILE_SHARE_DELETE,NULL,OPEN_EXISTING,0,NULL);
     if (original==INVALID_HANDLE_VALUE) return result;
@@ -520,6 +523,7 @@ const char *plum_cache_windows_fingerprint(const char *tool) {
         const char tag[]="plum-msys2-mingw64-loader-v1";
         plum_cache_update(&total,(const unsigned char *)tag,sizeof(tag));
         for (size_t i=0;i<count;i++) {
+            PLUM_WIN_IMAGE_TRACE(images[i].path,images[i].digest);
             uint64_t bytes=wcslen(images[i].path)*sizeof(wchar_t);
             plum_cache_update(&total,(const unsigned char *)&bytes,sizeof(bytes));
             plum_cache_update(&total,(const unsigned char *)images[i].path,(size_t)bytes);
