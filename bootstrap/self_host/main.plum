@@ -2786,10 +2786,15 @@ let compile_objs (srcs: Array[String]) (i: Int) (scratch: String) (flags: Array[
 let compile_two_phase (srcs: Array[String]) (out: String) (extra: Array[String]) (scratch: String) (target: String) (release: Bool): String = {
     let shim_dir = if srcs.len() > 1 { Path.dirname(srcs[1]) } else { scratch };
     let flags = Array.concat(target_args(target), Array.concat(cc_mode_args(release), ["-Wno-override-module", "-I", shim_dir, "-I", shim_dir.concat("/mbedtls/include"), "-I", shim_dir.concat("/mbedtls/library")]));
-    let built = compile_objs(srcs, 0, scratch, flags, []);
+    // Project/dependency C inputs need the same includes and persistent
+    // objects as embedded sources. Leaving C in the final link both loses
+    // its header search paths and lets Clang delete its debug-map objects.
+    let cs = Array.filter(extra, |p| p.ends_with(".c"));
+    let linked = Array.filter(extra, |p| !p.ends_with(".c"));
+    let built = compile_objs(Array.concat(srcs, cs), 0, scratch, flags, []);
     if built.err != "" { built.err }
     else {
-        let argv = Array.concat(Array.concat(Array.concat(Array.concat(cc_prefix_args(), target_args(target)), built.objs), extra),
+        let argv = Array.concat(Array.concat(Array.concat(Array.concat(cc_prefix_args(), target_args(target)), built.objs), linked),
             Array.concat(platform_libs(target), ["-o", out]));
         match run_process(cc_program(), argv) {
             Err(e) => "build failed: ".concat(e),
@@ -2797,12 +2802,39 @@ let compile_two_phase (srcs: Array[String]) (out: String) (extra: Array[String])
                 Array.join(cc_words(), " ").concat(" failed to link (exit ").concat(r.exit_code.to_string()).concat("):\n").concat(r.stderr)
             } else {
                 // The objects are still in `scratch`, so the map resolves.
-                let bundled = run_dsymutil(out);
+                if target_os(target) == "macos" { run_dsymutil(out) } else { () };
                 let cleaned = Os.remove_file(srcs[0]);
                 ""
             },
         }
     }
+}
+
+// Exercise the two-phase path on every test host: the native C file is
+// outside the shim tree, so only the compiler's include paths find its
+// embedded dependency header. macOS additionally bundles the C debug map.
+pub let test_two_phase_native_headers (): Unit = {
+    let scratch = Result.unwrap_or(Os.temp_dir(()), "");
+    assert(scratch != "");
+    assert(Result.is_ok(Os.make_dir(Path.join(scratch, "mbedtls"))));
+    assert(Result.is_ok(Os.make_dir(Path.join(scratch, "mbedtls/include"))));
+    assert(Result.is_ok(Os.make_dir(Path.join(scratch, "native"))));
+    let header = Path.join(scratch, "mbedtls/include/native_fixture.h");
+    assert(Result.is_ok(Os.write_file(header, "#define NATIVE_FIXTURE_RESULT 7\n")));
+    let c = Path.join(scratch, "native/value.c");
+    assert(Result.is_ok(Os.write_file(c, "#include <native_fixture.h>\nint native_fixture(void) { return NATIVE_FIXTURE_RESULT; }\n")));
+    let ll = Path.join(scratch, "main.ll");
+    assert(Result.is_ok(Os.write_file(ll, "declare i32 @native_fixture()\ndefine i32 @main() {\n  %r = call i32 @native_fixture()\n  ret i32 %r\n}\n")));
+    let out = Path.join(scratch, "native-test.exe");
+    assert_eq(compile_two_phase([ll], out, [c, "-lm"], scratch, native_target(), false), "");
+    let ran = run_process(out, []);
+    assert(match ran { Ok(r) => r.exit_code == 7, Err(_) => false });
+    if Os.platform(()) == "macos" {
+        let dwarf = out.concat(".dSYM/Contents/Resources/DWARF/native-test.exe");
+        let info = run_process("dwarfdump", ["--debug-line", dwarf]);
+        assert(match info { Ok(r) => r.exit_code == 0 && r.stdout.contains("value.c"), Err(_) => false });
+    };
+    assert(Result.is_ok(Os.remove_tree(scratch)));
 }
 
 let run_dsymutil (out: String): Unit =
