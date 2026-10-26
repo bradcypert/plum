@@ -75,7 +75,7 @@
 #endif
 
 // temp_dir and self_exe share scratch space only within one thread.
-// Each simultaneous mkdtemp/GetTempFileNameA call has its own template.
+// Each simultaneous temporary-directory call has its own template.
 static PLUM_OS_TLS char plum_os_buf[PLUM_PATH_MAX];
 
 // Compiler artifact support. Hash files in bounded memory: materializing the
@@ -263,11 +263,29 @@ long long plum_cache_copy(const char *src, const char *dst, const char *digest) 
     return bad ? -1 : 0;
 }
 
+#if defined(_WIN32)
+// Reserve the DIRECTORY atomically. GetTempFileName followed by deleting its
+// file and making a directory releases the name between those operations;
+// concurrent callers can then select the same supposedly unique name.
+static void plum_win_temp_dir(const char *root, const char *prefix) {
+    static volatile LONG serial=0;
+    size_t len=strlen(root);
+    const char *separator=len && (root[len-1]=='/' || root[len-1]=='\\') ? "" : "\\";
+    for (unsigned attempt=0; attempt<128; attempt++) {
+        unsigned long next=(unsigned long)(ULONG)InterlockedIncrement(&serial);
+        int n=snprintf(plum_os_buf,sizeof(plum_os_buf),"%s%s%s%lu-%llu-%lu",root,separator,prefix,
+                       (unsigned long)GetCurrentProcessId(),(unsigned long long)GetTickCount64(),next);
+        if (n<0 || n>=(int)sizeof(plum_os_buf)) break;
+        if (CreateDirectoryA(plum_os_buf,NULL)) return;
+        if (GetLastError()!=ERROR_ALREADY_EXISTS) break;
+    }
+    plum_os_buf[0]='\0';
+}
+#endif
+
 const char *plum_cache_temp(const char *root) {
 #if defined(_WIN32)
-    if (GetTempFileNameA(root,"pcb",0,plum_os_buf) == 0) { plum_os_buf[0]='\0'; return plum_os_buf; }
-    DeleteFileA(plum_os_buf);
-    if (PLUM_MKDIR(plum_os_buf) != 0) plum_os_buf[0]='\0';
+    plum_win_temp_dir(root,".partial-");
 #else
     if (snprintf(plum_os_buf,sizeof(plum_os_buf),"%s/.partial-XXXXXX",root) >= (int)sizeof(plum_os_buf)
         || mkdtemp(plum_os_buf) == NULL) plum_os_buf[0]='\0';
@@ -666,14 +684,7 @@ const char *os_temp_dir(void) {
     char base[PLUM_PATH_MAX];
     DWORD n = GetTempPathA((DWORD)sizeof(base), base);
     if (n == 0 || n >= sizeof(base)) { plum_os_buf[0] = '\0'; return plum_os_buf; }
-    // `GetTempFileNameA` creates a FILE; the directory of the same name
-    // is what is wanted, so the file is removed and a directory put in
-    // its place. The name is still unique -- that is what the call
-    // bought -- and the window between the two is not a security
-    // boundary this compiler relies on.
-    if (GetTempFileNameA(base, "plum", 0, plum_os_buf) == 0) { plum_os_buf[0] = '\0'; return plum_os_buf; }
-    DeleteFileA(plum_os_buf);
-    if (PLUM_MKDIR(plum_os_buf) != 0) { plum_os_buf[0] = '\0'; }
+    plum_win_temp_dir(base,"plum-");
     return plum_os_buf;
 #else
     const char *tmp = getenv("TMPDIR");
@@ -1151,7 +1162,7 @@ long long plum_cache_prune(const char *root, long long limit) {
         while ((e=readdir(d)) != NULL) {
             if (plum_join(path,sizeof(path),parent,e->d_name) != 0
                 || plum_cache_stat_private(path,&st) != 0 || !S_ISDIR(st.st_mode)) continue;
-            // Windows GetTempFileName uses pcb*.tmp; POSIX uses .partial-*.
+            // Keep recognizing legacy Windows pcb*.tmp staging entries too.
             if (!strncmp(e->d_name,".partial-",9) || !strncmp(e->d_name,"pcb",3)) {
                 if (now > st.st_mtime && now-st.st_mtime > 86400 && plum_cache_owner_gone(path)) {
                     if (plum_remove_tree(path) == 0) removed++;

@@ -1002,6 +1002,13 @@ a DLL loaded outside the supported directories must bypass; repeated
 success/failure probes must release handles. Accelerated and portable
 SHA-256 providers must agree.
 
+Windows temporary directories are reserved with atomic directory creation,
+shared by cache staging and ordinary temporary workspaces. Reserving a file,
+deleting it, then creating a directory leaves a name-reuse race between
+concurrent callers. The native probe stresses both directory callers with
+eight threads and 512 retained reservations, in addition to the concurrent
+cache-clean regression.
+
 `bootstrap/measure-windows-cache ./sh.real --out measurements.json` runs
 cold, warm, object-cache-disabled, all-cache-disabled, and edited-header
 cases. It records phase timings, cache bytes, and sampled working sets of

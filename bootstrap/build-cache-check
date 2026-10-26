@@ -75,6 +75,9 @@ with tempfile.TemporaryDirectory(prefix="plum-cache-check-") as tmp:
         probe = work / "loader-probe.exe"
         subprocess.run(["clang", "-O1", "-g", str(ROOT / "bootstrap/windows-cache-probe.c"), "-o", str(probe)],
                        check=True, capture_output=True, timeout=180)
+        temporary = subprocess.run([str(probe), "--temp-race", str(work)],
+                                   capture_output=True, text=True, timeout=90)
+        require(temporary.returncode == 0, temporary.stdout + temporary.stderr)
         testbin = work / "toolchain/mingw64/bin"
         testbin.mkdir(parents=True)
         dll_source = work / "module.c"
