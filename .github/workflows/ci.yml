@@ -126,6 +126,8 @@ jobs:
         run: ./bootstrap/check-shims
       - name: no runtime declare goes unused
         run: ./bootstrap/check-declares
+      - name: compiler internals preserve native object compilation
+        run: ./bootstrap/self-test ./sh.real
       - name: plum test really runs tests
         run: ./bootstrap/test-smoke
       - name: properties hold
@@ -164,6 +166,10 @@ jobs:
         run: ./bootstrap/remove-tree-smoke
       - name: OS path results survive concurrent native calls
         run: ./bootstrap/os-path-smoke
+      - name: declared native dependencies preserve TLS compatibility
+        env:
+          PLUM_CI_TIMINGS: "1"
+        run: ./bootstrap/native-deps-check ./sh.real
       - name: whole-file reads propagate failures and preserve bytes
         run: ./bootstrap/file-read-smoke
       - name: the version string is consistent
@@ -309,6 +315,10 @@ jobs:
         run: ./bootstrap/platform-smoke ./sh.real
       - name: build cache preserves program behavior
         run: ./bootstrap/build-cache-check ./sh.real
+      - name: declared native dependencies preserve TLS compatibility
+        env:
+          PLUM_CI_TIMINGS: "1"
+        run: ./bootstrap/native-deps-check ./sh.real
 
   platforms-memory-and-debug:
     name: macOS memory and debug checks
@@ -335,6 +345,8 @@ jobs:
       # and `plum build` keeps none. Whether clang's driver already runs
       # `dsymutil` for a one-step compile-and-link is a question about a
       # real Mac, so it is asked on one.
+      - name: compiler internals preserve native headers and debug maps
+        run: ./bootstrap/self-test ./sh.real
       - name: debug builds carry Plum line information
         run: ./bootstrap/debug-info-check
 
@@ -551,6 +563,10 @@ jobs:
         env:
           PLUM_CI_TIMINGS: "1"
         run: ./bootstrap/build-cache-check ./sh.real
+      - name: declared native dependencies preserve TLS compatibility
+        env:
+          PLUM_CI_TIMINGS: "1"
+        run: ./bootstrap/native-deps-check ./sh.real
 
   windows-lsp:
     name: Windows language server smoke

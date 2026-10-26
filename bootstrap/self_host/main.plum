@@ -2312,6 +2312,7 @@ let usage (): Unit = {
     println("  --target <triple>   build for another platform, e.g. aarch64-linux-musl.");
     println("                      Needs a C compiler that can link for it: set PLUM_CC,");
     println("                      e.g. PLUM_CC=\"zig cc\". Plum ships no sysroot.");
+    println("  --native-deps <none|tls>  embedded dependencies of --link-c/--link-lib inputs.");
     println("  cache list build    inspect reusable IR, objects and generated shims.");
     println("  cache clean build   remove build artifacts; fetched packages are kept.");
     println("  PLUM_NO_BUILD_CACHE=1  run without reusing build artifacts.");
@@ -2460,8 +2461,9 @@ let compile_and_run_tests (dir: String) (program: parser.ProgramNode) (names: Ar
             let outcome = match Os.write_file(ll, ir) {
                 Err(e) => TestRun { failed: 1, detail: "could not write test IR: ".concat(e) },
                 Ok(_) => {
-                    let extra = link_args([], dir, native_target());
-                    let written = write_shims(scratch, needs_tls(ir, extra));
+                    let native = link_args([], dir, native_target());
+                    let extra = native.args;
+                    let written = write_shims(scratch, needs_tls(ir, native.tls));
                     if written.err != "" { TestRun { failed: 1, detail: written.err } } else {
                         let cfiles = written.files;
                         // Native, for the same reason `run` is: each test
@@ -2784,10 +2786,15 @@ let compile_objs (srcs: Array[String]) (i: Int) (scratch: String) (flags: Array[
 let compile_two_phase (srcs: Array[String]) (out: String) (extra: Array[String]) (scratch: String) (target: String) (release: Bool): String = {
     let shim_dir = if srcs.len() > 1 { Path.dirname(srcs[1]) } else { scratch };
     let flags = Array.concat(target_args(target), Array.concat(cc_mode_args(release), ["-Wno-override-module", "-I", shim_dir, "-I", shim_dir.concat("/mbedtls/include"), "-I", shim_dir.concat("/mbedtls/library")]));
-    let built = compile_objs(srcs, 0, scratch, flags, []);
+    // Project/dependency C inputs need the same includes and persistent
+    // objects as embedded sources. Leaving C in the final link both loses
+    // its header search paths and lets Clang delete its debug-map objects.
+    let cs = Array.filter(extra, |p| p.ends_with(".c"));
+    let linked = Array.filter(extra, |p| !p.ends_with(".c"));
+    let built = compile_objs(Array.concat(srcs, cs), 0, scratch, flags, []);
     if built.err != "" { built.err }
     else {
-        let argv = Array.concat(Array.concat(Array.concat(Array.concat(cc_prefix_args(), target_args(target)), built.objs), extra),
+        let argv = Array.concat(Array.concat(Array.concat(Array.concat(cc_prefix_args(), target_args(target)), built.objs), linked),
             Array.concat(platform_libs(target), ["-o", out]));
         match run_process(cc_program(), argv) {
             Err(e) => "build failed: ".concat(e),
@@ -2795,12 +2802,39 @@ let compile_two_phase (srcs: Array[String]) (out: String) (extra: Array[String])
                 Array.join(cc_words(), " ").concat(" failed to link (exit ").concat(r.exit_code.to_string()).concat("):\n").concat(r.stderr)
             } else {
                 // The objects are still in `scratch`, so the map resolves.
-                let bundled = run_dsymutil(out);
+                if target_os(target) == "macos" { run_dsymutil(out) } else { () };
                 let cleaned = Os.remove_file(srcs[0]);
                 ""
             },
         }
     }
+}
+
+// Exercise the two-phase path on every test host: the native C file is
+// outside the shim tree, so only the compiler's include paths find its
+// embedded dependency header. macOS additionally bundles the C debug map.
+pub let test_two_phase_native_headers (): Unit = {
+    let scratch = Result.unwrap_or(Os.temp_dir(()), "");
+    assert(scratch != "");
+    assert(Result.is_ok(Os.make_dir(Path.join(scratch, "mbedtls"))));
+    assert(Result.is_ok(Os.make_dir(Path.join(scratch, "mbedtls/include"))));
+    assert(Result.is_ok(Os.make_dir(Path.join(scratch, "native"))));
+    let header = Path.join(scratch, "mbedtls/include/native_fixture.h");
+    assert(Result.is_ok(Os.write_file(header, "#define NATIVE_FIXTURE_RESULT 7\n")));
+    let c = Path.join(scratch, "native/value.c");
+    assert(Result.is_ok(Os.write_file(c, "#include <native_fixture.h>\nint native_fixture(void) { return NATIVE_FIXTURE_RESULT; }\n")));
+    let ll = Path.join(scratch, "main.ll");
+    assert(Result.is_ok(Os.write_file(ll, "declare i32 @native_fixture()\ndefine i32 @main() {\n  %r = call i32 @native_fixture()\n  ret i32 %r\n}\n")));
+    let out = Path.join(scratch, "native-test.exe");
+    assert_eq(compile_two_phase([ll], out, [c, "-lm"], scratch, native_target(), false), "");
+    let ran = run_process(out, []);
+    assert(match ran { Ok(r) => r.exit_code == 7, Err(_) => false });
+    if Os.platform(()) == "macos" {
+        let dwarf = out.concat(".dSYM/Contents/Resources/DWARF/native-test.exe");
+        let info = run_process("dwarfdump", ["--debug-line", dwarf]);
+        assert(match info { Ok(r) => r.exit_code == 0 && r.stdout.contains("value.c"), Err(_) => false });
+    };
+    assert(Result.is_ok(Os.remove_tree(scratch)));
 }
 
 let run_dsymutil (out: String): Unit =
@@ -3016,17 +3050,14 @@ let target_args (target: String): Array[String] =
 // Target selection applies per dependency, so a package can carry
 // `native/windows/` and `native/posix/` the same way a project can.
 //
-// KNOWN LIMIT, worth stating rather than discovering: link FLAGS do not
-// travel. A package shipping a SQLite shim also needs `-lsqlite3`, and
-// there is nowhere in a manifest to say so, so the consumer has to know
-// and repeat it. A shim over libc, or over anything already linked,
-// needs nothing extra.
-let link_args (argv: Array[String]) (dir: String) (target: String): Array[String] = {
+struct NativeBuild { args: Array[String], tls: Bool }
+
+let link_args (argv: Array[String]) (dir: String) (target: String): NativeBuild = {
     let deps = project_deps(dir);
     link_args_resolved(argv, dir, target, deps)
 }
 
-let link_args_resolved (argv: Array[String]) (dir: String) (target: String) (deps: Array[pkg.Dep]): Array[String] = {
+let link_args_resolved (argv: Array[String]) (dir: String) (target: String) (deps: Array[pkg.Dep]): NativeBuild = {
     let os = target_os(target);
     // Libraries come from three places, and only the first was ever
     // available: the command line, this project's own manifest, and
@@ -3034,17 +3065,37 @@ let link_args_resolved (argv: Array[String]) (dir: String) (target: String) (dep
     // shipping a shim over SQLite knows it needs `-lsqlite3`, and until
     // 0.0.34 there was nowhere to say so, which meant every consumer had
     // to know an implementation detail of every dependency. See #42.
-    let declared = Array.concat(pkg.manifest_link_for(pkg.read(dir), os), dep_link_libs(deps, os, 0, []));
-    let libs = Array.map(Array.concat(collect_flag(argv, "--link-lib", 0, []), declared), |l| "-l".concat(l));
-    let own = native_c_files(dir.concat("/native"), os);
-    let cs = Array.concat(collect_flag(argv, "--link-c", 0, []),
-        Array.concat(own, dep_native_files(deps, os, 0, [])));
-    Array.concat(cs, libs)
+    let own = pkg.read(dir);
+    let own_cs = native_c_files(Path.join(dir, "native"), os);
+    let own_libs = pkg.manifest_link_for(own, os);
+    let mut cs = Array.concat(collect_flag(argv, "--link-c", 0, []), own_cs);
+    let mut libs = Array.concat(collect_flag(argv, "--link-lib", 0, []), own_libs);
+    let mut tls = command_native_tls(argv) || pkg.native_needs_tls(own, own_cs.len() > 0 || own_libs.len() > 0);
+    for dep in deps {
+        let m = pkg.read(dep.path);
+        let dep_cs = native_c_files(Path.join(dep.path, "native"), os);
+        let dep_libs = pkg.manifest_link_for(m, os);
+        cs = Array.concat(cs, dep_cs);
+        libs = Array.concat(libs, dep_libs);
+        tls = tls || pkg.native_needs_tls(m, dep_cs.len() > 0 || dep_libs.len() > 0);
+    };
+    NativeBuild { args: Array.concat(cs, Array.map(libs, |l| "-l".concat(l))), tls: tls }
 }
 
-let dep_link_libs (deps: Array[pkg.Dep]) (os: String) (i: Int) (acc: Array[String]): Array[String] =
-    if i >= deps.len() { acc }
-    else { dep_link_libs(deps, os, i + 1, Array.concat(acc, pkg.manifest_link_for(pkg.read(deps[i].path), os))) }
+// Command-line declarations apply only to --link-c/--link-lib inputs;
+// a root package cannot suppress a dependency package's TLS requirement.
+let command_native_tls (argv: Array[String]): Bool = {
+    let values = collect_flag(argv, "--native-deps", 0, []);
+    let occurrences = Array.filter(argv, |v| v == "--native-deps").len();
+    if occurrences > 0 && (occurrences != 1 || values.len() != 1) {
+        panic_raw("--native-deps requires one value: none or tls")
+    };
+    if values.len() == 0 {
+        collect_flag(argv, "--link-c", 0, []).len() > 0 || collect_flag(argv, "--link-lib", 0, []).len() > 0
+    } else if values[0] == "tls" { true }
+    else if values[0] == "none" { false }
+    else { panic_raw("--native-deps requires one value: none or tls"); true }
+}
 
 // The resolved dependency paths, transitively, with cycles already
 // handled -- the same scan `collect_project` uses to decide which
@@ -3055,18 +3106,16 @@ let project_deps (dir: String): Array[pkg.Dep] =
         dep_closure(dir, DepScan { root: Path.clean(dir), visited: [Path.clean(dir)], found: [], fetch: false }).found
     } else { [] }
 
-let dep_native_files (deps: Array[pkg.Dep]) (os: String) (i: Int) (acc: Array[String]): Array[String] =
-    if i >= deps.len() { acc }
-    else { dep_native_files(deps, os, i + 1, Array.concat(acc, native_c_files(Path.join(deps[i].path, "native"), os))) }
-
 // Compiles a project to `out`. Returns an error message, or "" on
 // success -- shared by `build` and `run`, which differ only in what
 // they do with the binary afterwards.
-// TLS sources are needed only when the program declares a TLS function.
-// Custom native inputs can reference TLS without a Plum declaration, so
-// keep the complete bundle whenever the build supplies native inputs.
-let needs_tls (ir: String) (extra: Array[String]): Bool =
-    extra.len() > 0 || declares_tls(ir.split("\n"), 0)
+// Native requirements are resolved from each input owner's declaration.
+// Direct Plum calls always select TLS, independently of native metadata.
+let needs_tls (ir: String) (native_tls: Bool): Bool = {
+    let tls = native_tls || declares_tls(ir.split("\n"), 0);
+    buildcache.diagnostic(if tls { "native dependencies: tls" } else { "native dependencies: none" });
+    tls
+}
 
 let declares_tls (lines: Array[String]) (i: Int): Bool =
     if i >= lines.len() { false }
@@ -3194,16 +3243,16 @@ pub let wants_release (argv: Array[String]): Bool = Array.contains(argv, "--rele
 pub let wants_trace (argv: Array[String]): Bool = Array.contains(argv, "--trace")
 
 let compile_project (dir: String) (out: String) (extra: Array[String]) (target: String) (release: Bool) (trace: Bool): String =
-    compile_prepared(dir, out, extra, target, release, trace, prepare_inputs(dir), false)
+    compile_prepared(dir, out, NativeBuild { args: extra, tls: extra.len() > 0 }, target, release, trace, prepare_inputs(dir), false)
 
-let compile_prepared (dir: String) (out: String) (extra: Array[String]) (target: String) (release: Bool) (trace: Bool) (inputs: BuildInputs) (cached: Bool): String = {
+let compile_prepared (dir: String) (out: String) (native: NativeBuild) (target: String) (release: Bool) (trace: Bool) (inputs: BuildInputs) (cached: Bool): String = {
     let bad = target_error(target);
     if bad != "" { bad }
     else {
         match Os.temp_dir() {
             Err(e) => "build failed: ".concat(e),
             Ok(scratch) => {
-                let err = compile_with_scratch(dir, out, extra, scratch, target, release, trace, inputs, cached);
+                let err = compile_with_scratch(dir, out, native, scratch, target, release, trace, inputs, cached);
                 if cached && buildcache.enabled(()) { buildcache.prune(()) } else { () };
                 let cleaned = Os.remove_tree(scratch);
                 err
@@ -3212,7 +3261,8 @@ let compile_prepared (dir: String) (out: String) (extra: Array[String]) (target:
     }
 }
 
-let compile_with_scratch (dir: String) (out: String) (extra: Array[String]) (scratch: String) (target: String) (release: Bool) (trace: Bool) (inputs: BuildInputs) (cached: Bool): String = {
+let compile_with_scratch (dir: String) (out: String) (native: NativeBuild) (scratch: String) (target: String) (release: Bool) (trace: Bool) (inputs: BuildInputs) (cached: Bool): String = {
+    let extra = native.args;
     let ll = out.concat(".ll");
     // Debug builds carry the shadow call stack; release builds do not.
     codegen.set_debug_frames(trace);
@@ -3255,9 +3305,9 @@ let compile_with_scratch (dir: String) (out: String) (extra: Array[String]) (scr
             let shim_time = buildcache.start(());
             let stable_shims = Path.join(Path.join(buildcache.root(()), "shims"), buildcache.compiler_hash(()));
             let shim_dir = if cached && key != "" { stable_shims } else { scratch };
-            let first = if shim_dir == scratch { write_shims(scratch, needs_tls(ir, extra)) }
-                else { shared_shims(shim_dir, needs_tls(ir, extra)) };
-            let written = if first.err != "" && shim_dir != scratch { write_shims(scratch, needs_tls(ir, extra)) } else { first };
+            let first = if shim_dir == scratch { write_shims(scratch, needs_tls(ir, native.tls)) }
+                else { shared_shims(shim_dir, needs_tls(ir, native.tls)) };
+            let written = if first.err != "" && shim_dir != scratch { write_shims(scratch, needs_tls(ir, native.tls)) } else { first };
             buildcache.finish("shim extraction", shim_time);
             if written.err != "" { "build failed: ${written.err}" }
             else {
@@ -3270,7 +3320,7 @@ let compile_with_scratch (dir: String) (out: String) (extra: Array[String]) (scr
                     // Retry from private scratch; real source/link errors
                     // still fail, and no older executable is available.
                     buildcache.diagnostic("native cache unavailable; retrying uncached");
-                    let fresh = write_shims(scratch, needs_tls(ir, extra));
+                    let fresh = write_shims(scratch, needs_tls(ir, native.tls));
                     if fresh.err != "" { "build failed: ${fresh.err}" }
                     else { link_ir_uncached(ll, fresh.files, out, extra, scratch, target, release) }
                 } else { err }

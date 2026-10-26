@@ -309,6 +309,43 @@ Package {
 }
 ```
 
+Native sources and linked libraries can declare which embedded dependencies
+those inputs require:
+
+```plum manifest
+Package { name: "native_helper", native_deps: [] }
+```
+
+`native_deps: []` certifies that this package's selected native sources
+and linked libraries do not need embedded TLS. Use `native_deps: ["tls"]`
+when they need Plum's TLS shim, Mbed TLS, or PSA APIs, including through
+native headers or libraries. `tls` is currently the only supported name;
+unknown names and duplicate entries are errors. The declaration applies
+on every target, and does not change which platform sources or link
+libraries are selected.
+
+Omitting `native_deps` preserves compatibility: a package with native
+sources or linked libraries receives the complete TLS bundle. Packages
+without native inputs do not acquire TLS merely because the field is
+absent. An explicit `["tls"]` requests TLS even without native inputs.
+
+Each package owns its declaration, including transitive dependencies. A
+root package's `[]` cannot override a dependency's requirement. Direct
+Plum calls to TLS/Mbed TLS/PSA functions select TLS independently of these
+native declarations. The compiler does not inspect C text to guess dependencies.
+An incorrect empty declaration can therefore cause a missing-header or
+link error; correct it to `["tls"]` rather than relying on an automatic retry.
+
+For native sources/libraries added with `--link-c` or `--link-lib`,
+`--native-deps none` or `--native-deps tls` declares the requirements of
+those command-line inputs only. Without the option, their requirements
+remain unknown and TLS is included. These options are accepted by `build`
+and `run`; as with other existing `run` options, arguments after the
+project are also forwarded to the program. Package declarations apply to
+`build`, `run`, and `test`. Selection is resolved for every invocation,
+including cache hits and private recovery builds; manifest edits invalidate
+the cached IR identity.
+
 A dependency is an ordinary project: a directory with `.plum` files in
 it, which builds and tests on its own. Nothing has to be published.
 `plum check`, `run`, `build`, `test` and `doc` all read the

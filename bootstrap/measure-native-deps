@@ -1,0 +1,107 @@
+#!/usr/bin/env python3
+"""Measure migration from undeclared native inputs to explicit TLS selection.
+
+Run on an idle host, after correctness checks. Baseline compilers predating
+native_deps receive the same source without the new manifest field. Reports
+wall time, phase times and executable size. POSIX reports the maximum
+resident set for the compiler/child command (not aggregate RSS).
+"""
+import argparse
+import hashlib
+import json
+import os
+from pathlib import Path
+import platform
+import re
+import statistics
+import subprocess
+import sys
+import tempfile
+import time
+
+# A fresh measuring process isolates RUSAGE_CHILDREN for each invocation.
+# Waiting for the compiler includes the children it waited for (Clang).
+if len(sys.argv) > 1 and sys.argv[1] == '--measure-child':
+    import resource
+    result = subprocess.run(sys.argv[2:], capture_output=True, text=True)
+    rss = resource.getrusage(resource.RUSAGE_CHILDREN).ru_maxrss
+    if sys.platform == 'darwin':
+        rss = rss / 1024
+    print(json.dumps({'returncode': result.returncode, 'stdout': result.stdout,
+                      'stderr': result.stderr, 'max_rss_kib': rss}))
+    raise SystemExit(0)
+
+parser = argparse.ArgumentParser(description=__doc__)
+parser.add_argument('--baseline', type=Path, required=True)
+parser.add_argument('--candidate', type=Path, required=True)
+parser.add_argument('--samples', type=int, default=3)
+parser.add_argument('--out', type=Path, required=True)
+args = parser.parse_args()
+if args.samples < 1:
+    parser.error('--samples must be positive')
+def digest(path):
+    hasher = hashlib.sha256()
+    with path.open('rb') as source:
+        for block in iter(lambda: source.read(1024 * 1024), b''):
+            hasher.update(block)
+    return hasher.hexdigest()
+
+
+report = {
+    'platform': platform.platform(),
+    'clang': subprocess.check_output(['clang', '--version'], text=True),
+    'source_commit': subprocess.check_output(['git', 'rev-parse', 'HEAD'], text=True).strip(),
+    'note': 'Identical Plum/C source; baseline omits native_deps, candidate declares [] or ["tls"]. '
+            'POSIX RSS is child-process maximum resident set, not concurrent aggregate memory. '
+            'Wall time includes the Python measurement launcher on POSIX.',
+    'compiler_sha256': {kind: digest(path)
+                        for kind, path in [('baseline', args.baseline), ('candidate', args.candidate)]},
+    'results': {},
+}
+env = dict(os.environ, PLUM_PROFILE='1', PLUM_CACHE_TRACE='1', PLUM_NO_BUILD_CACHE='1')
+for key in ('PLUM_CC', 'PLUM_NO_OBJECT_CACHE', 'PLUM_RT_STATS'):
+    env.pop(key, None)
+with tempfile.TemporaryDirectory(prefix='plum-native-measure-') as tmp:
+    work = Path(tmp)
+    project = work / 'app'
+    (project / 'native').mkdir(parents=True)
+    (project / 'main.plum').write_text('extern "C" { fn native_value() -> Int; }\n'
+                                    'let main (): Unit = println(unsafe { native_value() })\n')
+    (project / 'native/value.c').write_text('long long native_value(void) { return 7; }\n')
+    for label, compiler, declaration in (
+            ('baseline-undeclared', args.baseline, None),
+            ('candidate-undeclared', args.candidate, None),
+            ('candidate-none', args.candidate, '[]'),
+            ('candidate-tls', args.candidate, '["tls"]')):
+        manifest = project / 'plum.pkg'
+        manifest.write_text('Package { name: "app"' +
+                            ('' if declaration is None else ', native_deps: ' + declaration) + ' }\n')
+        samples = []
+        for i in range(args.samples):
+            binary = work / 'program.exe'
+            command = [str(compiler.resolve()), 'build', str(project), '-o', str(binary)]
+            measure_rss = os.name == 'posix'
+            if measure_rss:
+                command = [sys.executable, str(Path(__file__).resolve()), '--measure-child', *command]
+            started = time.perf_counter()
+            result = subprocess.run(command, capture_output=True, text=True, env=env, timeout=180)
+            seconds = time.perf_counter() - started
+            if result.returncode:
+                raise RuntimeError(result.stdout + result.stderr)
+            measured = json.loads(result.stdout) if measure_rss else {
+                'stdout': result.stdout, 'stderr': result.stderr,
+                'returncode': result.returncode, 'max_rss_kib': None}
+            if measured['returncode']:
+                raise RuntimeError(measured['stdout'] + measured['stderr'])
+            output = subprocess.check_output([str(binary)], text=True, timeout=30)
+            if output != '7\n':
+                raise RuntimeError('incorrect measured program: ' + repr(output))
+            phases = {}
+            for name, micros in re.findall(r'profile: (.*?) (\d+) us', measured['stderr']):
+                phases[name] = phases.get(name, 0) + int(micros) / 1e6
+            samples.append({'seconds': seconds, 'max_rss_kib': measured['max_rss_kib'],
+                            'executable_bytes': binary.stat().st_size, 'phases_seconds': phases})
+        report['results'][label] = {'samples': samples,
+            'median_seconds': statistics.median(s['seconds'] for s in samples)}
+        print(label, report['results'][label]['median_seconds'], flush=True)
+args.out.write_text(json.dumps(report, indent=2) + '\n')
