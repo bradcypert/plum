@@ -19,8 +19,9 @@ int main(int argc, char **argv) {
         DWORD before=0, after=0;
         if (!GetProcessHandleCount(GetCurrentProcess(),&before)) return 2;
         for (int i=0;i<5;i++) {
-            if (strcmp(first,plum_cache_windows_fingerprint(argv[1]))!=0) {
-                fprintf(stderr,"loader fingerprint was not stable\n"); return 2;
+            const char *next=plum_cache_windows_fingerprint(argv[1]);
+            if (strcmp(first,next)!=0) {
+                fprintf(stderr,"loader fingerprint was not stable: %s -> %s\n",first,next); return 2;
             }
         }
         if (!GetProcessHandleCount(GetCurrentProcess(),&after) || after>before+2) {
