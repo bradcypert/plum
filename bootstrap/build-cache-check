@@ -642,8 +642,10 @@ raise SystemExit(subprocess.call(["clang", *sys.argv[1:]]))
         nested = entries / ("d" * 64)
         nested.mkdir()
         (nested / "data").write_text("evict")
-        subprocess.run(["cmd", "/c", "mklink", "/J", str(nested / "link"), str(outside)],
-                       check=True, capture_output=True)
+        junction = subprocess.run([os.environ.get("COMSPEC", "cmd.exe"), "/d", "/c", "mklink", "/J",
+                                   str(nested / "link").replace("/", "\\"), str(outside).replace("/", "\\")],
+                                  capture_output=True, text=True)
+        require(junction.returncode == 0, "junction creation failed: " + junction.stdout + junction.stderr)
         run("file\n", "miss", target=src, overlay={"PLUM_CACHE": str(retention),
             "PLUM_BUILD_CACHE_MAX_BYTES": "0"})
         require(sentinel.read_text() == "preserved" and not nested.exists(),

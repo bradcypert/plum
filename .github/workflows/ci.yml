@@ -560,15 +560,6 @@ jobs:
           name: plum-windows-compiler
       - name: restore freshly built compiler
         run: tar -xzf plum-windows-compiler.tar.gz
-      - name: build cache preserves program behavior
-        env:
-          PLUM_CI_TIMINGS: "1"
-        run: ./bootstrap/build-cache-check ./sh.real --require-objects
-      - name: declared native dependencies preserve TLS compatibility
-        env:
-          PLUM_CI_TIMINGS: "1"
-        run: ./bootstrap/native-deps-check ./sh.real
-
       - name: measure Windows cold, warm, edited and uncached builds
         run: ./bootstrap/measure-windows-cache ./sh.real --out windows-cache-measurements.json
       - uses: actions/upload-artifact@v4
@@ -577,6 +568,14 @@ jobs:
           path: windows-cache-measurements.json
           if-no-files-found: error
           retention-days: 7
+      - name: build cache preserves program behavior
+        env:
+          PLUM_CI_TIMINGS: "1"
+        run: ./bootstrap/build-cache-check ./sh.real --require-objects
+      - name: declared native dependencies preserve TLS compatibility
+        env:
+          PLUM_CI_TIMINGS: "1"
+        run: ./bootstrap/native-deps-check ./sh.real
 
   windows-lsp:
     name: Windows language server smoke
