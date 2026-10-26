@@ -90,6 +90,12 @@ with tempfile.TemporaryDirectory(prefix="plum-cache-check-") as tmp:
             with file.open("ab") as stream:
                 stream.write(b"overlay-A")
 
+        # Match native_fingerprint's ordinary -dumpmachine launch before the
+        # debug probe. Windows can load apphelp.dll only on a fresh EXE's
+        # first launch; different loaded-image sets correctly have different
+        # identities, even when all of the files themselves are unchanged.
+        subprocess.run([str(exe), "-dumpmachine"], check=True, capture_output=True, cwd=work)
+
         def fingerprint(ok=True, repeat=False, cwd=work):
             result = subprocess.run([str(probe), str(exe), *(["--repeat"] if repeat else [])],
                                     capture_output=True, text=True, cwd=cwd, timeout=60)
