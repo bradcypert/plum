@@ -490,6 +490,8 @@ jobs:
           compression-level: 0
           retention-days: 7
 
+  # These suites already took about 18 + 10 minutes on main. Give each
+  # its own budget and timing output; neither suite's coverage is reduced.
   windows-smoke:
     name: Windows platform smoke
     needs: windows-build
@@ -516,8 +518,38 @@ jobs:
       - name: restore freshly built compiler
         run: tar -xzf plum-windows-compiler.tar.gz
       - name: real programs work on Windows
+        env:
+          PLUM_CI_TIMINGS: "1"
         run: ./bootstrap/platform-smoke ./sh.real
+
+  windows-cache:
+    name: Windows build cache validation
+    needs: windows-build
+    runs-on: windows-latest
+    timeout-minutes: 30
+    defaults:
+      run:
+        shell: msys2 {0}
+    steps:
+      - uses: actions/checkout@v5
+      - uses: msys2/setup-msys2@v2
+        with:
+          msystem: MINGW64
+          update: true
+          install: >-
+            mingw-w64-x86_64-clang
+            mingw-w64-x86_64-lld
+            diffutils
+            tar
+            python
+      - uses: actions/download-artifact@v4
+        with:
+          name: plum-windows-compiler
+      - name: restore freshly built compiler
+        run: tar -xzf plum-windows-compiler.tar.gz
       - name: build cache preserves program behavior
+        env:
+          PLUM_CI_TIMINGS: "1"
         run: ./bootstrap/build-cache-check ./sh.real
 
   windows-lsp:
@@ -554,7 +586,7 @@ jobs:
   windows:
     name: windows x86_64 builds and runs real programs
     if: ${{ always() }}
-    needs: [windows-build, windows-smoke, windows-lsp]
+    needs: [windows-build, windows-smoke, windows-cache, windows-lsp]
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
@@ -562,4 +594,5 @@ jobs:
         run: |
           test "${{ needs.windows-build.result }}" = success
           test "${{ needs.windows-smoke.result }}" = success
+          test "${{ needs.windows-cache.result }}" = success
           test "${{ needs.windows-lsp.result }}" = success

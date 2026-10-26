@@ -21,6 +21,7 @@ COMPILER = Path(compiler_args[0] if compiler_args else ROOT / "sh").resolve()
 # Windows executable. Unix PTYs, symlinks and executable paths cannot be
 # assumed to have the same meaning to both processes.
 WINDOWS_HOST = os.name == "nt" or sys.platform.startswith(("msys", "cygwin"))
+TIMINGS = os.environ.get("PLUM_CI_TIMINGS") == "1"
 passed = 0
 
 
@@ -44,8 +45,19 @@ with tempfile.TemporaryDirectory(prefix="plum-cache-check-") as tmp:
     env.pop("PLUM_BUILD_CACHE_MAX_BYTES", None)
 
     def invoke(*args, overlay=None, ok=True):
+        # repr keeps control characters and POSIX byte paths readable in CI.
+        label = " ".join(repr(str(arg)) for arg in args)
+        if TIMINGS:
+            print(f"START cache command: {label}", flush=True)
+        started = time.monotonic()
         result = subprocess.run([str(COMPILER), *map(str, args)], env=env | (overlay or {}),
                                 capture_output=True, text=True, timeout=180, cwd=work)
+        if TIMINGS:
+            print(f"TIMING cache command: {time.monotonic() - started:.3f}s "
+                  f"(exit {result.returncode}) {label}", flush=True)
+            for line in result.stderr.splitlines():
+                if line.startswith(("profile:", "cache: IR ", "cache: objects bypass")):
+                    print("  " + line, flush=True)
         require((result.returncode == 0) == ok,
                 f"unexpected status for {args}: {result.returncode}\n{result.stdout}\n{result.stderr}")
         return result
