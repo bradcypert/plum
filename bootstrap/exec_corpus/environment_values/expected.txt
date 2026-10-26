@@ -1,0 +1,4 @@
+unset, empty and valid UTF-8 values: ok
+malformed UTF-8 rejected as text, preserved as bytes: ok
+returned values survive environment changes: ok
+large values and repeated invalid reads: ok
