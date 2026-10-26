@@ -25,13 +25,37 @@ Compile and run it in one step:
 plum run myapp
 ```
 
-`run` caches validated LLVM IR. On Linux with the default Clang driver,
+`run` caches validated LLVM IR. With a supported default Clang toolchain,
 it also caches compiled objects when it can fingerprint the compiler and
 its loaded libraries. C inputs are preprocessed again so header edits and
 changes in include search paths are reflected. Every run links a fresh
 temporary executable and inherits your arguments, working directory and
 terminal streams. Other platforms and custom `PLUM_CC` commands reuse IR
 and compile native inputs normally.
+
+Object reuse supports Linux's default Clang/loader and the x86-64 MSYS2
+MINGW64 Clang setup used by Windows CI. Other Windows toolchains, custom
+`PLUM_CC` commands, and macOS retain IR reuse and compile native objects afresh.
+
+The Windows adapter requires `MSYSTEM=MINGW64`, the GNU Windows target,
+and an ASCII executable spelling ending in `mingw64/bin/clang.exe`. It
+launches a short, bounded loader probe and hashes the actual executable
+and DLL files selected by Windows. Private DLLs must come from that toolchain's
+`bin` directory and have no delayed imports; system DLLs must come from
+Windows' system directory. Unknown images, unreadable files, unsupported
+layouts, and failed probes bypass object reuse. This contract covers the
+standard compiler without compile-time plugins, not arbitrary DLL-loading
+compiler extensions. Compiler files must remain stable during a command.
+
+Certified Windows object compilation uses the exact probed executable and
+an integrated Clang frontend. The effective command is checked against
+Clang's configuration-free command; an external assembler/compiler,
+plugin, profile input, or unsupported configuration triggers ordinary
+compilation. C is still preprocessed afresh, objects are integrity-checked,
+and every invocation links a fresh executable. Windows validates emitted
+C LLVM IR rather than materializing large Windows-header JSON syntax trees;
+assembly and quoted assembler symbols conservatively bypass C object reuse.
+Normal builds keep their existing compiler selection and linking behavior.
 
 The cache is under `PLUM_CACHE/build/v1`, or the same default cache root
 used for packages (`XDG_CACHE_HOME/plum`, then `~/.cache/plum`). Source

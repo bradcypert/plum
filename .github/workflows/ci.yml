@@ -551,18 +551,27 @@ jobs:
           install: >-
             mingw-w64-x86_64-clang
             mingw-w64-x86_64-lld
+            mingw-w64-x86_64-binutils
             diffutils
             tar
-            python
+            mingw-w64-x86_64-python
       - uses: actions/download-artifact@v4
         with:
           name: plum-windows-compiler
       - name: restore freshly built compiler
         run: tar -xzf plum-windows-compiler.tar.gz
+      - name: measure Windows cold, warm, edited and uncached builds
+        run: ./bootstrap/measure-windows-cache ./sh.real --out windows-cache-measurements.json
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows-cache-measurements
+          path: windows-cache-measurements.json
+          if-no-files-found: error
+          retention-days: 7
       - name: build cache preserves program behavior
         env:
           PLUM_CI_TIMINGS: "1"
-        run: ./bootstrap/build-cache-check ./sh.real
+        run: ./bootstrap/build-cache-check ./sh.real --require-objects
       - name: declared native dependencies preserve TLS compatibility
         env:
           PLUM_CI_TIMINGS: "1"

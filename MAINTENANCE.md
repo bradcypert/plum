@@ -988,3 +988,31 @@ both arguments. The report includes wall/phase times, executable sizes,
 and per-command maximum RSS on POSIX. Windows RSS is left unavailable;
 measure it separately rather than confusing executable size with runtime
 memory. The tool measures compiler invocations, not application runtime RSS.
+
+
+## Windows native-object cache validation
+
+`bootstrap/build-cache-check ./sh.real --require-objects` requires LLVM
+object hits and a fresh link on Linux and supported Windows toolchains.
+Windows CI uses native MinGW Python so native process IDs, directory
+junctions, and PE debug locations are checked. `windows-cache-probe.c`
+also verifies loader fingerprints independently of cache diagnostics:
+compiler/DLL replacements with unchanged size/time must alter identity;
+a DLL loaded outside the supported directories must bypass; repeated
+success/failure probes must release handles. Accelerated and portable
+SHA-256 providers must agree.
+
+Windows temporary directories are reserved with atomic directory creation,
+shared by cache staging and ordinary temporary workspaces. Reserving a file,
+deleting it, then creating a directory leaves a name-reuse race between
+concurrent callers. The native probe stresses both directory callers with
+eight threads and 512 retained reservations, in addition to the concurrent
+cache-clean regression.
+
+`bootstrap/measure-windows-cache ./sh.real --out measurements.json` runs
+cold, warm, object-cache-disabled, all-cache-disabled, and edited-header
+cases. It records phase timings, cache bytes, and sampled working sets of
+the compiler process tree, using native Windows Python. The memory figure
+is a sum of sampled process working sets: shared pages may be counted more
+than once, and short peaks can be missed. It is neither application runtime
+memory nor an exact physical-RAM peak. Windows CI uploads this report.

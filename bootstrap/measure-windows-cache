@@ -1,0 +1,150 @@
+#!/usr/bin/env python3
+"""Measure Windows object-cache costs with native Python and Win32 APIs.
+
+Memory is a sampled sum of working sets in the compiler process tree, not
+unique physical RAM or an exact instantaneous peak. No timing thresholds.
+"""
+import argparse
+import ctypes
+from ctypes import wintypes as w
+import json
+import os
+from pathlib import Path
+import re
+import statistics
+import subprocess
+import tempfile
+import time
+
+parser = argparse.ArgumentParser(description=__doc__)
+parser.add_argument('compiler', type=Path)
+parser.add_argument('--out', type=Path, required=True)
+parser.add_argument('--samples', type=int, default=3)
+args = parser.parse_args()
+if os.name != 'nt':
+    parser.error('use native Windows Python, not MSYS Python')
+if args.samples < 1:
+    parser.error('--samples must be positive')
+
+kernel = ctypes.WinDLL('kernel32', use_last_error=True)
+class Entry(ctypes.Structure):
+    _fields_ = [('size', w.DWORD), ('usage', w.DWORD), ('pid', w.DWORD),
+                ('heap', ctypes.c_size_t), ('module', w.DWORD), ('threads', w.DWORD),
+                ('parent', w.DWORD), ('priority', w.LONG), ('flags', w.DWORD), ('exe', w.WCHAR * 260)]
+class Memory(ctypes.Structure):
+    _fields_ = [('size', w.DWORD), ('faults', w.DWORD)] + [(name, ctypes.c_size_t) for name in
+        ('peak', 'working', 'peak_paged', 'paged', 'peak_nonpaged', 'nonpaged', 'pagefile', 'peak_pagefile')]
+kernel.CreateToolhelp32Snapshot.argtypes = [w.DWORD, w.DWORD]
+kernel.CreateToolhelp32Snapshot.restype = w.HANDLE
+for name in ('Process32FirstW', 'Process32NextW'):
+    fn = getattr(kernel, name)
+    fn.argtypes = [w.HANDLE, ctypes.POINTER(Entry)]
+    fn.restype = w.BOOL
+kernel.OpenProcess.argtypes = [w.DWORD, w.BOOL, w.DWORD]
+kernel.OpenProcess.restype = w.HANDLE
+kernel.CloseHandle.argtypes = [w.HANDLE]
+kernel.K32GetProcessMemoryInfo.argtypes = [w.HANDLE, ctypes.POINTER(Memory), w.DWORD]
+kernel.K32GetProcessMemoryInfo.restype = w.BOOL
+
+
+def working_set_tree(root):
+    snapshot = kernel.CreateToolhelp32Snapshot(2, 0)
+    if snapshot == ctypes.c_void_p(-1).value:
+        return None
+    parents = {}
+    entry = Entry()
+    entry.size = ctypes.sizeof(entry)
+    try:
+        valid = kernel.Process32FirstW(snapshot, ctypes.byref(entry))
+        while valid:
+            parents[entry.pid] = entry.parent
+            valid = kernel.Process32NextW(snapshot, ctypes.byref(entry))
+    finally:
+        kernel.CloseHandle(snapshot)
+    selected = {root}
+    while True:
+        more = {pid for pid, parent in parents.items() if parent in selected}
+        if more <= selected:
+            break
+        selected |= more
+    total = 0
+    measured = 0
+    for pid in selected:
+        process = kernel.OpenProcess(0x0410, False, pid)
+        if not process:
+            continue  # A short-lived process may have exited since enumeration.
+        try:
+            memory = Memory()
+            memory.size = ctypes.sizeof(memory)
+            if kernel.K32GetProcessMemoryInfo(process, ctypes.byref(memory), memory.size):
+                total += memory.working
+                measured += 1
+        finally:
+            kernel.CloseHandle(process)
+    return total if measured else None
+
+
+compiler = args.compiler.resolve()
+report = {'measurement': 'sampled compiler-tree working sets (shared pages may be counted in multiple processes)',
+          'sample_interval_seconds': 0.025,
+          'clang': subprocess.check_output(['clang', '--version'], text=True), 'results': {}}
+with tempfile.TemporaryDirectory(prefix='plum-win-measure-') as tmp:
+    work = Path(tmp)
+    app = work / 'app'
+    (app / 'native').mkdir(parents=True)
+    (app / 'plum.pkg').write_text('Package { name: "app", native_deps: [] }\n')
+    (app / 'main.plum').write_text('extern "C" { fn native_value() -> Int; }\n'
+                                  'let main (): Unit = println(unsafe { native_value() })\n')
+    header = app / 'native/value.h'
+    header.write_text('#define VALUE 7\n')
+    (app / 'native/value.c').write_text('#include "value.h"\nlong long native_value(void) { return VALUE; }\n')
+    env = dict(os.environ, PLUM_CACHE=str(work / 'cache'), PLUM_PROFILE='1', PLUM_CACHE_TRACE='1')
+    for key in ('PLUM_CC', 'PLUM_NO_BUILD_CACHE', 'PLUM_NO_OBJECT_CACHE'):
+        env.pop(key, None)
+
+    def invoke(label, overlay=None, expected='7\n'):
+        start = time.perf_counter()
+        peak = 0
+        with tempfile.TemporaryFile() as out, tempfile.TemporaryFile() as err:
+            process = subprocess.Popen([str(compiler), 'run', str(app)], env=env | (overlay or {}),
+                                       stdout=out, stderr=err, cwd=work)
+            while process.poll() is None:
+                if time.perf_counter() - start > 180:
+                    process.kill()
+                    process.wait()
+                    raise TimeoutError(label)
+                value = working_set_tree(process.pid)
+                if value is not None:
+                    peak = max(peak, value)
+                time.sleep(0.025)
+            seconds = time.perf_counter() - start
+            out.seek(0)
+            err.seek(0)
+            stdout = out.read().decode().replace('\r\n', '\n')
+            stderr = err.read().decode().replace('\r\n', '\n')
+        if process.returncode or stdout != expected:
+            raise RuntimeError(label + ': ' + stdout + stderr)
+        phases = {}
+        for name, micros in re.findall(r'profile: (.*?) (\d+) us', stderr):
+            phases[name] = phases.get(name, 0) + int(micros) / 1e6
+        row = {'seconds': seconds, 'sampled_tree_working_set_bytes': peak or None,
+               'phases_seconds': phases, 'object_hits': stderr.count('cache: object hit '),
+               'object_misses': stderr.count('cache: object miss '),
+               'cache_bytes': sum(f.stat().st_size for f in (work / 'cache').rglob('*') if f.is_file())}
+        report['results'].setdefault(label, []).append(row)
+        print(label, json.dumps(row), flush=True)
+        return stderr
+
+    invoke('cold')
+    for _ in range(args.samples):
+        trace = invoke('warm')
+        if 'cache: object hit 0' not in trace or 'profile: link ' not in trace:
+            raise RuntimeError('warm run did not reuse LLVM and freshly link: ' + trace)
+    for _ in range(args.samples):
+        invoke('objects-disabled', {'PLUM_NO_OBJECT_CACHE': '1'})
+    invoke('all-cache-disabled', {'PLUM_NO_BUILD_CACHE': '1'})
+    header.write_text('#define VALUE 8\n')
+    invoke('edited-header', expected='8\n')
+report['median_seconds'] = {name: statistics.median(row['seconds'] for row in rows)
+                            for name, rows in report['results'].items()}
+args.out.write_text(json.dumps(report, indent=2) + '\n')

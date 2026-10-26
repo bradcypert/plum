@@ -2857,7 +2857,8 @@ let compile_cached_objects (ll: String) (cfiles: Array[String]) (out: String) (e
     let tool_time = buildcache.start(());
     let fingerprint = buildcache.native_fingerprint(());
     buildcache.finish("native toolchain fingerprint", tool_time);
-    let flags = Array.concat(target_args(target), Array.concat(cc_mode_args(release), ["-Wno-override-module"]));
+    let integrated = if Os.platform(()) == "windows" { ["-fintegrated-cc1"] } else { [] };
+    let flags = Array.concat(integrated, Array.concat(target_args(target), Array.concat(cc_mode_args(release), ["-Wno-override-module"])));
     let shim_dir = if cfiles.len() == 0 { scratch } else { Path.dirname(cfiles[0]) };
     let includes = ["-I", shim_dir, "-I", shim_dir.concat("/mbedtls/include"), "-I", shim_dir.concat("/mbedtls/library")];
     if fingerprint == "" {
@@ -2867,7 +2868,8 @@ let compile_cached_objects (ll: String) (cfiles: Array[String]) (out: String) (e
         let cs = Array.filter(extra, |p| p.ends_with(".c"));
         let linked = Array.filter(extra, |p| !p.ends_with(".c"));
         let srcs = Array.concat(Array.concat([ll], cfiles), cs);
-        let built = cached_object_loop(srcs, 0, scratch, flags, includes, fingerprint, []);
+        let program = buildcache.object_program(cc_program());
+        let built = cached_object_loop(program, srcs, 0, scratch, flags, includes, fingerprint, []);
         if built.err == "uncertified native cache invocation" {
             buildcache.diagnostic("objects bypass: uncertified compiler configuration");
             link_ir_uncached(ll, cfiles, out, extra, scratch, target, release)
@@ -2905,7 +2907,7 @@ let link_ir_uncached (ll: String) (cfiles: Array[String]) (out: String) (extra: 
     }
 }
 
-let cached_object_loop (srcs: Array[String]) (i: Int) (scratch: String) (flags: Array[String]) (includes: Array[String]) (fingerprint: String) (acc: Array[String]): ObjBuild =
+let cached_object_loop (program: String) (srcs: Array[String]) (i: Int) (scratch: String) (flags: Array[String]) (includes: Array[String]) (fingerprint: String) (acc: Array[String]): ObjBuild =
     if i >= srcs.len() { ObjBuild { err: "", objs: acc } }
     else {
         let src = srcs[i];
@@ -2913,7 +2915,7 @@ let cached_object_loop (srcs: Array[String]) (i: Int) (scratch: String) (flags: 
         let input = if src.ends_with(".ll") { src } else { scratch.concat("/input${i.to_string()}.i") };
         let prep_time = buildcache.start(());
         let prep_err = if src.ends_with(".ll") { "" }
-            else { match run_process(cc_program(), Array.concat(Array.concat(flags, includes), ["-E", src, "-o", input])) {
+            else { match run_process(program, Array.concat(Array.concat(flags, includes), ["-E", src, "-o", input])) {
                 Err(e) => "build failed: ${e}",
                 Ok(r) => if r.exit_code != 0 { "${cc_program()} preprocessing failed: ${r.stderr}" } else { "" },
             } };
@@ -2922,7 +2924,7 @@ let cached_object_loop (srcs: Array[String]) (i: Int) (scratch: String) (flags: 
         else {
             let args = Array.concat(flags, ["-c", input, "-o", obj]);
             let probe_time = buildcache.start(());
-            let spec = buildcache.compile_signature(cc_program(), flags, input, obj);
+            let spec = buildcache.compile_signature(program, flags, input, obj);
             // An uncertified configuration must use the original source
             // compile/link path. Merely avoiding object reuse while still
             // compiling preprocessed snapshots could change driver behavior.
@@ -2937,24 +2939,25 @@ let cached_object_loop (srcs: Array[String]) (i: Int) (scratch: String) (flags: 
                     buildcache.hash("plum-native-object-v2".concat(buildcache.frame(fingerprint)).concat(buildcache.frame(spec)).concat(digest))
                 } else { "" };
                 let hit = key != "" && buildcache.load_object(key, obj);
-                // Validate C assembly through Clang's parsed AST on misses.
+                // Validate C assembly through Clang's parsed AST (Linux)
+                // or emitted LLVM IR (Windows) on misses.
                 // Text searches miss concatenated/escaped asm strings. A
                 // stored object already passed this check under the v2 key.
-                let reusable = hit || (key != "" && (src.ends_with(".ll") || buildcache.c_snapshot_safe(cc_program(), flags, input)));
+                let reusable = hit || (key != "" && (src.ends_with(".ll") || buildcache.c_snapshot_safe(program, flags, input)));
                 buildcache.finish("object lookup preparation", probe_time);
                 if hit { buildcache.diagnostic("object hit ${i.to_string()}") }
                 else {
                     buildcache.diagnostic(if !reusable { "object bypass ${i.to_string()}" } else { "object miss ${i.to_string()}" })
                 };
                 let compile_time = buildcache.start(());
-                let err = if hit { "" } else { match run_process(cc_program(), args) {
+                let err = if hit { "" } else { match run_process(program, args) {
                     Err(e) => "build failed: ${e}",
                     Ok(r) => if r.exit_code != 0 { "${cc_program()} failed on ${src}: ${r.stderr}" }
                     else { if reusable { buildcache.store("obj", key, obj, "") } else { () }; "" },
                 } };
                 buildcache.finish("object compile", compile_time);
                 if err != "" { ObjBuild { err: err, objs: acc } }
-                else { cached_object_loop(srcs, i + 1, scratch, flags, includes, fingerprint, acc.push(obj)) }
+                else { cached_object_loop(program, srcs, i + 1, scratch, flags, includes, fingerprint, acc.push(obj)) }
             }
         }
     }
