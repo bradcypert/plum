@@ -158,6 +158,8 @@ jobs:
         run: ./bootstrap/net-smoke
       - name: stdin reads preserve buffers and bound waits
         run: ./bootstrap/stdin-smoke
+      - name: handle tracking grows and claims cleanup exactly once
+        run: ./bootstrap/handle-registry-smoke
       - name: tree removal stays inside held directories and releases resources
         run: ./bootstrap/remove-tree-smoke
       - name: whole-file reads propagate failures and preserve bytes

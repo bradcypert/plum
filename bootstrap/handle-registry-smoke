@@ -1,0 +1,19 @@
+#!/usr/bin/env bash
+set -euo pipefail
+root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+cd "$root"
+work="$(mktemp -d)"
+trap 'rm -rf "$work"' EXIT
+clang -O1 -g -Wall -Wextra -Werror -pthread -fsanitize=address,undefined \
+    -fno-sanitize-recover=all bootstrap/handle-registry-test.c -o "$work/test"
+for mode in lifo reuse threads reentrant shrink-failure; do
+    ASAN_OPTIONS=detect_leaks=1 timeout 30 "$work/test" "$mode"
+done
+for mode in oom oom-first atexit closed; do
+    status=0
+    ASAN_OPTIONS=detect_leaks=1 timeout 30 "$work/test" "$mode" > "$work/out" 2>&1 || status=$?
+    if [ "$status" != 1 ]; then cat "$work/out"; echo "$mode: expected exit 1, got $status"; exit 1; fi
+    grep -q 'panic: handle tracking failed:' "$work/out"
+    if grep -Eq 'Sanitizer|Assertion' "$work/out"; then cat "$work/out"; exit 1; fi
+done
+echo 'handle registry smoke: ok'

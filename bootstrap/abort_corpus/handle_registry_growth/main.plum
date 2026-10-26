@@ -1,0 +1,11 @@
+// More than 256 cells must remain registered until a panic skips releases.
+extern "C" { fn growth_drop(h: Int); }
+handle Probe { on_drop: growth_drop }
+
+let main (): Unit = {
+    let mut held: Array[Probe] = [];
+    for i in 0..1024 { held = held.push(unsafe { Probe.from_raw(i) }); };
+    println(held.len().to_string());
+    panic_raw("registry growth panic");
+    println("unreachable")
+}

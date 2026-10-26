@@ -1,0 +1,24 @@
+// Keep 1024 declared handles live across eight OS threads, then release
+// their cells through generated code and check every native drop once.
+extern "C" {
+    fn registry_barrier();
+    fn registry_drop(h: Int);
+    fn registry_verify();
+}
+handle Probe { on_drop: registry_drop }
+
+let worker (base: Int): Int = {
+    let mut held: Array[Probe] = [];
+    for i in 0..128 { held = held.push(unsafe { Probe.from_raw(base + i) }); };
+    unsafe { registry_barrier() };
+    held.len()
+}
+
+let main (): Unit = {
+    let mut tasks: Array[Task[Int]] = [];
+    for i in 0..8 { tasks = tasks.push(spawn { worker(i * 128) }); };
+    let counts = Array.map(tasks, |task| task.join());
+    assert_eq(Array.fold(counts, 0, |sum, n| sum + n), 1024);
+    unsafe { registry_verify() };
+    println("cleaned 1024 handles once")
+}

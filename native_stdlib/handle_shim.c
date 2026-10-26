@@ -21,84 +21,135 @@
 // `atexit` handler therefore covers all three, and covers any future
 // path that exits properly, without the panic code knowing this exists.
 //
-// --- Why this is not the refcounting problem again ---
-//
-// Tracking every VALUE would be ruinous. Handles are not values in that
-// sense: a program holds a few files, a socket, maybe a child. The
-// registry is a flat array with a linear-scan removal, which is the
-// right shape at that size and would be the wrong one at a million.
-//
-// **Not thread-safe**, matching every other blocking primitive in this
-// directory. A handle opened on one thread and dropped on another is
-// not something the language offers yet.
+// Only declared native handles are registered, not ordinary heap values.
+// The registry borrows cell identities; it never retains a cell or changes
+// its reference count. Geometric growth removes the old 256-handle limit.
+// Sixteen inline entries avoid heap allocation for small programs. Extra
+// storage shrinks after a burst and is freed when the last entry leaves.
+// Registration/removal and exit cleanup share one mutex. Drop callbacks
+// run outside it: they may release or create other handles, or call exit.
 
+#include <pthread.h>
+#include <stdint.h>
+#include <stdio.h>
 #include <stdlib.h>
-
-#define PLUM_HANDLE_MAX 256
+#include <string.h>
 
 typedef struct {
-    void *cell;                 // the refcounted cell, used as the identity
+    void *cell;
     void (*on_drop)(long long);
-    long long value;            // the raw handle to hand back to `on_drop`
+    long long value;
 } PlumTrackedHandle;
 
-static PlumTrackedHandle plum_tracked[PLUM_HANDLE_MAX];
-static int plum_tracked_n = 0;
-static int plum_tracked_armed = 0;
-static int plum_tracked_running = 0;
+static pthread_mutex_t plum_tracked_lock = PTHREAD_MUTEX_INITIALIZER;
+static PlumTrackedHandle plum_tracked_inline[16];
+static PlumTrackedHandle *plum_tracked = plum_tracked_inline;
+static size_t plum_tracked_n, plum_tracked_capacity = 16;
+static int plum_tracked_armed, plum_tracked_running, plum_tracked_closed;
 
-// LIFO, the same order a scope releases in: a handle opened later may
-// depend on one opened earlier, so the later one goes first.
-//
-// `plum_tracked_running` makes this non-reentrant. A cleanup that fails
-// and calls `exit` itself would otherwise re-enter here and run every
-// remaining handler a second time, which turns one bad cleanup into a
-// double free.
-static void plum_handle_cleanup_all(void) {
-    if (plum_tracked_running) return;
-    plum_tracked_running = 1;
-    while (plum_tracked_n > 0) {
-        PlumTrackedHandle *t = &plum_tracked[--plum_tracked_n];
-        if (t->on_drop != NULL) t->on_drop(t->value);
-    }
-    plum_tracked_running = 0;
-}
-
-// Called where a handle cell is built. `on_drop` is the function the
-// `handle` declaration named.
-//
-// **Silently stops tracking past the cap.** Overflowing is not worth a
-// crash: the program still works and still releases every handle on the
-// ordinary paths, and only the panic path loses the ones past 256. A
-// program holding more than 256 live handles is doing something this
-// design did not anticipate, and should say so in a bug report rather
-// than through an abort.
-void plum_handle_track(void *cell, void (*on_drop)(long long), long long value) {
-    if (!plum_tracked_armed) {
-        atexit(plum_handle_cleanup_all);
-        plum_tracked_armed = 1;
-    }
-    if (plum_tracked_n >= PLUM_HANDLE_MAX) return;
-    plum_tracked[plum_tracked_n].cell = cell;
-    plum_tracked[plum_tracked_n].on_drop = on_drop;
-    plum_tracked[plum_tracked_n].value = value;
-    plum_tracked_n++;
-}
-
-// Called when a handle is released the ordinary way, BEFORE its
-// `on_drop` runs -- so a cleanup that fails and exits does not find
-// itself still registered and run twice.
-//
-// The scan runs backwards because releases are overwhelmingly LIFO, so
-// the entry being removed is usually the last one.
-void plum_handle_untrack(void *cell) {
-    for (int i = plum_tracked_n - 1; i >= 0; i--) {
-        if (plum_tracked[i].cell == cell) {
-            for (int j = i; j < plum_tracked_n - 1; j++) {
-                plum_tracked[j] = plum_tracked[j + 1];
-            }
-            plum_tracked_n--;
-            return;
+// Called with the lock held. Shrinking is optional; failure keeps the
+// existing allocation and all registrations intact.
+static void plum_handle_trim(void) {
+    if (plum_tracked_n == 0) {
+        if (plum_tracked != plum_tracked_inline) free(plum_tracked);
+        plum_tracked = plum_tracked_inline;
+        plum_tracked_capacity = 16;
+    } else if (plum_tracked_capacity > 16 &&
+               plum_tracked_n <= plum_tracked_capacity / 4) {
+        size_t capacity = plum_tracked_capacity / 2;
+        PlumTrackedHandle *next;
+        if (capacity == 16) {
+            next = plum_tracked_inline;
+            memcpy(next, plum_tracked, plum_tracked_n * sizeof(*next));
+            free(plum_tracked);
+        } else next = realloc(plum_tracked, capacity * sizeof(*next));
+        if (next) {
+            plum_tracked = next;
+            plum_tracked_capacity = capacity;
         }
     }
+}
+
+// LIFO among entries still registered. Claim a record under the lock,
+// then use a COPY outside it, since callbacks can resize the registry.
+// Ordinary release uses the same claim, so only one path calls on_drop.
+static void plum_handle_cleanup_all(void) {
+    pthread_mutex_lock(&plum_tracked_lock);
+    if (plum_tracked_running || plum_tracked_closed) {
+        pthread_mutex_unlock(&plum_tracked_lock);
+        return;
+    }
+    plum_tracked_running = 1;
+    while (plum_tracked_n > 0) {
+        PlumTrackedHandle t = plum_tracked[--plum_tracked_n];
+        plum_handle_trim();
+        pthread_mutex_unlock(&plum_tracked_lock);
+        if (t.on_drop) t.on_drop(t.value);
+        pthread_mutex_lock(&plum_tracked_lock);
+    }
+    plum_tracked_closed = 1;
+    plum_tracked_running = 0;
+    pthread_mutex_unlock(&plum_tracked_lock);
+}
+
+// No error channel exists in the generated from_raw ABI. Never return an
+// unregistered resource on failure: release it, report why, and exit via
+// the already-armed cleanup for older registrations. No allocation is
+// needed on this path. The callback runs without the registry lock.
+static void plum_handle_track_fail(void (*on_drop)(long long), long long value,
+                                   const char *reason) {
+    fprintf(stderr, "panic: handle tracking failed: %s\n", reason);
+    if (on_drop) on_drop(value);
+    exit(1);
+}
+
+void plum_handle_track(void *cell, void (*on_drop)(long long), long long value) {
+    const char *failure = NULL;
+    pthread_mutex_lock(&plum_tracked_lock);
+    if (plum_tracked_closed) failure = "process cleanup already completed";
+    else if (!plum_tracked_armed) {
+        if (atexit(plum_handle_cleanup_all) != 0)
+            failure = "cannot register exit cleanup";
+        else plum_tracked_armed = 1;
+    }
+    if (!failure && plum_tracked_n == plum_tracked_capacity) {
+        size_t capacity = plum_tracked_capacity * 2;
+        if (capacity < plum_tracked_capacity || capacity > SIZE_MAX / sizeof(*plum_tracked))
+            failure = "registry size overflow";
+        else {
+            PlumTrackedHandle *next = realloc(
+                plum_tracked == plum_tracked_inline ? NULL : plum_tracked,
+                capacity * sizeof(*next));
+            if (!next) failure = "out of memory";
+            else {
+                if (plum_tracked == plum_tracked_inline)
+                    memcpy(next, plum_tracked_inline, plum_tracked_n * sizeof(*next));
+                plum_tracked = next;
+                plum_tracked_capacity = capacity;
+            }
+        }
+    }
+    if (!failure)
+        plum_tracked[plum_tracked_n++] = (PlumTrackedHandle){cell, on_drop, value};
+    pthread_mutex_unlock(&plum_tracked_lock);
+    if (failure) plum_handle_track_fail(on_drop, value, failure);
+}
+
+// Return whether ordinary release owns the callback. A missing entry
+// has already been claimed by exit cleanup; the caller still frees the
+// refcounted cell but must not drop the underlying resource again.
+int plum_handle_untrack(void *cell) {
+    pthread_mutex_lock(&plum_tracked_lock);
+    for (size_t i = plum_tracked_n; i > 0; i--) {
+        if (plum_tracked[i - 1].cell == cell) {
+            memmove(&plum_tracked[i - 1], &plum_tracked[i],
+                    (plum_tracked_n - i) * sizeof(*plum_tracked));
+            plum_tracked_n--;
+            plum_handle_trim();
+            pthread_mutex_unlock(&plum_tracked_lock);
+            return 1;
+        }
+    }
+    pthread_mutex_unlock(&plum_tracked_lock);
+    return 0;
 }
