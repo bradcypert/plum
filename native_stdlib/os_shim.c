@@ -289,6 +289,254 @@ const char *plum_cache_temp(const char *root) {
     return plum_os_buf;
 }
 
+// Windows native-object adapter. Ask the OS loader which images it actually
+// selects instead of approximating DLL search rules with SearchPath. Support
+// the MSYS2 MINGW64 layout only; unknown layouts/modules/delay imports bypass.
+#if defined(_WIN64)
+#include <bcrypt.h>
+
+#define PLUM_WIN_MODULES 256
+
+typedef struct { wchar_t *path; char digest[65]; } plum_win_image;
+typedef struct {
+    HMODULE dll;
+    BCRYPT_ALG_HANDLE alg;
+    NTSTATUS (WINAPI *open)(BCRYPT_ALG_HANDLE *,LPCWSTR,LPCWSTR,ULONG);
+    NTSTATUS (WINAPI *create)(BCRYPT_ALG_HANDLE,BCRYPT_HASH_HANDLE *,PUCHAR,ULONG,PUCHAR,ULONG,ULONG);
+    NTSTATUS (WINAPI *update)(BCRYPT_HASH_HANDLE,PUCHAR,ULONG,ULONG);
+    NTSTATUS (WINAPI *finish)(BCRYPT_HASH_HANDLE,PUCHAR,ULONG,ULONG);
+    NTSTATUS (WINAPI *destroy)(BCRYPT_HASH_HANDLE);
+    NTSTATUS (WINAPI *close)(BCRYPT_ALG_HANDLE,ULONG);
+} plum_win_sha;
+
+static void plum_win_sha_close(plum_win_sha *s) {
+    if (s->alg) s->close(s->alg,0);
+    if (s->dll) FreeLibrary(s->dll);
+    memset(s,0,sizeof(*s));
+}
+
+static void plum_win_sha_open(plum_win_sha *s) {
+    memset(s,0,sizeof(*s));
+    s->dll=LoadLibraryExW(L"bcrypt.dll",NULL,LOAD_LIBRARY_SEARCH_SYSTEM32);
+    if (!s->dll) return;
+#define PLUM_WIN_PROC(member, name) do { \
+    FARPROC p=GetProcAddress(s->dll,name); \
+    memcpy(&s->member,&p,sizeof(p)); \
+    if (!p) { plum_win_sha_close(s); return; } \
+} while (0)
+    PLUM_WIN_PROC(open,"BCryptOpenAlgorithmProvider");
+    PLUM_WIN_PROC(create,"BCryptCreateHash");
+    PLUM_WIN_PROC(update,"BCryptHashData");
+    PLUM_WIN_PROC(finish,"BCryptFinishHash");
+    PLUM_WIN_PROC(destroy,"BCryptDestroyHash");
+    PLUM_WIN_PROC(close,"BCryptCloseAlgorithmProvider");
+#undef PLUM_WIN_PROC
+    if (s->open(&s->alg,BCRYPT_SHA256_ALGORITHM,NULL,0) < 0) plum_win_sha_close(s);
+}
+
+static int plum_win_hash(HANDLE f, plum_win_sha *provider, char out[65]) {
+    LARGE_INTEGER zero; zero.QuadPart=0;
+    if (!SetFilePointerEx(f,zero,NULL,FILE_BEGIN)) return 0;
+    BCRYPT_HASH_HANDLE hash=NULL;
+    int fast=provider && provider->alg && provider->create(provider->alg,&hash,NULL,0,NULL,0,0) >= 0;
+    plum_cache_sha portable; plum_cache_init(&portable);
+    unsigned char buf[32768], digest[32]; DWORD n;
+    int good=1, retry=0;
+    for (;;) {
+        if (!ReadFile(f,buf,sizeof(buf),&n,NULL)) { good=0; break; }
+        if (!n) break;
+        if (fast) {
+            if (provider->update(hash,buf,n,0) < 0) { retry=1; break; }
+        } else plum_cache_update(&portable,buf,n);
+    }
+    if (good && fast && !retry) {
+        if (provider->finish(hash,digest,sizeof(digest),0) < 0) retry=1;
+        else {
+            for (unsigned i=0;i<32;i++) snprintf(out+i*2,3,"%02x",(unsigned)digest[i]);
+            out[64]='\0';
+        }
+    } else if (good && !fast) plum_cache_final(&portable,out);
+    if (hash) provider->destroy(hash);
+    // Restart from byte zero if the optional provider fails partway.
+    return retry ? plum_win_hash(f,NULL,out) : good;
+}
+
+static int plum_win_path(HANDLE file, wchar_t path[PLUM_PATH_MAX]) {
+    DWORD n=GetFinalPathNameByHandleW(file,path,PLUM_PATH_MAX,FILE_NAME_NORMALIZED|VOLUME_NAME_DOS);
+    if (!n || n >= PLUM_PATH_MAX) return 0;
+    if (wcsncmp(path,L"\\\\?\\",4)==0) memmove(path,path+4,(wcslen(path+4)+1)*sizeof(wchar_t));
+    return wcslen(path)>3 && path[1]==L':' && path[2]==L'\\';
+}
+
+static int plum_win_in_dir(const wchar_t *path, const wchar_t *dir) {
+    size_t n=wcslen(dir);
+    return wcslen(path)>n && path[n]==L'\\'
+        && CompareStringOrdinal(path,(int)n,dir,(int)n,TRUE)==CSTR_EQUAL;
+}
+
+static int plum_win_no_delay(HANDLE file) {
+    IMAGE_DOS_HEADER dos; IMAGE_NT_HEADERS64 nt; DWORD n; LARGE_INTEGER at;
+    at.QuadPart=0;
+    if (!SetFilePointerEx(file,at,NULL,FILE_BEGIN)
+        || !ReadFile(file,&dos,sizeof(dos),&n,NULL) || n!=sizeof(dos)
+        || dos.e_magic!=IMAGE_DOS_SIGNATURE || dos.e_lfanew<0) return 0;
+    at.QuadPart=dos.e_lfanew;
+    if (!SetFilePointerEx(file,at,NULL,FILE_BEGIN)
+        || !ReadFile(file,&nt,sizeof(nt),&n,NULL) || n!=sizeof(nt)
+        || nt.Signature!=IMAGE_NT_SIGNATURE || nt.FileHeader.Machine!=IMAGE_FILE_MACHINE_AMD64
+        || nt.FileHeader.SizeOfOptionalHeader!=sizeof(nt.OptionalHeader)
+        || nt.OptionalHeader.Magic!=IMAGE_NT_OPTIONAL_HDR64_MAGIC
+        || nt.OptionalHeader.NumberOfRvaAndSizes<=IMAGE_DIRECTORY_ENTRY_DELAY_IMPORT) return 0;
+    return nt.OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_DELAY_IMPORT].Size==0
+        && nt.OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_DELAY_IMPORT].VirtualAddress==0;
+}
+
+static int plum_win_image_add(plum_win_image *images, size_t *count, HANDLE file,
+                             const wchar_t *bin, const wchar_t *system, plum_win_sha *sha,
+                             int *llvm, char reason[160]) {
+    wchar_t path[PLUM_PATH_MAX];
+    if (!file) { strcpy(reason,"!loader event has no file handle"); return 0; }
+    if (!plum_win_path(file,path)) { strcpy(reason,"!loader image path unavailable"); return 0; }
+    int private_image=plum_win_in_dir(path,bin);
+    if (!private_image && !plum_win_in_dir(path,system)) {
+        strcpy(reason,"!DLL outside supported toolchain/system directories"); return 0;
+    }
+    if (private_image && !plum_win_no_delay(file)) {
+        strcpy(reason,"!toolchain image has delay imports or unsupported PE headers"); return 0;
+    }
+    for (size_t i=0;i<*count;i++) if (wcscmp(images[i].path,path)==0) return 1;
+    if (*count>=PLUM_WIN_MODULES) return 0;
+    size_t len=wcslen(path);
+    wchar_t *copy=malloc((len+1)*sizeof(wchar_t));
+    if (!copy) return 0;
+    memcpy(copy,path,(len+1)*sizeof(wchar_t));
+    if (!plum_win_hash(file,sha,images[*count].digest)) { free(copy); return 0; }
+    images[*count].path=copy; (*count)++;
+    const wchar_t *name=wcsrchr(path,L'\\');
+    if (private_image && name && _wcsnicmp(name+1,L"libLLVM",7)==0) *llvm=1;
+    return 1;
+}
+
+static int plum_win_image_compare(const void *a, const void *b) {
+    return wcscmp(((const plum_win_image *)a)->path,((const plum_win_image *)b)->path);
+}
+#endif
+
+const char *plum_cache_windows_fingerprint(const char *tool) {
+    static PLUM_OS_TLS char result[160];
+    strcpy(result,"!unsupported Windows toolchain");
+#if defined(_WIN64)
+    // The process ABI currently uses ANSI paths. Until that ABI is UTF-8
+    // end-to-end, do not certify ambiguous non-ASCII executable spellings.
+    size_t len=strlen(tool);
+    if (!len || len>PLUM_PATH_MAX-32) return result;
+    for (size_t i=0;i<len;i++) if ((unsigned char)tool[i]>=128 || tool[i]=='"') return result;
+    wchar_t exe[PLUM_PATH_MAX], bin[PLUM_PATH_MAX], system[PLUM_PATH_MAX];
+    if (!MultiByteToWideChar(CP_ACP,0,tool,-1,exe,PLUM_PATH_MAX)) return result;
+    HANDLE original=CreateFileW(exe,GENERIC_READ,FILE_SHARE_READ|FILE_SHARE_DELETE,NULL,OPEN_EXISTING,0,NULL);
+    if (original==INVALID_HANDLE_VALUE) return result;
+    BY_HANDLE_FILE_INFORMATION identity;
+    int valid=plum_win_path(original,bin) && GetFileInformationByHandle(original,&identity);
+    wchar_t *base=wcsrchr(bin,L'\\');
+    if (!valid || !base || _wcsicmp(base+1,L"clang.exe")!=0) { CloseHandle(original); return result; }
+    *base=L'\0';
+    size_t dirlen=wcslen(bin);
+    if (dirlen<12 || _wcsicmp(bin+dirlen-12,L"\\mingw64\\bin")!=0) { CloseHandle(original); return result; }
+    DWORD sn=GetSystemDirectoryW(system,PLUM_PATH_MAX);
+    SYSTEM_INFO machine; GetNativeSystemInfo(&machine);
+    if (!sn || sn>=PLUM_PATH_MAX || machine.wProcessorArchitecture!=PROCESSOR_ARCHITECTURE_AMD64) {
+        CloseHandle(original); return result;
+    }
+    wchar_t command[PLUM_PATH_MAX+32];
+    _snwprintf(command,sizeof(command)/sizeof(command[0]),L"\"%ls\" --version",exe);
+    SECURITY_ATTRIBUTES sa={sizeof(sa),NULL,TRUE};
+    HANDLE sink=CreateFileW(L"NUL",GENERIC_READ|GENERIC_WRITE,FILE_SHARE_READ|FILE_SHARE_WRITE,&sa,OPEN_EXISTING,0,NULL);
+    if (sink==INVALID_HANDLE_VALUE) { CloseHandle(original); return result; }
+    STARTUPINFOW startup; PROCESS_INFORMATION process;
+    memset(&startup,0,sizeof(startup)); memset(&process,0,sizeof(process));
+    startup.cb=sizeof(startup); startup.dwFlags=STARTF_USESTDHANDLES;
+    startup.hStdInput=sink; startup.hStdOutput=sink; startup.hStdError=sink;
+    BOOL launched=CreateProcessW(exe,command,NULL,NULL,TRUE,DEBUG_ONLY_THIS_PROCESS|CREATE_NO_WINDOW,NULL,NULL,&startup,&process);
+    CloseHandle(sink);
+    if (!launched) { CloseHandle(original); strcpy(result,"!Windows loader probe could not start"); return result; }
+    plum_win_image images[PLUM_WIN_MODULES]; memset(images,0,sizeof(images));
+    size_t count=0; int llvm=0, exited=0, failed=0, breakpoint=0;
+    DWORD exit_code=1;
+    plum_win_sha sha; plum_win_sha_open(&sha);
+    ULONGLONG deadline=GetTickCount64()+10000;
+    while (!exited && !failed && GetTickCount64()<deadline) {
+        DEBUG_EVENT event; memset(&event,0,sizeof(event));
+        if (!WaitForDebugEvent(&event,100)) {
+            if (GetLastError()==ERROR_SEM_TIMEOUT) continue;
+            failed=1; break;
+        }
+        DWORD action=DBG_CONTINUE;
+        switch (event.dwDebugEventCode) {
+        case CREATE_PROCESS_DEBUG_EVENT: {
+            HANDLE f=event.u.CreateProcessInfo.hFile;
+            BY_HANDLE_FILE_INFORMATION actual;
+            if (!f || !GetFileInformationByHandle(f,&actual)
+                || actual.dwVolumeSerialNumber!=identity.dwVolumeSerialNumber
+                || actual.nFileIndexHigh!=identity.nFileIndexHigh || actual.nFileIndexLow!=identity.nFileIndexLow
+                || !plum_win_image_add(images,&count,f,bin,system,&sha,&llvm,result)) failed=1;
+            if (f) CloseHandle(f);
+            break;
+        }
+        case LOAD_DLL_DEBUG_EVENT:
+            if (!plum_win_image_add(images,&count,event.u.LoadDll.hFile,bin,system,&sha,&llvm,result)) failed=1;
+            if (event.u.LoadDll.hFile) CloseHandle(event.u.LoadDll.hFile);
+            break;
+        case EXCEPTION_DEBUG_EVENT:
+            if (event.u.Exception.ExceptionRecord.ExceptionCode==EXCEPTION_BREAKPOINT && !breakpoint) breakpoint=1;
+            else { failed=1; action=DBG_EXCEPTION_NOT_HANDLED; }
+            break;
+        case EXIT_PROCESS_DEBUG_EVENT: exit_code=event.u.ExitProcess.dwExitCode; exited=1; break;
+        case RIP_EVENT: failed=1; break;
+        default: break;
+        }
+        if (!ContinueDebugEvent(event.dwProcessId,event.dwThreadId,action)) failed=1;
+    }
+    if (!exited) {
+        TerminateProcess(process.hProcess,1);
+        // Drain exit events so Windows releases debugger-owned thread/process
+        // handles too. A failed probe never leaves a live compiler behind.
+        ULONGLONG end=GetTickCount64()+2000;
+        while (GetTickCount64()<end) {
+            DEBUG_EVENT event;
+            if (!WaitForDebugEvent(&event,100)) continue;
+            if (event.dwDebugEventCode==LOAD_DLL_DEBUG_EVENT && event.u.LoadDll.hFile) CloseHandle(event.u.LoadDll.hFile);
+            if (event.dwDebugEventCode==CREATE_PROCESS_DEBUG_EVENT && event.u.CreateProcessInfo.hFile) CloseHandle(event.u.CreateProcessInfo.hFile);
+            int done=event.dwDebugEventCode==EXIT_PROCESS_DEBUG_EVENT;
+            ContinueDebugEvent(event.dwProcessId,event.dwThreadId,DBG_CONTINUE);
+            if (done) break;
+        }
+        DebugActiveProcessStop(process.dwProcessId);
+    }
+    CloseHandle(process.hThread); CloseHandle(process.hProcess); CloseHandle(original);
+    plum_win_sha_close(&sha);
+    if (exited && !failed && exit_code==0 && llvm && count>1) {
+        qsort(images,count,sizeof(images[0]),plum_win_image_compare);
+        plum_cache_sha total; plum_cache_init(&total);
+        const char tag[]="plum-msys2-mingw64-loader-v1";
+        plum_cache_update(&total,(const unsigned char *)tag,sizeof(tag));
+        for (size_t i=0;i<count;i++) {
+            uint64_t bytes=wcslen(images[i].path)*sizeof(wchar_t);
+            plum_cache_update(&total,(const unsigned char *)&bytes,sizeof(bytes));
+            plum_cache_update(&total,(const unsigned char *)images[i].path,(size_t)bytes);
+            plum_cache_update(&total,(const unsigned char *)images[i].digest,64);
+        }
+        plum_cache_final(&total,result);
+    } else if (!failed) {
+        snprintf(result,sizeof(result),"!loader probe incomplete (exit=%lu, LLVM=%d, images=%lu)",
+                 (unsigned long)exit_code,llvm,(unsigned long)count);
+    }
+    for (size_t i=0;i<count;i++) free(images[i].path);
+#else
+    (void)tool;
+#endif
+    return result;
+}
+
 const char *plum_cache_tool(const char *name) {
     plum_os_buf[0]='\0';
 #if defined(_WIN32)
@@ -377,6 +625,30 @@ long long plum_cache_safe_ir(const char *ir) {
             while (plum_cache_ir_word((unsigned char)*p)) p++;
             if (p-start == 3 && !memcmp(start,"asm",3)) return 0;
         } else { p++; }
+    }
+    return 1;
+}
+
+// Windows headers contain unused inline assembly and produce enormous JSON
+// ASTs. Inspect the emitted C IR at the SAME target/optimization settings.
+// Assembly tokens remain forbidden. Reject quoted globals too: escaped asm
+// labels can otherwise inject assembler directives through emitted symbols.
+// This is deliberately stricter than accepting arbitrary LLVM symbol names.
+long long plum_cache_safe_c_ir(const char *ir) {
+    if (!plum_cache_safe_ir(ir)) return 0;
+    const char *p=ir;
+    while (*p) {
+        if (*p==';') { while (*p && *p!='\n') p++; }
+        else if (*p=='@' && p[1]=='"') return 0;
+        else if (*p=='"') {
+            p++;
+            while (*p && *p!='"') {
+                if (*p=='\\') { p++; if (!*p) return 0; }
+                p++;
+            }
+            if (!*p) return 0;
+            p++;
+        } else p++;
     }
     return 1;
 }

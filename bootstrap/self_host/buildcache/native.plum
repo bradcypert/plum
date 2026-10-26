@@ -3,16 +3,29 @@ use Process;
 extern "C" {
     fn plum_cache_safe_ast(ast: CStr) -> Int;
     fn plum_cache_safe_ir(ir: CStr) -> Int;
+    fn plum_cache_safe_c_ir(ir: CStr) -> Int;
+    fn plum_cache_windows_fingerprint(tool: CStr) -> CStr;
 }
 
 pub let safe_ast (ast: String): Bool = unsafe { plum_cache_safe_ast(ast.as_cstr()) == 1 }
 pub let safe_ir (ir: String): Bool = unsafe { plum_cache_safe_ir(ir.as_cstr()) == 1 }
-pub let c_snapshot_safe (program: String) (flags: Array[String]) (input: String): Bool =
-    match Process.run(Process.Options { program: program,
-        args: Array.concat(flags, ["-Xclang", "-ast-dump=json", "-fsyntax-only", input]), env: [], stdin: None }) {
-            Err(_) => false,
-            Ok(r) => r.exit_code == 0 && safe_ast(r.stdout),
-        }
+pub let c_snapshot_safe (program: String) (flags: Array[String]) (input: String): Bool = {
+    let windows = Os.platform(()) == "windows";
+    let args = if windows { ["-S", "-emit-llvm", "-o", "-", input] }
+        else { ["-Xclang", "-ast-dump=json", "-fsyntax-only", input] };
+    match Process.run(Process.Options { program: program, args: Array.concat(flags, args), env: [], stdin: None }) {
+        Err(_) => false,
+        Ok(r) => r.exit_code == 0 && (if windows {
+            unsafe { plum_cache_safe_c_ir(r.stdout.as_cstr()) == 1 }
+        } else { safe_ast(r.stdout) }),
+    }
+}
+
+let OBJECT_PROGRAM: Ref[String] = ref("")
+pub let object_program (fallback: String): String = {
+    let pinned = OBJECT_PROGRAM.get();
+    if pinned == "" { fallback } else { pinned }
+}
 
 let SIGNATURES: Ref[Map[String, String]] = ref(empty_signatures(()))
 let empty_signatures (): Map[String, String] = Map.new(())
@@ -36,10 +49,8 @@ pub let compile_signature (program: String) (flags: Array[String]) (input: Strin
                 Ok(r) => match b {
                     Err(_) => "",
                     Ok(plain) => if r.exit_code != 0 || plain.exit_code != 0 || r.stderr != plain.stderr
-                        || !r.stderr.contains("(in-process)") || r.stderr.contains("-load")
-                        || r.stderr.contains("-fprofile") || r.stderr.contains("-include-pch") { "" }
-                        else { r.stderr.replace(input, "<input>").replace(out, "<output>")
-                            .replace("\"".concat(Path.basename(input)).concat("\""), "\"<name>\"") },
+                        || !single_integrated_command(r.stderr) { "" }
+                        else { normalize_compile_signature(r.stderr, input, out) },
                 },
             };
             SIGNATURES.set(SIGNATURES.get().insert(memo_key, result));
@@ -49,13 +60,44 @@ pub let compile_signature (program: String) (flags: Array[String]) (input: Strin
     if signature == "" { "" } else { signature.concat(frame(Path.basename(input))) }
 }
 
-// Linux adapter: fingerprint every shared dependency selected by the loader,
-// as well as the compiler itself. Other hosts and opaque drivers reuse only
-// Plum IR. No version-string or mtime shortcut for executable code.
+// A single integrated frontend is the execution boundary we fingerprint.
+// A second assembler/compiler process would need its own loader identity.
+let single_integrated_command (text: String): Bool = {
+    let commands = Array.filter(text.split("\n"), |line| line.trim().starts_with("\""));
+    commands.len() == 1 && text.contains("(in-process)") && text.contains("\"-cc1\"")
+        && !text.contains("-load") && !text.contains("-fpass-plugin")
+        && !text.contains("-fprofile") && !text.contains("-include-pch")
+}
+
+pub let test_compile_driver_execution_boundary (): Unit = {
+    let command = " (in-process)\n \"clang\" \"-cc1\" \"input.i\"\n";
+    assert(single_integrated_command(command));
+    assert(!single_integrated_command(command.concat(" \"as\" \"input.s\"\n")));
+    assert(!single_integrated_command(command.concat(" -fpass-plugin=extra.dll")));
+    assert(!single_integrated_command("unexpected output"));
+}
+
+// Clang quotes command arguments with escaped backslashes on Windows.
+// Normalize complete arguments, never substrings of unrelated identities.
+let quoted_driver_arg (s: String): String =
+    "\"".concat(s.replace("\\", "\\\\").replace("\"", "\\\"")).concat("\"")
+
+let normalize_compile_signature (command: String) (input: String) (out: String): String = {
+    let normalized = command.replace(quoted_driver_arg(input), "\"<input>\"")
+        .replace(quoted_driver_arg(out), "\"<output>\"");
+    if !normalized.contains("\"<input>\"") || !normalized.contains("\"<output>\"") { "" }
+    else { normalized.replace(quoted_driver_arg(Path.basename(input)), "\"<name>\"") }
+}
+
+// Fingerprint executable code through a platform-specific loader adapter.
+// Unknown loaders/drivers remain IR-only; both adapters hash content, not
+// version strings or timestamps. Windows object commands pin the probed EXE.
 pub let native_fingerprint (): String = {
-    if Os.platform(()) != "linux" || env("PLUM_CC") != ""
+    OBJECT_PROGRAM.set("");
+    if env("PLUM_CC") != "" || env("CCC_OVERRIDE_OPTIONS") != "" || env("CLANG_SPAWN_CC1") != "" { "" }
+    else if Os.platform(()) == "windows" { windows_fingerprint(()) }
+    else if Os.platform(()) != "linux"
         || env("LD_PRELOAD") != "" || env("LD_LIBRARY_PATH") != "" || env("LD_AUDIT") != ""
-        || env("CCC_OVERRIDE_OPTIONS") != "" || env("CLANG_SPAWN_CC1") != ""
         || env("LD_DEBUG") != "" || env("LD_PROFILE") != "" { "" }
     else {
         let tool = tool_path("clang");
@@ -67,6 +109,31 @@ pub let native_fingerprint (): String = {
                 else { loader_fingerprint(r.stdout.split("\n"), 0, [frame(tool), digest]) },
         } }
     }
+}
+
+let windows_fingerprint (): String = {
+    if env("MSYSTEM") != "MINGW64" { "" }
+    else {
+        let tool = tool_path("clang");
+        if tool == "" { "" }
+        else { match Process.run(Process.Options { program: tool, args: ["-dumpmachine"], env: [], stdin: None }) {
+            Err(_) => "",
+            Ok(r) => if r.exit_code != 0 || r.stdout.trim() != "x86_64-w64-windows-gnu" { "" }
+            else {
+                let identity = unsafe { plum_cache_windows_fingerprint(tool.as_cstr()).as_string() };
+                if identity.starts_with("!") || identity.len() != 64 { diagnostic("objects bypass: ${identity}"); "" }
+                else { OBJECT_PROGRAM.set(tool); identity }
+            },
+        } }
+    }
+}
+
+pub let test_windows_driver_signature_paths (): Unit = {
+    let input = "C:\\tmp\\input.i";
+    let out = "C:\\tmp\\obj.o";
+    let command = quoted_driver_arg(input).concat(" -o ").concat(quoted_driver_arg(out));
+    assert_eq(normalize_compile_signature(command, input, out), "\"<input>\" -o \"<output>\"");
+    assert_eq(normalize_compile_signature("unexpected", input, out), "");
 }
 
 let loader_fingerprint (lines: Array[String]) (i: Int) (parts: Array[String]): String =
@@ -106,4 +173,11 @@ pub let test_assembly_ir_classification (): Unit = {
     assert(safe_ir("@name = constant [12 x i8] c\"module asm\\00\"\n"));
     assert(!safe_ir("module\tasm\t\"encoded contents\"\n"));
     assert(!safe_ir("call void asm sideeffect \"\\2eincbin\\20file\", \"\"()\n"))
+}
+
+pub let test_c_ir_assembly_and_labels (): Unit = {
+    assert(unsafe { plum_cache_safe_c_ir("@.str = constant [3 x i8] c\"@x\\00\"\n".as_cstr()) == 1 });
+    assert(unsafe { plum_cache_safe_c_ir("module asm \"encoded contents\"\n".as_cstr()) == 0 });
+    assert(unsafe { plum_cache_safe_c_ir("declare void @\"\\01bad\\0Aname\"()\n".as_cstr()) == 0 });
+    assert(unsafe { plum_cache_safe_c_ir("define void @f() { call void asm sideeffect \"\\2eincbin file\", \"\"() ret void }\n".as_cstr()) == 0 });
 }

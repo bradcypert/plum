@@ -71,14 +71,61 @@ with tempfile.TemporaryDirectory(prefix="plum-cache-check-") as tmp:
             require("profile: function emission" not in result.stderr, "IR hit emitted code")
         return result
 
+    if WINDOWS_HOST:
+        probe = work / "loader-probe.exe"
+        subprocess.run(["clang", "-O1", "-g", str(ROOT / "bootstrap/windows-cache-probe.c"), "-o", str(probe)],
+                       check=True, capture_output=True, timeout=180)
+        testbin = work / "toolchain/mingw64/bin"
+        testbin.mkdir(parents=True)
+        dll_source = work / "module.c"
+        dll_source.write_text('__declspec(dllexport) int fixture(void) { return 7; }\n')
+        dll = testbin / "libLLVM-probe.dll"
+        subprocess.run(["clang", "-shared", str(dll_source), "-o", str(dll)], check=True, capture_output=True)
+        exe_source = work / "driver.c"
+        exe_source.write_text('#include <windows.h>\nint main(void) { HMODULE m=LoadLibraryW(L"libLLVM-probe.dll"); '
+                              'if (!m) return 1; FreeLibrary(m); return 0; }\n')
+        exe = testbin / "clang.exe"
+        subprocess.run(["clang", str(exe_source), "-o", str(exe)], check=True, capture_output=True)
+        for file in (exe, dll):
+            with file.open("ab") as stream:
+                stream.write(b"overlay-A")
+
+        def fingerprint(ok=True, repeat=False, cwd=work):
+            result = subprocess.run([str(probe), str(exe), *(["--repeat"] if repeat else [])],
+                                    capture_output=True, text=True, cwd=cwd, timeout=60)
+            require(result.returncode == (0 if ok else 1), result.stdout + result.stderr)
+            value = result.stdout.strip()
+            require(len(value) == 64 if ok else value.startswith("!"), value)
+            return value
+
+        first = fingerprint(repeat=True)
+        def replace_overlay(file):
+            stamp = file.stat()
+            with file.open("r+b") as stream:
+                stream.seek(-1, 2)
+                stream.write(b"B")
+            os.utime(file, ns=(stamp.st_atime_ns, stamp.st_mtime_ns))
+            require(file.stat().st_size == stamp.st_size and file.stat().st_mtime_ns == stamp.st_mtime_ns,
+                    "fixture did not preserve size/time")
+        replace_overlay(exe)
+        second = fingerprint()
+        require(first != second, "same-size/same-mtime compiler replacement retained identity")
+        replace_overlay(dll)
+        third = fingerprint()
+        require(second != third, "same-size/same-mtime DLL replacement retained identity")
+        outside = work / "outside-toolchain"
+        outside.mkdir()
+        dll.rename(outside / dll.name)
+        fingerprint(ok=False, repeat=True, cwd=outside)
+
     src = app / "main.plum"
     src.write_text('let main (): Unit = println("one")\n')
     run("one\n", "miss")
     hit = run("one\n", "hit")
     if REQUIRE_OBJECTS:
-        require(sys.platform.startswith("linux"), "required object cache needs Linux")
+        require(sys.platform.startswith("linux") or WINDOWS_HOST, "required object cache needs a supported host")
         require("objects bypass" not in hit.stderr, "required object cache was bypassed: " + hit.stderr)
-    if sys.platform.startswith("linux") and "objects bypass" not in hit.stderr:
+    if (sys.platform.startswith("linux") or WINDOWS_HOST) and "objects bypass" not in hit.stderr:
         require("cache: object hit 0" in hit.stderr, "LLVM object was recompiled")
         require("cache: object miss" not in hit.stderr, "unchanged generated C was recompiled")
         require("profile: link " in hit.stderr, "cached objects did not get a fresh link")
@@ -358,7 +405,7 @@ with tempfile.TemporaryDirectory(prefix="plum-cache-check-") as tmp:
 
     # Library bytes and newly shadowing search candidates are resolved at
     # every fresh link, even when the IR and compiled objects all hit.
-    if not WINDOWS_HOST and shutil.which("ar"):
+    if shutil.which("ar"):
         def archive(directory, word):
             source = work / "library.c"
             source.write_text(f'const char *cache_word(void) {{ return "{word}"; }}\n')
@@ -378,16 +425,17 @@ with tempfile.TemporaryDirectory(prefix="plum-cache-check-") as tmp:
         (low / "libcacheword.a").unlink()
         invoke("run", app, "--link-lib", "cacheword", overlay=library_env, ok=False)
 
-    if sys.platform.startswith("linux"):
+    if sys.platform.startswith("linux") or WINDOWS_HOST:
         # Assembly can read files outside the preprocessor's include graph.
-        # Concatenated literals deliberately conceal the directive from a
-        # text search; Clang's parsed assembly node must prevent reuse.
+        # Concatenated literals conceal the directive from a text search;
+        # the parsed AST / emitted IR assembly guards must prevent reuse.
         native.mkdir()
         asset = work / "assembler-payload"
         asset.write_text("assembly first")
+        section = ".rdata" if WINDOWS_HOST else ".rodata"
         (native / "word.c").write_text(
-            '__asm__(".section .rodata\\n.globl cache_blob\\ncache_blob:\\n" '
-            '".in" "cbin \\"' + str(asset) + '\\"\\n.byte 0\\n.text\\n");\n'
+            '__asm__(".section ' + section + '\\n.globl cache_blob\\ncache_blob:\\n" '
+            '".in" "cbin \\"' + asset.as_posix() + '\\"\\n.byte 0\\n.text\\n");\n'
             'extern const char cache_blob[];\n'
             'const char *cache_word(void) { return cache_blob; }\n')
         # The IR is already cached from the earlier native-header fixture.
@@ -396,6 +444,17 @@ with tempfile.TemporaryDirectory(prefix="plum-cache-check-") as tmp:
         run("assembly other\n", "hit")
         asset.unlink()
         invoke("run", app, ok=False)
+        # Quoted assembly labels are conservative bypasses even when the
+        # wrapper's ordinary C ABI links and runs successfully.
+        (native / "word.c").write_text(
+            '__attribute__((noinline)) const char *helper(void) __asm__("unsafe name");\n'
+            'const char *helper(void) { return "quoted label"; }\n'
+            'const char *cache_word(void) { return helper(); }\n')
+        labeled = run("quoted label\n", "hit")
+        events = [line for line in labeled.stderr.splitlines() if line.startswith("cache: object ")]
+        if "objects bypass" not in labeled.stderr:
+            require(events and events[-1].startswith("cache: object bypass "),
+                    "quoted native assembly label was cached: " + labeled.stderr)
         shutil.rmtree(native)
     src.write_text('let main (): Unit = println("file")\n')
 
@@ -597,8 +656,8 @@ raise SystemExit(subprocess.call(["clang", *sys.argv[1:]]))
         "PLUM_BUILD_CACHE_MAX_BYTES": "invalid"})
 
     # Check real linked debug locations through the object-hit path.
-    if sys.platform.startswith("linux") and "objects bypass" not in hit.stderr:
-        require(shutil.which("nm") and shutil.which("addr2line"), "Linux cached debug checks need binutils")
+    if (sys.platform.startswith("linux") or WINDOWS_HOST) and "objects bypass" not in hit.stderr:
+        require(shutil.which("nm") and shutil.which("addr2line"), "cached debug checks need binutils")
         debug = work / "debug"
         (debug / "native").mkdir(parents=True)
         plum = debug / "main.plum"
@@ -620,7 +679,15 @@ raise SystemExit(subprocess.call(["clang", *sys.argv[1:]]))
                 require(len(matches) == 1, "missing debug fixture symbol: " + name)
                 location = subprocess.check_output(["addr2line", "-e", str(binary),
                     "0x" + matches[0]], text=True).strip()
-                require(location == f"{path}:{line}", f"{name} debug location: {location}")
+                if WINDOWS_HOST:
+                    actual_path, actual_line = location.rsplit(":", 1)
+                    expected_path = str(path)
+                    if sys.platform.startswith(("msys", "cygwin")):
+                        expected_path = subprocess.check_output(["cygpath", "-am", expected_path], text=True).strip()
+                    require(actual_path.replace("\\", "/").lower() == expected_path.replace("\\", "/").lower()
+                            and actual_line == str(line), f"{name} debug location: {location}")
+                else:
+                    require(location == f"{path}:{line}", f"{name} debug location: {location}")
         for edit in (0, 1):
             plum.write_text("// edited\n" * edit + program)
             native.write_text("// edited\n" * edit + c_program)
