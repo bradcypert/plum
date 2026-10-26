@@ -1926,7 +1926,7 @@ let lsp_handle (body: String): Bool =
                         // rewrite the user's program. Refuse instead.
                         if lexer.token_texts(out) != lexer.token_texts(text) { lsp_reply(req.id, JsonArray([])) }
                         else if out == text { lsp_reply(req.id, JsonArray([])) }
-                        else { lsp_reply(req.id, lsp.format_result(out, count_lines(text, 0, 0))) }
+                        else { lsp_reply(req.id, lsp.format_result(out, text)) }
                     },
                 };
                 true
@@ -1940,8 +1940,11 @@ let lsp_handle (body: String): Bool =
                 let uri = lsp.document_uri(req.params);
                 if uri == "" { () }
                 else {
-                    match lsp.open_text(req.params) { Some(t) => remember_buffer(uri, t), None => () };
-                    lsp_publish(uri, lsp_check(Path.dirname(lsp.uri_to_path(uri))), "")
+                    let text = if req.method == "textDocument/didSave" {
+                        match lsp.json_field(req.params, "text") { Some(JsonString(t)) => Some(t), _ => None }
+                    } else { lsp.open_text(req.params) };
+                    match text { Some(t) => remember_buffer(uri, t), None => () };
+                    lsp_diagnose_document(uri)
                 };
                 true
             } else if req.method == "textDocument/didChange" {
@@ -1961,12 +1964,15 @@ let lsp_handle (body: String): Bool =
                         None => (),
                         Some(text) => {
                             remember_buffer(uri, text);
-                            let bc = lsp_check_buffer(lsp.uri_to_path(uri), text);
-                            lsp_publish(uri, bc.diagnostic, bc.scratch);
-                            if bc.scratch == "" { () } else { let c = Os.remove_tree(bc.scratch); () }
+                            lsp_diagnose_document(uri)
                         },
                     }
                 };
+                true
+            } else if req.method == "textDocument/didClose" {
+                let uri = lsp.document_uri(req.params);
+                forget_buffer(uri);
+                if uri == "" { () } else { lsp_send(lsp.publish_message(uri, [])) };
                 true
             } else {
                 // An unknown NOTIFICATION is ignored; an unknown REQUEST
@@ -1977,39 +1983,42 @@ let lsp_handle (body: String): Bool =
             },
     }
 
-// The text of every open document, by URI.
-//
-// This server deliberately keeps no buffer for DIAGNOSTICS -- full sync
-// means every `didChange` carries the whole file, so a check can run
-// against what arrived and nothing needs remembering.
-//
-// Formatting is different, and the difference is not academic. An
-// editor asks to format the buffer it is showing, which for
-// format-on-save is DIRTY: the file on disk is one edit behind, or
-// several. Formatting that stale text and handing back a whole-file
-// replacement would revert whatever the user had just typed. So the
-// last text seen for a document is kept, and formatting uses it.
-// ONE document, not a map of them. An editor formats the document it is
-// showing, so the one that matters is the one last touched.
-//
-// A `Ref[Map[String, String]]` would work now -- the compiler bug that
-// first forced this shape is fixed (see DESIGN.md, "A global's type
-// does not reach its uses"). It stays one document because that is the
-// right amount: an editor formats what it is showing.
-let BUFFER_URI: Ref[String] = ref("")
-let BUFFER_TEXT: Ref[String] = ref("")
+// One current text per open URI. Replacing or closing a buffer drops
+// the old map and its text through ordinary reference counting; no edit
+// history is retained. This store is also used by selection ranges.
+let BUFFERS: Ref[Map[String, String]] = ref(empty_buffers(()))
+let empty_buffers (): Map[String, String] = Map.new(())
 
-let remember_buffer (uri: String) (text: String): Unit = { BUFFER_URI.set(uri); BUFFER_TEXT.set(text) }
+let remember_buffer (uri: String) (text: String): Unit =
+    BUFFERS.set(Map.insert(BUFFERS.get(), uri, text))
 
-// Falls back to disk for a document this server has never been told
-// about -- a client that formats without opening first. Being one edit
-// behind is only a hazard when there IS an edit it never sent.
+let forget_buffer (uri: String): Unit = {
+    let remaining = Map.remove(BUFFERS.get(), uri);
+    // Map.remove preserves bucket capacity. Reset an empty store so a
+    // session that closes all documents releases that capacity too.
+    BUFFERS.set(if Map.len(remaining) == 0 { empty_buffers(()) } else { remaining })
+}
+
+// Disk fallback is only for documents for which no text was supplied.
 let buffer_text (uri: String) (path: String): Option[String] =
-    if uri != "" && BUFFER_URI.get() == uri { Some(BUFFER_TEXT.get()) }
-    else { match Os.read_file(path) { Ok(t) => Some(t), Err(_) => None } }
+    match Map.get(BUFFERS.get(), uri) {
+        Some(text) => Some(text),
+        None => match Os.read_file(path) { Ok(t) => Some(t), Err(_) => None },
+    }
 
-let count_lines (s: String) (i: Int) (n: Int): Int =
-    if i >= s.len() { n } else if String.slice(s, i, i + 1) == "\n" { count_lines(s, i + 1, n + 1) } else { count_lines(s, i + 1, n) }
+// Open and save may carry text too; diagnose the same version that
+// formatting sees, including a save notification with no text field.
+let lsp_diagnose_document (uri: String): Unit = {
+    let path = lsp.uri_to_path(uri);
+    match Map.get(BUFFERS.get(), uri) {
+        None => lsp_publish(uri, lsp_check(Path.dirname(path)), ""),
+        Some(text) => {
+            let bc = lsp_check_buffer(path, text);
+            lsp_publish(uri, bc.diagnostic, bc.scratch);
+            if bc.scratch == "" { () } else { let c = Os.remove_tree(bc.scratch); () }
+        },
+    }
+}
 
 // Hover and go-to-definition share everything but the last step: find
 // the identifier under the cursor, look it up in the project's

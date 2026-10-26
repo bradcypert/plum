@@ -600,21 +600,38 @@ pub let path_to_uri (path: String): String = path_to_uri_in(Path.separator(), pa
 // shape that cannot be wrong about a range. Editors preserve the
 // cursor across it.
 //
-// The end position is `(lines, 0)` -- one past the last line, column
-// zero -- which is how LSP spells "to the end" for a document that
-// ends in a newline. Overshooting the line count is legal and clients
-// clamp, but being exact means a client that does not clamp is not
-// relying on charity.
-pub let format_result (formatted: String) (lines: Int): JsonValue =
+// Derive the range from the ORIGINAL text, including an unterminated
+// final line. LSP columns count UTF-16 units, and CRLF is one break.
+pub let format_result (formatted: String) (original: String): JsonValue = {
+    let end = document_end(original.as_bytes());
     JsonArray([
         JsonObject([
             JsonEntry { key: "range", value: JsonObject([
                 JsonEntry { key: "start", value: position_json(0, 0) },
-                JsonEntry { key: "end", value: position_json(lines, 0) },
+                JsonEntry { key: "end", value: position_json(end.line, end.character) },
             ]) },
             JsonEntry { key: "newText", value: JsonString(formatted) },
         ]),
     ])
+}
+
+struct DocumentEnd { line: Int, character: Int }
+
+// Walk UTF-8 bytes once without allocating a slice per character.
+// Continuation bytes contribute no units; four-byte scalars need two.
+let document_end (bytes: Bytes): DocumentEnd = {
+    let mut line = 0;
+    let mut col = 0;
+    let mut after_cr = false;
+    for i in 0..bytes.len() {
+        let b = Option.unwrap_or(Bytes.at(bytes, i), 0);
+        if b == 13 { line = line + 1; col = 0; }
+        else if b == 10 { if !after_cr { line = line + 1; }; col = 0; }
+        else if b < 128 || b >= 192 { col = col + if b >= 240 { 2 } else { 1 }; };
+        after_cr = b == 13;
+    };
+    DocumentEnd { line: line, character: col }
+}
 
 let position_json (line: Int) (col: Int): JsonValue =
     JsonObject([
