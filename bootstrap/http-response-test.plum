@@ -81,7 +81,31 @@ let test_server (method: String) (resp: Response) (expected: String) (ok: Bool):
     Net.close(listener)
 }
 
+// The client withholds its body until it sees 100. A body-first server
+// deadlocks here and is killed by net-smoke's timeout.
+let test_expect_continue (): Unit = {
+    let listener = test_int(Net.listen_on(18806));
+    let peer = spawn {
+        let fd = test_int(Net.accept(listener));
+        let result = http_handle_connection(fd, |req| {
+            assert_eq(req.body == "abc".as_bytes(), true);
+            Response { status: 200, headers: [], body: req.body }
+        });
+        Net.close(fd);
+        result
+    };
+    let fd = test_int(Net.connect_to("127.0.0.1", 18806));
+    test_write(fd, "POST / HTTP/1.1\r\nHost:a\r\nContent-Length:3\r\nExpect: 100-CoNtInUe\r\n\r\n");
+    assert_eq(http_recv_headers_acc(fd, 0, Bytes.empty()) == Ok("HTTP/1.1 100 Continue\r\n\r\n".as_bytes()), true);
+    test_write(fd, "abc");
+    assert_eq(test_read_closed(fd, ""), "HTTP/1.1 200 OK\r\nContent-Length: 3\r\nConnection: close\r\n\r\nabc");
+    Net.close(fd);
+    assert_eq(peer.join(), Ok(()));
+    Net.close(listener)
+}
+
 let main (): Unit = {
+    test_expect_continue();
     // Framing precedence includes malformed/overflowing lengths and an
     // unsupported coding. Nothing may read fd=-1 or return buffered junk.
     let framing = [Header { name: "Content-Length", value: "99999999999999999999999" }, Header { name: "Transfer-Encoding", value: "chunked" }];
@@ -115,6 +139,10 @@ let main (): Unit = {
     assert_eq(test_client("GET", "HTTP/1.1 101 Switching Protocols\r\nUpgrade: test\r\n\r\n", false) == Err("http client: protocol upgrades are not supported"), true);
     assert_eq(test_client("CONNECT", "HTTP/1.1 200 OK\r\nContent-Length: 999999999999\r\n\r\n", false) == Err("http client: CONNECT tunnels are not supported"), true);
     test_response(test_client("CONNECT", "HTTP/1.1 403 Forbidden\r\nContent-Length: 2\r\n\r\nno", false), 403, "no");
+    for fields in ["Content-Length: -1", "Content-Length: 2\r\ncontent-length: 3", "Content-Length: 2\r\nTransfer-Encoding: chunked"] {
+        assert_eq(Result.is_err(test_client("GET", "HTTP/1.1 200 OK\r\n".concat(fields).concat("\r\n\r\n"), false)), true)
+    };
+    test_response(test_client("GET", "HTTP/1.1 200 OK\r\nContent-Length: 3,003\r\ncontent-length:3\r\n\r\nabcEXTRA", false), 200, "abc");
     test_split_heads();
 
     let hints = String.repeat("HTTP/1.1 103 Early Hints\r\n\r\n", 100);

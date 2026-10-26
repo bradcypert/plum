@@ -41,7 +41,9 @@ Sends a request over HTTP or HTTPS. HTTPS verifies the peer's
 certificate and hostname using the native TLS trust-store integration.
 
 Invalid URL text, methods, header names, and header values return Err
-before connecting. Methods and names must be nonempty ASCII tokens;
+before connecting. Caller Host, Content-Length and Transfer-Encoding
+fields are rejected: the builder owns authority and framing. Methods
+and names must be nonempty ASCII tokens;
 values may contain spaces, HTAB, and UTF-8, but no other ASCII controls
 or DEL. Bodies are not subject to protocol-field validation.
 
@@ -83,7 +85,14 @@ length; 204 and 304 omit Content-Length. Caller Content-Length and
 Transfer-Encoding fields are replaced by this generated framing.
 Malformed request lines/fields and missing (HTTP/1.1), duplicate, or
 invalid Host fields receive 400 before body reading or handler dispatch,
-then return Err. HTTP/1.0 may omit Host. Present Host values use URI host
+then return Err. Ambiguous, invalid, or unsupported body framing also
+receives 400 before reading content or dispatching the handler. Repeated
+or comma-separated Content-Length values must all agree and use decimal
+digits within Int range. Requests without framing have an empty body;
+bytes beyond a declared length are excluded from that request's body.
+HTTP/1.1 Expect: 100-continue is acknowledged before waiting for content;
+unsupported expectations receive 417. HTTP/1.0 expectations are ignored.
+HTTP/1.0 may omit Host. Present Host values use URI host
 syntax, including empty values, IP literals, and optional decimal ports.
 Real, useful on its own
 (a one-shot server, or a test fixture — this is what THIS module's
