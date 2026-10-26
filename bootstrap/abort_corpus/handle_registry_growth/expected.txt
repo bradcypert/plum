@@ -1,0 +1,3 @@
+1024
+registry growth panic
+cleaned 1024 handles in reverse order

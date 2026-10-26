@@ -198,7 +198,7 @@ pub let cg_runtime (unit: Unit): String = cg_lines([
     "; so without this a `Child` outlives its parent and keeps running.",
     "; See native_stdlib/handle_shim.c.",
     "declare void @plum_handle_track(ptr, ptr, i64)",
-    "declare void @plum_handle_untrack(ptr)",
+    "declare i32 @plum_handle_untrack(ptr)",
     "declare void @channel_release(i64, ptr)",
     "declare void @task_release(i64, ptr)",
     "",

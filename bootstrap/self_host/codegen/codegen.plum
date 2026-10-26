@@ -6617,9 +6617,15 @@ let cg_emit_user_handle_rel (p: CgProgram) (t: typecheck.ITy) (name: String): St
         .concat("  %h = load i64, ptr %hp\n")
         // Unregistered BEFORE the cleanup runs, not after: a cleanup
         // that fails and exits would otherwise still be on the live
-        // list and be run a second time on the way out.
-        .concat("  call void @plum_handle_untrack(ptr %p)\n")
+        // list and be run a second time on the way out. Only the
+        // winner of the registry claim calls on_drop; exit cleanup
+        // may already have claimed it on another thread.
+        .concat("  %claimed = call i32 @plum_handle_untrack(ptr %p)\n")
+        .concat("  %owns_drop = icmp ne i32 %claimed, 0\n")
+        .concat("  br i1 %owns_drop, label %drop, label %freecell\n")
+        .concat("drop:\n")
         .concat("  call void @").concat(typecheck.ctx_handle_on_drop(p.ctx, name)).concat("(i64 %h)\n")
+        .concat("  br label %freecell\nfreecell:\n")
         .concat("  call void @free(ptr %p)\n")
         .concat("  ret void\n}\n\n")
 
