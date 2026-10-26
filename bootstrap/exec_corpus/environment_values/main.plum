@@ -1,0 +1,76 @@
+use Os;
+use Terminal;
+
+extern "C" {
+    fn environment_test_set(value: CStr);
+    fn environment_test_unset();
+}
+
+let key = "PLUM_TEST_ENV_135"
+let set_value (value: Bytes): Unit = unsafe { environment_test_set(value.as_cstr()) }
+
+let check_valid (value: String): Unit = {
+    set_value(value.as_bytes());
+    assert_eq(Os.env_var(key), Some(value));
+    assert_eq(Os.env_var_bytes(key), Some(value.as_bytes()));
+    match Os.env_var(key) {
+        Some(text) => {
+            assert_eq(text.to_upper(), value.to_upper());
+            assert_eq(Terminal.display_width(text), Terminal.display_width(value));
+            assert_eq(Terminal.truncate(text, 2), Terminal.truncate(value, 2));
+        },
+        None => assert(false),
+    }
+}
+
+let main (): Unit = {
+    unsafe { environment_test_unset() };
+    assert_eq(Os.env_var(key), None);
+    assert_eq(Os.env_var_bytes(key), None);
+    // Windows CRT treats setting an empty value as unsetting it.
+    if Os.platform() != "windows" { check_valid(""); };
+    check_valid("ascii");
+    check_valid("é中😀");
+    check_valid("\u{80}\u{7FF}\u{800}\u{D7FF}\u{FFFF}\u{10000}\u{10FFFF}");
+    println("unset, empty and valid UTF-8 values: ok");
+
+    let invalid = [[128], [192, 128], [193, 191], [224, 128, 128],
+        [237, 160, 128], [240, 128, 128, 128], [244, 144, 128, 128],
+        [245, 128, 128, 128], [255], [194, 65], [226, 65, 128],
+        [240, 144, 65, 128], [194], [226], [226, 130], [240],
+        [240, 144], [240, 144, 128]];
+    for values in invalid {
+        let bytes = "prefix".as_bytes().concat(Bytes.from_array(values));
+        set_value(bytes);
+        assert_eq(Os.env_var(key), None);
+        assert_eq(Os.env_var_bytes(key), Some(bytes));
+    };
+    println("malformed UTF-8 rejected as text, preserved as bytes: ok");
+
+    set_value("original".as_bytes());
+    let text = Os.env_var(key);
+    let bytes = Os.env_var_bytes(key);
+    set_value("replacement".as_bytes());
+    unsafe { environment_test_unset() };
+    assert_eq(text, Some("original"));
+    assert_eq(bytes, Some("original".as_bytes()));
+    println("returned values survive environment changes: ok");
+
+    // Stay within Windows' environment-value limit; POSIX can also
+    // validate a megabyte here without passing it through exec's limits.
+    let powers = if Os.platform() == "windows" { 14 } else { 20 };
+    let mut large = "a";
+    for i in 0..powers { large = large.concat(large); };
+    let valid_large = large.concat("😀");
+    set_value(valid_large.as_bytes());
+    assert_eq(Os.env_var(key), Some(valid_large));
+    assert_eq(Os.env_var_bytes(key), Some(valid_large.as_bytes()));
+    let bad = large.as_bytes().concat(Bytes.from_array([240, 144, 128]));
+    set_value(bad);
+    for i in 0..8 {
+        assert_eq(Os.env_var(key), None);
+        assert_eq(Os.env_var_bytes(key), Some(bad));
+    };
+    unsafe { environment_test_unset() };
+    println("large values and repeated invalid reads: ok");
+}

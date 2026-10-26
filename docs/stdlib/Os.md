@@ -68,13 +68,22 @@ Exit with a status code, printing nothing. `panic_raw` also exits
 non-zero but prints its message first, which is wrong when the
 report has already been written.
 
+## `let env_var_bytes (name: String): Option[Bytes]`
+
+Reads an environment value as bytes, preserving non-UTF-8 data.
+
+`None` when unset; a set but empty value is `Some(Bytes.empty())`.
+The returned buffer owns a copy of the value, independent of later
+environment changes. Values cannot contain NUL in the OS environment.
+
 ## `let env_var (name: String): Option[String]`
 
-`env_var_raw` returns an ARRAY, empty when unset, matching
-`read_file_raw`: hand-written runtime IR cannot construct an
-`Option` without hard-coding tag numbers the backend assigns per
-program, so the wrapping happens here where `Some`/`None` are
-ordinary variants.
+Reads an environment value as UTF-8 text.
+
+`None` when unset or not valid UTF-8. A set but empty value is
+`Some("")`. Use `Os.env_var_bytes` to distinguish invalid text from
+an unset variable and preserve its bytes. Validation shares the byte
+buffer without making another copy of the value.
 
 ## `let read_file (path: String): Result[String, String]`
 
@@ -154,7 +163,7 @@ agreed to.
 
 ## `let home_dir (): Option[String]`
 
-`$HOME`, or `%USERPROFILE%` on Windows. `None` when it is unset --
+`$HOME`, or `%USERPROFILE%` on Windows. `None` when unset or not valid UTF-8 --
 no guessing from a username, because a guess that is usually right
 is the worst kind of wrong for a path a program is about to write
 to.

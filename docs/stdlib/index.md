@@ -91,6 +91,7 @@ Every declaration, linked to the page that documents it.
 - [`let remove_tree (path: String): Result[Unit, String]`](Os.md#remove_tree)
 - [`let copy_tree (src: String) (dst: String): Result[Unit, String]`](Os.md#copy_tree)
 - [`let exit_with (code: Int): Unit`](Os.md#exit_with)
+- [`let env_var_bytes (name: String): Option[Bytes]`](Os.md#env_var_bytes)
 - [`let env_var (name: String): Option[String]`](Os.md#env_var)
 - [`let read_file (path: String): Result[String, String]`](Os.md#read_file)
 - [`let write_file (path: String) (contents: String): Result[Unit, String]`](Os.md#write_file)

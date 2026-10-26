@@ -51,6 +51,25 @@ echo
 ok=0
 fail=0
 
+# Opt-in CI diagnostics separate build cost from running each fixture.
+# Use portable seconds for wall time; compiler phases retain microseconds.
+build_program() {
+    build_label="$1"
+    build_source="$2"
+    build_output="$3"
+    build_log="$4"
+    if [ "${PLUM_CI_TIMINGS:-0}" = 1 ]; then
+        printf 'START build %s\n' "$build_label"
+        build_started="$(date +%s)"
+        PLUM_PROFILE=1 PLUM_CACHE_TRACE=1 "$plum" build "$build_source" -o "$build_output" > "$build_log" 2>&1
+        build_status=$?
+        printf 'TIMING build %s: %ss (exit %s)\n' "$build_label" "$(($(date +%s) - build_started))" "$build_status"
+        sed -n '/^profile:/p; /^cache: objects bypass/p' "$build_log"
+        return "$build_status"
+    fi
+    "$plum" build "$build_source" -o "$build_output" > "$build_log" 2>&1
+}
+
 # Borrowed path lifetimes must hold on native Windows and macOS threads too.
 if clang -O1 -g -Wall -Wextra -pthread bootstrap/os-path-test.c \
         -o "$work/os-path-test.bin" > "$work/os-path-test.log" 2>&1 &&
@@ -92,7 +111,7 @@ for dir in bootstrap/exec_corpus/*/; do
     # `build`, not `emit-llvm` plus a hand-written clang line. The point
     # is to test what a user actually runs, including the parts of the
     # compiler that shell out to other programs.
-    if ! "$plum" build "$dir" -o "$work/$name.bin" > "$work/$name.log" 2>&1; then
+    if ! build_program "$name" "$dir" "$work/$name.bin" "$work/$name.log"; then
         printf 'FAIL  %-24s did not build\n' "$name"
         cat "$work/$name.log"
         fail=$((fail + 1))
@@ -198,7 +217,7 @@ let main (): Unit = {
 }
 PLUM_EOF
 
-if ! "$plum" build "$work/stdinpipe" -o "$work/stdinpipe.bin" > "$work/stdinpipe.log" 2>&1; then
+if ! build_program stdin_pipe "$work/stdinpipe" "$work/stdinpipe.bin" "$work/stdinpipe.log"; then
     printf 'FAIL  %-24s did not build: %s\n' "stdin_pipe" "$(head -n 1 "$work/stdinpipe.log")"
     fail=$((fail + 1))
 else
@@ -268,7 +287,7 @@ let main (): Unit = {
 }
 PLUM_EOF
 
-if ! "$plum" build "$work/stdinempty" -o "$work/stdinempty.bin" > "$work/stdinempty.log" 2>&1; then
+if ! build_program stdin_empty "$work/stdinempty" "$work/stdinempty.bin" "$work/stdinempty.log"; then
     printf 'FAIL  %-24s did not build: %s\n' "stdin_empty" "$(head -n 1 "$work/stdinempty.log")"
     fail=$((fail + 1))
 else
