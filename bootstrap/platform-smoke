@@ -51,6 +51,18 @@ echo
 ok=0
 fail=0
 
+# Borrowed path lifetimes must hold on native Windows and macOS threads too.
+if clang -O1 -g -Wall -Wextra -pthread bootstrap/os-path-test.c \
+        -o "$work/os-path-test.bin" > "$work/os-path-test.log" 2>&1 &&
+        "$work/os-path-test.bin"; then
+    printf 'OK    %-24s\n' "native_os_paths"
+    ok=$((ok + 1))
+else
+    printf 'FAIL  %-24s\n' "native_os_paths"
+    cat "$work/os-path-test.log"
+    fail=$((fail + 1))
+fi
+
 # Native tree-removal checks run on every platform, including Windows
 # junctions and POSIX symlink swaps; no external helper programs required.
 if clang -O1 -g -Wall -Wextra bootstrap/remove-tree-test.c \

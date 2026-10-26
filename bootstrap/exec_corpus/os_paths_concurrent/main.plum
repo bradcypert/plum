@@ -1,0 +1,37 @@
+use Os;
+
+let path (r: Result[String, String]): String = match r {
+    Ok(p) => p, Err(e) => { panic_raw(e); "" },
+}
+
+let paths (exe: String) (cwd: String): Array[String] = {
+    let mut directories: Array[String] = [];
+    for i in 0..32 {
+        let dir = path(Os.temp_dir());
+        assert(path(Os.self_exe()) == exe);
+        assert(path(Os.cwd()) == cwd);
+        assert(Result.unwrap_or(Os.is_directory(dir), false));
+        directories = directories.push(dir);
+    };
+    directories
+}
+
+let main (): Unit = {
+    let exe = path(Os.self_exe());
+    let cwd = path(Os.cwd());
+    let mut tasks: Array[Task[Array[String]]] = [];
+    for i in 0..8 { tasks = tasks.push(spawn { paths(exe, cwd) }); };
+    let mut directories: Array[String] = [];
+    for task in tasks {
+        for dir in task.join() {
+            assert(!directories.contains(dir));
+            directories = directories.push(dir);
+        };
+    };
+    assert(directories.len() == 256);
+    for dir in directories {
+        assert(Result.unwrap_or(Os.is_directory(dir), false));
+        assert(Result.is_ok(Os.remove_tree(dir)));
+    };
+    println("concurrent OS paths: stable copies and 256 unique temporary directories");
+}
