@@ -30,6 +30,8 @@ set -uo pipefail
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$root"
 
+plum="${PLUM:-./sh}"
+
 record=0
 [ "${1:-}" = "--record" ] && record=1
 
@@ -43,17 +45,36 @@ for dir in bootstrap/alloc_corpus/*/; do
     name="$(basename "$dir")"
     [ -f "$dir/main.plum" ] || continue
 
-    if ! ./sh build "$dir" -o "$work/$name.bin" > "$work/$name.err" 2>&1; then
+    if ! "$plum" build "$dir" -o "$work/$name.bin" > "$work/$name.err" 2>&1; then
         printf 'FAIL  %-16s did not build: %s\n' "$name" "$(head -n 1 "$work/$name.err")"
         fail=$((fail + 1)); continue
     fi
 
     # The count goes to stderr; the program's own output is irrelevant
     # here and is discarded.
-    got="$(PLUM_RT_STATS=1 "$work/$name.bin" 2>&1 >/dev/null | grep -oE 'alloc n=[0-9]+' | grep -oE '[0-9]+')"
+    stats="$(PLUM_RT_STATS=1 "$work/$name.bin" 2>&1 >/dev/null)"
+    run_rc=$?
+    if [ "$run_rc" -ne 0 ]; then
+        printf 'FAIL  %-16s exited %s: %s\n' "$name" "$run_rc" "$stats"
+        fail=$((fail + 1)); continue
+    fi
+    got="$(printf '%s' "$stats" | grep -oE 'alloc n=[0-9]+' | grep -oE '[0-9]+')"
     if [ -z "$got" ]; then
         printf 'FAIL  %-16s produced no allocation count -- is PLUM_RT_STATS still wired up?\n' "$name"
         fail=$((fail + 1)); continue
+    fi
+
+    # A count can stay linear while each allocation copies a growing
+    # prefix. Selected fixtures also bound cumulative allocated bytes.
+    # Keep this a generous, deliberate ceiling, not a platform snapshot.
+    if [ -f "$dir/max_bytes.txt" ]; then
+        bytes="$(printf '%s' "$stats" | grep -oE 'bytes=[0-9]+' | grep -oE '[0-9]+')"
+        ceiling="$(cat "$dir/max_bytes.txt")"
+        if [ -z "$bytes" ] || [ "$bytes" -gt "$ceiling" ]; then
+            printf 'FAIL  %-16s allocated bytes: %s (ceiling %s)\n' "$name" "${bytes:-missing}" "$ceiling"
+            fail=$((fail + 1)); continue
+        fi
+        printf 'ok    %-16s %s allocated bytes (ceiling %s)\n' "$name" "$bytes" "$ceiling"
     fi
 
     if [ $record -eq 1 ]; then

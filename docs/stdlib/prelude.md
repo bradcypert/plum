@@ -87,7 +87,10 @@ duplicate names return `Err("duplicate object member name")`.
 Renders a `JsonValue` as compact JSON — no spaces, no newlines.
 
 Object keys come out in the order they are held, which for a parsed
-document is the order they were read.
+document is the order they were read. All U+0000–U+001F control
+characters are escaped, including in keys. Output construction takes
+linear time and space in the output size, with an explicit traversal
+stack proportional to nesting depth instead of native stack recursion.
 
 ## `let hash (self: T): Int`
 

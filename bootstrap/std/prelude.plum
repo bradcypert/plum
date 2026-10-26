@@ -1632,41 +1632,115 @@ pub let json_parse (s: String): Result[JsonValue, String] = {
     }
 }
 
-let json_escape_chars (chars: Array[String]) (pos: Int) (acc: String): String =
-    if pos >= chars.len() { acc }
+// ASCII escape boundaries cannot split a UTF-8 code point. Scan byte
+// runs so ordinary text needs neither chars_of nor per-character strings.
+let json_run_end (s: Bytes) (pos: Int): Int =
+    if pos >= bytes_len_raw(s) { pos }
     else {
-        let c = chars[pos];
-        let escaped =
-            if c == "\"" { "\\\"" }
-            else if c == "\\" { "\\\\" }
-            else if c == "\n" { "\\n" }
-            else if c == "\r" { "\\r" }
-            else if c == "\t" { "\\t" }
-            else { c };
-        json_escape_chars(chars, pos + 1, acc.concat(escaped))
+        let b = bytes_at_raw(s, pos);
+        if b == 34 || b == 92 || b < 32 { pos }
+        else { json_run_end(s, pos + 1) }
     }
 
-let json_escape (s: String): String = json_escape_chars(chars_of(s), 0, "")
+let json_escape_byte (b: Int): String =
+    if b == 34 { "\\\"" }
+    else if b == 92 { "\\\\" }
+    else if b == 8 { "\\b" }
+    else if b == 12 { "\\f" }
+    else if b == 10 { "\\n" }
+    else if b == 13 { "\\r" }
+    else if b == 9 { "\\t" }
+    else if b < 32 { "\\u00".concat(plum__hex_digit(b / 16)).concat(plum__hex_digit(b % 16)) }
+    else { "" }
 
-let json_quote (s: String): String = "\"".concat(json_escape(s)).concat("\"")
+// One continuation per active container, rather than one per sibling.
+// Keep the container alive while visiting its children so dropping a
+// traversal frame cannot recursively destroy the unvisited subtree.
+enum JsonWriteStack {
+    JsonWriteDone,
+    JsonWriteValue(JsonValue, JsonWriteStack),
+    JsonWriteArray(Array[JsonValue], Int, JsonWriteStack),
+    JsonWriteObject(Array[JsonEntry], Int, JsonWriteStack),
+    JsonWriteString(Bytes, Int, JsonWriteStack),
+    JsonWriteText(String, JsonWriteStack),
+}
 
-let join_with_commas (parts: Array[String]) (pos: Int) (acc: String): String =
-    if pos >= parts.len() { acc }
-    else if pos == 0 { join_with_commas(parts, pos + 1, parts[pos]) }
-    else { join_with_commas(parts, pos + 1, acc.concat(",").concat(parts[pos])) }
+// Every transition is a same-signature tail call (musttail in LLVM).
+// Append only through self-rebinding here: passing parts through nested
+// helpers keeps aliases alive and defeats geometric array growth.
+// concat_all then copies the fragments into one final allocation.
+let json_emit (stack: JsonWriteStack) (parts: Array[String]): String = match stack {
+    JsonWriteDone => Array.concat_all(parts),
+    JsonWriteText(text, rest) => {
+        parts = parts.push(text);
+        json_emit(rest, parts)
+    },
+    JsonWriteString(s, pos, rest) => {
+        let end = json_run_end(s, pos);
+        if end > pos { parts = parts.push(str_of_bytes_raw(bytes_slice_raw(s, pos, end))); };
+        if end == bytes_len_raw(s) {
+            parts = parts.push("\"");
+            json_emit(rest, parts)
+        } else {
+            parts = parts.push(json_escape_byte(bytes_at_raw(s, end)));
+            json_emit(JsonWriteString(s, end + 1, rest), parts)
+        }
+    },
+    JsonWriteValue(v, rest) => match v {
+        JsonNull => {
+            parts = parts.push("null");
+            json_emit(rest, parts)
+        },
+        JsonBool(b) => {
+            parts = parts.push(if b { "true" } else { "false" });
+            json_emit(rest, parts)
+        },
+        JsonNumber(n) => {
+            parts = parts.push(n.to_string());
+            json_emit(rest, parts)
+        },
+        JsonString(s) => {
+            parts = parts.push("\"");
+            json_emit(JsonWriteString(bytes_of_str_raw(s), 0, rest), parts)
+        },
+        JsonArray(arr) => {
+            parts = parts.push("[");
+            json_emit(JsonWriteArray(arr, 0, rest), parts)
+        },
+        JsonObject(entries) => {
+            parts = parts.push("{");
+            json_emit(JsonWriteObject(entries, 0, rest), parts)
+        },
+    },
+    JsonWriteArray(arr, pos, rest) =>
+        if pos >= arr.len() {
+            parts = parts.push("]");
+            json_emit(rest, parts)
+        } else {
+            if pos > 0 { parts = parts.push(","); };
+            json_emit(JsonWriteValue(arr[pos], JsonWriteArray(arr, pos + 1, rest)), parts)
+        },
+    JsonWriteObject(entries, pos, rest) =>
+        if pos >= entries.len() {
+            parts = parts.push("}");
+            json_emit(rest, parts)
+        } else {
+            let entry = entries[pos];
+            if pos > 0 { parts = parts.push(","); };
+            parts = parts.push("\"");
+            let next = JsonWriteValue(entry.value, JsonWriteObject(entries, pos + 1, rest));
+            json_emit(JsonWriteString(bytes_of_str_raw(entry.key), 0, JsonWriteText(":", next)), parts)
+        },
+}
 
 /// Renders a `JsonValue` as compact JSON — no spaces, no newlines.
 ///
 /// Object keys come out in the order they are held, which for a parsed
-/// document is the order they were read.
-pub let json_stringify (v: JsonValue): String = match v {
-    JsonNull => "null",
-    JsonBool(b) => if b { "true" } else { "false" },
-    JsonNumber(n) => n.to_string(),
-    JsonString(s) => json_quote(s),
-    JsonArray(arr) => "[".concat(join_with_commas(Array.map(arr, |x: JsonValue| json_stringify(x)), 0, "")).concat("]"),
-    JsonObject(entries) => "{".concat(join_with_commas(Array.map(entries, |e: JsonEntry| json_quote(e.key).concat(":").concat(json_stringify(e.value))), 0, "")).concat("}"),
-}
+/// document is the order they were read. All U+0000–U+001F control
+/// characters are escaped, including in keys. Output construction takes
+/// linear time and space in the output size, with an explicit traversal
+/// stack proportional to nesting depth instead of native stack recursion.
+pub let json_stringify (v: JsonValue): String = json_emit(JsonWriteValue(v, JsonWriteDone), [])
 /// `pub` because the PARSER generates calls to these when it
 /// desugars `requires`/`ensures`, and that generated code lands in
 /// the user's own module. Nobody writes them by hand.
