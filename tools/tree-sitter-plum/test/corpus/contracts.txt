@@ -1,0 +1,805 @@
+====================
+Repeated preconditions and postconditions with messages
+====================
+
+let withdraw (account: Account) (amount: Int): Account
+    require amount > 0 : "withdrawal amount must be positive"
+    require amount <= account.balance : "insufficient funds"
+    ensure result.balance >= 0
+    ensure result.balance < account.balance : "balance must decrease"
+= Account { balance: account.balance - amount }
+
+---
+
+(source_file
+  (item
+    (let_def
+      (identifier)
+      (param
+        (pattern
+          (identifier))
+        (path_type
+          (identifier)))
+      (param
+        (pattern
+          (identifier))
+        (path_type
+          (identifier)))
+      (path_type
+        (identifier))
+      (require_clause
+        (pipe_expr
+          (or_expr
+            (and_expr
+              (compare_expr
+                (range_expr
+                  (add_expr
+                    (mul_expr
+                      (unary_expr
+                        (postfix_expr
+                          (identifier))))))
+                (compare_op)
+                (range_expr
+                  (add_expr
+                    (mul_expr
+                      (unary_expr
+                        (postfix_expr
+                          (int_literal))))))))))
+        (string_literal))
+      (require_clause
+        (pipe_expr
+          (or_expr
+            (and_expr
+              (compare_expr
+                (range_expr
+                  (add_expr
+                    (mul_expr
+                      (unary_expr
+                        (postfix_expr
+                          (identifier))))))
+                (compare_op)
+                (range_expr
+                  (add_expr
+                    (mul_expr
+                      (unary_expr
+                        (postfix_expr
+                          (identifier)
+                          (identifier))))))))))
+        (string_literal))
+      (ensure_clause
+        (pipe_expr
+          (or_expr
+            (and_expr
+              (compare_expr
+                (range_expr
+                  (add_expr
+                    (mul_expr
+                      (unary_expr
+                        (postfix_expr
+                          (identifier)
+                          (identifier))))))
+                (compare_op)
+                (range_expr
+                  (add_expr
+                    (mul_expr
+                      (unary_expr
+                        (postfix_expr
+                          (int_literal)))))))))))
+      (ensure_clause
+        (pipe_expr
+          (or_expr
+            (and_expr
+              (compare_expr
+                (range_expr
+                  (add_expr
+                    (mul_expr
+                      (unary_expr
+                        (postfix_expr
+                          (identifier)
+                          (identifier))))))
+                (compare_op)
+                (range_expr
+                  (add_expr
+                    (mul_expr
+                      (unary_expr
+                        (postfix_expr
+                          (identifier)
+                          (identifier))))))))))
+        (string_literal))
+      (pipe_expr
+        (or_expr
+          (and_expr
+            (compare_expr
+              (range_expr
+                (add_expr
+                  (mul_expr
+                    (unary_expr
+                      (postfix_expr
+                        (struct_literal
+                          (path
+                            (identifier))
+                          (field_init_list
+                            (field_init
+                              (identifier)
+                              (pipe_expr
+                                (or_expr
+                                  (and_expr
+                                    (compare_expr
+                                      (range_expr
+                                        (add_expr
+                                          (mul_expr
+                                            (unary_expr
+                                              (postfix_expr
+                                                (identifier)
+                                                (identifier))))
+                                          (mul_expr
+                                            (unary_expr
+                                              (postfix_expr
+                                                (identifier)))))))))))))))))))))))))
+
+====================
+Preconditions only
+====================
+
+let average (total: Int) (count: Int): Int
+    require count > 0 : "cannot average over zero items"
+= total / count
+
+---
+
+(source_file
+  (item
+    (let_def
+      (identifier)
+      (param
+        (pattern
+          (identifier))
+        (path_type
+          (identifier)))
+      (param
+        (pattern
+          (identifier))
+        (path_type
+          (identifier)))
+      (path_type
+        (identifier))
+      (require_clause
+        (pipe_expr
+          (or_expr
+            (and_expr
+              (compare_expr
+                (range_expr
+                  (add_expr
+                    (mul_expr
+                      (unary_expr
+                        (postfix_expr
+                          (identifier))))))
+                (compare_op)
+                (range_expr
+                  (add_expr
+                    (mul_expr
+                      (unary_expr
+                        (postfix_expr
+                          (int_literal))))))))))
+        (string_literal))
+      (pipe_expr
+        (or_expr
+          (and_expr
+            (compare_expr
+              (range_expr
+                (add_expr
+                  (mul_expr
+                    (unary_expr
+                      (postfix_expr
+                        (identifier)))
+                    (unary_expr
+                      (postfix_expr
+                        (identifier)))))))))))))
+
+====================
+Postconditions only
+====================
+
+let identity (value: Int): Int ensure result == value : "identity" = value
+
+---
+
+(source_file
+  (item
+    (let_def
+      (identifier)
+      (param
+        (pattern
+          (identifier))
+        (path_type
+          (identifier)))
+      (path_type
+        (identifier))
+      (ensure_clause
+        (pipe_expr
+          (or_expr
+            (and_expr
+              (compare_expr
+                (range_expr
+                  (add_expr
+                    (mul_expr
+                      (unary_expr
+                        (postfix_expr
+                          (identifier))))))
+                (compare_op)
+                (range_expr
+                  (add_expr
+                    (mul_expr
+                      (unary_expr
+                        (postfix_expr
+                          (identifier))))))))))
+        (string_literal))
+      (pipe_expr
+        (or_expr
+          (and_expr
+            (compare_expr
+              (range_expr
+                (add_expr
+                  (mul_expr
+                    (unary_expr
+                      (postfix_expr
+                        (identifier)))))))))))))
+
+====================
+Contracts without return annotations
+====================
+
+let positive (n: Int) require n > 0 ensure result > 0 = n
+
+---
+
+(source_file
+  (item
+    (let_def
+      (identifier)
+      (param
+        (pattern
+          (identifier))
+        (path_type
+          (identifier)))
+      (require_clause
+        (pipe_expr
+          (or_expr
+            (and_expr
+              (compare_expr
+                (range_expr
+                  (add_expr
+                    (mul_expr
+                      (unary_expr
+                        (postfix_expr
+                          (identifier))))))
+                (compare_op)
+                (range_expr
+                  (add_expr
+                    (mul_expr
+                      (unary_expr
+                        (postfix_expr
+                          (int_literal)))))))))))
+      (ensure_clause
+        (pipe_expr
+          (or_expr
+            (and_expr
+              (compare_expr
+                (range_expr
+                  (add_expr
+                    (mul_expr
+                      (unary_expr
+                        (postfix_expr
+                          (identifier))))))
+                (compare_op)
+                (range_expr
+                  (add_expr
+                    (mul_expr
+                      (unary_expr
+                        (postfix_expr
+                          (int_literal)))))))))))
+      (pipe_expr
+        (or_expr
+          (and_expr
+            (compare_expr
+              (range_expr
+                (add_expr
+                  (mul_expr
+                    (unary_expr
+                      (postfix_expr
+                        (identifier)))))))))))))
+
+====================
+Generic associated function contracts
+====================
+
+pub let Box.identity[T] (value: T): T ensure true = value
+
+---
+
+(source_file
+  (item
+    (let_def
+      (identifier)
+      (identifier)
+      (generic_params
+        (generic_param
+          (identifier)))
+      (param
+        (pattern
+          (identifier))
+        (path_type
+          (identifier)))
+      (path_type
+        (identifier))
+      (ensure_clause
+        (pipe_expr
+          (or_expr
+            (and_expr
+              (compare_expr
+                (range_expr
+                  (add_expr
+                    (mul_expr
+                      (unary_expr
+                        (postfix_expr
+                          (bool_literal)))))))))))
+      (pipe_expr
+        (or_expr
+          (and_expr
+            (compare_expr
+              (range_expr
+                (add_expr
+                  (mul_expr
+                    (unary_expr
+                      (postfix_expr
+                        (identifier)))))))))))))
+
+====================
+Contract words remain identifiers
+====================
+
+let require = 1
+let ensure = 2
+let use_words require ensure = require + ensure
+let typed_words (require: Int) (ensure: Int): Int = {
+    let require = ensure;
+    let ensure = require;
+    require + ensure
+}
+let check (require: Int) (ensure: Int): Int
+    require require > 0
+    ensure result == ensure
+= require
+
+---
+
+(source_file
+  (item
+    (let_def
+      (identifier)
+      (pipe_expr
+        (or_expr
+          (and_expr
+            (compare_expr
+              (range_expr
+                (add_expr
+                  (mul_expr
+                    (unary_expr
+                      (postfix_expr
+                        (int_literal))))))))))))
+  (item
+    (let_def
+      (identifier)
+      (pipe_expr
+        (or_expr
+          (and_expr
+            (compare_expr
+              (range_expr
+                (add_expr
+                  (mul_expr
+                    (unary_expr
+                      (postfix_expr
+                        (int_literal))))))))))))
+  (item
+    (let_def
+      (identifier)
+      (param
+        (identifier))
+      (param
+        (identifier))
+      (pipe_expr
+        (or_expr
+          (and_expr
+            (compare_expr
+              (range_expr
+                (add_expr
+                  (mul_expr
+                    (unary_expr
+                      (postfix_expr
+                        (identifier))))
+                  (mul_expr
+                    (unary_expr
+                      (postfix_expr
+                        (identifier))))))))))))
+  (item
+    (let_def
+      (identifier)
+      (param
+        (pattern
+          (identifier))
+        (path_type
+          (identifier)))
+      (param
+        (pattern
+          (identifier))
+        (path_type
+          (identifier)))
+      (path_type
+        (identifier))
+      (pipe_expr
+        (or_expr
+          (and_expr
+            (compare_expr
+              (range_expr
+                (add_expr
+                  (mul_expr
+                    (unary_expr
+                      (postfix_expr
+                        (block
+                          (let_stmt
+                            (pattern
+                              (identifier))
+                            (pipe_expr
+                              (or_expr
+                                (and_expr
+                                  (compare_expr
+                                    (range_expr
+                                      (add_expr
+                                        (mul_expr
+                                          (unary_expr
+                                            (postfix_expr
+                                              (identifier)))))))))))
+                          (let_stmt
+                            (pattern
+                              (identifier))
+                            (pipe_expr
+                              (or_expr
+                                (and_expr
+                                  (compare_expr
+                                    (range_expr
+                                      (add_expr
+                                        (mul_expr
+                                          (unary_expr
+                                            (postfix_expr
+                                              (identifier)))))))))))
+                          (pipe_expr
+                            (or_expr
+                              (and_expr
+                                (compare_expr
+                                  (range_expr
+                                    (add_expr
+                                      (mul_expr
+                                        (unary_expr
+                                          (postfix_expr
+                                            (identifier))))
+                                      (mul_expr
+                                        (unary_expr
+                                          (postfix_expr
+                                            (identifier))))))))))))))))))))))
+  (item
+    (let_def
+      (identifier)
+      (param
+        (pattern
+          (identifier))
+        (path_type
+          (identifier)))
+      (param
+        (pattern
+          (identifier))
+        (path_type
+          (identifier)))
+      (path_type
+        (identifier))
+      (require_clause
+        (pipe_expr
+          (or_expr
+            (and_expr
+              (compare_expr
+                (range_expr
+                  (add_expr
+                    (mul_expr
+                      (unary_expr
+                        (postfix_expr
+                          (identifier))))))
+                (compare_op)
+                (range_expr
+                  (add_expr
+                    (mul_expr
+                      (unary_expr
+                        (postfix_expr
+                          (int_literal)))))))))))
+      (ensure_clause
+        (pipe_expr
+          (or_expr
+            (and_expr
+              (compare_expr
+                (range_expr
+                  (add_expr
+                    (mul_expr
+                      (unary_expr
+                        (postfix_expr
+                          (identifier))))))
+                (compare_op)
+                (range_expr
+                  (add_expr
+                    (mul_expr
+                      (unary_expr
+                        (postfix_expr
+                          (identifier)))))))))))
+      (pipe_expr
+        (or_expr
+          (and_expr
+            (compare_expr
+              (range_expr
+                (add_expr
+                  (mul_expr
+                    (unary_expr
+                      (postfix_expr
+                        (identifier)))))))))))))
+
+====================
+Contract expressions reuse the expression grammar
+====================
+
+let bounded (n: Int): Int
+    require valid(n) && n > 0 : "valid input"
+    ensure (result == n || result == 0)
+= n
+
+---
+
+(source_file
+  (item
+    (let_def
+      (identifier)
+      (param
+        (pattern
+          (identifier))
+        (path_type
+          (identifier)))
+      (path_type
+        (identifier))
+      (require_clause
+        (pipe_expr
+          (or_expr
+            (and_expr
+              (compare_expr
+                (range_expr
+                  (add_expr
+                    (mul_expr
+                      (unary_expr
+                        (postfix_expr
+                          (identifier)
+                          (arguments
+                            (argument
+                              (pipe_expr
+                                (or_expr
+                                  (and_expr
+                                    (compare_expr
+                                      (range_expr
+                                        (add_expr
+                                          (mul_expr
+                                            (unary_expr
+                                              (postfix_expr
+                                                (identifier))))))))))))))))))
+              (compare_expr
+                (range_expr
+                  (add_expr
+                    (mul_expr
+                      (unary_expr
+                        (postfix_expr
+                          (identifier))))))
+                (compare_op)
+                (range_expr
+                  (add_expr
+                    (mul_expr
+                      (unary_expr
+                        (postfix_expr
+                          (int_literal))))))))))
+        (string_literal))
+      (ensure_clause
+        (pipe_expr
+          (or_expr
+            (and_expr
+              (compare_expr
+                (range_expr
+                  (add_expr
+                    (mul_expr
+                      (unary_expr
+                        (postfix_expr
+                          (paren_or_tuple_expr
+                            (pipe_expr
+                              (or_expr
+                                (and_expr
+                                  (compare_expr
+                                    (range_expr
+                                      (add_expr
+                                        (mul_expr
+                                          (unary_expr
+                                            (postfix_expr
+                                              (identifier))))))
+                                    (compare_op)
+                                    (range_expr
+                                      (add_expr
+                                        (mul_expr
+                                          (unary_expr
+                                            (postfix_expr
+                                              (identifier))))))))
+                                (and_expr
+                                  (compare_expr
+                                    (range_expr
+                                      (add_expr
+                                        (mul_expr
+                                          (unary_expr
+                                            (postfix_expr
+                                              (identifier))))))
+                                    (compare_op)
+                                    (range_expr
+                                      (add_expr
+                                        (mul_expr
+                                          (unary_expr
+                                            (postfix_expr
+                                              (int_literal)))))))))))))))))))))
+      (pipe_expr
+        (or_expr
+          (and_expr
+            (compare_expr
+              (range_expr
+                (add_expr
+                  (mul_expr
+                    (unary_expr
+                      (postfix_expr
+                        (identifier)))))))))))))
+
+====================
+Contract comments and multiline conditions
+====================
+
+let positive (n: Int): Int
+    // check the input
+    require (n > 0 &&
+             n < 100) // no message
+    ensure result > 0 : "positive result"
+= n
+
+---
+
+(source_file
+  (item
+    (let_def
+      (identifier)
+      (param
+        (pattern
+          (identifier))
+        (path_type
+          (identifier)))
+      (path_type
+        (identifier))
+      (comment)
+      (require_clause
+        (pipe_expr
+          (or_expr
+            (and_expr
+              (compare_expr
+                (range_expr
+                  (add_expr
+                    (mul_expr
+                      (unary_expr
+                        (postfix_expr
+                          (paren_or_tuple_expr
+                            (pipe_expr
+                              (or_expr
+                                (and_expr
+                                  (compare_expr
+                                    (range_expr
+                                      (add_expr
+                                        (mul_expr
+                                          (unary_expr
+                                            (postfix_expr
+                                              (identifier))))))
+                                    (compare_op)
+                                    (range_expr
+                                      (add_expr
+                                        (mul_expr
+                                          (unary_expr
+                                            (postfix_expr
+                                              (int_literal)))))))
+                                  (compare_expr
+                                    (range_expr
+                                      (add_expr
+                                        (mul_expr
+                                          (unary_expr
+                                            (postfix_expr
+                                              (identifier))))))
+                                    (compare_op)
+                                    (range_expr
+                                      (add_expr
+                                        (mul_expr
+                                          (unary_expr
+                                            (postfix_expr
+                                              (int_literal)))))))))))))))))))))
+      (comment)
+      (ensure_clause
+        (pipe_expr
+          (or_expr
+            (and_expr
+              (compare_expr
+                (range_expr
+                  (add_expr
+                    (mul_expr
+                      (unary_expr
+                        (postfix_expr
+                          (identifier))))))
+                (compare_op)
+                (range_expr
+                  (add_expr
+                    (mul_expr
+                      (unary_expr
+                        (postfix_expr
+                          (int_literal))))))))))
+        (string_literal))
+      (pipe_expr
+        (or_expr
+          (and_expr
+            (compare_expr
+              (range_expr
+                (add_expr
+                  (mul_expr
+                    (unary_expr
+                      (postfix_expr
+                        (identifier)))))))))))))
+====================
+Preconditions cannot follow postconditions
+:error
+====================
+
+let f (n: Int): Int ensure result > 0 require n > 0 = n
+
+---
+
+(ERROR)
+
+====================
+Preconditions need a condition
+:error
+====================
+
+let f (n: Int): Int require = n
+
+---
+
+(ERROR)
+
+====================
+Postconditions need a condition
+:error
+====================
+
+let f (n: Int): Int ensure = n
+
+---
+
+(ERROR)
+
+====================
+Contract messages must be strings
+:error
+====================
+
+let f (n: Int): Int require n > 0 : 123 = n
+
+---
+
+(ERROR)
+
