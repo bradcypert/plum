@@ -502,25 +502,28 @@ The version lives in exactly one place: `plum_version` in
 # 1. bump it, rebuild, verify
 $EDITOR bootstrap/self_host/main.plum
 ./sh build bootstrap/self_host -o sh.real
-./bootstrap/check-version
+./bootstrap/check-version v0.0.40
 
-# 2. the seed will usually need refreshing for a release
+# 2. refresh the seed only if it cannot bootstrap today's source
 ./bootstrap/check-seed || ./bootstrap/gen-seed
 
 # 3. full validation, then commit
 
 # 4. tag -- this publishes
-git tag v0.0.2 && git push origin v0.0.2
+git tag -a v0.0.40 -m "Plum v0.0.40"
+git push origin v0.0.40
 ```
 
-Pushing the tag runs `.github/workflows/release.yml`. It has three
-build jobs and a publish job, and produces **four archives**: Linux
-x86_64, macOS arm64, macOS x86_64, Windows x86_64. Each is built on the
+Pushing the tag runs `.github/workflows/release.yml`. It has a version
+gate, four build jobs (including a two-platform macOS matrix), and a
+publish job, and produces **five archives**: Linux x86_64, Linux arm64,
+macOS arm64, macOS x86_64, Windows x86_64. Each is built on the
 platform it targets — nothing is cross-compiled — from the checked-in
 seed, which is the same path a user takes.
 
-The jobs check different amounts, deliberately. `linux` runs every
-harness; `macos` and `windows` run `bootstrap/platform-smoke` only,
+The jobs check different amounts, deliberately. `linux` runs the release
+validation harnesses; `linux-arm64` runs corpus, platform, LSP, and property
+checks. `macos` and `windows` run `bootstrap/platform-smoke` only,
 because the rest of `bootstrap/` is Linux-only development tooling.
 macOS x86_64 is here and not in `ci.yml`: Intel Mac runners are scarce
 enough to queue for hours, which is tolerable on a tag and not on a
@@ -536,7 +539,7 @@ reports, not just against the source — checking the source alone passes
 on a stale binary.
 
 The release workflow runs it twice, at different strengths. A `version`
-job gates all three builds with `--source-only`, which needs no
+job gates all four build jobs with `--source-only`, which needs no
 compiler and so fails a mis-tagged commit in seconds; the `linux` job
 then runs the full three-way check. Both exist because they catch
 different mistakes: `v0.0.3` was first tagged on a commit still saying
