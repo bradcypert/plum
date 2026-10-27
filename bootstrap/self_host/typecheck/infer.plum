@@ -1245,16 +1245,27 @@ let infer_index (p2: Program2) (state: FreshState) (env: TyEnv) (acc: Subst) (ba
 let infer_unary (p2: Program2) (state: FreshState) (env: TyEnv) (acc: Subst) (op: parser.UOp) (inner: parser.PExpr): InferResult = {
     let r = infer_expr(p2, state, env, acc, inner);
     match op {
-        UNot => ir_leaf(unify_or_fail(r.ty, ITBool), r.subst, r.state, TUnary(op, r.texpr)),
+        UNot => infer_constrained_unary(op, r, ITBool),
         UNeg => ir_leaf(r.ty, r.subst, r.state, TUnary(op, r.texpr)),
         // `~` flips bits, so it is `Int` and nothing else. `!` is the
         // `Bool` one; keeping them separate is what stops `~flag` and
         // `!count` from silently meaning something.
-        UBitNot => ir_leaf(unify_or_fail(r.ty, ITInt), r.subst, r.state, TUnary(op, r.texpr)),
+        UBitNot => infer_constrained_unary(op, r, ITInt),
     }
 }
 
-let unify_or_fail (a: ITy) (b: ITy): ITy = match unify(a, b) { Ok(_) => b, Err(e) => { fail_tc(e); b } }
+// Operator constraints must refine the threaded substitution, including
+// fresh closure parameters. Validation alone leaves their ABI unresolved.
+let constrain_operand (acc: Subst) (ty: ITy) (required: ITy) (prefix: String): Subst =
+    match unify(subst_apply(acc, ty), required) {
+        Ok(s) => subst_compose(s, acc),
+        Err(e) => { fail_tc(prefix.concat(e)); acc },
+    }
+
+let infer_constrained_unary (op: parser.UOp) (r: InferResult) (required: ITy): InferResult = {
+    let s = constrain_operand(r.subst, r.ty, required, "");
+    ir_leaf(required, s, r.state, TUnary(op, r.texpr))
+}
 
 let infer_binary (p2: Program2) (state: FreshState) (env: TyEnv) (acc: Subst) (op: parser.BOp) (lhs: parser.PExpr) (rhs: parser.PExpr): InferResult = {
     let lr = infer_expr(p2, state, env, acc, lhs);
@@ -1263,12 +1274,19 @@ let infer_binary (p2: Program2) (state: FreshState) (env: TyEnv) (acc: Subst) (o
         Ok(s) => subst_compose(s, rr.subst),
         Err(e) => { fail_tc("'${op_name(op)}': ${e}"); rr.subst },
     };
-    let operand_ty = subst_apply(combined, lr.ty);
+    // The operands already share a type. Constraining that type also
+    // resolves both operands' fresh variables through the composed subst.
+    let constrained = match op {
+        BAnd => constrain_operand(combined, lr.ty, ITBool, "'&&': "),
+        BOr => constrain_operand(combined, lr.ty, ITBool, "'||': "),
+        _ => combined,
+    };
+    let operand_ty = subst_apply(constrained, lr.ty);
     reject_function_equality(p2, op, operand_ty);
     reject_handle_equality(p2, op, operand_ty);
     reject_unordered_comparison(op, operand_ty);
     reject_non_int_bitwise(op, operand_ty);
-    ir_leaf(binary_result_ty(op, operand_ty), combined, rr.state, TBinary(op, lr.texpr, rr.texpr))
+    ir_leaf(binary_result_ty(op, operand_ty), constrained, rr.state, TBinary(op, lr.texpr, rr.texpr))
 }
 
 // Bitwise operators are `Int` and nothing else.

@@ -1,0 +1,4 @@
+let main (): Unit = {
+    let f = |x| if x == true { ~x } else { 0 };
+    println(f(true).to_string());
+}

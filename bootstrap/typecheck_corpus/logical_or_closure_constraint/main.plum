@@ -1,0 +1,4 @@
+let main (): Unit = {
+    let either = |a, b| a || b;
+    println(either("a", "b").to_string());
+}

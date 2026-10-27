@@ -1,0 +1,4 @@
+let main (): Unit = {
+    let both = |a, b| a && b;
+    println(both(1, 2).to_string());
+}

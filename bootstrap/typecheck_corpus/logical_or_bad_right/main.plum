@@ -1,0 +1,1 @@
+let main (): Unit = { println((false || 1).to_string()); }
