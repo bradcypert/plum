@@ -1,0 +1,4 @@
+text, binary and empty replacements: ok
+directories and missing parents: err
+rename replaces files and preserves source on failure: ok
+repeated replacements: ok

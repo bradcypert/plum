@@ -97,8 +97,15 @@ A failed or incomplete read returns `Err`, never a partial string.
 
 Writes text to a file, creating it or REPLACING what was there.
 
-The parent directory must exist. Returns `Err` if opening, writing,
-or closing fails. A failure can leave a truncated or partially written file.
+Writes an exclusive sibling temporary, checks writing and closing,
+then replaces the destination in one same-filesystem rename. `Err`
+leaves the old destination intact; temporary files are removed on failure.
+The parent directory must exist and be writable. Symlinks and special
+files are rejected; parent directories are followed. On Unix, new files
+are private (0600) and replacements preserve ordinary permission bits.
+Replacement changes file identity: hard links, ownership, ACLs and other
+metadata are not preserved. This is atomic publication, not a promise
+of durability after power loss; interruption may leave a temporary file.
 
 ## `let read_bytes (path: String): Result[Bytes, String]`
 

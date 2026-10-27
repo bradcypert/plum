@@ -739,7 +739,24 @@ long long os_remove_file(const char *path) {
 // caller is told so rather than being silently given a slower,
 // non-atomic fallback it did not ask for.
 long long os_rename_file(const char *from, const char *to) {
+#if defined(_WIN32)
+    // The CRT rename refuses an existing destination. Do not enable
+    // MOVEFILE_COPY_ALLOWED: cross-volume copy/delete is not replacement.
+    int nf = MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, from, -1, NULL, 0);
+    int nt = MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, to, -1, NULL, 0);
+    if (nf <= 0 || nt <= 0) return -1;
+    wchar_t *wf = malloc((size_t)nf * sizeof(wchar_t));
+    wchar_t *wt = malloc((size_t)nt * sizeof(wchar_t));
+    if (wf == NULL || wt == NULL) { free(wf); free(wt); return -1; }
+    int ok = MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, from, -1, wf, nf) &&
+             MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, to, -1, wt, nt) &&
+             MoveFileExW(wf, wt, MOVEFILE_REPLACE_EXISTING);
+    free(wf);
+    free(wt);
+    return ok ? 0 : -1;
+#else
     return rename(from, to) == 0 ? 0 : -1;
+#endif
 }
 
 static int plum_is_dir(const char *path) {

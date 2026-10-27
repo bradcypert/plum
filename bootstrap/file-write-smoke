@@ -1,0 +1,51 @@
+#!/usr/bin/env bash
+set -euo pipefail
+root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+cd "$root"
+plum="${PLUM:-./sh}"
+work="$(mktemp -d)"
+trap 'rm -rf "$work"' EXIT
+clang -O1 -g -Wall -Wextra -Werror -fsanitize=address,undefined \
+    -fno-sanitize-recover=all bootstrap/whole-file-write-test.c -o "$work/native-test"
+ASAN_OPTIONS=detect_leaks=1 timeout 30 "$work/native-test" "$work/data"
+"$plum" build bootstrap/exec_corpus/whole_file_writes -o "$work/writes"
+timeout 30 "$work/writes" > "$work/out"
+diff -u bootstrap/exec_corpus/whole_file_writes/expected.txt "$work/out"
+
+# The old formatter scratch name may be planted by a checkout. Neither
+# a symlink there nor an unrelated regular file there may be touched.
+printf 'outside\n' > "$work/outside"
+printf 'let main (): Unit = {\nprintln("hello")\n}\n' > "$work/main.plum"
+ln -s "$work/outside" "$work/main.plum.fmt-tmp"
+"$plum" fmt --write "$work/main.plum"
+"$plum" fmt --check "$work/main.plum"
+test -L "$work/main.plum.fmt-tmp"
+test "$(cat "$work/outside")" = outside
+rm "$work/main.plum.fmt-tmp"
+printf 'sentinel\n' > "$work/main.plum.fmt-tmp"
+printf 'let main (): Unit = {\nprintln("hello")\n}\n' > "$work/main.plum"
+"$plum" fmt --write "$work/main.plum"
+test "$(cat "$work/main.plum.fmt-tmp")" = sentinel
+
+# Refuse a symlink destination rather than follow or replace it.
+ln -s "$work/outside" "$work/link"
+mkdir "$work/link-test"
+cat > "$work/link-test/main.plum" <<'PLUM'
+use Os;
+let main (): Unit = {
+    let path = args()[0];
+    assert(Result.is_err(Os.write_file(path, "overwrite")));
+    assert(Result.is_err(Os.write_bytes(path, Bytes.empty())));
+}
+PLUM
+"$plum" build "$work/link-test" -o "$work/link-test.bin"
+"$work/link-test.bin" "$work/link"
+test -L "$work/link"
+mkfifo "$work/fifo"
+"$work/link-test.bin" "$work/fifo"
+test "$(cat "$work/outside")" = outside
+if find "$work" -name '.plum-*' | grep -q .; then
+    echo 'file-write smoke: leaked sibling temporary' >&2
+    exit 1
+fi
+echo 'file-write smoke: ok'
