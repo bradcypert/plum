@@ -151,6 +151,20 @@ for dir in bootstrap/exec_corpus/*/; do
     fi
 done
 
+# Formatting must replace an existing file on Windows as well as Unix.
+printf 'let main (): Unit = {\nprintln("hello")\n}\n' > "$work/format.plum"
+printf 'sentinel\n' > "$work/format.plum.fmt-tmp"
+if "$plum" fmt --write "$work/format.plum" > "$work/format.log" 2>&1 &&
+        "$plum" fmt --check "$work/format.plum" >> "$work/format.log" 2>&1 &&
+        [ "$(cat "$work/format.plum.fmt-tmp")" = sentinel ]; then
+    printf 'OK    %-24s\n' "formatter_replacement"
+    ok=$((ok + 1))
+else
+    printf 'FAIL  %-24s\n' "formatter_replacement"
+    cat "$work/format.log"
+    fail=$((fail + 1))
+fi
+
 # Native Windows process-boundary checks: real UTF-16 child argv/env,
 # both spawn paths, and deterministic allocation-failure cleanup.
 case "$(uname -s)" in

@@ -1,0 +1,39 @@
+use Os;
+
+let main (): Unit = match Os.temp_dir() {
+    Err(e) => { println(e); assert(false) },
+    Ok(root) => {
+        let path = root.concat("/data");
+        assert(Result.is_ok(Os.write_file(path, "old")));
+        assert(Result.is_ok(Os.write_file(path, "replacement")));
+        assert(Os.read_file(path) == Ok("replacement"));
+        let data = Bytes.from_array([0, 255, 13, 10, 65]);
+        assert(Result.is_ok(Os.write_bytes(path, data)));
+        assert(Os.read_bytes(path) == Ok(data));
+        assert(Result.is_ok(Os.write_bytes(path, Bytes.empty())));
+        assert(Os.read_bytes(path) == Ok(Bytes.empty()));
+        println("text, binary and empty replacements: ok");
+        assert(Result.is_err(Os.write_file(root, "cannot replace a directory")));
+        assert(Result.is_err(Os.write_bytes(root, data)));
+        assert(Result.is_err(Os.write_file(root.concat("/missing/data"), "no parent")));
+        println("directories and missing parents: err");
+        let from = root.concat("/from");
+        assert(Result.is_ok(Os.write_file(from, "renamed")));
+        assert(Result.is_ok(Os.rename_file(from, path)));
+        assert(Os.read_file(path) == Ok("renamed"));
+        assert(Result.is_ok(Os.write_file(from, "keep source")));
+        assert(Result.is_err(Os.rename_file(from, root)));
+        assert(Os.read_file(from) == Ok("keep source"));
+        let unicode = root.concat("/\u{96EA}.txt");
+        assert(Result.is_ok(Os.write_file(unicode, "UTF-8 path")));
+        assert(Result.is_ok(Os.rename_file(unicode, path)));
+        assert(Os.read_file(path) == Ok("UTF-8 path"));
+        println("rename replaces files and preserves source on failure: ok");
+        for i in 0..100 {
+            assert(Result.is_ok(Os.write_file(path, "repeated")));
+        };
+        assert(Os.read_file(path) == Ok("repeated"));
+        println("repeated replacements: ok");
+        assert(Result.is_ok(Os.remove_tree(root)));
+    },
+}

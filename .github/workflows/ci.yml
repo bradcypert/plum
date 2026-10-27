@@ -170,6 +170,8 @@ jobs:
         env:
           PLUM_CI_TIMINGS: "1"
         run: ./bootstrap/native-deps-check ./sh.real
+      - name: whole-file replacements preserve contents and release resources
+        run: ./bootstrap/file-write-smoke
       - name: whole-file reads propagate failures and preserve bytes
         run: ./bootstrap/file-read-smoke
       - name: the version string is consistent

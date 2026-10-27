@@ -3564,24 +3564,13 @@ let fmt_one (path: String) (write: Bool) (check: Bool): Int =
         },
     }
 
-// Written BESIDE the original and renamed into place, because `rename`
-// is atomic within a filesystem: the path is either the old file or the
-// new one and never a half-written mixture. Writing straight over the
-// original would mean an interrupted run -- a full disk, a Ctrl-C --
-// could leave somebody's source truncated, which is the one thing a
-// formatter must never do.
-//
-// Beside it, not in a temp directory, for two reasons: `rename` across
-// filesystems fails, and the neighbouring directory is the one place
-// guaranteed to be on the same one.
+// Whole-file writes own the exclusive sibling temporary and replacement.
+// Keeping publication there gives formatter and library users the same
+// failure guarantees without a predictable formatter scratch path.
 let fmt_write (path: String) (out: String): Unit = {
-    let tmp = path.concat(".fmt-tmp");
-    match Os.write_file(tmp, out) {
+    match Os.write_file(path, out) {
         Err(e) => { println("fmt: ".concat(e)); Os.exit_with(1) },
-        Ok(_) => match Os.rename_file(tmp, path) {
-            Ok(_) => println("formatted ".concat(path)),
-            Err(e) => { Os.remove_file(tmp); println("fmt: ".concat(e)); Os.exit_with(1) },
-        },
+        Ok(_) => println("formatted ".concat(path)),
     }
 }
 

@@ -8,7 +8,7 @@ work="$(mktemp -d)"
 trap 'rm -rf "$work"' EXIT
 
 clang -O1 -g -fsanitize=address,undefined -fno-sanitize-recover=all \
-    bootstrap/whole-file-read-test.c -o "$work/native-test"
+    bootstrap/whole-file-read-test.c native_stdlib/os_shim.c -o "$work/native-test"
 ASAN_OPTIONS=detect_leaks=1 timeout 10 "$work/native-test"
 
 "$plum" build bootstrap/exec_corpus/whole_file_reads -o "$work/reads"
