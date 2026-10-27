@@ -1,0 +1,100 @@
+#!/usr/bin/env python3
+"""Check native failures and generated ownership paths with deterministic faults."""
+import os
+from pathlib import Path
+import subprocess
+import sys
+import tempfile
+
+ROOT = Path(__file__).resolve().parent.parent
+PLUM = str(Path(sys.argv[1] if len(sys.argv) > 1 else "./sh.real").resolve())
+os.chdir(ROOT)
+
+
+def run(args, **kwargs):
+    try:
+        return subprocess.run(args, check=True, timeout=120, **kwargs)
+    except subprocess.CalledProcessError as error:
+        sys.exit(f"{args}:\n{error.stdout or ''}{error.stderr or ''}")
+
+
+with tempfile.TemporaryDirectory(prefix="plum-thread-") as directory:
+    work = Path(directory)
+    flags = ["-O1", "-g", "-pthread"]
+    if sys.platform.startswith("linux"):
+        flags += ["-fsanitize=address,undefined", "-fno-sanitize-recover=all"]
+        os.environ["ASAN_OPTIONS"] = "detect_leaks=1"
+    libraries = ["-lm"]
+    if os.name == "nt":
+        libraries += ["-lws2_32", "-lcrypt32", "-lbcrypt"]
+    native = str(work / "native.exe")
+    run(["clang", *flags, "-Wall", "-Wextra", "-Werror", "-DTHREAD_NATIVE_TEST",
+         "bootstrap/thread-test.c", "-o", native])
+    run([native])
+    objects = []
+    for source in sorted((ROOT / "native_stdlib").glob("*.c")):
+        if source.name in ("thread_shim.c", "tls_shim.c"):
+            continue
+        obj = str(work / (source.stem + ".o"))
+        run(["clang", *flags, "-c", str(source), "-o", obj])
+        objects.append(obj)
+    probe = str(work / "probe.o")
+    run(["clang", *flags, "-c", "bootstrap/thread-test.c", "-o", probe])
+    objects.append(probe)
+
+    common = '''extern "C" {
+    fn probe_arm(mode: Int);
+    fn probe_drop(h: Int);
+}
+handle Probe { on_drop: probe_drop }
+'''
+    # Each send gets its only owned sender from a function result. Its
+    # receiver is already gone, so failure must reclaim the queue too.
+    send = common + '''let sender (): Sender[Probe] = {
+    let (tx, rx) = channel[Probe]();
+    tx
+}
+let payload (mode: Int): Probe = {
+    unsafe { probe_arm(mode); Probe.from_raw(42) }
+}
+let main (): Unit = sender().send(payload(MODE))
+'''
+    spawn = common + '''let main (): Unit = {
+    unsafe { probe_arm(MODE) };
+    let held = unsafe { Probe.from_raw(42) };
+    let task = spawn { unsafe { held.raw() } };
+    println(task.join().to_string())
+}
+'''
+    channel = common + '''let main (): Unit = {
+    unsafe { probe_arm(MODE) };
+    let held = unsafe { Probe.from_raw(42) };
+    let (tx, rx) = channel[Int]();
+    tx.send(unsafe { held.raw() });
+    println(rx.recv().to_string())
+}
+'''
+    cases = [("spawn", spawn, (1, 2, 3, 5), "task creation"),
+             ("channel", channel, (1, 3, 4), "channel creation"),
+             ("send", send, (1, 6), "channel send")]
+    for name, template, faults, message in cases:
+        for fault in faults:
+            source = work / "main.plum"
+            source.write_text(template.replace("MODE", str(fault + (10 if name == "spawn" else 0))))
+            ir = run([PLUM, "emit-llvm", str(source)], capture_output=True, text=True).stdout
+            # Intercept generated allocations independently of the shim.
+            ir = ir.replace("@malloc(", "@probe_malloc(")
+            ir = "declare void @probe_closure_release()\n" + ir.replace(
+                "define void @plum_rel_closure(ptr %p) {\nentry:\n",
+                "define void @plum_rel_closure(ptr %p) {\nentry:\n  call void @probe_closure_release()\n")
+            ll = work / "main.ll"
+            ll.write_text(ir)
+            binary = str(work / "program.exe")
+            run(["clang", *flags, str(ll), *objects, *libraries, "-o", binary],
+                capture_output=True, text=True)
+            result = subprocess.run([binary], capture_output=True, text=True, timeout=30)
+            assert result.returncode == 1, (name, fault, result)
+            assert result.stdout == f"panic: {message} failed\n", (name, fault, result)
+            assert not result.stderr, (name, fault, result.stderr)
+            print(f"thread generated failure: {name}/{fault}: ok", flush=True)
+print("thread smoke: ok")

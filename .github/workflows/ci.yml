@@ -166,6 +166,8 @@ jobs:
         run: ./bootstrap/remove-tree-smoke
       - name: OS path results survive concurrent native calls
         run: ./bootstrap/os-path-smoke
+      - name: task and channel failures preserve ownership
+        run: ./bootstrap/thread-smoke ./sh.real
       - name: declared native dependencies preserve TLS compatibility
         env:
           PLUM_CI_TIMINGS: "1"
@@ -317,6 +319,8 @@ jobs:
         run: ./bootstrap/platform-smoke ./sh.real
       - name: build cache preserves program behavior
         run: ./bootstrap/build-cache-check ./sh.real
+      - name: task and channel failures preserve ownership
+        run: ./bootstrap/thread-smoke ./sh.real
       - name: declared native dependencies preserve TLS compatibility
         env:
           PLUM_CI_TIMINGS: "1"
@@ -574,6 +578,8 @@ jobs:
         env:
           PLUM_CI_TIMINGS: "1"
         run: ./bootstrap/build-cache-check ./sh.real --require-objects
+      - name: task and channel failures preserve ownership
+        run: ./bootstrap/thread-smoke ./sh.real
       - name: declared native dependencies preserve TLS compatibility
         env:
           PLUM_CI_TIMINGS: "1"

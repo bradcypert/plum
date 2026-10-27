@@ -3596,11 +3596,22 @@ let cg_as_string (p: CgProgram) (env: Array[CgSlot]) (n: Int) (inner: typecheck.
     }
 }
 
+// Native operations return zero/null without consuming their inputs on
+// failure. Keep their checks and cleanup before publishing public values.
+let cg_thread_check (value: String) (lty: String) (zero: String) (cleanup: String) (operation: Int): String = {
+    let label = String.slice(value, 1, value.len()).concat("_checked");
+    "  ${value}_failed = icmp eq ${lty} ${value}, ${zero}\n"
+        .concat("  br i1 ${value}_failed, label %${label}_fail, label %${label}_ok\n")
+        .concat("${label}_fail:\n").concat(cleanup)
+        .concat("  call void @thread_fail(i64 ${operation})\n  unreachable\n")
+        .concat("${label}_ok:\n")
+}
+
 // `spawn { body }`. The body arrives as a zero-parameter closure (the
 // checker wrapped it), so the capture machinery is already done: this
 // emits a per-site ENTRY function matching what `thread_spawn` expects
-// (`void *(*)(void *)`), which invokes the closure and boxes its result
-// into one malloc'd word for `.join()` to collect.
+// (`void (*)(void *, void *)`), which invokes the closure and stores its
+// result in the shim's preallocated box for `.join()` to collect.
 //
 // A box, rather than returning the value in the pointer itself: a
 // `Float` does not fit in a pointer on every target, and a boxed word
@@ -3629,16 +3640,17 @@ let cg_spawn (p: CgProgram) (env: Array[CgSlot]) (n: Int) (clo: typecheck.TExpr)
     // A capture-FREE closure is a module-level constant with an
     // immortal refcount, and `@plum_rel_closure` skips those, so the
     // common `spawn { f(3) }` is unchanged.
-    let fn_text = "define ptr ${entry}(ptr %clo) {\nentry:\n"
+    let rel = if cg_is_heap(ret) { cg_rel_sym(ret_ity) } else { "null" };
+    let fn_text = "define void ${entry}(ptr %clo, ptr %box) {\nentry:\n"
         .concat(cg_invoke("%clo", ret, "", 0))
         .concat("  call void @plum_rel_closure(ptr %clo)\n")
-        .concat("  %box = call ptr @malloc(i64 8)\n")
         .concat("  store ").concat(lty).concat(" ").concat(cg_reg(1)).concat(", ptr %box\n")
-        .concat("  ret ptr %box\n}\n\n");
+        .concat("  ret void\n}\n\n");
     let h = cg_reg(c.n + 1);
     let cell = cg_reg(c.n + 2);
     Emit {
-        code: c.code.concat("  ").concat(h).concat(" = call i64 @thread_spawn(ptr ").concat(entry).concat(", ptr ").concat(c.val).concat(")\n")
+        code: c.code.concat("  ").concat(h).concat(" = call i64 @thread_spawn(ptr ").concat(entry).concat(", ptr ").concat(c.val).concat(", ptr ").concat(rel).concat(")\n")
+            .concat(cg_thread_check(h, "i64", "0", cg_dec(cg_concrete(p, typecheck.texpr_ty(p.subst, clo)), c.val), 0))
             .concat(cg_handle_cell(cell, h)),
         allocas: c.allocas, releases: c.releases, globals: c.globals.concat(fn_text),
         val: cell, ty: CgHandle("Task"), n: c.n + 3,
@@ -3646,7 +3658,7 @@ let cg_spawn (p: CgProgram) (env: Array[CgSlot]) (n: Int) (clo: typecheck.TExpr)
 }
 
 // `t.join()` -- block, then take the boxed value. The box is freed
-// here; the task struct itself is freed by `thread_join`.
+// here; the task struct itself is freed when its last owner releases it.
 let cg_task_join (p: CgProgram) (env: Array[CgSlot]) (n: Int) (task: typecheck.TExpr) (ret: CgTy): Emit = {
     let t = cg_expr(p, env, n, task);
     let box = cg_reg(t.n);
@@ -3690,6 +3702,7 @@ let cg_channel_new (p: CgProgram) (env: Array[CgSlot]) (n: Int) (ty: CgTy): Emit
     // cell, so it outlives whichever end is dropped first and is freed
     // when the second goes.
     let code = "  ${h} = call i64 @channel_new()\n"
+        .concat(cg_thread_check(h, "i64", "0", "", 1))
         .concat(cg_handle_cell(tx, h))
         .concat(cg_handle_cell(rx, h))
         .concat("  ").concat(cell).concat(" = call ptr @plum_alloc(i64 24)\n")
@@ -3707,15 +3720,20 @@ let cg_channel_send (p: CgProgram) (env: Array[CgSlot]) (n: Int) (ch: typecheck.
     let x = cg_expr(p, env, c.n, v);
     let box = cg_reg(x.n);
     let lty = cg_llvm_ty(x.ty);
+    let cleanup = cg_dec(cg_concrete(p, typecheck.texpr_ty(p.subst, v)), x.val)
+        .concat(cg_dec(cg_concrete(p, typecheck.texpr_ty(p.subst, ch)), c.val));
+    let sent = cg_reg(x.n + 2);
     Emit {
         code: c.code.concat(x.code)
             .concat("  ").concat(box).concat(" = call ptr @malloc(i64 8)\n")
+            .concat(cg_thread_check(box, "ptr", "null", cleanup, 2))
             .concat("  store ").concat(lty).concat(" ").concat(x.val).concat(", ptr ").concat(box).concat("\n")
             .concat(cg_handle_load(cg_reg(x.n + 1), c.val))
-            .concat("  call void @channel_send(i64 ").concat(cg_reg(x.n + 1)).concat(", ptr ").concat(box).concat(")\n")
+            .concat("  ${sent} = call i64 @channel_send(i64 ").concat(cg_reg(x.n + 1)).concat(", ptr ").concat(box).concat(")\n")
+            .concat(cg_thread_check(sent, "i64", "0", cleanup.concat("  call void @free(ptr ${box})\n"), 2))
             .concat(cg_dec(cg_concrete(p, typecheck.texpr_ty(p.subst, ch)), c.val)),
         allocas: c.allocas.concat(x.allocas), releases: c.releases.concat(x.releases), globals: c.globals.concat(x.globals),
-        val: "0", ty: CgUnit, n: x.n + 2,
+        val: "0", ty: CgUnit, n: x.n + 3,
     }
 }
 
@@ -6579,11 +6597,11 @@ pub let cg_is_handle (p: CgProgram) (name: String): Bool =
 // of it without joining detaches the thread.
 //
 // The element's release function is passed along because values may
-// still be IN FLIGHT -- queued and never received, or a result nobody
-// joined -- and freeing the queue has to release them too. `null` for
+// still be IN FLIGHT -- queued and never received -- and freeing the
+// queue has to release them too. Tasks install theirs at spawn. `null` for
 // an element type that owns nothing, which the shim checks for.
 let cg_handle_release_call (name: String) (rel: String): String =
-    if name == "Task" { "  call void @task_release(i64 %h, ptr ${rel})\n" }
+    if name == "Task" { "  call void @task_release(i64 %h)\n" }
     else { "  call void @channel_release(i64 %h, ptr ${rel})\n" }
 
 // The whole point of issue #9, in one function: at zero, the number

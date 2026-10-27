@@ -16109,8 +16109,34 @@ still be able to receive.
 
 Draining a dead queue releases what is still IN it -- values sent and
 never received own references of their own -- so `channel_release`
-takes the element's release function. Same for a task's result box when
-nobody joined. `null` for an element type that owns nothing.
+takes the element's release function. A task stores its result release
+function at spawn, before its worker can start, so either final owner can
+release an unjoined result. `null` for an element type that owns nothing.
+
+Task and channel construction check allocation and pthread initialization
+before publishing a handle. Partial construction destroys only successfully
+initialized synchronization objects and frees its allocations. A task's
+8-byte result box is allocated before thread creation; its generated entry
+stores directly into that box. A failed spawn leaves the closure owned by
+the caller, which releases it before reporting `panic: task creation failed`.
+Channel creation reports `panic: channel creation failed`. Failed payload
+boxing or queue-node allocation releases the untransferred payload and sender
+reference before reporting `panic: channel send failed`; enqueue success is
+the ownership-transfer boundary. These errors terminate the process through
+the existing panic convention rather than changing the public API to Result.
+
+This closes resource leaks under construction/enqueue failure and detached
+task completion; it does not bound normal concurrency memory. Tasks still use
+OS threads and their stacks, channels are still unbounded, and each queued
+message still needs a payload box and queue node. The task record gains one
+result-destructor pointer; the number of allocations per successful task is
+unchanged, with its result box allocated earlier. Each running task therefore
+reserves those 8 bytes plus allocator overhead earlier than before. Native
+boxes, queue nodes, and pthread storage are outside the generated runtime's allocation counters.
+Fault-injection accounting and sanitizer checks cover their lifetime; the
+runtime allocation counters alone do not measure their cost. This is separate
+from precise last-use ownership/reuse work (#349), and does not establish a
+runtime-wide recoverable out-of-memory guarantee.
 
 ### Dropping a task detaches it
 
