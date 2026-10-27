@@ -2039,7 +2039,7 @@ let channel_elem_ty (p2: Program2) (callee: parser.PExpr) (args: Array[parser.PE
             EGenericInst(inner, targs) =>
                 if targs.len() == 1 {
                     match inner {
-                        EIdent(nm, _) => if nm == "channel" { Some(resolve_ann(p2.ctx, [], targs[0])) } else { None },
+                        EIdent(nm, _) => if nm == "channel" { Some(resolve_ann_seen(p2.ctx, p2.current, p2.generics, targs[0])) } else { None },
                         _ => None,
                     }
                 } else { None },
@@ -2544,7 +2544,9 @@ let infer_fn_call (p2: Program2) (state: FreshState) (env: TyEnv) (acc: Subst) (
         // exactly zero arguments. A no-argument call to a multi-param
         // function stays the arity error that partial application
         // deliberately does not swallow.
-        ir_leaf(sig.ret, acc, state, TFnCall(sig.module, sig.name, [TExpr { ty: ITUnit, node: TUnitLit }], []))
+        // Use the ordinary call path so generic return types are
+        // instantiated and recorded for monomorphization as usual.
+        infer_fn_call(p2, state, env, acc, sig, [ETuple([])])
     } else {
         if !Array.is_empty(args) && args.len() < sig.params.len() {
             infer_partial_call(p2, state, env, acc, sig, args)
@@ -2671,7 +2673,7 @@ pub let builtin_methods (): Array[BuiltinMethod] = [
     BuiltinMethod { recv: "CStr", name: "as_string", detail: "as_string(): String", doc: "A NUL-terminated C pointer copied into a Plum string. Only valid inside `unsafe`, and the pointer must really be NUL-terminated.", recv_ty: "CStr" },
     BuiltinMethod { recv: "Ref", name: "get", detail: "get(): T", doc: "The value currently in the cell.", recv_ty: "Ref[T]" },
     BuiltinMethod { recv: "Ref", name: "set", detail: "set(value: T): Unit", doc: "Replaces the value in the cell. This is the one way to mutate shared state, and a `Ref` is what a `spawn`ed task can share.", recv_ty: "Ref[T]" },
-    BuiltinMethod { recv: "Sender", name: "send", detail: "send(value: T): Unit", doc: "Puts a value on the channel, blocking while it is full.", recv_ty: "Sender[T]" },
+    BuiltinMethod { recv: "Sender", name: "send", detail: "send(value: T): Unit", doc: "Puts a value on the unbounded channel without waiting for the receiver. Queued values consume memory until received or the channel is released; send does not apply backpressure.", recv_ty: "Sender[T]" },
     BuiltinMethod { recv: "Receiver", name: "recv", detail: "recv(): T", doc: "Takes the next value off the channel, blocking until one arrives.", recv_ty: "Receiver[T]" },
     BuiltinMethod { recv: "Map", name: "get", detail: "get(key: K): Option[V]", doc: "The value stored under `key`, or `None`.", recv_ty: "Map[K, V]" },
     BuiltinMethod { recv: "Map", name: "remove", detail: "remove(key: K): Map[K, V]", doc: "A new map without `key`. Removing a key that is not there is not an error.", recv_ty: "Map[K, V]" },

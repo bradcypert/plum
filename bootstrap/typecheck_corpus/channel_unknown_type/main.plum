@@ -1,0 +1,3 @@
+let main (): Unit = {
+    let (tx, rx) = channel[T]();
+}

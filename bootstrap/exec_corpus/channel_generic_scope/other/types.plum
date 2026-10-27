@@ -1,0 +1,7 @@
+struct Message { number: Int }
+
+pub let round_trip (): String = {
+    let (tx, rx) = channel[Message]();
+    tx.send(Message { number: 7 });
+    rx.recv().number.to_string()
+}

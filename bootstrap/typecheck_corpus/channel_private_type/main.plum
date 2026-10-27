@@ -1,0 +1,5 @@
+use hidden;
+
+let main (): Unit = {
+    let (tx, rx) = channel[hidden.Secret]();
+}

@@ -6,6 +6,6 @@ Part of [`prelude`](prelude.md).
 
 ## `let Sender.send (self: Sender[T]) (value: T): Unit`
 
-Puts a value on the channel, blocking while it is full.
+Puts a value on the unbounded channel without waiting for the receiver. Queued values consume memory until received or the channel is released; send does not apply backpressure.
 
 Implemented by the compiler itself, so it has no Plum source to read.
