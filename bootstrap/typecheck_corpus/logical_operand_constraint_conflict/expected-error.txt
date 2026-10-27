@@ -1,0 +1,2 @@
+error: '+': Bool != Int
+main.plum:2:38

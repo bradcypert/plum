@@ -1,0 +1,2 @@
+error: argument 0: String != Bool
+main.plum:3:5

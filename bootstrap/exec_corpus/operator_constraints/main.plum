@@ -1,0 +1,41 @@
+// Global closures must have concrete signatures before any call constrains them.
+let global_both = |a, b| a && b
+let global_either = |a, b| a || b
+let global_invert = |x| !x
+let global_flip = |x| ~x
+
+let probe (events: Ref[Int]) (answer: Bool): Bool = {
+    events.set(events.get() + 1);
+    answer
+}
+
+let main (): Unit = {
+    let both = global_both;
+    let either = global_either;
+    let invert = global_invert;
+    let flip = global_flip;
+    println(both(true, false).to_string());
+    println(both(true, true).to_string());
+    println(either(false, false).to_string());
+    println(either(false, true).to_string());
+    println(invert(true).to_string());
+    println(invert(false).to_string());
+    println(flip(0).to_string());
+    println(flip(-1).to_string());
+    let nested = |a, b| !(a && !b) || b;
+    println(nested(true, false).to_string());
+    let left = |x| x && true;
+    let right = |x| false || x;
+    println(left(true).to_string());
+    println(right(false).to_string());
+    let events = ref(0);
+    println((false && probe(events, true)).to_string());
+    println((true || probe(events, false)).to_string());
+    println(events.get().to_string());
+    println((true && probe(events, true)).to_string());
+    println((false || probe(events, false)).to_string());
+    println(events.get().to_string());
+    // Heap temporaries on the RHS must only exist on the evaluated path.
+    println((false && "skip".concat("ped") == "skipped").to_string());
+    println((true && "run".concat("ning") == "running").to_string());
+}

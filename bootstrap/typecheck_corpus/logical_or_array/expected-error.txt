@@ -1,0 +1,2 @@
+error: '||': Array[Int] != Bool
+main.plum:1:23

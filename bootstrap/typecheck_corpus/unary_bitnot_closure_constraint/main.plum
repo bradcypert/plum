@@ -1,0 +1,4 @@
+let main (): Unit = {
+    let invert = |x| ~x;
+    println(invert(1.0).to_string());
+}

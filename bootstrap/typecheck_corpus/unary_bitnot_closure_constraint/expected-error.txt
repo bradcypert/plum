@@ -1,0 +1,2 @@
+error: argument 0: Float != Int
+main.plum:3:5
