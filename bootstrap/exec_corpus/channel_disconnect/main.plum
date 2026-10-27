@@ -1,0 +1,72 @@
+use Time;
+extern "C" {
+    fn channel_probe_drop(h: Int);
+    fn channel_probe_count() -> Int;
+}
+handle Probe { on_drop: channel_probe_drop }
+struct Payload { resource: Probe, items: Array[String] }
+let probe (): Payload = Payload { resource: unsafe { Probe.from_raw(42) }, items: ["owned".concat(" payload")] }
+let count (): Int = unsafe { channel_probe_count() }
+let closed (): Receiver[Int] = {
+    let (tx, rx) = channel[Int]();
+    rx
+}
+let queued (): Receiver[Int] = {
+    let (tx, rx) = channel[Int]();
+    assert(match tx.send(0) { Ok(_) => true, Err(_) => false });
+    tx.send(7);
+    rx
+}
+let orphan (): Sender[Payload] = {
+    let (tx, rx) = channel[Payload]();
+    tx.send(probe());
+    assert(count() == 0);
+    tx
+}
+let async_closed (): Receiver[String] = {
+    let (tx, rx) = channel[String]();
+    spawn { Time.sleep(Time.millis(20)); tx.send("delivered".concat(" value")); () };
+    rx
+}
+let ended[T] (value: T): Receiver[T] = {
+    let (tx, rx) = channel[T]();
+    tx.send(value);
+    rx
+}
+let main (): Unit = {
+    let absent: Option[Int] = None;
+    let nested = ended(absent);
+    assert(nested.recv() == Some(None));
+    assert(nested.recv() == None);
+    assert(ended(false).recv() == Some(false));
+    assert(ended(0.25).recv() == Some(0.25));
+    assert(ended(()).recv() == Some(()));
+    let heap = ended(["buffered".concat(" string")]);
+    assert(heap.recv() == Some(["buffered string"]));
+    assert(heap.recv() == None);
+    let rx = queued();
+    assert(rx.recv() == Some(0));
+    assert(rx.recv() == Some(7));
+    assert(rx.recv() == None);
+    assert(rx.recv() == None);
+    // A temporary receiver must live through both blocking and timed waits.
+    assert(select { value = closed() => value == None });
+    assert(select { value = closed() => value == None, else => false });
+    assert(select { value = closed() => value == None, Time.seconds(30) => false });
+    let worker_rx = async_closed();
+    assert(worker_rx.recv() == Some("delivered value"));
+    assert(worker_rx.recv() == None);
+    assert(select { value = async_closed() => value == Some("delivered value") });
+    // Last receiver drains nested resources even while the sender survives.
+    let tx = orphan();
+    assert(count() == 1);
+    match tx.send(probe()) {
+        Ok(_) => panic_raw("send succeeded without a receiver"),
+        Err(value) => assert(value.items[0] == "owned payload"),
+    };
+    assert(count() == 2);
+    // An ignored failure result also releases its returned payload.
+    for i in 0..100 { tx.send(probe()) };
+    assert(count() == 102);
+    println("channel closure and payload ownership balanced")
+}

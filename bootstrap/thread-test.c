@@ -118,6 +118,90 @@ static void wait_released(void) {
     assert(atomic_load(&live) == 0);
     assert(atomic_load(&locks) == 0);
 }
+// These waiters own retained receiver endpoints until after the operation.
+static void *closed_recv(void *raw) {
+    long long ch = (long long)(intptr_t)raw;
+    assert(channel_recv(ch) == NULL);
+    channel_release(ch, 1, NULL);
+    return NULL;
+}
+static void *closed_select(void *raw) {
+    long long ch = (long long)(intptr_t)raw;
+    void *out = (void *)1;
+    assert(channel_select(&ch, 1, &out) == 0);
+    assert(out == NULL);
+    channel_release(ch, 1, NULL);
+    return NULL;
+}
+static void release_sender(void *p) {
+    channel_release((long long)(intptr_t)p, 0, NULL);
+}
+static void channel_checks(void) {
+    for (int i = 0; i < 100; i++) {
+        long long ch = channel_new();
+        channel_retain(ch, 1);
+        pthread_t recv, select;
+        assert(pthread_create(&recv, NULL, closed_recv, (void *)(intptr_t)ch) == 0);
+        assert(pthread_create(&select, NULL, closed_select, (void *)(intptr_t)ch) == 0);
+        struct timespec delay = {0, 1000000};
+        nanosleep(&delay, NULL);
+        channel_release(ch, 0, NULL);
+        pthread_join(recv, NULL);
+        pthread_join(select, NULL);
+        assert(atomic_load(&live) == 0);
+    }
+    long long ch = channel_new();
+    void **box = shim_malloc(sizeof(void *));
+    int *payload = malloc(sizeof(int));
+    *payload = 42;
+    *box = payload;
+    assert(channel_send(ch, box) == 1);
+    channel_retain(ch, 1);
+    channel_release(ch, 1, result_release); // Another consumer still exists.
+    assert(atomic_load(&drops) == 0);
+    channel_release(ch, 1, result_release); // Drain while sender survives.
+    assert(atomic_load(&drops) == 1);
+    int value = 7;
+    assert(channel_send(ch, &value) == -1);
+    assert(value == 7);
+    channel_release(ch, 0, result_release);
+    assert(atomic_load(&live) == 0);
+
+    ch = channel_new();
+    int value2 = 0;
+    channel_retain(ch, 0);
+    channel_release(ch, 0, NULL);
+    void *out = (void *)1;
+    assert(channel_select_timeout(&ch, 1, &out, 0) == -1);
+    assert(out == NULL);
+    assert(channel_send(ch, &value2) == 1);
+    channel_release(ch, 0, NULL);
+    assert(channel_recv(ch) == &value2); // Drain before EOF, including zero.
+    assert(channel_recv(ch) == NULL);
+    assert(channel_recv(ch) == NULL);
+    out = (void *)1;
+    assert(channel_select_timeout(&ch, 1, &out, 30000000000LL) == 0);
+    assert(out == NULL);
+    channel_release(ch, 1, NULL);
+    assert(atomic_load(&live) == 0);
+    assert(atomic_load(&locks) == 0);
+    assert(atomic_load(&conditions) == 0);
+    // Draining can recursively free this very queue through a payload's
+    // endpoint. Neither queue lock may be held while running its destructor.
+    ch = channel_new();
+    channel_retain(ch, 0);
+    box = shim_malloc(sizeof(void *));
+    *box = (void *)(intptr_t)ch;
+    assert(channel_send(ch, box) == 1);
+    channel_release(ch, 0, NULL);
+    channel_release(ch, 1, release_sender);
+    assert(atomic_load(&live) == 0);
+    assert(atomic_load(&locks) == 0);
+    assert(atomic_load(&conditions) == 0);
+    atomic_store(&drops, 0);
+    printf("channel native checks: disconnection, wakeups, FIFO EOF and prompt drain balanced; queue %zu bytes, node %zu bytes\n", sizeof(plum_chan), sizeof(plum_chan_node));
+}
+
 int main(void) {
     for (int f = 1; f <= 5; f++) {
         if (f == 4) continue;
@@ -145,14 +229,17 @@ int main(void) {
     allocation = 0;
     assert(channel_send(ch, value) == 0);
     assert(*(int *)value == 42); // Failure leaves ownership with caller.
-    assert(plum_chan_try_recv(ch) == NULL);
+    void *out = NULL;
+    assert(!plum_chan_try_recv(ch, &out));
     fault = 0;
     assert(channel_send(ch, value) == 1);
     assert(channel_recv(ch) == value);
     free(value);
-    channel_release(ch, NULL);
-    channel_release(ch, NULL);
+    channel_release(ch, 0, NULL);
+    channel_release(ch, 1, NULL);
     assert(atomic_load(&live) == 0);
+
+    channel_checks();
 
     // Force handle-first completion, then worker-first, then joined.
     for (int iteration = 0; iteration < 300; iteration++) {

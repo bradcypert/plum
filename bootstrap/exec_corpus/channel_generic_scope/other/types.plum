@@ -3,5 +3,5 @@ struct Message { number: Int }
 pub let round_trip (): String = {
     let (tx, rx) = channel[Message]();
     tx.send(Message { number: 7 });
-    rx.recv().number.to_string()
+    rx.recv().unwrap_or_else(|| { panic_raw("unexpected closed channel"); Message { number: 0 } }).number.to_string()
 }

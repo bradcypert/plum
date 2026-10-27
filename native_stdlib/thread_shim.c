@@ -172,16 +172,16 @@ typedef struct plum_chan_node {
     struct plum_chan_node *next;
 } plum_chan_node;
 
-// `refs` is 2 at birth, one for each end's Plum cell. The queue
-// outlives whichever end is dropped first and is freed when the second
-// goes -- which is the whole reason the two ends are separate cells
-// over one handle rather than one cell shared.
+// Counts track wrapper cells, not aliases of a cell. Spawned copies retain
+// their own endpoint kind. Zero senders means EOF after draining; zero
+// receivers means queued values can never be delivered.
 typedef struct {
     pthread_mutex_t lock;
     pthread_cond_t ready;
     plum_chan_node *head;
     plum_chan_node *tail;
-    int refs;
+    int senders;
+    int receivers;
 } plum_chan;
 
 static pthread_mutex_t plum_sel_lock = PTHREAD_MUTEX_INITIALIZER;
@@ -201,22 +201,24 @@ long long channel_new(void) {
     }
     c->head = NULL;
     c->tail = NULL;
-    c->refs = 2;
+    c->senders = 1;
+    c->receivers = 1;
     return (long long)(intptr_t)c;
 }
 
 // A channel end's Plum wrapper cell is copied into each spawned closure,
 // but every copy still points at this one queue. Retain the queue under
 // its mutex so the per-thread wrapper cells can be released independently.
-void channel_retain(long long handle) {
+void channel_retain(long long handle, long long receiver) {
     plum_chan *c = (plum_chan *)(intptr_t)handle;
     if (!c) return;
     pthread_mutex_lock(&c->lock);
-    c->refs++;
+    if (receiver) c->receivers++; else c->senders++;
     pthread_mutex_unlock(&c->lock);
 }
 
-// Ownership of value transfers only when enqueue succeeds (returns 1).
+// 1 transfers value into the queue; -1 is disconnected; 0 is allocation
+// failure. Both failures leave ownership with the caller.
 long long channel_send(long long handle, void *value) {
     plum_chan *c = (plum_chan *)(intptr_t)handle;
     if (!c) return 0;
@@ -225,6 +227,11 @@ long long channel_send(long long handle, void *value) {
     n->value = value;
     n->next = NULL;
     pthread_mutex_lock(&c->lock);
+    if (!c->receivers) {
+        pthread_mutex_unlock(&c->lock);
+        free(n);
+        return -1; // Disconnected: caller still owns the payload.
+    }
     if (c->tail) c->tail->next = n; else c->head = n;
     c->tail = n;
     // Signalled while the lock is HELD: a receiver woken before the
@@ -262,27 +269,26 @@ long long channel_send(long long handle, void *value) {
 // the sweep takes each channel lock in turn. `channel_send` takes its
 // channel lock and RELEASES it before taking `sel_lock`, so it never
 // holds both in the other order and there is no cycle.
-// Non-blocking: the queue's head, or NULL when there is nothing. NULL
-// is unambiguous because a sent value is always a `malloc`'d box and
-// so never null itself.
-static void *plum_chan_try_recv(long long handle) {
+// Non-blocking readiness probe: a queued box or drained EOF is ready.
+// A ready NULL box means EOF; an actual message always has a nonnull box.
+static int plum_chan_try_recv(long long handle, void **out) {
     plum_chan *c = (plum_chan *)(intptr_t)handle;
-    if (!c) return NULL;
+    if (!c) { *out = NULL; return 1; }
     pthread_mutex_lock(&c->lock);
     plum_chan_node *n = c->head;
     if (n) {
         c->head = n->next;
         if (!c->head) c->tail = NULL;
     }
+    int ready = n || !c->senders;
     pthread_mutex_unlock(&c->lock);
-    if (!n) return NULL;
-    void *v = n->value;
+    *out = n ? n->value : NULL;
     free(n);
-    return v;
+    return ready;
 }
 
-// Blocks until one of `handles` has a value. Returns the INDEX of the
-// arm that won and stores its boxed value through `out`.
+// Blocks until one of `handles` has a value or reaches EOF. Returns the
+// winning INDEX and stores its box (NULL for EOF) through `out`.
 //
 // The whole loop is here rather than in generated code because every
 // payload crosses as a `void *` box, so C can do all of it, and because
@@ -294,12 +300,13 @@ static void *plum_chan_try_recv(long long handle) {
 // a real fairness choice -- a hot arm 0 can starve arm 1 -- and it is
 // the same order the retired backend used.
 long long channel_select(const long long *handles, long long n, void **out) {
+    *out = NULL;
     if (n <= 0) return -1;
     pthread_mutex_lock(&plum_sel_lock);
     for (;;) {
         for (long long i = 0; i < n; i++) {
-            void *v = plum_chan_try_recv(handles[i]);
-            if (v) {
+            void *v;
+            if (plum_chan_try_recv(handles[i], &v)) {
                 pthread_mutex_unlock(&plum_sel_lock);
                 *out = v;
                 return i;
@@ -332,6 +339,7 @@ long long channel_select(const long long *handles, long long n, void **out) {
 // only one of them can use a condition variable.
 long long channel_select_timeout(const long long *handles, long long n, void **out, long long nanos) {
     struct timespec deadline;
+    *out = NULL;
     if (n <= 0) return -1;
     if (nanos < 0) nanos = 0;
     clock_gettime(CLOCK_REALTIME, &deadline);
@@ -344,8 +352,8 @@ long long channel_select_timeout(const long long *handles, long long n, void **o
     pthread_mutex_lock(&plum_sel_lock);
     for (;;) {
         for (long long i = 0; i < n; i++) {
-            void *v = plum_chan_try_recv(handles[i]);
-            if (v) {
+            void *v;
+            if (plum_chan_try_recv(handles[i], &v)) {
                 pthread_mutex_unlock(&plum_sel_lock);
                 *out = v;
                 return i;
@@ -359,8 +367,8 @@ long long channel_select_timeout(const long long *handles, long long n, void **o
             // one and the deadline expiring, and reporting a timeout
             // while a value sits in the queue would lose it.
             for (long long i = 0; i < n; i++) {
-                void *v = plum_chan_try_recv(handles[i]);
-                if (v) {
+                void *v;
+                if (plum_chan_try_recv(handles[i], &v)) {
                     pthread_mutex_unlock(&plum_sel_lock);
                     *out = v;
                     return i;
@@ -372,17 +380,19 @@ long long channel_select_timeout(const long long *handles, long long n, void **o
     }
 }
 
-// Blocks until a value is available. The `while` (not `if`) is the
+// Blocks until a value or EOF is available; NULL means drained EOF.
+// The `while` (not `if`) is the
 // standard guard against spurious wakeups, which pthread condition
 // variables are explicitly permitted to produce.
 void *channel_recv(long long handle) {
     plum_chan *c = (plum_chan *)(intptr_t)handle;
     if (!c) return NULL;
     pthread_mutex_lock(&c->lock);
-    while (!c->head) {
+    while (!c->head && c->senders) {
         pthread_cond_wait(&c->ready, &c->lock);
     }
     plum_chan_node *n = c->head;
+    if (!n) { pthread_mutex_unlock(&c->lock); return NULL; }
     c->head = n->next;
     if (!c->head) c->tail = NULL;
     pthread_mutex_unlock(&c->lock);
@@ -393,20 +403,27 @@ void *channel_recv(long long handle) {
 
 // One end of the channel has let go.
 //
-// Anything still QUEUED when the last end goes was sent and never
-// received, and it holds references of its own -- so the drain
+// Anything still QUEUED when the last receiver goes is undeliverable
+// and holds references of its own -- so the drain
 // releases each value through `rel` rather than just freeing boxes.
 // `rel` is null for an element type that owns nothing.
-void channel_release(long long handle, void (*rel)(void *)) {
+void channel_release(long long handle, long long receiver, void (*rel)(void *)) {
     plum_chan *c = (plum_chan *)(intptr_t)handle;
     if (!c) return;
     pthread_mutex_lock(&c->lock);
-    c->refs--;
-    int dead = (c->refs == 0);
-    plum_chan_node *n = dead ? c->head : NULL;
-    if (dead) { c->head = NULL; c->tail = NULL; }
+    if (receiver) c->receivers--; else c->senders--;
+    int closed = !receiver && !c->senders;
+    int dead = !c->senders && !c->receivers;
+    plum_chan_node *n = !c->receivers ? c->head : NULL;
+    if (!c->receivers) { c->head = NULL; c->tail = NULL; }
+    if (closed) pthread_cond_broadcast(&c->ready);
     pthread_mutex_unlock(&c->lock);
-    if (!dead) return;
+    if (closed) {
+        pthread_mutex_lock(&plum_sel_lock);
+        pthread_cond_broadcast(&plum_sel_ready);
+        pthread_mutex_unlock(&plum_sel_lock);
+    }
+    // Run destructors outside both locks: payloads may own channel ends.
     while (n) {
         plum_chan_node *next = n->next;
         if (rel) rel(*(void **)n->value);
@@ -414,6 +431,7 @@ void channel_release(long long handle, void (*rel)(void *)) {
         free(n);
         n = next;
     }
+    if (!dead) return;
     pthread_mutex_destroy(&c->lock);
     pthread_cond_destroy(&c->ready);
     free(c);

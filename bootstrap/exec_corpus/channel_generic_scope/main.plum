@@ -12,17 +12,17 @@ let make_nested[T] (): (Sender[Array[T]], Receiver[Array[T]]) = {
 let main (): Unit = {
     let (ints, numbers) = make_channel();
     ints.send(42);
-    println(numbers.recv().to_string());
+    println(numbers.recv().unwrap_or_else(|| { panic_raw("unexpected closed channel"); 0 }).to_string());
 
     let (strings, words) = make_channel(());
     let word = "generic".concat(" payload");
     let worker = spawn { strings.send(word) };
-    println(words.recv());
+    println(words.recv().unwrap_or_else(|| { panic_raw("unexpected closed channel"); "" }));
     worker.join();
 
     let (arrays, batches) = make_nested();
     arrays.send(["nested".concat(" payload")]);
-    println(batches.recv()[0]);
+    println(batches.recv().unwrap_or_else(|| { panic_raw("unexpected closed channel"); [] })[0]);
 
     // Leave a heap payload queued: dropping both generic endpoints must
     // release the payload as well as the queue and endpoint cells.

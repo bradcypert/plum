@@ -1819,6 +1819,7 @@ let cg_for (p: CgProgram) (env: Array[CgSlot]) (n: Int) (pattern: typecheck.TPat
         .concat("  br i1 ").concat(test).concat(", label %").concat(body_label).concat(", label %").concat(end_label).concat("\n")
         .concat(body_label).concat(":\n")
         .concat(b.code)
+        .concat(cg_dec(cg_concrete(p, typecheck.texpr_ty(p.subst, body)), b.val))
         .concat("  ").concat(step_cur).concat(" = load i64, ptr ").concat(iv).concat("\n")
         .concat("  ").concat(step_next).concat(" = add i64 ").concat(step_cur).concat(", 1\n")
         .concat("  store i64 ").concat(step_next).concat(", ptr ").concat(iv).concat("\n")
@@ -1878,6 +1879,7 @@ let cg_for_array (p: CgProgram) (env: Array[CgSlot]) (n: Int) (pattern: typechec
         .concat(cg_inc(elem, ev))
         .concat("  store ").concat(lty).concat(" ").concat(ev).concat(", ptr ").concat(slot).concat("\n")
         .concat(b.code)
+        .concat(cg_dec(cg_concrete(p, typecheck.texpr_ty(p.subst, body)), b.val))
         .concat(cg_dec(elem_ity, ev))
         .concat("  ").concat(step_cur).concat(" = load i64, ptr ").concat(iv).concat("\n")
         .concat("  ").concat(step_next).concat(" = add i64 ").concat(step_cur).concat(", 1\n")
@@ -3400,7 +3402,7 @@ let lv_select_rest (arms: Array[typecheck.TSelectArm]) (from: Int) (acc: Array[t
 let cg_rel_in_select (p: CgProgram) (arms: Array[typecheck.TSelectArm]) (i: Int) (here: Array[typecheck.ITy]): Array[typecheck.ITy] =
     if i >= arms.len() { here }
     else { cg_rel_in_select(p, arms, i + 1, cg_rel_in(p, arms[i].body, match arms[i].kind {
-        TSARecv(chan, _) => cg_rel_in(p, chan, here),
+        TSARecv(chan, _) => cg_rel_in(p, chan, cg_rel_close(p, ITEnum(parser.qualify_type(parser.PRELUDE_MODULE(), "Option"), [cg_array_elem_ity(p, typecheck.texpr_ty(p.subst, chan))]), here)),
         TSAAfter(d) => cg_rel_in(p, d, here),
         TSAElse => here,
     })) }
@@ -3723,6 +3725,10 @@ let cg_channel_send (p: CgProgram) (env: Array[CgSlot]) (n: Int) (ch: typecheck.
     let cleanup = cg_dec(cg_concrete(p, typecheck.texpr_ty(p.subst, v)), x.val)
         .concat(cg_dec(cg_concrete(p, typecheck.texpr_ty(p.subst, ch)), c.val));
     let sent = cg_reg(x.n + 2);
+    let result = cg_reg(x.n + 3);
+    let label = cg_label(x.n + 3);
+    let ok = match cg_variant_of(p, parser.qualify_type(parser.PRELUDE_MODULE(), "Result"), "Ok") { Some(v) => v.tag, None => 0 };
+    let err = match cg_variant_of(p, parser.qualify_type(parser.PRELUDE_MODULE(), "Result"), "Err") { Some(v) => v.tag, None => 1 };
     Emit {
         code: c.code.concat(x.code)
             .concat("  ").concat(box).concat(" = call ptr @malloc(i64 8)\n")
@@ -3731,25 +3737,52 @@ let cg_channel_send (p: CgProgram) (env: Array[CgSlot]) (n: Int) (ch: typecheck.
             .concat(cg_handle_load(cg_reg(x.n + 1), c.val))
             .concat("  ${sent} = call i64 @channel_send(i64 ").concat(cg_reg(x.n + 1)).concat(", ptr ").concat(box).concat(")\n")
             .concat(cg_thread_check(sent, "i64", "0", cleanup.concat("  call void @free(ptr ${box})\n"), 2))
-            .concat(cg_dec(cg_concrete(p, typecheck.texpr_ty(p.subst, ch)), c.val)),
+            .concat(cg_dec(cg_concrete(p, typecheck.texpr_ty(p.subst, ch)), c.val))
+            .concat("  ${result} = call ptr @plum_alloc(i64 ${cg_enum_cell_size(p, parser.qualify_type(parser.PRELUDE_MODULE(), "Result"))})\n")
+            .concat("  ${result}_tag = getelementptr i8, ptr ${result}, i64 8\n")
+            .concat("  ${result}_payload = getelementptr i8, ptr ${result}, i64 16\n")
+            .concat("  ${result}_ok = icmp eq i64 ${sent}, 1\n")
+            .concat("  br i1 ${result}_ok, label %${label}_ok, label %${label}_err\n")
+            .concat("${label}_ok:\n  store i64 ${ok}, ptr ${result}_tag\n  store i64 0, ptr ${result}_payload\n  br label %${label}_done\n")
+            .concat("${label}_err:\n  store i64 ${err}, ptr ${result}_tag\n  store ${lty} ${x.val}, ptr ${result}_payload\n")
+            .concat("  call void @free(ptr ${box})\n  br label %${label}_done\n${label}_done:\n"),
         allocas: c.allocas.concat(x.allocas), releases: c.releases.concat(x.releases), globals: c.globals.concat(x.globals),
-        val: "0", ty: CgUnit, n: x.n + 3,
+        val: result, ty: CgEnum(parser.qualify_type(parser.PRELUDE_MODULE(), "Result")), n: x.n + 4,
     }
+}
+
+// Wrap a nullable native box as an owned Option. A null box means EOF,
+// never a zero/null payload; Some owns the transferred payload reference.
+let cg_channel_option (p: CgProgram) (n: Int) (box: String) (elem: typecheck.ITy): Emit = {
+    let v = cg_reg(n);
+    let label = cg_label(n);
+    let lty = cg_llvm_ty(cg_of_ity(elem));
+    let some = match cg_variant_of(p, parser.qualify_type(parser.PRELUDE_MODULE(), "Option"), "Some") { Some(v) => v.tag, None => 0 };
+    let none = match cg_variant_of(p, parser.qualify_type(parser.PRELUDE_MODULE(), "Option"), "None") { Some(v) => v.tag, None => 1 };
+    let code = "  ${v} = call ptr @plum_alloc(i64 ${cg_enum_cell_size(p, parser.qualify_type(parser.PRELUDE_MODULE(), "Option"))})\n"
+        .concat("  ${v}_tag = getelementptr i8, ptr ${v}, i64 8\n")
+        .concat("  ${v}_has = icmp ne ptr ${box}, null\n")
+        .concat("  br i1 ${v}_has, label %${label}_some, label %${label}_none\n")
+        .concat("${label}_some:\n  store i64 ${some}, ptr ${v}_tag\n")
+        .concat("  ${v}_value = load ${lty}, ptr ${box}\n")
+        .concat("  ${v}_payload = getelementptr i8, ptr ${v}, i64 16\n")
+        .concat("  store ${lty} ${v}_value, ptr ${v}_payload\n  call void @free(ptr ${box})\n")
+        .concat("  br label %${label}_done\n${label}_none:\n  store i64 ${none}, ptr ${v}_tag\n")
+        .concat("  br label %${label}_done\n${label}_done:\n");
+    Emit { code: code, allocas: "", releases: "", globals: "", val: v, ty: CgEnum(parser.qualify_type(parser.PRELUDE_MODULE(), "Option")), n: n + 1 }
 }
 
 let cg_channel_recv (p: CgProgram) (env: Array[CgSlot]) (n: Int) (ch: typecheck.TExpr) (ret: CgTy): Emit = {
     let c = cg_expr(p, env, n, ch);
     let box = cg_reg(c.n);
-    let v = cg_reg(c.n + 1);
-    let lty = cg_llvm_ty(ret);
+    let wrapped = cg_channel_option(p, c.n + 2, box, cg_array_elem_ity(p, typecheck.texpr_ty(p.subst, ch)));
     Emit {
         code: c.code
-            .concat(cg_handle_load(cg_reg(c.n + 2), c.val))
-            .concat("  ").concat(box).concat(" = call ptr @channel_recv(i64 ").concat(cg_reg(c.n + 2)).concat(")\n")
-            .concat("  ").concat(v).concat(" = load ").concat(lty).concat(", ptr ").concat(box).concat("\n")
-            .concat("  call void @free(ptr ").concat(box).concat(")\n")
-            .concat(cg_dec(cg_concrete(p, typecheck.texpr_ty(p.subst, ch)), c.val)),
-        allocas: c.allocas, releases: c.releases, globals: c.globals, val: v, ty: ret, n: c.n + 3,
+            .concat(cg_handle_load(cg_reg(c.n + 1), c.val))
+            .concat("  ${box} = call ptr @channel_recv(i64 ${cg_reg(c.n + 1)})\n")
+            .concat(cg_dec(cg_concrete(p, typecheck.texpr_ty(p.subst, ch)), c.val))
+            .concat(wrapped.code),
+        allocas: c.allocas, releases: c.releases, globals: c.globals, val: wrapped.val, ty: ret, n: wrapped.n,
     }
 }
 
@@ -4929,7 +4962,7 @@ let cg_match (p: CgProgram) (env: Array[CgSlot]) (n: Int) (scrutinee: typecheck.
 //
 // Every arm's RECEIVER is evaluated first, in order and exactly once,
 // then their handles go into one stack array and `@channel_select`
-// blocks until one of them has a value. It comes back as the winning
+// blocks until one has a value or reaches EOF. It comes back as the winning
 // arm's INDEX plus the boxed payload, so the only thing left here is a
 // `switch` into that arm's block -- which is why none of the waiting
 // logic is in this file.
@@ -4971,6 +5004,7 @@ let cg_select (p: CgProgram) (env: Array[CgSlot]) (n: Int) (arms: Array[typechec
     Emit {
         code: c.code
             .concat(w.code)
+            .concat(cg_select_drop(p, chans, 0, hs))
             .concat("  ").concat(box).concat(" = load ptr, ptr ").concat(outp).concat("\n")
             .concat("  switch i64 ").concat(idx).concat(", label %").concat(fail_label).concat(" [\n")
             .concat(cg_select_cases(chans, 0, w.n, ""))
@@ -4981,7 +5015,7 @@ let cg_select (p: CgProgram) (env: Array[CgSlot]) (n: Int) (arms: Array[typechec
             .concat("  br label %").concat(end_label).concat("\n")
             .concat(end_label).concat(":\n")
             .concat("  ").concat(res).concat(" = load ").concat(lty).concat(", ptr ").concat(slot).concat("\n"),
-        allocas: "  ${hs} = alloca i64, i64 ${cg_alloca_count(chans.len())}\n"
+        allocas: "  ${hs} = alloca i64, i64 ${cg_alloca_count(2 * chans.len())}\n"
             .concat("  ").concat(outp).concat(" = alloca ptr\n")
             .concat("  ").concat(slot).concat(" = alloca ").concat(lty).concat("\n")
             .concat(c.allocas).concat(w.allocas).concat(a.allocas).concat(o.allocas),
@@ -5070,9 +5104,22 @@ let cg_select_chans (p: CgProgram) (env: Array[CgSlot]) (n: Int) (arms: Array[ty
         let line = cg_handle_load(cg_reg(r.n), r.val)
             .concat("  ").concat(ep).concat(" = getelementptr i8, ptr ").concat(hs).concat(", i64 ").concat((8 * i).to_string()).concat("\n")
             .concat("  store i64 ").concat(cg_reg(r.n)).concat(", ptr ").concat(ep).concat("\n")
-            .concat(cg_dec(cg_concrete(p, typecheck.texpr_ty(p.subst, chan)), r.val));
+            .concat("  ${ep}_cell = getelementptr i8, ptr ${hs}, i64 ${8 * (arms.len() + i)}\n")
+            .concat("  store ptr ${r.val}, ptr ${ep}_cell\n");
         cg_select_chans(p, env, r.n + 1, arms, i + 1, hs, code.concat(r.code).concat(line),
             allocas.concat(r.allocas), releases.concat(r.releases), globals.concat(r.globals))
+    }
+
+// Drop the evaluated receiver cells only after all native handle use ends.
+let cg_select_drop (p: CgProgram) (arms: Array[typecheck.TSelectArm]) (i: Int) (hs: String): String =
+    if i >= arms.len() { "" }
+    else {
+        let chan = match arms[i].kind { TSARecv(c, _) => c, _ => arms[i].body };
+        let reg = hs.concat("_drop").concat(i.to_string());
+        "  ${reg}_p = getelementptr i8, ptr ${hs}, i64 ${8 * (arms.len() + i)}\n"
+            .concat("  ${reg} = load ptr, ptr ${reg}_p\n")
+            .concat(cg_dec(cg_concrete(p, typecheck.texpr_ty(p.subst, chan)), reg))
+            .concat(cg_select_drop(p, arms, i + 1, hs))
     }
 
 let cg_select_cases (arms: Array[typecheck.TSelectArm]) (i: Int) (base: Int) (acc: String): String =
@@ -5090,14 +5137,14 @@ let cg_select_arms (p: CgProgram) (env: Array[CgSlot]) (n: Int) (arms: Array[typ
         // arm has its own, which is the whole reason the unboxing load
         // lives in the arm's block rather than before the switch.
         let chan = match arms[i].kind { TSARecv(c, _) => c, _ => arms[i].body };
-        let elem = cg_array_elem_ity(p, typecheck.texpr_ty(p.subst, chan));
-        let vty = cg_of_ity(elem);
-        let v = cg_reg(n);
-        let pat = cg_pattern(p, env, n + 1, match arms[i].kind { TSARecv(_, pt) => pt, _ => TPWildcard }, v, elem);
+        let payload = cg_array_elem_ity(p, typecheck.texpr_ty(p.subst, chan));
+        let elem = ITEnum(parser.qualify_type(parser.PRELUDE_MODULE(), "Option"), [payload]);
+        let wrapped = cg_channel_option(p, n, box, payload);
+        let v = wrapped.val;
+        let pat = cg_pattern(p, env, wrapped.n, match arms[i].kind { TSARecv(_, pt) => pt, _ => TPWildcard }, v, elem);
         let b = cg_expr(p, pat.env, pat.n, arms[i].body);
         let this_code = cg_select_label(base, i).concat(":\n")
-            .concat("  ").concat(v).concat(" = load ").concat(cg_llvm_ty(vty)).concat(", ptr ").concat(box).concat("\n")
-            .concat("  call void @free(ptr ").concat(box).concat(")\n")
+            .concat(wrapped.code)
             .concat(pat.code).concat(pat.binds)
             // The value arrived OWNED -- the sender transferred its
             // reference into the box -- and the binding took its own,
@@ -6592,17 +6639,19 @@ pub let cg_is_handle (p: CgProgram) (name: String): Bool =
 // BEHIND the handle is told to go.
 //
 // `Sender` and `Receiver` are two cells over one queue, which is why
-// the queue carries its own count and `@channel_release` frees it only
-// when the second end lets go. A `Task` has one cell, and letting go
+// the queue counts sender and receiver cells separately. Last sender means
+// EOF; last receiver drains payloads; zero of both frees the queue. A `Task` has one cell, and letting go
 // of it without joining detaches the thread.
 //
 // The element's release function is passed along because values may
 // still be IN FLIGHT -- queued and never received -- and freeing the
 // queue has to release them too. Tasks install theirs at spawn. `null` for
 // an element type that owns nothing, which the shim checks for.
+let cg_channel_end_kind (name: String): Int = if name == "Receiver" { 1 } else { 0 }
+
 let cg_handle_release_call (name: String) (rel: String): String =
     if name == "Task" { "  call void @task_release(i64 %h)\n" }
-    else { "  call void @channel_release(i64 %h, ptr ${rel})\n" }
+    else { "  call void @channel_release(i64 %h, i64 ${cg_channel_end_kind(name)}, ptr ${rel})\n" }
 
 // The whole point of issue #9, in one function: at zero, the number
 // this cell holds is handed to the cleanup the declaration named.
@@ -6774,7 +6823,7 @@ let cg_emit_channel_copy_fn (p: CgProgram) (t: typecheck.ITy): String =
         ITStruct(name, args) =>
             if name == "Sender" || name == "Receiver" {
                 cg_channel_copy_head(t).concat(cg_handle_load("%h", "%p"))
-                    .concat("  call void @channel_retain(i64 %h)\n")
+                    .concat("  call void @channel_retain(i64 %h, i64 ${cg_channel_end_kind(name)})\n")
                     .concat(cg_handle_cell("%out", "%h"))
                     .concat("  ret ptr %out\n}\n\n")
             } else if name == "Array" { cg_emit_channel_copy_array(p, t, args[0]) }

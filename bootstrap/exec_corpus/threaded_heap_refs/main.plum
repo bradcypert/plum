@@ -14,7 +14,7 @@ let channel_round (): Unit = {
         for i in 0..64 { tx.send("channel".concat(i.to_string())); };
     };
     let mut total = 0;
-    for i in 0..64 { total = total + rx.recv().len(); };
+    for i in 0..64 { total = total + rx.recv().unwrap_or_else(|| { panic_raw("unexpected closed channel"); "" }).len(); };
     sender.join();
     println(total.to_string());
 }

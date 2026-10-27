@@ -9,7 +9,7 @@ let sender_round (): Unit = {
     let tasks = Array.map([0, 1, 2, 3, 4, 5, 6, 7], |t| spawn {
         for i in 0..10000 { ends[0].send(i) }
     });
-    for i in 0..80000 { rx.recv() };
+    for i in 0..80000 { rx.recv().unwrap_or_else(|| { panic_raw("unexpected closed channel"); 0 }) };
     for task in tasks { task.join() };
     println("nested senders done")
 }
@@ -25,7 +25,7 @@ let receiver_round (): Unit = {
         match ends {
             Link(box, tail) => {
                 let (receivers, marker) = box.item;
-                for i in 0..10000 { receivers[i % 2].recv() };
+                for i in 0..10000 { receivers[i % 2].recv().unwrap_or_else(|| { panic_raw("unexpected closed channel"); 0 }) };
                 if marker != 42 || box.marker != 7 { panic_raw("bad copied fields") };
                 match tail {
                     Link(empty, rest) => {
@@ -48,7 +48,7 @@ let receiver_round (): Unit = {
 // cloned end must keep the native queue alive until the task finishes.
 let delayed_receiver (rx: Receiver[Int]): Task[Int] = {
     let ends = Box { item: ([rx], 2), marker: 1 };
-    spawn { let (receivers, marker) = ends.item; receivers[0].recv() }
+    spawn { let (receivers, marker) = ends.item; receivers[0].recv().unwrap_or_else(|| { panic_raw("unexpected closed channel"); 0 }) }
 }
 
 let main (): Unit = {

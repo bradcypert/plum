@@ -414,7 +414,8 @@ SelectArm     ::= Pattern "=" Expr "=>" Expr
 ```
 
 A receive arm's middle `Expr` is the `Receiver[T]` to wait on, and the
-`Pattern` binds the value received from it, so the `=` reads as the
+`Pattern` must be a name or `_` and binds `Option[T]` (`Some(value)` or
+`None` for drained closure), so the `=` reads as the
 binding it is, not as an equality test. Unlike `MatchArm` there is no
 guard: an arm that could decline after winning would have to put the
 value back, and the queue has no un-pop.
@@ -430,8 +431,9 @@ is taken if nothing arrives within it. At most one of each, and never
 both in the same `select`; `else` fires the instant nothing is ready,
 so a timeout beside it could never be reached.
 
-`select` otherwise blocks until one arm's receiver has a value. Arms are
-swept in written order, so an earlier arm wins a tie. An empty
+`select` otherwise blocks until one arm's receiver has a value or reaches
+drained closure. Closed receivers stay ready; handle `None` inside the arm.
+Arms are swept in written order, so an earlier arm wins a tie. An empty
 `select {}` is rejected, as is one with no channel arm; neither is
 waiting for anything. See DESIGN.md, "`select`, and the primitive it was
 missing".

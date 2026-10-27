@@ -1,0 +1,2 @@
+error: a `select` receive pattern must bind the Option value; match Some/None inside the arm
+main.plum:3:14

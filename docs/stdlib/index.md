@@ -399,7 +399,7 @@ Every declaration, linked to the page that documents it.
 
 ### [prelude.Receiver](prelude.Receiver.md)
 
-- [`let Receiver.recv (self: Receiver[T]): T`](prelude.Receiver.md#Receiver.recv)
+- [`let Receiver.recv (self: Receiver[T]): Option[T]`](prelude.Receiver.md#Receiver.recv)
 
 ### [prelude.Ref](prelude.Ref.md)
 
@@ -430,7 +430,7 @@ Every declaration, linked to the page that documents it.
 
 ### [prelude.Sender](prelude.Sender.md)
 
-- [`let Sender.send (self: Sender[T]) (value: T): Unit`](prelude.Sender.md#Sender.send)
+- [`let Sender.send (self: Sender[T]) (value: T): Result[Unit, T]`](prelude.Sender.md#Sender.send)
 
 ### [prelude.Set](prelude.Set.md)
 

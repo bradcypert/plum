@@ -1,0 +1,2 @@
+let send (tx: Sender[Int]): Unit = tx.send(42)
+let main (): Unit = ()
