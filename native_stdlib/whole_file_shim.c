@@ -3,6 +3,9 @@
 // particular, Windows long/ftell are only 32 bits even on 64-bit builds.
 // The caller owns the returned buffer and must free it after copying it
 // into a Plum cell. NULL means failure; an empty file still owns a buffer.
+#if defined(__APPLE__)
+#define _DARWIN_C_SOURCE 1
+#endif
 #if !defined(_WIN32)
 #ifndef _FILE_OFFSET_BITS
 #define _FILE_OFFSET_BITS 64
@@ -25,6 +28,7 @@
 #include <io.h>
 #else
 #include <unistd.h>
+#include <fcntl.h>
 #endif
 
 #if defined(_WIN32)
@@ -83,6 +87,22 @@ static wchar_t *plum_whole_wide(const char *path) {
 }
 #endif
 
+// Complete the stream before publication. Both ordinary whole-file writes
+// and strict generated-output writes use this transaction boundary.
+static int plum_whole_finish(FILE *f, const char *data, size_t length,
+                             int preserve_mode, unsigned mode) {
+    size_t wrote = fwrite(data, 1, length, f);
+    int ok = wrote == length && !ferror(f);
+#if !defined(_WIN32)
+    if (ok && preserve_mode && fchmod(fileno(f), mode & 0777) != 0) ok = 0;
+#else
+    (void)preserve_mode;
+    (void)mode;
+#endif
+    if (fclose(f) != 0) ok = 0;
+    return ok;
+}
+
 // Borrow the payload; do not copy it into another file-sized buffer.
 // Only the sibling name (O(path length)) and libc's bounded FILE buffer
 // are allocated here. Every ordinary failure releases both before return.
@@ -134,7 +154,7 @@ long long plum_write_whole_file(const char *path, const char *data, long long le
     FILE *f = _fdopen(fd, "wb");
     if (f == NULL) { _close(fd); goto remove_tmp; }
 #else
-    struct stat st;
+    struct stat st = {0};
     int exists = lstat(path, &st) == 0;
     if (!exists && errno != ENOENT) goto done;
     // Do not turn a device, FIFO or symlink into a regular file, or
@@ -146,15 +166,11 @@ long long plum_write_whole_file(const char *path, const char *data, long long le
     FILE *f = fdopen(fd, "wb");
     if (f == NULL) { close(fd); goto remove_tmp; }
 #endif
-    size_t wrote = fwrite(data, 1, (size_t)length, f);
-    int ok = wrote == (size_t)length && !ferror(f);
-#if !defined(_WIN32)
-    // Preserve ordinary permissions for replacements, including executable
-    // bits. New files retain mkstemp's private 0600 permissions. Ownership,
-    // hard-link identity, ACLs and other inode metadata are not copied.
-    if (ok && exists && fchmod(fd, st.st_mode & 0777) != 0) ok = 0;
+#if defined(_WIN32)
+    int ok = plum_whole_finish(f, data, (size_t)length, 0, 0);
+#else
+    int ok = plum_whole_finish(f, data, (size_t)length, exists, st.st_mode);
 #endif
-    if (fclose(f) != 0) ok = 0;
     if (ok && os_rename_file(tmp, path) == 0) result = 0;
 remove_tmp:
     if (result != 0) {
@@ -171,4 +187,142 @@ done:
 #endif
     free(tmp);
     return result;
+}
+
+// Generated output has a stricter trust boundary than Os.write_file:
+// no ancestor may redirect writes. Walk iteratively, holding native directory
+// identities rather than checking names and later resolving them again.
+// Only path-sized scratch is allocated; the rendered page remains borrowed.
+#if !defined(_WIN32)
+static int plum_generated_parent(char *path, char **leaf) {
+    int dir = open(path[0] == '/' ? "/" : ".", O_RDONLY | O_DIRECTORY | O_CLOEXEC);
+    if (dir < 0) return -1;
+    char *part = path;
+    for (char *p = path; *p; p++) {
+        if (*p != '/') continue;
+        *p = 0;
+        if (*part && strcmp(part, ".") != 0) {
+            if (mkdirat(dir, part, 0700) != 0 && errno != EEXIST) goto fail;
+            int next = openat(dir, part, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC);
+            if (next < 0) goto fail;
+            close(dir);
+            dir = next;
+        }
+        part = p + 1;
+    }
+    if (!*part || strcmp(part, ".") == 0 || strcmp(part, "..") == 0) goto fail;
+    *leaf = part;
+    return dir;
+fail:
+    close(dir);
+    return -1;
+}
+#else
+// Windows path operations are anchored by keeping every ancestor open without
+// FILE_SHARE_DELETE or FILE_SHARE_WRITE. A checked directory cannot be
+// renamed or rewritten into a junction during publication. Reject reparse points.
+// Bound live handles (and accept an explicit error for excessive depth).
+#define PLUM_GENERATED_DEPTH 128
+static wchar_t *plum_generated_lock(const char *path, HANDLE *dirs, size_t *count) {
+    wchar_t *input = plum_whole_wide(path);
+    if (!input) return NULL;
+    DWORD n = GetFullPathNameW(input, 0, NULL, NULL);
+    wchar_t *full = n ? malloc((size_t)n * sizeof(wchar_t)) : NULL;
+    DWORD got = full ? GetFullPathNameW(input, n, full, NULL) : 0;
+    if (!got || got >= n) {
+        free(input); free(full); return NULL;
+    }
+    free(input);
+    // A drive root or a UNC share is the traversal anchor. Device namespace
+    // paths are deliberately outside this generated-output API.
+    size_t start = 0;
+    if (full[0] && full[1] == L':' && full[2] == L'\\') start = 3;
+    else if (full[0] == L'\\' && full[1] == L'\\' && full[2] != L'?' && full[2] != L'.') {
+        wchar_t *server = wcschr(full + 2, L'\\');
+        wchar_t *share = server ? wcschr(server + 1, L'\\') : NULL;
+        if (share) start = (size_t)(share - full) + 1;
+    }
+    if (!start) { free(full); return NULL; }
+    for (size_t i = start - 1; full[i]; i++) {
+        if (full[i] != L'\\') continue;
+        if (*count == PLUM_GENERATED_DEPTH) goto fail;
+        // Keep the separator on the root (C:\ or \\server\share\).
+        size_t end = i == start - 1 ? i + 1 : i;
+        wchar_t tail = full[end]; full[end] = 0;
+        if (i != start - 1 && !CreateDirectoryW(full, NULL) && GetLastError() != ERROR_ALREADY_EXISTS) {
+            full[end] = tail; goto fail;
+        }
+        HANDLE h = CreateFileW(full, FILE_READ_ATTRIBUTES, FILE_SHARE_READ,
+                               NULL, OPEN_EXISTING,
+                               FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT, NULL);
+        full[end] = tail;
+        if (h == INVALID_HANDLE_VALUE) goto fail;
+        BY_HANDLE_FILE_INFORMATION info;
+        if (!GetFileInformationByHandle(h, &info) ||
+            !(info.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) ||
+            (info.dwFileAttributes & FILE_ATTRIBUTE_REPARSE_POINT)) {
+            CloseHandle(h); goto fail;
+        }
+        dirs[(*count)++] = h;
+    }
+    return full;
+fail:
+    free(full);
+    return NULL;
+}
+#endif
+
+long long plum_write_generated_file(const char *path, const char *data, long long length) {
+    if (length < 0 || (uint64_t)length > SIZE_MAX || !*path) return -1;
+#if defined(_WIN32)
+    HANDLE dirs[PLUM_GENERATED_DEPTH];
+    size_t count = 0;
+    wchar_t *full = plum_generated_lock(path, dirs, &count);
+    long long result = -1;
+    if (full) {
+        int n = WideCharToMultiByte(CP_UTF8, WC_ERR_INVALID_CHARS, full, -1, NULL, 0, NULL, NULL);
+        char *absolute = n > 0 ? malloc((size_t)n) : NULL;
+        if (absolute && WideCharToMultiByte(CP_UTF8, WC_ERR_INVALID_CHARS, full, -1, absolute, n, NULL, NULL))
+            result = plum_write_whole_file(absolute, data, length);
+        free(absolute);
+        free(full);
+    }
+    while (count) CloseHandle(dirs[--count]);
+    return result;
+#else
+    char *copy = strdup(path);
+    if (!copy) return -1;
+    char *leaf = NULL;
+    int dir = plum_generated_parent(copy, &leaf);
+    long long result = -1;
+    if (dir < 0) { free(copy); return -1; }
+    struct stat st = {0};
+    int exists = fstatat(dir, leaf, &st, AT_SYMLINK_NOFOLLOW) == 0;
+    if ((!exists && errno != ENOENT) || (exists && !S_ISREG(st.st_mode))) goto done;
+    char tmp[64];
+    int fd = -1;
+    static _Atomic unsigned sequence;
+    for (int attempt = 0; attempt < 128; attempt++) {
+        unsigned serial = ++sequence;
+        snprintf(tmp, sizeof(tmp), ".plum-%lu-%u.tmp", (unsigned long)getpid(), serial);
+        fd = openat(dir, tmp, O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW | O_CLOEXEC, 0600);
+        if (fd >= 0) break;
+        if (errno != EEXIST) goto done;
+    }
+    if (fd < 0) goto done;
+    FILE *f = fdopen(fd, "wb");
+    if (f == NULL) close(fd);
+    else if (plum_whole_finish(f, data, (size_t)length, exists, st.st_mode)) {
+        // Recheck type at publication, without following a concurrent link.
+        // renameat never dereferences the leaf, even if it changes afterwards.
+        int present = fstatat(dir, leaf, &st, AT_SYMLINK_NOFOLLOW) == 0;
+        if (((!present && errno == ENOENT) || (present && S_ISREG(st.st_mode))) &&
+            renameat(dir, tmp, dir, leaf) == 0) result = 0;
+    }
+    if (result != 0) unlinkat(dir, tmp, 0);
+done:
+    close(dir);
+    free(copy);
+    return result;
+#endif
 }

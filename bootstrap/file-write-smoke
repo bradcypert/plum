@@ -8,6 +8,9 @@ trap 'rm -rf "$work"' EXIT
 clang -O1 -g -Wall -Wextra -Werror -fsanitize=address,undefined \
     -fno-sanitize-recover=all bootstrap/whole-file-write-test.c -o "$work/native-test"
 ASAN_OPTIONS=detect_leaks=1 timeout 30 "$work/native-test" "$work/data"
+clang -O1 -g -Wall -Wextra -Werror -fsanitize=address,undefined \
+    -fno-sanitize-recover=all bootstrap/generated-output-test.c -o "$work/generated-test"
+ASAN_OPTIONS=detect_leaks=1 timeout 30 "$work/generated-test" "$work/generated-data"
 "$plum" build bootstrap/exec_corpus/whole_file_writes -o "$work/writes"
 timeout 30 "$work/writes" > "$work/out"
 diff -u bootstrap/exec_corpus/whole_file_writes/expected.txt "$work/out"

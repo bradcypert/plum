@@ -95,6 +95,18 @@ else
     fail=$((fail + 1))
 fi
 
+# Strict output traversal must work on native Windows and macOS too.
+if clang -O1 -g -Wall -Wextra bootstrap/generated-output-test.c \
+        -o "$work/generated-output-test.bin" > "$work/generated-output-test.log" 2>&1 &&
+        "$work/generated-output-test.bin" "$(cd "$work" && pwd -P)/generated-data"; then
+    printf 'OK    %-24s\n' "native_generated_output"
+    ok=$((ok + 1))
+else
+    printf 'FAIL  %-24s\n' "native_generated_output"
+    cat "$work/generated-output-test.log"
+    fail=$((fail + 1))
+fi
+
 for dir in bootstrap/exec_corpus/*/; do
     name="$(basename "$dir")"
     [ -f "$dir/main.plum" ] || continue
