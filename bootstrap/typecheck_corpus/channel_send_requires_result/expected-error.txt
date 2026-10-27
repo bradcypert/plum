@@ -1,0 +1,2 @@
+error: function send: declared return type Unit doesn't match body type <prelude>.Result[Unit, Int] (<prelude>.Result[Unit, Int] != Unit)
+main.plum:1:1

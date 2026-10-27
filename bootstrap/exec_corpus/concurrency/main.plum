@@ -27,7 +27,7 @@
 
 let square (n: Int): Int = n * n
 
-let producer (tx: Sender[Int]) (n: Int): Unit = tx.send(square(n))
+let producer (tx: Sender[Int]) (n: Int): Unit = { tx.send(square(n)); () }
 
 let main (): Unit = {
     let t = spawn { square(9) };
@@ -35,7 +35,7 @@ let main (): Unit = {
 
     let (tx, rx) = channel[Int]();
     spawn { producer(tx, 7) };
-    println(rx.recv().to_string());
+    println(rx.recv().unwrap_or_else(|| { panic_raw("unexpected closed channel"); 0 }).to_string());
 
     let a = spawn { square(1) };
     let b = spawn { square(2) };
@@ -50,5 +50,5 @@ let main (): Unit = {
     // Several values through one channel, in order.
     let (tx2, rx2) = channel[String]();
     spawn { tx2.send("first") };
-    println(rx2.recv());
+    println(rx2.recv().unwrap_or_else(|| { panic_raw("unexpected closed channel"); "" }));
 }

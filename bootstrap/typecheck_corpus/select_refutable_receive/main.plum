@@ -1,0 +1,4 @@
+let main (): Unit = {
+    let (tx, rx) = channel[Int]();
+    select { Some(value) = rx => println(value) }
+}

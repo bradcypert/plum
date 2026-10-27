@@ -585,21 +585,33 @@ compile error pointing at the call.
 type argument written out, because there is nothing else in the expression to
 infer it from.
 
+`tx.send(value)` returns `Ok(())` when queued, or `Err(value)` when every
+receiver has been dropped. The error returns ownership of the unsent value.
+`rx.recv()` returns `Some(value)` or, once all senders have been dropped and
+queued values have been delivered, `None`. Repeated receives keep returning
+`None`. Sends are unbounded and do not apply backpressure; queued payloads
+are released immediately when the last receiver is dropped.
+
 **`select`** waits on several channels at once and takes whichever is
 ready first:
 
 ```plum fragment
 let got = select {
-    n = numbers => n.to_string(),
-    s = words => s,
+    n = numbers => match n { Some(value) => value.to_string(), None => "numbers closed" },
+    s = words => match s { Some(value) => value, None => "words closed" },
 };
 ```
 
-Arms are swept in written order, so an earlier one wins a tie. Two ways
+Each receive arm binds an `Option[T]` using a name or `_`; match `Some` and
+`None` inside its body. A drained, closed receiver is ready, including in a
+select with `else` or a timeout. Remove closed receivers from subsequent
+selects: arms are swept in written order, so an earlier closed arm keeps
+winning ties and can starve later arms. Two ways
 of not waiting forever:
 
 ```plum fragment
 // Take one if ready, otherwise carry on. Never blocks.
+// Some(None) means closed; None means no arm was ready.
 select {
     n = rx => Some(n),
     else => None,

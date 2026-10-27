@@ -1,0 +1,2 @@
+let receive (rx: Receiver[Int]): Int = rx.recv()
+let main (): Unit = ()

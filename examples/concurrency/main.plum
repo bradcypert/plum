@@ -1,7 +1,6 @@
 // Concurrency: `spawn`/`.join()` for tasks, channels for communication.
-// Sending is a MOVE — after `tx.send(msg)`, the compiler treats `msg`
-// as used for the last time, so reusing it is a compile error, not a
-// runtime race: ownership transferred rather than being shared.
+// A send returns Ok(()) when queued, or Err(value) when disconnected.
+// A receive returns Some(value), or None after the last sender drops.
 //
 // Run: `plum run examples/concurrency`
 // Build: `plum build examples/concurrency -o out && ./out`
@@ -14,25 +13,20 @@ let compute_in_background (n: Int): Int = spawn { square(n) }.join()
 
 let producer (tx: Sender[Int]) (n: Int): Unit = {
     let msg = square(n);
-    tx.send(msg)
-    // tx.send(msg); // <- would be a compile error: `msg` already moved
+    match tx.send(msg) { Ok(_) => (), Err(value) => println("consumer exited before receiving ${value}") }
 }
-// See DESIGN.md's "Concurrency" section: `.recv()`/`select` BLOCK — no
-// runtime `None` for a closed channel the way the language sketch in
-// DESIGN.md's history once considered; a closed-with-no-sender channel
-// is a hang, not a value, matching Go's own channel semantics.
 
 let main (): Unit = {
     // A single background task, joined for its result.
     println(compute_in_background(9));   // 81
 
     // Producer/consumer over a typed channel. `.recv()` blocks until a
-    // value arrives and returns it directly (not wrapped in `Option`).
+    // value arrives or every sender drops. Handle both outcomes.
     // The "fire and forget" `spawn` below discards its own `Task`
     // result — ordinary, no special handling needed.
     let (tx, rx) = channel[Int]();
     spawn { producer(tx, 7) };
-    println(rx.recv());   // 49
+    match rx.recv() { Some(value) => println(value), None => println("producer finished") };
 
     // Several tasks, spawned and joined individually.
     let t1 = spawn { square(1) };

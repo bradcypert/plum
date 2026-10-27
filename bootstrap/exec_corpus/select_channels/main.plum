@@ -25,8 +25,8 @@ let drain (rx1: Receiver[Int]) (rx2: Receiver[String]) (left: Int) (acc: Int): I
     if left <= 0 { acc }
     else {
         let got = select {
-            n = rx1 => n,
-            s = rx2 => s.len(),
+            n = rx1 => { let n = n.unwrap_or_else(|| { panic_raw("unexpected closed channel"); 0 }); n },
+            s = rx2 => { let s = s.unwrap_or_else(|| { panic_raw("unexpected closed channel"); "" }); s.len() },
         };
         drain(rx1, rx2, left - 1, acc + got)
     }
@@ -34,8 +34,8 @@ let drain (rx1: Receiver[Int]) (rx2: Receiver[String]) (left: Int) (acc: Int): I
 // A heap payload, so the arm's binding has a reference to account for.
 let first_word (rx: Receiver[String]) (other: Receiver[Int]): String =
     select {
-        s = rx => s.concat("!"),
-        n = other => n.to_string(),
+        s = rx => { let s = s.unwrap_or_else(|| { panic_raw("unexpected closed channel"); "" }); s.concat("!") },
+        n = other => { let n = n.unwrap_or_else(|| { panic_raw("unexpected closed channel"); 0 }); n.to_string() },
     }
 
 let main (): Unit = {
@@ -55,5 +55,5 @@ let main (): Unit = {
     c.join();
     // The unused end still type-checks and is never selected on again.
     tx4.send(1);
-    println(rx4.recv().to_string())
+    println(rx4.recv().unwrap_or_else(|| { panic_raw("unexpected closed channel"); 0 }).to_string())
 }

@@ -2673,8 +2673,8 @@ pub let builtin_methods (): Array[BuiltinMethod] = [
     BuiltinMethod { recv: "CStr", name: "as_string", detail: "as_string(): String", doc: "A NUL-terminated C pointer copied into a Plum string. Only valid inside `unsafe`, and the pointer must really be NUL-terminated.", recv_ty: "CStr" },
     BuiltinMethod { recv: "Ref", name: "get", detail: "get(): T", doc: "The value currently in the cell.", recv_ty: "Ref[T]" },
     BuiltinMethod { recv: "Ref", name: "set", detail: "set(value: T): Unit", doc: "Replaces the value in the cell. This is the one way to mutate shared state, and a `Ref` is what a `spawn`ed task can share.", recv_ty: "Ref[T]" },
-    BuiltinMethod { recv: "Sender", name: "send", detail: "send(value: T): Unit", doc: "Puts a value on the unbounded channel without waiting for the receiver. Queued values consume memory until received or the channel is released; send does not apply backpressure. Panics with `channel send failed` if the payload or queue node cannot be allocated; a failed send never reports success.", recv_ty: "Sender[T]" },
-    BuiltinMethod { recv: "Receiver", name: "recv", detail: "recv(): T", doc: "Takes the next value off the channel, blocking until one arrives.", recv_ty: "Receiver[T]" },
+    BuiltinMethod { recv: "Sender", name: "send", detail: "send(value: T): Result[Unit, T]", doc: "Returns Ok(()) when queued, or Err(value) when every receiver has gone. Puts a value on the unbounded channel without waiting for the receiver. Queued values consume memory until received or the last receiver is released; send does not apply backpressure. Panics with `channel send failed` if the payload or queue node cannot be allocated; a failed send never reports success.", recv_ty: "Sender[T]" },
+    BuiltinMethod { recv: "Receiver", name: "recv", detail: "recv(): Option[T]", doc: "Returns Some(value), blocking until a value arrives or every sender is dropped. Queued values are delivered before None; subsequent receives also return None.", recv_ty: "Receiver[T]" },
     BuiltinMethod { recv: "Map", name: "get", detail: "get(key: K): Option[V]", doc: "The value stored under `key`, or `None`.", recv_ty: "Map[K, V]" },
     BuiltinMethod { recv: "Map", name: "remove", detail: "remove(key: K): Map[K, V]", doc: "A new map without `key`. Removing a key that is not there is not an error.", recv_ty: "Map[K, V]" },
     BuiltinMethod { recv: "Array", name: "join", detail: "join(sep: String): String", doc: "The elements, which must be `String`, run together with `sep` between them.", recv_ty: "Array[T]" },
@@ -2788,7 +2788,7 @@ let infer_method_call (p2: Program2) (state: FreshState) (env: TyEnv) (acc: Subs
             Ok(x) => subst_compose(x, vr.subst),
             Err(e) => { fail_tc(".send() value: ".concat(e)); vr.subst },
         };
-        ir_leaf(ITUnit, s2, vr.state, TChannelSend(r.texpr, vr.texpr))
+        ir_leaf(ITEnum(parser.qualify_type(parser.PRELUDE_MODULE(), "Result"), [ITUnit, subst_apply(s2, ef.ty)]), s2, vr.state, TChannelSend(r.texpr, vr.texpr))
     } else if method_name == "recv" && Array.is_empty(args) {
         let r = infer_expr(p2, state, env, acc, base);
         let ef = fresh(r.state);
@@ -2796,7 +2796,7 @@ let infer_method_call (p2: Program2) (state: FreshState) (env: TyEnv) (acc: Subs
             Ok(x) => subst_compose(x, r.subst),
             Err(e) => { fail_tc(".recv() requires a Receiver: ".concat(e)); r.subst },
         };
-        ir_leaf(subst_apply(s1, ef.ty), s1, ef.state, TChannelRecv(r.texpr))
+        ir_leaf(ITEnum(parser.qualify_type(parser.PRELUDE_MODULE(), "Option"), [subst_apply(s1, ef.ty)]), s1, ef.state, TChannelRecv(r.texpr))
     } else if method_name == "join" && Array.is_empty(args) {
         // `t.join()` -- wait for the task and take its value. Recognised
         // by SHAPE, matching the real compiler's own precedent: a struct
@@ -3353,7 +3353,10 @@ let infer_select_arm (p2: Program2) (state: FreshState) (env: TyEnv) (acc: Subst
                 Ok(s) => subst_compose(s, cr.subst),
                 Err(e) => { fail_tc("a `select` arm waits on a Receiver: ".concat(e)); cr.subst },
             };
-            let br = bind_pattern_ty(p2, ef.state, s1, env, pattern, subst_apply(s1, ef.ty));
+            // A receive is ready for either Some(value) or None. Refutable
+            // patterns would silently consume messages or unbox absent payloads.
+            match pattern { PIdent(_, _) => (), PWildcard => (), _ => fail_tc("a `select` receive pattern must bind the Option value; match Some/None inside the arm") };
+            let br = bind_pattern_ty(p2, ef.state, s1, env, pattern, ITEnum(parser.qualify_type(parser.PRELUDE_MODULE(), "Option"), [subst_apply(s1, ef.ty)]));
             let bodyr = infer_expr(p2, br.state, br.env, br.subst, arm.body);
             SelectOneArm { ty: bodyr.ty, subst: bodyr.subst, state: bodyr.state,
                            tarm: TSelectArm { kind: TSARecv(cr.texpr, br.pattern), body: bodyr.texpr } }

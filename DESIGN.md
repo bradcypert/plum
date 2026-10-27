@@ -16102,8 +16102,12 @@ death the resource can hook onto.
 ### Two cells over one queue
 
 A channel's two ends are separate cells over the same handle, and the
-queue carries its own count of 2. Whichever end is dropped first
-decrements it; the second frees the queue. That is why the ends could
+queue counts sender and receiver cells separately, starting at one each.
+Spawned copies retain their endpoint kind; aliases share the wrapper's atomic
+reference count. Zero senders wakes direct receivers and selectors; buffered
+messages are delivered FIFO before persistent EOF. Zero receivers detaches
+and drains the queue immediately, even if senders survive. Zero of both
+frees the queue. That is why the ends could
 not be one shared cell: a program that keeps only the receiver must
 still be able to receive.
 
@@ -16137,6 +16141,45 @@ Fault-injection accounting and sanitizer checks cover their lifetime; the
 runtime allocation counters alone do not measure their cost. This is separate
 from precise last-use ownership/reuse work (#349), and does not establish a
 runtime-wide recoverable out-of-memory guarantee.
+
+### Channel disconnection and migration (#112, #147, #297)
+
+Channel shutdown is a normal outcome: `recv(): Option[T]` returns `Some(value)`
+or `None` after the final sender drops and the queue drains. A select arm
+binds the same Option, including when it has an `else` or timeout arm. Closed
+receivers stay ready and written arm order still breaks ties; callers must
+stop selecting closed receivers to avoid starving later arms. Receive patterns
+must bind a name or `_`, with a match inside the body to handle both cases.
+Select retains evaluated receiver cells until the native wait finishes,
+including receivers returned by temporary expressions.
+
+`send(value): Result[Unit, T]` returns `Ok(())` on enqueue and `Err(value)`
+when no receivers remain. Enqueue is the ownership transfer boundary. A
+failed send returns its owned payload; dropping or ignoring Err releases it.
+Allocation failures retain the existing panic contract. Last-receiver cleanup
+runs payload destructors outside queue and selector locks, so nested channel
+endpoints can be released safely.
+
+Migration: replace direct uses of `rx.recv()` as T with a match on Some/None.
+Keep select bindings (`value = rx => ...`) and match that Option inside the
+arm. Replace Unit-returning send expressions with a match on Ok/Err (or an
+explicitly discarded result followed by `()`). Handle Err(value) to retry or
+reclaim the payload, and stop receiving/selecting on None. See the concurrency
+example for a complete producer/consumer migration.
+
+This eliminates undeliverable queue retention and blocked workers after
+producer exit; it does not bound queues with live consumers, add backpressure,
+collect ownership cycles, or implement precise Perceus reuse (#349). Endpoint
+counts occupy the existing channel record's padding on x86-64 (no extra
+allocation); wrappers, payload boxes and queue nodes are unchanged. The current
+ordinary enum representation adds a 24-byte cell, plus allocator overhead,
+for each send Result and each recv/select Option, including None. Those cells
+are covered by generated allocation accounting, unlike native queue storage.
+Both for-loop forms now release discarded body results every iteration
+(#297), which is necessary to avoid leaking these new result cells and also
+fixes the same bug for arbitrary heap-valued bodies. Native sanitizer and
+fault-injection tests cover queue/endpoint storage and destructor counts;
+execution fixtures cover generated Option/Result and discarded-value lifetimes.
 
 ### Dropping a task detaches it
 

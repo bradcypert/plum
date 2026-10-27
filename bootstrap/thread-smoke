@@ -57,7 +57,7 @@ handle Probe { on_drop: probe_drop }
 let payload (mode: Int): Probe = {
     unsafe { probe_arm(mode); Probe.from_raw(42) }
 }
-let main (): Unit = sender().send(payload(MODE))
+let main (): Unit = { sender().send(payload(MODE)); () }
 '''
     spawn = common + '''let main (): Unit = {
     unsafe { probe_arm(MODE) };

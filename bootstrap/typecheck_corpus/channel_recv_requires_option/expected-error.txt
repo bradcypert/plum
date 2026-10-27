@@ -1,0 +1,2 @@
+error: function receive: declared return type Int doesn't match body type <prelude>.Option[Int] (<prelude>.Option[Int] != Int)
+main.plum:1:1

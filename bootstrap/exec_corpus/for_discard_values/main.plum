@@ -1,0 +1,6 @@
+// Discarded heap results must be released on every iteration in both forms.
+let main (): Unit = {
+    for i in 0..1000 { ["range".concat(i.to_string())] };
+    for i in [1, 2, 3] { Some(["array".concat(i.to_string())]) };
+    println("discarded loop values released")
+}
