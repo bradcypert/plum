@@ -37,9 +37,10 @@
 // turns a second join from undefined behaviour into a clean abort, now
 // that a refcounted `Task` cell can be copied and joined twice.
 typedef struct {
-    void *(*fn)(void *);
+    void (*fn)(void *, void *);
     void *arg;
     void *result;
+    void (*result_release)(void *);
     pthread_t id;
     pthread_mutex_t lock;
     int refs;
@@ -49,7 +50,7 @@ typedef struct {
 
 // Drops one reference and frees at zero. The caller must NOT hold
 // `t->lock`.
-static void plum_task_unref(plum_task *t, void (*rel)(void *)) {
+static void plum_task_unref(plum_task *t) {
     pthread_mutex_lock(&t->lock);
     t->refs--;
     int dead = (t->refs == 0);
@@ -59,7 +60,7 @@ static void plum_task_unref(plum_task *t, void (*rel)(void *)) {
     // holds and free the box, or it leaks exactly the way the whole
     // change is meant to stop.
     if (t->result && !t->joined) {
-        if (rel) rel(*(void **)t->result);
+        if (t->result_release) t->result_release(*(void **)t->result);
         free(t->result);
     }
     pthread_mutex_destroy(&t->lock);
@@ -68,34 +69,53 @@ static void plum_task_unref(plum_task *t, void (*rel)(void *)) {
 
 static void *plum_task_trampoline(void *raw) {
     plum_task *t = (plum_task *)raw;
-    t->result = t->fn(t->arg);
-    // The thread's own reference. The release function is null here on
-    // purpose: a thread that finishes while the handle is still alive
-    // must leave the result for `.join()`, and this drop can only reach
-    // zero when the handle is already gone -- in which case the handle
-    // side passed the real one.
-    plum_task_unref(t, NULL);
+    t->fn(t->arg, t->result);
+    // The callback was installed before pthread_create, so either final
+    // owner can release an unjoined result, including a detached worker.
+    plum_task_unref(t);
     return NULL;
 }
 
-// Returns 0 on failure, which the caller treats as a spawn that never
-// ran -- there is no error channel back into Plum here.
-long long thread_spawn(void *(*fn)(void *), void *arg) {
+// On failure, the caller still owns arg. On success, the worker owns it.
+// Allocate the result box BEFORE starting the worker: no allocation can
+// fail between running the body and storing its returned owned value.
+long long thread_spawn(void (*fn)(void *, void *), void *arg,
+                       void (*result_release)(void *)) {
     plum_task *t = (plum_task *)malloc(sizeof(plum_task));
     if (!t) return 0;
+    t->result = malloc(8);
+    if (!t->result) {
+        free(t);
+        return 0;
+    }
     t->fn = fn;
     t->arg = arg;
-    t->result = NULL;
-    pthread_mutex_init(&t->lock, NULL);
+    t->result_release = result_release;
+    if (pthread_mutex_init(&t->lock, NULL) != 0) {
+        free(t->result);
+        free(t);
+        return 0;
+    }
     t->refs = 2;
     t->joined = 0;
     t->detached = 0;
     if (pthread_create(&t->id, NULL, plum_task_trampoline, t) != 0) {
         pthread_mutex_destroy(&t->lock);
+        free(t->result);
         free(t);
         return 0;
     }
     return (long long)(intptr_t)t;
+}
+
+// Fixed diagnostics need no allocation, including under memory pressure.
+// Generated code releases untransferred inputs before calling this.
+void thread_fail(long long operation) {
+    const char *message = operation == 0 ? "panic: task creation failed\n" :
+                          operation == 1 ? "panic: channel creation failed\n" :
+                                           "panic: channel send failed\n";
+    fputs(message, stdout);
+    exit(1);
 }
 
 // A second join is an ERROR, not undefined. It used to be prevented by
@@ -129,7 +149,7 @@ void *thread_join(long long handle) {
 // scope exit that blocked for an unbounded time with nothing at the
 // call site saying so would be worse than the leak this replaces. The
 // body keeps running and its result is dropped.
-void task_release(long long handle, void (*rel)(void *)) {
+void task_release(long long handle) {
     plum_task *t = (plum_task *)(intptr_t)handle;
     if (!t) return;
     pthread_mutex_lock(&t->lock);
@@ -137,7 +157,7 @@ void task_release(long long handle, void (*rel)(void *)) {
     if (detach) t->detached = 1;
     pthread_mutex_unlock(&t->lock);
     if (detach) pthread_detach(t->id);
-    plum_task_unref(t, rel);
+    plum_task_unref(t);
 }
 
 // --- Channels ---
@@ -170,8 +190,15 @@ static pthread_cond_t plum_sel_ready = PTHREAD_COND_INITIALIZER;
 long long channel_new(void) {
     plum_chan *c = (plum_chan *)malloc(sizeof(plum_chan));
     if (!c) return 0;
-    pthread_mutex_init(&c->lock, NULL);
-    pthread_cond_init(&c->ready, NULL);
+    if (pthread_mutex_init(&c->lock, NULL) != 0) {
+        free(c);
+        return 0;
+    }
+    if (pthread_cond_init(&c->ready, NULL) != 0) {
+        pthread_mutex_destroy(&c->lock);
+        free(c);
+        return 0;
+    }
     c->head = NULL;
     c->tail = NULL;
     c->refs = 2;
@@ -189,11 +216,12 @@ void channel_retain(long long handle) {
     pthread_mutex_unlock(&c->lock);
 }
 
-void channel_send(long long handle, void *value) {
+// Ownership of value transfers only when enqueue succeeds (returns 1).
+long long channel_send(long long handle, void *value) {
     plum_chan *c = (plum_chan *)(intptr_t)handle;
-    if (!c) return;
+    if (!c) return 0;
     plum_chan_node *n = (plum_chan_node *)malloc(sizeof(plum_chan_node));
-    if (!n) return;
+    if (!n) return 0;
     n->value = value;
     n->next = NULL;
     pthread_mutex_lock(&c->lock);
@@ -214,6 +242,7 @@ void channel_send(long long handle, void *value) {
     pthread_mutex_lock(&plum_sel_lock);
     pthread_cond_broadcast(&plum_sel_ready);
     pthread_mutex_unlock(&plum_sel_lock);
+    return 1;
 }
 
 // --- Selecting over several channels ---
