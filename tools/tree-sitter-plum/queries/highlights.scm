@@ -13,6 +13,8 @@
 ; node type — confirmed by hand, not assumed.
 [
   "let"
+  "require"
+  "ensure"
   "mut"
   "fn"
   "struct"

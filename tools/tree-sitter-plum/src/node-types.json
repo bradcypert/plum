@@ -236,6 +236,32 @@
     "fields": {}
   },
   {
+    "type": "ensure_clause",
+    "named": true,
+    "fields": {
+      "condition": {
+        "multiple": false,
+        "required": true,
+        "types": [
+          {
+            "type": "pipe_expr",
+            "named": true
+          }
+        ]
+      },
+      "message": {
+        "multiple": false,
+        "required": false,
+        "types": [
+          {
+            "type": "string_literal",
+            "named": true
+          }
+        ]
+      }
+    }
+  },
+  {
     "type": "enum_decl",
     "named": true,
     "fields": {
@@ -720,11 +746,19 @@
       }
     },
     "children": {
-      "multiple": false,
+      "multiple": true,
       "required": false,
       "types": [
         {
+          "type": "ensure_clause",
+          "named": true
+        },
+        {
           "type": "generic_params",
+          "named": true
+        },
+        {
+          "type": "require_clause",
           "named": true
         }
       ]
@@ -1160,6 +1194,32 @@
           "named": true
         }
       ]
+    }
+  },
+  {
+    "type": "require_clause",
+    "named": true,
+    "fields": {
+      "condition": {
+        "multiple": false,
+        "required": true,
+        "types": [
+          {
+            "type": "pipe_expr",
+            "named": true
+          }
+        ]
+      },
+      "message": {
+        "multiple": false,
+        "required": false,
+        "types": [
+          {
+            "type": "string_literal",
+            "named": true
+          }
+        ]
+      }
     }
   },
   {
@@ -1628,6 +1688,10 @@
     "named": false
   },
   {
+    "type": "ensure",
+    "named": false
+  },
+  {
     "type": "enum",
     "named": false
   },
@@ -1685,6 +1749,10 @@
   },
   {
     "type": "pub",
+    "named": false
+  },
+  {
+    "type": "require",
     "named": false
   },
   {

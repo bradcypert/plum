@@ -47,6 +47,11 @@ module.exports = grammar({
     // comment) discard the wrong one once `{` either does or doesn't
     // show up.
     [$.path, $._primary_expr],
+    // A contract word can also be a bare parameter. Keep both parses
+    // until the declaration disambiguates them; prefer parameters when
+    // both fit, matching the compiler's greedy parameter parsing.
+    [$.param, $.require_clause],
+    [$.param, $.ensure_clause],
   ],
 
   rules: {
@@ -73,8 +78,25 @@ module.exports = grammar({
         optional($.generic_params),
         repeat(field("param", $.param)),
         optional(seq(":", field("return_type", $._type))),
+        repeat($.require_clause),
+        repeat($.ensure_clause),
         "=",
         field("value", $._expr),
+      ),
+
+    // Contracts occupy the declaration slot before `=`. These literals
+    // remain contextual: `require` and `ensure` are identifiers elsewhere.
+    require_clause: ($) =>
+      seq(
+        "require",
+        field("condition", $._expr),
+        optional(seq(":", field("message", $.string_literal))),
+      ),
+    ensure_clause: ($) =>
+      seq(
+        "ensure",
+        field("condition", $._expr),
+        optional(seq(":", field("message", $.string_literal))),
       ),
 
     // `parser.rs::parse_param`'s parenthesized form is really three
@@ -91,6 +113,9 @@ module.exports = grammar({
     param: ($) =>
       choice(
         $.identifier,
+        // Aliases preserve identifier nodes and highlights for parameters.
+        prec.dynamic(1, alias("require", $.identifier)),
+        prec.dynamic(1, alias("ensure", $.identifier)),
         seq(
           "(",
           optional(seq(commaSep1($.pattern), optional(","))),

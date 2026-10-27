@@ -1,0 +1,15 @@
+let require = 1
+//  ^ variable
+let ensure = 2
+//  ^ variable
+let use_words require ensure = require + ensure
+//            ^ variable
+//                    ^ variable
+//                             ^ variable
+//                                       ^ variable
+let positive (n: Int): Int
+    require n > 0 : "positive input"
+//  ^ keyword
+    ensure result > 0
+//  ^ keyword
+= n
