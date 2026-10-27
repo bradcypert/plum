@@ -1,0 +1,27 @@
+// Serializer coverage independent of the parser (which does not yet accept
+// every JSON escape). Keep the input live to check serialization is immutable.
+let nest (n: Int) (v: JsonValue): JsonValue =
+    if n == 0 { v }
+    else if n % 2 == 0 { nest(n - 1, JsonArray([v])) }
+    else { nest(n - 1, JsonObject([JsonEntry { key: "k", value: v }])) }
+
+let wide (n: Int) (value: JsonValue) (xs: Array[JsonValue]): Array[JsonValue] =
+    if n == 0 { xs } else { wide(n - 1, value, xs.push(value)) }
+
+let controls (n: Int) (xs: Array[Int]): Array[Int] =
+    if n == 32 { xs } else { controls(n + 1, xs.push(n)) }
+
+let main (): Unit = {
+    let text = Result.unwrap_or(Bytes.as_string(Bytes.from_array(controls(0, []))), "bad UTF-8");
+    println(json_stringify(JsonString(text)));
+    println(json_stringify(JsonObject([JsonEntry { key: text, value: JsonString("\"\\/ é λ 😀") }])));
+    println(json_stringify(JsonArray([JsonNull, JsonBool(false), JsonNumber(-2.5), JsonString(""), JsonArray([]), JsonObject([])])));
+    println(json_stringify(nest(4, JsonBool(true))));
+    let value = nest(10000, JsonNull);
+    let first = json_stringify(value);
+    let second = json_stringify(value);
+    println(if first == second && Bytes.len(first.as_bytes()) == 40004 { "deep mixed: ok" } else { "deep mixed: FAIL" });
+    let arr = JsonArray(wide(20000, JsonBool(true), []));
+    let out = json_stringify(arr);
+    println(if Bytes.len(out.as_bytes()) == 100001 { "wide: ok" } else { "wide: FAIL" });
+}
