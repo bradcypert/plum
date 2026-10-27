@@ -1,0 +1,9 @@
+// Both modules deliberately use the same private type name. The channel
+// annotation must resolve in the module that contains the expression.
+struct Message { text: String }
+
+pub let round_trip (): String = {
+    let (tx, rx) = channel[Message]();
+    tx.send(Message { text: "local".concat(" message") });
+    rx.recv().text
+}

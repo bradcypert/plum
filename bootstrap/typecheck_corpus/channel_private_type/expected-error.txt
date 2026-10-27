@@ -1,0 +1,2 @@
+error: struct hidden.Secret is private to module `hidden`. Add `pub` to its declaration to use it from the root module
+main.plum:4:5

@@ -1,0 +1,34 @@
+use local;
+use other;
+
+let make_channel[T] (): (Sender[T], Receiver[T]) = channel[T]()
+
+// The closure body must retain the enclosing generic scope too.
+let make_nested[T] (): (Sender[Array[T]], Receiver[Array[T]]) = {
+    let create = || channel[Array[T]]();
+    create()
+}
+
+let main (): Unit = {
+    let (ints, numbers) = make_channel();
+    ints.send(42);
+    println(numbers.recv().to_string());
+
+    let (strings, words) = make_channel(());
+    let word = "generic".concat(" payload");
+    let worker = spawn { strings.send(word) };
+    println(words.recv());
+    worker.join();
+
+    let (arrays, batches) = make_nested();
+    arrays.send(["nested".concat(" payload")]);
+    println(batches.recv()[0]);
+
+    // Leave a heap payload queued: dropping both generic endpoints must
+    // release the payload as well as the queue and endpoint cells.
+    let (pending, unused) = make_channel();
+    pending.send(["unread".concat(" payload")]);
+
+    println(local.round_trip());
+    println(other.round_trip());
+}
