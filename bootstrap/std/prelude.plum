@@ -1460,7 +1460,10 @@ let parse_number (bytes: Bytes) (pos: Int): Result[ParseResult[Float], String] =
             let end = if has_exp { parse_digits(bytes, exp_start) } else { frac_end };
             if has_exp && end == exp_start { Err("expected digit") }
             else {
-                let value = parse_float_raw(str_of_bytes_raw(bytes_slice_raw(bytes, pos, end)));
+                let converted = parse_float_raw(str_of_bytes_raw(bytes_slice_raw(bytes, pos, end)));
+                // Some CRTs return positive zero on negative underflow.
+                // Preserve the token's sign independently of that behavior.
+                let value = if converted == 0.0 && start > pos { -0.0 } else { converted };
                 if Float.is_finite(value) { Ok(ParseResult { value: value, next_pos: end }) }
                 else { Err("float out of range") }
             }
