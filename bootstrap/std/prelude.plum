@@ -846,9 +846,9 @@ pub let String.parse_int (s: String): Result[Int, String] = {
 /// handling exponents, already correct. Reusing it is not absurd;
 /// writing a second one was.
 pub let String.parse_float (s: String): Result[Float, String] = {
-    let cs = chars_of(s);
+    let cs = bytes_of_str_raw(s);
     match parse_number(cs, 0) {
-        Ok(r) => if r.next_pos == cs.len() { Ok(r.value) } else { Err("trailing characters after number") },
+        Ok(r) => if r.next_pos == bytes_len_raw(cs) { Ok(r.value) } else { Err("trailing characters after number") },
         Err(e) => Err(e),
     }
 }
@@ -1402,12 +1402,7 @@ pub let Set.from_array[T: Eq + Hash] (arr: Array[T]): Set[T] = set_from_array_ac
 
 // --- JSON ---
 
-/// Mirrored from `crates/plumc/src/lib.rs`'s STDLIB_JSON_SRC, minus its
-/// own `chars_of` (the runtime already provides that one, since it is the
-/// single thing this prelude cannot write in Plum). Everything else is
-/// character-for-character the real compiler's, so the two agree on
-/// number formatting, escape handling and parse errors by construction
-/// rather than by inspection.
+/// An object member, with a decoded key and JSON value.
 pub struct JsonEntry { pub key: String, pub value: JsonValue }
 /// A parsed JSON document.
 ///
@@ -1427,186 +1422,195 @@ pub enum JsonValue {
 /// wants `json_parse`.
 pub struct ParseResult[T] { pub value: T, pub next_pos: Int }
 
-let skip_ws (chars: Array[String]) (pos: Int): Int =
-    if pos >= chars.len() { pos }
+// Scanning uses byte offsets. JSON punctuation is ASCII, so token and
+// string-run boundaries never split a UTF-8 code point.
+let skip_ws (bytes: Bytes) (pos: Int): Int =
+    if pos >= bytes_len_raw(bytes) { pos }
     else {
-        let c = chars[pos];
-        if c == " " || c == "\t" || c == "\n" || c == "\r" { skip_ws(chars, pos + 1) } else { pos }
+        let c = bytes_at_raw(bytes, pos);
+        if c == 32 || c == 9 || c == 10 || c == 13 { skip_ws(bytes, pos + 1) } else { pos }
     }
 
-let digit_value (c: String): Result[Float, String] =
-    if c == "0" { Ok(0.0) }
-    else if c == "1" { Ok(1.0) }
-    else if c == "2" { Ok(2.0) }
-    else if c == "3" { Ok(3.0) }
-    else if c == "4" { Ok(4.0) }
-    else if c == "5" { Ok(5.0) }
-    else if c == "6" { Ok(6.0) }
-    else if c == "7" { Ok(7.0) }
-    else if c == "8" { Ok(8.0) }
-    else if c == "9" { Ok(9.0) }
-    else { Err("not a digit") }
+let json_digit (c: Int): Bool = c >= 48 && c <= 57
 
-let pow10 (n: Int): Float = if n <= 0 { 1.0 } else { pow10(n - 1) * 10.0 }
-let pow10_float (n: Float): Float = if n <= 0.0 { 1.0 } else { pow10_float(n - 1.0) * 10.0 }
+let parse_digits (bytes: Bytes) (pos: Int): Int =
+    if pos < bytes_len_raw(bytes) && json_digit(bytes_at_raw(bytes, pos)) { parse_digits(bytes, pos + 1) }
+    else { pos }
 
-let parse_digits_acc (chars: Array[String]) (pos: Int) (acc: Float) (any: Bool): Result[ParseResult[Float], String] =
-    if pos >= chars.len() {
-        if any { Ok(ParseResult { value: acc, next_pos: pos }) } else { Err("expected digit") }
-    } else {
-        match digit_value(chars[pos]) {
-            Ok(d) => parse_digits_acc(chars, pos + 1, acc * 10.0 + d, true),
-            Err(_) => if any { Ok(ParseResult { value: acc, next_pos: pos }) } else { Err("expected digit") },
+// Shared lexical scanner for String.parse_float and JSON. No numeric
+// accumulation or exponent scaling: the runtime converts the token once.
+let parse_number (bytes: Bytes) (pos: Int): Result[ParseResult[Float], String] = {
+    let n = bytes_len_raw(bytes);
+    let start = if pos < n && bytes_at_raw(bytes, pos) == 45 { pos + 1 } else { pos };
+    let int_end = parse_digits(bytes, start);
+    if int_end == start { Err("expected digit") }
+    else {
+        let has_frac = int_end < n && bytes_at_raw(bytes, int_end) == 46;
+        let frac_end = if has_frac { parse_digits(bytes, int_end + 1) } else { int_end };
+        if has_frac && frac_end == int_end + 1 { Err("expected digit") }
+        else {
+            let has_exp = frac_end < n && (bytes_at_raw(bytes, frac_end) == 101 || bytes_at_raw(bytes, frac_end) == 69);
+            let after_e = frac_end + 1;
+            let exp_start = if has_exp && after_e < n && (bytes_at_raw(bytes, after_e) == 45 || bytes_at_raw(bytes, after_e) == 43) { after_e + 1 } else { after_e };
+            let end = if has_exp { parse_digits(bytes, exp_start) } else { frac_end };
+            if has_exp && end == exp_start { Err("expected digit") }
+            else { Ok(ParseResult { value: parse_float_raw(str_of_bytes_raw(bytes_slice_raw(bytes, pos, end))), next_pos: end }) }
         }
     }
+}
 
-let parse_digits (chars: Array[String]) (pos: Int): Result[ParseResult[Float], String] = parse_digits_acc(chars, pos, 0.0, false)
+let parse_literal (bytes: Bytes) (pos: Int) (word: String) (value: JsonValue): Result[ParseResult[JsonValue], String] =
+    if str_of_bytes_raw(bytes_slice_raw(bytes, pos, pos + word.len())) == word { Ok(ParseResult { value: value, next_pos: pos + word.len() }) }
+    else { Err("invalid literal") }
 
-let parse_number (chars: Array[String]) (pos: Int): Result[ParseResult[Float], String] = {
-    let neg = pos < chars.len() && chars[pos] == "-";
-    let start = if neg { pos + 1 } else { pos };
-    match parse_digits(chars, start) {
+let json_hex (c: Int): Int =
+    if c >= 48 && c <= 57 { c - 48 }
+    else if c >= 65 && c <= 70 { c - 55 }
+    else if c >= 97 && c <= 102 { c - 87 }
+    else { -1 }
+
+let json_hex4 (bytes: Bytes) (pos: Int) (left: Int) (acc: Int): Result[Int, String] =
+    if left == 0 { Ok(acc) }
+    else if pos >= bytes_len_raw(bytes) { Err("invalid unicode escape") }
+    else {
+        let d = json_hex(bytes_at_raw(bytes, pos));
+        if d < 0 { Err("invalid unicode escape") }
+        else { json_hex4(bytes, pos + 1, left - 1, acc * 16 + d) }
+    }
+
+let json_codepoint (c: Int): String = str_of_bytes_raw(bytes_from_array_raw(
+    if c < 128 { [c] }
+    else if c < 2048 { [192 + c / 64, 128 + c % 64] }
+    else if c < 65536 { [224 + c / 4096, 128 + (c / 64) % 64, 128 + c % 64] }
+    else { [240 + c / 262144, 128 + (c / 4096) % 64, 128 + (c / 64) % 64, 128 + c % 64] }
+))
+
+let json_unicode (bytes: Bytes) (pos: Int): Result[ParseResult[String], String] =
+    match json_hex4(bytes, pos, 4, 0) {
         Err(e) => Err(e),
-        Ok(int_r) => {
-            let has_frac = int_r.next_pos < chars.len() && chars[int_r.next_pos] == ".";
-            match (if has_frac { parse_digits(chars, int_r.next_pos + 1) } else { Ok(ParseResult { value: 0.0, next_pos: int_r.next_pos }) }) {
+        Ok(c) => if c >= 55296 && c <= 56319 {
+            if pos + 6 > bytes_len_raw(bytes) || bytes_at_raw(bytes, pos + 4) != 92 || bytes_at_raw(bytes, pos + 5) != 117 { Err("invalid unicode surrogate pair") }
+            else { match json_hex4(bytes, pos + 6, 4, 0) {
                 Err(e) => Err(e),
-                Ok(frac_r) => {
-                    let frac_digit_count = if has_frac { frac_r.next_pos - (int_r.next_pos + 1) } else { 0 };
-                    let frac_val = if has_frac { frac_r.value / pow10(frac_digit_count) } else { 0.0 };
-                    let mag_no_exp = int_r.value + frac_val;
-                    let exp_pos = frac_r.next_pos;
-                    let has_exp = exp_pos < chars.len() && (chars[exp_pos] == "e" || chars[exp_pos] == "E");
-                    if !has_exp {
-                        Ok(ParseResult { value: parse_float_raw(Array.concat_all(Array.slice(chars, pos, exp_pos))), next_pos: exp_pos })
-                    } else {
-                        let after_e = exp_pos + 1;
-                        let exp_neg = after_e < chars.len() && chars[after_e] == "-";
-                        let exp_pos_sign = after_e < chars.len() && chars[after_e] == "+";
-                        let exp_digit_start = if exp_neg || exp_pos_sign { after_e + 1 } else { after_e };
-                        match parse_digits(chars, exp_digit_start) {
-                            Err(e) => Err(e),
-                            Ok(exp_r) => {
-                                let exp_count = exp_r.value;
-                                let factor = pow10_float(exp_count);
-                                Ok(ParseResult { value: parse_float_raw(Array.concat_all(Array.slice(chars, pos, exp_r.next_pos))), next_pos: exp_r.next_pos })
-                            }
-                        }
+                Ok(low) => if low < 56320 || low > 57343 { Err("invalid unicode surrogate pair") }
+                else { Ok(ParseResult { value: json_codepoint(65536 + (c - 55296) * 1024 + low - 56320), next_pos: pos + 10 }) },
+            } }
+        } else if c >= 56320 && c <= 57343 { Err("invalid unicode surrogate pair") }
+        else { Ok(ParseResult { value: json_codepoint(c), next_pos: pos + 4 }) },
+    }
+
+// An ordinary run is copied once into a chunk. Escapes append small
+// chunks to a uniquely owned growable array, then concat_all copies the
+// decoded string once. Width is handled by tail calls, not stack frames.
+let parse_string_body (bytes: Bytes) (pos: Int) (run: Int) (parts: Array[String]): Result[ParseResult[String], String] =
+    if pos >= bytes_len_raw(bytes) { Err("unterminated string") }
+    else {
+        let c = bytes_at_raw(bytes, pos);
+        if c == 34 || c == 92 {
+            if pos > run { parts = parts.push(str_of_bytes_raw(bytes_slice_raw(bytes, run, pos))); };
+            if c == 34 { Ok(ParseResult { value: Array.concat_all(parts), next_pos: pos + 1 }) }
+            else if pos + 1 >= bytes_len_raw(bytes) { Err("unterminated escape") }
+            else {
+                let e = bytes_at_raw(bytes, pos + 1);
+                let decoded = if e == 117 { json_unicode(bytes, pos + 2) }
+                else {
+                    let value = if e == 34 { Ok("\"") }
+                    else if e == 92 { Ok("\\") }
+                    else if e == 47 { Ok("/") }
+                    else if e == 98 { Ok(json_codepoint(8)) }
+                    else if e == 102 { Ok(json_codepoint(12)) }
+                    else if e == 110 { Ok("\n") }
+                    else if e == 114 { Ok("\r") }
+                    else if e == 116 { Ok("\t") }
+                    else { Err("unsupported escape sequence") };
+                    match value {
+                        Err(err) => Err(err),
+                        Ok(v) => Ok(ParseResult { value: v, next_pos: pos + 2 }),
                     }
+                };
+                match decoded {
+                    Err(err) => Err(err),
+                    Ok(r) => {
+                        parts = parts.push(r.value);
+                        parse_string_body(bytes, r.next_pos, r.next_pos, parts)
+                    },
                 }
             }
         }
-    }
-}
-
-let match_literal_at (chars: Array[String]) (pos: Int) (lit: Array[String]) (i: Int): Bool =
-    if i >= lit.len() { true }
-    else if pos + i >= chars.len() { false }
-    else if chars[pos + i] == lit[i] { match_literal_at(chars, pos, lit, i + 1) }
-    else { false }
-
-let parse_literal (chars: Array[String]) (pos: Int) (word: String) (value: JsonValue): Result[ParseResult[JsonValue], String] = {
-    let lit = chars_of(word);
-    if match_literal_at(chars, pos, lit, 0) { Ok(ParseResult { value: value, next_pos: pos + lit.len() }) }
-    else { Err("invalid literal") }
-}
-
-let parse_string_body (chars: Array[String]) (pos: Int) (acc: String): Result[ParseResult[String], String] =
-    if pos >= chars.len() { Err("unterminated string") }
-    else {
-        let c = chars[pos];
-        if c == "\"" { Ok(ParseResult { value: acc, next_pos: pos + 1 }) }
-        else if c == "\\" {
-            if pos + 1 >= chars.len() { Err("unterminated escape") }
-            else {
-                let e = chars[pos + 1];
-                if e == "\"" { parse_string_body(chars, pos + 2, acc.concat("\"")) }
-                else if e == "\\" { parse_string_body(chars, pos + 2, acc.concat("\\")) }
-                else if e == "/" { parse_string_body(chars, pos + 2, acc.concat("/")) }
-                else if e == "n" { parse_string_body(chars, pos + 2, acc.concat("\n")) }
-                else if e == "r" { parse_string_body(chars, pos + 2, acc.concat("\r")) }
-                else if e == "t" { parse_string_body(chars, pos + 2, acc.concat("\t")) }
-                else { Err("unsupported escape sequence") }
-            }
-        }
-        else { parse_string_body(chars, pos + 1, acc.concat(c)) }
+        else if c < 32 { Err("unescaped control character") }
+        else { parse_string_body(bytes, pos + 1, run, parts) }
     }
 
-let parse_string (chars: Array[String]) (pos: Int): Result[ParseResult[String], String] =
-    if pos >= chars.len() || chars[pos] != "\"" { Err("expected opening quote") }
-    else { parse_string_body(chars, pos + 1, "") }
+let parse_string (bytes: Bytes) (pos: Int): Result[ParseResult[String], String] =
+    if pos >= bytes_len_raw(bytes) || bytes_at_raw(bytes, pos) != 34 { Err("expected opening quote") }
+    else { parse_string_body(bytes, pos + 1, pos + 1, []) }
 
-let parse_value (chars: Array[String]) (pos: Int): Result[ParseResult[JsonValue], String] =
-    if pos >= chars.len() { Err("unexpected end of input") }
+let parse_value (bytes: Bytes) (pos: Int) (depth: Int): Result[ParseResult[JsonValue], String] =
+    if pos >= bytes_len_raw(bytes) { Err("unexpected end of input") }
     else {
-        let c = chars[pos];
-        if c == "\"" {
-            match parse_string(chars, pos) {
+        let c = bytes_at_raw(bytes, pos);
+        if c == 34 {
+            match parse_string(bytes, pos) {
                 Ok(r) => Ok(ParseResult { value: JsonString(r.value), next_pos: r.next_pos }),
                 Err(e) => Err(e),
             }
         }
-        else if c == "{" { parse_object(chars, pos) }
-        else if c == "[" { parse_array(chars, pos) }
-        else if c == "t" { parse_literal(chars, pos, "true", JsonBool(true)) }
-        else if c == "f" { parse_literal(chars, pos, "false", JsonBool(false)) }
-        else if c == "n" { parse_literal(chars, pos, "null", JsonNull) }
-        else {
-            match digit_value(c) {
-                Ok(_) => match parse_number(chars, pos) {
-                    Ok(r) => Ok(ParseResult { value: JsonNumber(r.value), next_pos: r.next_pos }),
-                    Err(e) => Err(e),
-                },
-                Err(_) => if c == "-" {
-                    match parse_number(chars, pos) {
-                        Ok(r) => Ok(ParseResult { value: JsonNumber(r.value), next_pos: r.next_pos }),
-                        Err(e) => Err(e),
-                    }
-                } else { Err("unexpected character") },
-            }
+        else if c == 123 { if depth >= 128 { Err("JSON nesting limit exceeded (128)") } else { parse_object(bytes, pos, depth + 1) } }
+        else if c == 91 { if depth >= 128 { Err("JSON nesting limit exceeded (128)") } else { parse_array(bytes, pos, depth + 1) } }
+        else if c == 116 { parse_literal(bytes, pos, "true", JsonBool(true)) }
+        else if c == 102 { parse_literal(bytes, pos, "false", JsonBool(false)) }
+        else if c == 110 { parse_literal(bytes, pos, "null", JsonNull) }
+        else if json_digit(c) || c == 45 {
+            let start = if c == 45 { pos + 1 } else { pos };
+            if start + 1 < bytes_len_raw(bytes) && bytes_at_raw(bytes, start) == 48 && json_digit(bytes_at_raw(bytes, start + 1)) { Err("leading zero in JSON number") }
+            else { match parse_number(bytes, pos) {
+                Ok(r) => Ok(ParseResult { value: JsonNumber(r.value), next_pos: r.next_pos }),
+                Err(e) => Err(e),
+            } }
         }
+        else { Err("unexpected character") }
     }
 
-let parse_array (chars: Array[String]) (pos: Int): Result[ParseResult[JsonValue], String] = {
-    let p1 = skip_ws(chars, pos + 1);
-    if p1 < chars.len() && chars[p1] == "]" { Ok(ParseResult { value: JsonArray([]), next_pos: p1 + 1 }) }
-    else { parse_array_entries(chars, p1, []) }
+let parse_array (bytes: Bytes) (pos: Int) (depth: Int): Result[ParseResult[JsonValue], String] = {
+    let p1 = skip_ws(bytes, pos + 1);
+    if p1 < bytes_len_raw(bytes) && bytes_at_raw(bytes, p1) == 93 { Ok(ParseResult { value: JsonArray([]), next_pos: p1 + 1 }) }
+    else { parse_array_entries(bytes, p1, depth, []) }
 }
 
-let parse_array_entries (chars: Array[String]) (pos: Int) (acc: Array[JsonValue]): Result[ParseResult[JsonValue], String] =
-    match parse_value(chars, pos) {
+let parse_array_entries (bytes: Bytes) (pos: Int) (depth: Int) (acc: Array[JsonValue]): Result[ParseResult[JsonValue], String] =
+    match parse_value(bytes, pos, depth) {
         Err(e) => Err(e),
         Ok(val_r) => {
-            let new_acc = acc.push(val_r.value);
-            let p1 = skip_ws(chars, val_r.next_pos);
-            if p1 < chars.len() && chars[p1] == "," { parse_array_entries(chars, skip_ws(chars, p1 + 1), new_acc) }
-            else if p1 < chars.len() && chars[p1] == "]" { Ok(ParseResult { value: JsonArray(new_acc), next_pos: p1 + 1 }) }
+            acc = acc.push(val_r.value);
+            let p1 = skip_ws(bytes, val_r.next_pos);
+            if p1 < bytes_len_raw(bytes) && bytes_at_raw(bytes, p1) == 44 { parse_array_entries(bytes, skip_ws(bytes, p1 + 1), depth, acc) }
+            else if p1 < bytes_len_raw(bytes) && bytes_at_raw(bytes, p1) == 93 { Ok(ParseResult { value: JsonArray(acc), next_pos: p1 + 1 }) }
             else { Err("expected ',' or ']'") }
         }
     }
 
-let parse_object (chars: Array[String]) (pos: Int): Result[ParseResult[JsonValue], String] = {
-    let p1 = skip_ws(chars, pos + 1);
-    if p1 < chars.len() && chars[p1] == "}" { Ok(ParseResult { value: JsonObject([]), next_pos: p1 + 1 }) }
-    else { parse_object_entries(chars, p1, []) }
+let parse_object (bytes: Bytes) (pos: Int) (depth: Int): Result[ParseResult[JsonValue], String] = {
+    let p1 = skip_ws(bytes, pos + 1);
+    if p1 < bytes_len_raw(bytes) && bytes_at_raw(bytes, p1) == 125 { Ok(ParseResult { value: JsonObject([]), next_pos: p1 + 1 }) }
+    else { parse_object_entries(bytes, p1, depth, []) }
 }
 
-let parse_object_entries (chars: Array[String]) (pos: Int) (acc: Array[JsonEntry]): Result[ParseResult[JsonValue], String] =
-    match parse_string(chars, pos) {
+let parse_object_entries (bytes: Bytes) (pos: Int) (depth: Int) (acc: Array[JsonEntry]): Result[ParseResult[JsonValue], String] =
+    match parse_string(bytes, pos) {
         Err(e) => Err(e),
         Ok(key_r) => {
-            let p1 = skip_ws(chars, key_r.next_pos);
+            let p1 = skip_ws(bytes, key_r.next_pos);
             if Array.any(acc, |entry: JsonEntry| entry.key == key_r.value) { Err("duplicate object member name") }
-            else if p1 >= chars.len() || chars[p1] != ":" { Err("expected ':'") }
+            else if p1 >= bytes_len_raw(bytes) || bytes_at_raw(bytes, p1) != 58 { Err("expected ':'") }
             else {
-                let p2 = skip_ws(chars, p1 + 1);
-                match parse_value(chars, p2) {
+                let p2 = skip_ws(bytes, p1 + 1);
+                match parse_value(bytes, p2, depth) {
                     Err(e) => Err(e),
                     Ok(val_r) => {
-                        let new_acc = acc.push(JsonEntry { key: key_r.value, value: val_r.value });
-                        let p3 = skip_ws(chars, val_r.next_pos);
-                        if p3 < chars.len() && chars[p3] == "," { parse_object_entries(chars, skip_ws(chars, p3 + 1), new_acc) }
-                        else if p3 < chars.len() && chars[p3] == "}" { Ok(ParseResult { value: JsonObject(new_acc), next_pos: p3 + 1 }) }
+                        acc = acc.push(JsonEntry { key: key_r.value, value: val_r.value });
+                        let p3 = skip_ws(bytes, val_r.next_pos);
+                        if p3 < bytes_len_raw(bytes) && bytes_at_raw(bytes, p3) == 44 { parse_object_entries(bytes, skip_ws(bytes, p3 + 1), depth, acc) }
+                        else if p3 < bytes_len_raw(bytes) && bytes_at_raw(bytes, p3) == 125 { Ok(ParseResult { value: JsonObject(acc), next_pos: p3 + 1 }) }
                         else { Err("expected ',' or '}'") }
                     }
                 }
@@ -1620,14 +1624,22 @@ let parse_object_entries (chars: Array[String]) (pos: Int) (acc: Array[JsonEntry
 /// value and rejects trailing text after it. Object member names must
 /// be unique within each object, compared after decoding escapes;
 /// duplicate names return `Err("duplicate object member name")`.
+/// Strings support JSON escapes, including UTF-16 surrogate pairs, and
+/// reject raw control characters and unpaired surrogates. Numbers must
+/// follow JSON syntax (no leading zeros).
+/// At most 128 arrays/objects may be nested, counting the root container;
+/// a deeper container returns `Err("JSON nesting limit exceeded (128)")`.
+/// Input bytes and decoded strings use linear storage; this is not a
+/// total input-size limit. Wide objects still compare each key against
+/// preceding keys to reject duplicates.
 pub let json_parse (s: String): Result[JsonValue, String] = {
-    let chars = chars_of(s);
-    let start = skip_ws(chars, 0);
-    match parse_value(chars, start) {
+    let bytes = bytes_of_str_raw(s);
+    let start = skip_ws(bytes, 0);
+    match parse_value(bytes, start, 0) {
         Err(e) => Err(e),
         Ok(r) => {
-            let after = skip_ws(chars, r.next_pos);
-            if after == chars.len() { Ok(r.value) } else { Err("trailing characters after JSON value") }
+            let after = skip_ws(bytes, r.next_pos);
+            if after == bytes_len_raw(bytes) { Ok(r.value) } else { Err("trailing characters after JSON value") }
         }
     }
 }

@@ -1,0 +1,21 @@
+// Pin cumulative allocation as well as count: prefix concatenation can
+// make quadratic copies without a quadratic number of allocations.
+// Main allocated 837,346,758 bytes; the byte scanner uses 2,695,730 on
+// Linux x86_64. The 4 MB ceiling leaves room without hiding prefix copies.
+let repeated (n: Int) (text: String) (parts: Array[String]): String =
+    if n == 0 { Array.concat_all(parts) } else { repeated(n - 1, text, parts.push(text)) }
+
+let parsed_len (text: String): Int = match json_parse(text) {
+    Ok(JsonString(s)) => s.len(),
+    _ => { panic_raw("string did not parse"); 0 },
+}
+
+let main (): Unit = {
+    println(parsed_len("\"".concat(repeated(16000, "a", [])).concat("\"")).to_string());
+    println(parsed_len("\"".concat(repeated(8000, "é\\n", [])).concat("\"")).to_string());
+    let wide = "[".concat(repeated(8000, "null,", [])).concat("null]");
+    match json_parse(wide) {
+        Ok(JsonArray(xs)) => println(xs.len().to_string()),
+        _ => panic_raw("wide array did not parse"),
+    };
+}
