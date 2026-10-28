@@ -49,10 +49,13 @@ while IFS= read -r f; do
             expected_lex_error=1 ;;
         ./bootstrap/typecheck_corpus/unknown_string_escape/main.plum)
             expected_lex_error=1 ;;
+        ./bootstrap/typecheck_corpus/float_literal_overflow/main.plum|\
+        ./bootstrap/typecheck_corpus/float_literal_negative_overflow/main.plum)
+            expected_lex_error=1 ;;
     esac
     if [ "$expected_lex_error" -eq 1 ]; then
         if "$plum" fmt "$f" > "$work/out" 2>"$work/err"; then
-            printf 'FAIL  %-58s fmt accepted an invalid escape\n' "$f"
+            printf 'FAIL  %-58s fmt accepted lexically invalid input\n' "$f"
             fail=$((fail + 1)); continue
         fi
         expected_lex_errors=$((expected_lex_errors + 1))

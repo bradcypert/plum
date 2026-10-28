@@ -41,13 +41,15 @@ PATTERNS = (
 
 TAGS = re.compile(r"</?span[^>]*>")
 
-# These fixtures intentionally contain lexically invalid string escapes.
+# These fixtures intentionally contain lexically invalid input.
 # The highlighter uses the real lexer, so it must reject them rather than
 # produce markup for a token stream that does not exist.
 EXPECTED_LEX_ERRORS = {
     "bootstrap/typecheck_corpus/invalid_hex_escape/main.plum": "requires exactly two hexadecimal digits",
     "bootstrap/typecheck_corpus/invalid_unicode_escape/main.plum": "not a Unicode scalar value",
     "bootstrap/typecheck_corpus/unknown_string_escape/main.plum": "unknown escape \\q",
+    "bootstrap/typecheck_corpus/float_literal_overflow/main.plum": "float literal out of range: 1e400",
+    "bootstrap/typecheck_corpus/float_literal_negative_overflow/main.plum": "float literal out of range: 1e400",
 }
 
 
@@ -71,7 +73,7 @@ def main() -> int:
                 continue
             failed += 1
             if done.returncode == 0:
-                print(f"FAIL {src}: expected the lexer to reject this escape")
+                print(f"FAIL {src}: expected the lexer to reject this input")
             else:
                 print(f"FAIL {src}: lexer error did not contain {expected_error!r}")
                 print("    " + output.strip().replace("\n", "\n    "))

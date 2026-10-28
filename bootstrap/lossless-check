@@ -56,6 +56,9 @@ while IFS= read -r f; do
             expected_lex_error="not a Unicode scalar value" ;;
         ./bootstrap/typecheck_corpus/unknown_string_escape/main.plum)
             expected_lex_error="unknown escape \\q" ;;
+        ./bootstrap/typecheck_corpus/float_literal_overflow/main.plum|\
+        ./bootstrap/typecheck_corpus/float_literal_negative_overflow/main.plum)
+            expected_lex_error="float literal out of range: 1e400" ;;
     esac
     if [ -n "$expected_lex_error" ]; then
         if SH_TIMEOUT="${SH_TIMEOUT:-60}" "$plum" relex "$f" > "$work/out" 2>"$work/err"; then
