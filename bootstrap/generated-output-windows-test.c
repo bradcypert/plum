@@ -8,7 +8,7 @@
 #include <winioctl.h>
 #include <direct.h>
 
-static int buffers, handles, allocation, fail_at, deny_swap;
+static int buffers, handles, allocation, fail_at, deny_swap, fail_rename;
 static void *tracked_malloc(size_t n) {
     if (++allocation == fail_at) return NULL;
     void *p = malloc(n);
@@ -42,17 +42,27 @@ static BOOL WINAPI tracked_info(HANDLE h, LPBY_HANDLE_FILE_INFORMATION info) {
     }
     return GetFileInformationByHandle(h, info);
 }
+static BOOL WINAPI tracked_publish(HANDLE file, FILE_INFO_BY_HANDLE_CLASS kind, LPVOID info, DWORD size) {
+    assert(kind == FileRenameInfo);
+    if (fail_rename) { SetLastError(ERROR_ACCESS_DENIED); return FALSE; }
+    BOOL ok = SetFileInformationByHandle(file, kind, info, size);
+    if (!ok && !fail_at) fprintf(stderr, "SetFileInformationByHandle(FileRenameInfo): error %lu\n",
+                                (unsigned long)GetLastError());
+    return ok;
+}
 #define malloc tracked_malloc
 #define free tracked_free
 #define CreateFileW tracked_create
 #define CloseHandle tracked_close
 #define GetFileInformationByHandle tracked_info
+#define SetFileInformationByHandle tracked_publish
 #include "../native_stdlib/whole_file_shim.c"
 #undef malloc
 #undef free
 #undef CreateFileW
 #undef CloseHandle
 #undef GetFileInformationByHandle
+#undef SetFileInformationByHandle
 long long os_rename_file(const char *from, const char *to) {
     wchar_t *a = plum_whole_wide(from), *b = plum_whole_wide(to);
     long long rc = a && b && MoveFileExW(a, b, MOVEFILE_REPLACE_EXISTING) ? 0 : -1;
@@ -83,6 +93,20 @@ static void junction(void) {
     assert(DeviceIoControl(h, FSCTL_SET_REPARSE_POINT, &data, data.length + 8, NULL, 0, &bytes, NULL));
     assert(CloseHandle(h));
 }
+static void contents(const char *want) {
+    FILE *f = fopen("held/page", "rb");
+    assert(f);
+    for (size_t i = 0; want[i]; i++) assert(fgetc(f) == want[i]);
+    assert(fgetc(f) == EOF && fclose(f) == 0);
+    WIN32_FIND_DATAW data;
+    HANDLE find = FindFirstFileW(L"held/.*", &data);
+    // Inspect only our reserved temporary-name prefix; . and .. may appear.
+    if (find != INVALID_HANDLE_VALUE) {
+        do { assert(wcsncmp(data.cFileName, L".plum-", 6) != 0); }
+        while (FindNextFileW(find, &data));
+        assert(FindClose(find));
+    }
+}
 int main(void) {
     WCHAR tmp[MAX_PATH], root[MAX_PATH], cwd[4096];
     assert(GetCurrentDirectoryW(4096, cwd));
@@ -107,11 +131,20 @@ int main(void) {
     // Fail each allocation boundary; all native allocations and ancestor
     // handles must be gone before retrying, including partial lock walks.
     for (int i = 1; i < 30; i++) {
+        fail_at = 0;
+        assert(plum_write_generated_file("held/page", "old", 3) == 0);
         allocation = 0; fail_at = i;
-        plum_write_generated_file("held/page", "new", 3);
+        long long rc = plum_write_generated_file("held/page", "new", 3);
         assert(buffers == 0 && handles == 0);
+        contents(rc == 0 ? "new" : "old");
     }
     fail_at = 0;
+    assert(plum_write_generated_file("held/page", "old", 3) == 0);
+    fail_rename = 1;
+    assert(plum_write_generated_file("held/page", "bad", 3) != 0);
+    fail_rename = 0;
+    assert(buffers == 0 && handles == 0);
+    contents("old");
     junction();
     assert(plum_write_generated_file("junction/page", "bad", 3) != 0);
     assert(plum_write_generated_file("junction/new/page", "bad", 3) != 0);

@@ -16,6 +16,7 @@
 #endif
 
 #include <stdint.h>
+#include <stddef.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -103,10 +104,47 @@ static int plum_whole_finish(FILE *f, const char *data, size_t length,
     return ok;
 }
 
+#if defined(_WIN32)
+// MoveFileEx reopens the destination directory for write access, conflicting
+// with the ancestor locks. Reuse the already-authorized parent handle instead
+// of weakening its sharing restrictions for publication.
+static int plum_whole_rename_at(const wchar_t *from, const wchar_t *to, HANDLE parent) {
+    const wchar_t *leaf = wcsrchr(to, L'\\');
+    if (!leaf || !*++leaf) return -1;
+    size_t bytes = wcslen(leaf) * sizeof(wchar_t);
+    size_t size = offsetof(FILE_RENAME_INFO, FileName) + bytes + sizeof(wchar_t);
+    if (size > MAXDWORD) return -1;
+    FILE_RENAME_INFO *rename_info = malloc(size);
+    if (!rename_info) return -1;
+    memset(rename_info, 0, size);
+    rename_info->ReplaceIfExists = TRUE;
+    rename_info->RootDirectory = parent;
+    rename_info->FileNameLength = (DWORD)bytes;
+    memcpy(rename_info->FileName, leaf, bytes);
+    HANDLE file = CreateFileW(from, DELETE | FILE_READ_ATTRIBUTES,
+        FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, NULL, OPEN_EXISTING,
+        FILE_FLAG_OPEN_REPARSE_POINT, NULL);
+    int ok = 0;
+    if (file != INVALID_HANDLE_VALUE) {
+        BY_HANDLE_FILE_INFORMATION info;
+        ok = GetFileInformationByHandle(file, &info) &&
+            !(info.dwFileAttributes & (FILE_ATTRIBUTE_DIRECTORY | FILE_ATTRIBUTE_REPARSE_POINT)) &&
+            SetFileInformationByHandle(file, FileRenameInfo, rename_info, (DWORD)size);
+        CloseHandle(file);
+    }
+    free(rename_info);
+    return ok ? 0 : -1;
+}
+#endif
+
 // Borrow the payload; do not copy it into another file-sized buffer.
 // Only the sibling name (O(path length)) and libc's bounded FILE buffer
 // are allocated here. Every ordinary failure releases both before return.
-long long plum_write_whole_file(const char *path, const char *data, long long length) {
+static long long plum_write_whole_file_impl(const char *path, const char *data, long long length,
+                                            void *parent) {
+#if !defined(_WIN32)
+    (void)parent;
+#endif
     if (length < 0 || (uint64_t)length > SIZE_MAX) return -1;
     size_t n = strlen(path);
     if (n > SIZE_MAX - 64) return -1;
@@ -171,7 +209,14 @@ long long plum_write_whole_file(const char *path, const char *data, long long le
 #else
     int ok = plum_whole_finish(f, data, (size_t)length, exists, st.st_mode);
 #endif
-    if (ok && os_rename_file(tmp, path) == 0) result = 0;
+    if (ok) {
+#if defined(_WIN32)
+        int published = parent ? plum_whole_rename_at(wide_tmp, dest, parent) : os_rename_file(tmp, path);
+#else
+        int published = os_rename_file(tmp, path);
+#endif
+        if (published == 0) result = 0;
+    }
 remove_tmp:
     if (result != 0) {
 #if defined(_WIN32)
@@ -187,6 +232,10 @@ done:
 #endif
     free(tmp);
     return result;
+}
+
+long long plum_write_whole_file(const char *path, const char *data, long long length) {
+    return plum_write_whole_file_impl(path, data, length, NULL);
 }
 
 // Generated output has a stricter trust boundary than Os.write_file:
@@ -248,6 +297,7 @@ static wchar_t *plum_generated_lock(const char *path, HANDLE *dirs, size_t *coun
         if (*count == PLUM_GENERATED_DEPTH) goto fail;
         // Keep the separator on the root (C:\ or \\server\share\).
         size_t end = i == start - 1 ? i + 1 : i;
+        int final_parent = full + i == wcsrchr(full, L'\\');
         wchar_t tail = full[end]; full[end] = 0;
         if (i != start - 1 && !CreateDirectoryW(full, NULL) && GetLastError() != ERROR_ALREADY_EXISTS) {
             full[end] = tail; goto fail;
@@ -255,7 +305,9 @@ static wchar_t *plum_generated_lock(const char *path, HANDLE *dirs, size_t *coun
         // An attributes-only open does not participate in Windows sharing
         // checks. Directory-list access makes denial of write/delete sharing
         // effective, so the checked ancestor really stays pinned.
-        HANDLE h = CreateFileW(full, FILE_LIST_DIRECTORY | FILE_READ_ATTRIBUTES, FILE_SHARE_READ,
+        DWORD access = FILE_LIST_DIRECTORY | FILE_READ_ATTRIBUTES;
+        if (final_parent) access |= FILE_ADD_FILE;
+        HANDLE h = CreateFileW(full, access, FILE_SHARE_READ,
                                NULL, OPEN_EXISTING,
                                FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT, NULL);
         full[end] = tail;
@@ -286,7 +338,7 @@ long long plum_write_generated_file(const char *path, const char *data, long lon
         int n = WideCharToMultiByte(CP_UTF8, WC_ERR_INVALID_CHARS, full, -1, NULL, 0, NULL, NULL);
         char *absolute = n > 0 ? malloc((size_t)n) : NULL;
         if (absolute && WideCharToMultiByte(CP_UTF8, WC_ERR_INVALID_CHARS, full, -1, absolute, n, NULL, NULL))
-            result = plum_write_whole_file(absolute, data, length);
+            result = plum_write_whole_file_impl(absolute, data, length, dirs[count - 1]);
         free(absolute);
         free(full);
     }
