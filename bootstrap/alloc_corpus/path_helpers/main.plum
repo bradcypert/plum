@@ -1,0 +1,31 @@
+use Path;
+
+// Exercise long names, trailing separators, many surviving segments,
+// a deep prefix popped in full, and repeated push/pop after a deep prefix.
+// Bound bytes as well as allocation count: linear counts can hide
+// quadratic copying. Use both conventions on every CI host.
+// Build inputs once from fragments; String.repeat itself can copy growing
+// prefixes, which would obscure the cost of the path operations.
+let repeated (text: String) (n: Int): String = {
+    let mut parts: Array[String] = [];
+    for i in 0..n { parts = parts.push(text); };
+    Array.concat_all(parts)
+}
+
+let main (): Unit = {
+    for windows in [false, true] {
+        let name = repeated("é", 1000).concat(".txt");
+        let path = "dir/".concat(name).concat(repeated("/", 1000));
+        assert(Path.basename_in(windows, path) == name);
+        assert(Path.dirname_in(windows, path) == "dir");
+        assert(Path.extension_in(windows, path) == "txt");
+        assert(Path.stem_in(windows, path) == repeated("é", 1000));
+        let deep = repeated("a/", 1000);
+        let popped = deep.concat(repeated("../", 1000));
+        assert(Path.clean_in(windows, popped) == ".");
+        let churn = deep.concat(repeated("b/../", 1000)).concat("leaf");
+        let want = String.replace(deep.concat("leaf"), "/", Path.separator_in(windows));
+        assert(Path.clean_in(windows, churn) == want);
+    };
+    println("path allocation checks passed")
+}

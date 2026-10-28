@@ -21268,3 +21268,36 @@ stream lifetimes, zero native allocations while advancing, and repeated public
 listings under ASan/LSan. The execution corpus also checks invalid UTF-8 errors
 where the filesystem permits creating malformed names, and that returned names
 survive subsequent reads and stream closure.
+
+### Path scanning: ownership cannot eliminate algorithmic copying
+
+Issue #118 was allocation churn rather than a missing drop. The old path
+helpers decoded the full string for every character and copied the surviving
+segment array for every `..`. Precise reference counting could reclaim those
+temporaries, but could not make their cumulative O(n²) work disappear.
+
+`Path` now scans normalized UTF-8 bytes by index; ASCII separators and dots
+establish safe codepoint boundaries. Cleaning uses an owned linked segment
+stack with constant-time push/pop, then drains it explicitly into output
+fragments. Scanning and draining use tail calls, including for deep paths.
+The same root boundaries keep Windows UNC server/share components out of
+parent resolution and prevent `dirname` from splitting the share root
+(#117 and #272). The compiler embeds `std/Path.plum` directly, removing its
+second, quoted source copy.
+
+The allocation fixture exercises both path conventions with long Unicode
+names, trailing separators, a deep prefix popped completely, and repeated
+push/pop above a deep prefix. On Linux x86_64, at 1,000 units, the unchanged
+workload goes from 60,810,986 allocations / 2,457,395,676 cumulative bytes to
+82,419 allocations / 2,574,390 bytes. New cumulative bytes at 500, 1,000 and
+2,000 units are 1,288,918 / 2,574,390 / 5,145,622. The fixture builds its input
+from fragments rather than repeated string concatenation so input construction
+does not mask that linear growth; it pins both count and a 4 MB byte ceiling.
+
+These are cumulative allocation measurements, not peak-live-memory or RSS
+claims. Both implementations require O(n) live space; the change removes
+repeated allocation and copying within that bound. It uses the existing
+Perceus ownership/reuse machinery and introduces no collector, arena, native
+allocation, or persistent cache. Stack nodes and temporary strings remain
+ordinary owned values. The allocation fixture and focused path properties also run
+under AddressSanitizer with leak detection during validation.

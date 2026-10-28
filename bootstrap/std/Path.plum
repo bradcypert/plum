@@ -26,17 +26,43 @@ pub let separator (): String = separator_in(IS_WINDOWS)
 /// touched there.
 let normalize_in (windows: Bool) (p: String): String = if windows { String.replace(p, "\\", "/") } else { p }
 
-/// `C:` or `c:`, a drive letter, which only means anything on
-/// Windows.
-let has_drive_in (windows: Bool) (p: String): Bool =
-    windows && String.char_len(p) >= 2 && String.slice(p, 1, 2) == ":" && plum_is_alpha(String.slice(p, 0, 1))
+// All indices below are UTF-8 byte offsets. Separators, dots and drive
+// letters are ASCII, so boundaries found here cannot split a codepoint.
+let byte_at (b: Bytes) (i: Int): Int = Option.unwrap_or(b.at(i), 0)
+let alpha (c: Int): Bool = (c >= 65 && c <= 90) || (c >= 97 && c <= 122)
+let drive_end (windows: Bool) (b: Bytes): Int =
+    if windows && b.len() >= 2 && alpha(byte_at(b, 0)) && byte_at(b, 1) == 58 { 2 } else { 0 }
+let has_drive_in (windows: Bool) (p: String): Bool = drive_end(windows, p.as_bytes()) == 2
 
-let plum_is_alpha (c: String): Bool = {
-    let b = c.as_bytes();
-    if b.len() != 1 { false } else { match b.at(0) {
-        Some(v) => (v >= 65 && v <= 90) || (v >= 97 && v <= 122),
-        None => false,
-    } }
+let text_range (b: Bytes) (start: Int) (end: Int): String =
+    match Bytes.as_string(b.slice(start, end)) {
+        Ok(s) => s,
+        Err(e) => { panic_raw(e); "" },
+    }
+
+// Input is normalized once. The root includes the UNC server/share,
+// but base still names the last component (including a bare share).
+struct Bounds { drive: Int, root: Int, end: Int, base: Int, rooted: Bool, unc: Bool }
+let segment_end (b: Bytes) (i: Int): Int =
+    if i >= b.len() || byte_at(b, i) == 47 { i } else { segment_end(b, i + 1) }
+let skip_seps (b: Bytes) (i: Int): Int =
+    if i < b.len() && byte_at(b, i) == 47 { skip_seps(b, i + 1) } else { i }
+let trim_end (b: Bytes) (i: Int) (floor: Int): Int =
+    if i > floor && byte_at(b, i - 1) == 47 { trim_end(b, i - 1, floor) } else { i }
+let base_start (b: Bytes) (i: Int) (floor: Int): Int =
+    if i <= floor || byte_at(b, i - 1) == 47 { i } else { base_start(b, i - 1, floor) }
+
+let bounds (windows: Bool) (b: Bytes): Bounds = {
+    let drive = drive_end(windows, b);
+    let rooted = drive < b.len() && byte_at(b, drive) == 47;
+    let unc = windows && drive == 0 && b.len() >= 2 && byte_at(b, 0) == 47
+        && byte_at(b, 1) == 47 && (b.len() == 2 || byte_at(b, 2) != 47);
+    let server_end = if unc { segment_end(b, 2) } else { 0 };
+    let root = if unc {
+        if server_end < b.len() { segment_end(b, skip_seps(b, server_end)) } else { server_end }
+    } else { drive + if rooted { 1 } else { 0 } };
+    let end = trim_end(b, b.len(), drive);
+    Bounds { drive: drive, root: root, end: end, base: base_start(b, end, drive), rooted: rooted, unc: unc }
 }
 
 /// Rooted: `/x` anywhere, and on Windows also `C:/x` and a `//server`
@@ -45,9 +71,9 @@ let plum_is_alpha (c: String): Bool = {
 /// a relative path with a drive attached.
 pub let is_absolute_in (windows: Bool) (p: String): Bool = {
     let n = normalize_in(windows, p);
-    if String.starts_with(n, "/") { true }
-    else if has_drive_in(windows, n) { String.starts_with(String.slice(n, 2, String.char_len(n)), "/") }
-    else { false }
+    let b = n.as_bytes();
+    let drive = drive_end(windows, b);
+    drive < b.len() && byte_at(b, drive) == 47
 }
 pub let is_absolute (p: String): Bool = is_absolute_in(IS_WINDOWS, p)
 
@@ -58,47 +84,53 @@ pub let is_absolute (p: String): Bool = is_absolute_in(IS_WINDOWS, p)
 /// elsewhere. Resolving that needs syscalls and is a different
 /// function; `Os.remove_tree` already refuses to follow links out of
 /// a tree rather than trying to reason about them.
-let drop_empty_and_dot (parts: Array[String]) (i: Int) (acc: Array[String]): Array[String] =
-    if i >= parts.len() { acc }
-    else if String.is_empty(parts[i]) || parts[i] == "." { drop_empty_and_dot(parts, i + 1, acc) }
-    else { drop_empty_and_dot(parts, i + 1, acc.push(parts[i])) }
-
-/// A `..` pops the segment before it, unless there is nothing to
-/// pop, in which case it is KEPT for a relative path (`../x` really
-/// does mean the parent) and DROPPED for an absolute one (the root
-/// has no parent, so `/../x` is `/x`).
-let resolve_dotdot (parts: Array[String]) (i: Int) (rooted: Bool) (acc: Array[String]): Array[String] =
-    if i >= parts.len() { acc }
-    else if parts[i] != ".." { resolve_dotdot(parts, i + 1, rooted, acc.push(parts[i])) }
-    else if !Array.is_empty(acc) && acc[acc.len() - 1] != ".." {
-        resolve_dotdot(parts, i + 1, rooted, Array.slice(acc, 0, acc.len() - 1))
+// An owned linked stack gives constant-time push/pop without Array.remove
+// or Array.slice copying a growing prefix. Drain it explicitly at the end
+// so neither scanning nor releasing a deep path grows the machine stack.
+enum Segments { NoSegments, Segment(String, Segments) }
+let segment_strings (stack: Segments) (parts: Array[String]): Array[String] = match stack {
+    NoSegments => Array.reverse(parts),
+    Segment(part, rest) => {
+        parts = parts.push(part);
+        segment_strings(rest, parts)
+    },
+}
+let clean_parts (b: Bytes) (i: Int) (rooted: Bool) (stack: Segments): Array[String] =
+    if i >= b.len() { segment_strings(stack, []) }
+    else {
+        let end = segment_end(b, i);
+        let part = text_range(b, i, end);
+        if part == "" || part == "." { clean_parts(b, end + 1, rooted, stack) }
+        else if part == ".." { match stack {
+            Segment(top, rest) => if top != ".." { clean_parts(b, end + 1, rooted, rest) }
+                else { clean_parts(b, end + 1, rooted, Segment(part, Segment(top, rest))) },
+            NoSegments => if rooted { clean_parts(b, end + 1, rooted, NoSegments) }
+                else { clean_parts(b, end + 1, rooted, Segment(part, NoSegments)) },
+        } } else { clean_parts(b, end + 1, rooted, Segment(part, stack)) }
     }
-    else if rooted { resolve_dotdot(parts, i + 1, rooted, acc) }
-    else { resolve_dotdot(parts, i + 1, rooted, acc.push("..")) }
 
 /// Removes duplicate separators, `.` segments, and resolvable `..`
 /// segments, and drops a trailing separator. An empty result is `.`,
 /// matching Go's `filepath.Clean`. The empty string is not a path,
-/// and `.` is the one it means.
+/// and `.` is the one it means. Windows UNC server/share components
+/// form the root: parent segments cannot climb above that share.
 pub let clean_in (windows: Bool) (p: String): String = {
     let n = normalize_in(windows, p);
-    let drive = if has_drive_in(windows, n) { String.slice(n, 0, 2) } else { "" };
-    let rest = if String.is_empty(drive) { n } else { String.slice(n, 2, String.char_len(n)) };
-    let rooted = String.starts_with(rest, "/");
-    // `\\server\share` -- a UNC path, whose root is TWO separators.
-    // Collapsing it to one turned a network path into a local one:
-    // `//srv/sh` cleaned to `\srv\sh`, which names something else
-    // entirely. Exactly two, since `///x` is not UNC.
-    // A path WITH a drive is never UNC, and `join("C:\\", "a")`
-    // produces exactly that shape before cleaning: `C://a`.
-    let unc = windows && String.is_empty(drive) && String.starts_with(rest, "//") && !String.starts_with(rest, "///");
-    let parts = resolve_dotdot(drop_empty_and_dot(String.split(rest, "/"), 0, []), 0, rooted, []);
+    let b = n.as_bytes();
+    let split = bounds(windows, b);
+    let drive = text_range(b, 0, split.drive);
+    let parts = clean_parts(b, split.root, split.rooted, NoSegments);
     let joined = Array.join(parts, separator_in(windows));
-    let root = if unc { separator_in(windows).concat(separator_in(windows)) } else if rooted { separator_in(windows) } else { "" };
-    let body = root.concat(joined);
-    if String.is_empty(body) { if String.is_empty(drive) { "." } else { drive.concat(".") } }
-    else { drive.concat(body) }
+    let root = if split.unc {
+        let names = drop_empty(String.split(text_range(b, 2, split.root), "/"), 0, []);
+        separator_in(windows).concat(separator_in(windows)).concat(Array.join(names, separator_in(windows)))
+    } else if split.rooted { drive.concat(separator_in(windows)) } else { drive };
+    if String.is_empty(joined) {
+        if split.rooted { root } else { drive.concat(".") }
+    } else if split.unc && split.root > 2 { root.concat(separator_in(windows)).concat(joined) }
+    else { root.concat(joined) }
 }
+
 pub let clean (p: String): String = clean_in(IS_WINDOWS, p)
 
 /// --- join ---
@@ -167,71 +199,42 @@ pub let join (a: String) (b: String): String = join_all([a, b])
 //
 //     join(dirname(p), basename(p)) == clean(p)
 //
-// holds for every path, including `""`, `/`, `file` and `a/b/`.
+// holds for ordinary paths, including `""`, `/`, `file` and `a/b/`.
+// A bare UNC share is a root for dirname, while basename remains the
+// share name; that root is deliberately not a directory/name split.
 // Go's pair does not satisfy that for a trailing slash, and a
 // property in `bootstrap/properties` checks that this one does.
-
-let last_sep_index (s: String) (i: Int) (best: Int): Int =
-    if i >= String.char_len(s) { best }
-    else if String.slice(s, i, i + 1) == "/" { last_sep_index(s, i + 1, i) }
-    else { last_sep_index(s, i + 1, best) }
 
 /// The last component. `""` is `.`, a bare root is itself, and a
 /// trailing separator is ignored (`a/b/` is `b`).
 pub let basename_in (windows: Bool) (p: String): String = {
     let n = normalize_in(windows, p);
-    if String.is_empty(n) { "." }
-    else {
-        // The DRIVE comes off first. Without that, `C:\` has no
-        // separator after trimming and reads as the name `C:`
-        // rather than as a root.
-        let drive = if has_drive_in(windows, n) { String.slice(n, 0, 2) } else { "" };
-        let rest = if String.is_empty(drive) { n } else { String.slice(n, 2, String.char_len(n)) };
-        let trimmed = drop_trailing_seps(rest);
-        if String.is_empty(trimmed) {
-            if String.is_empty(drive) { separator_in(windows) }
-            else if String.starts_with(rest, "/") { drive.concat(separator_in(windows)) }
-            else { "." }
-        }
-        else {
-            let i = last_sep_index(trimmed, 0, 0 - 1);
-            if i < 0 { trimmed } else { String.slice(trimmed, i + 1, String.char_len(trimmed)) }
-        }
-    }
+    let b = n.as_bytes();
+    let split = bounds(windows, b);
+    if b.is_empty() { "." }
+    else if split.end == split.drive {
+        if split.rooted { text_range(b, 0, split.drive).concat(separator_in(windows)) }
+        else { "." }
+    } else { text_range(b, split.base, split.end) }
 }
+
 pub let basename (p: String): String = basename_in(IS_WINDOWS, p)
 
-let drop_trailing_seps (s: String): String =
-    if String.char_len(s) > 1 && String.ends_with(s, "/") {
-        drop_trailing_seps(String.slice(s, 0, String.char_len(s) - 1))
-    } else if s == "/" { "" } else { s }
-
 /// Everything before the last component, cleaned. A path with no
-/// separator is `.`, the directory it is in.
+/// separator is `.`, the directory it is in. A Windows UNC share root
+/// is returned intact.
 pub let dirname_in (windows: Bool) (p: String): String = {
     let n = normalize_in(windows, p);
-    if String.is_empty(n) { "." }
-    else {
-        // As in `basename_in`: the drive is not part of the search
-        // for the last separator, and it stays on the answer.
-        // `dirname("C:\a\")` was `C:.` -- the drive with no root,
-        // which names the current directory on drive C rather than
-        // its top.
-        let drive = if has_drive_in(windows, n) { String.slice(n, 0, 2) } else { "" };
-        let rest = if String.is_empty(drive) { n } else { String.slice(n, 2, String.char_len(n)) };
-        let trimmed = drop_trailing_seps(rest);
-        if String.is_empty(trimmed) {
-            if String.is_empty(drive) || String.starts_with(rest, "/") { drive.concat(separator_in(windows)) }
-            else { drive }
-        }
-        else {
-            let i = last_sep_index(trimmed, 0, 0 - 1);
-            if i < 0 { if String.is_empty(drive) { "." } else { drive } }
-            else if i == 0 { drive.concat(separator_in(windows)) }
-            else { clean_in(windows, drive.concat(String.slice(trimmed, 0, i))) }
-        }
-    }
+    let b = n.as_bytes();
+    let split = bounds(windows, b);
+    if b.is_empty() { "." }
+    else if split.rooted && (split.end <= split.root || split.base <= split.root) {
+        clean_in(windows, text_range(b, 0, split.root))
+    } else if split.base <= split.drive {
+        if split.drive == 0 { "." } else { text_range(b, 0, split.drive) }
+    } else { clean_in(windows, text_range(b, 0, split.base - 1)) }
 }
+
 pub let dirname (p: String): String = dirname_in(IS_WINDOWS, p)
 
 /// --- Extensions ---
@@ -247,14 +250,11 @@ pub let dirname (p: String): String = dirname_in(IS_WINDOWS, p)
 /// it (`file.` -> `file`), which is the only reading that lets stem
 /// and extension describe the same name.
 let ext_index (name: String): Int = {
-    let i = last_dot(name, 0, 0 - 1);
-    if i <= 0 { 0 - 1 } else { i }
+    let b = name.as_bytes();
+    let mut best = 0 - 1;
+    for i in 0..b.len() { if byte_at(b, i) == 46 { best = i; }; };
+    if best <= 0 { 0 - 1 } else { best }
 }
-
-let last_dot (s: String) (i: Int) (best: Int): Int =
-    if i >= String.char_len(s) { best }
-    else if String.slice(s, i, i + 1) == "." { last_dot(s, i + 1, i) }
-    else { last_dot(s, i + 1, best) }
 
 /// The extension of the last segment, without its dot, or empty when
 /// there is none.
@@ -267,7 +267,7 @@ let last_dot (s: String) (i: Int) (best: Int): Int =
 pub let extension_in (windows: Bool) (p: String): String = {
     let name = basename_in(windows, p);
     let i = ext_index(name);
-    if i < 0 { "" } else { String.slice(name, i + 1, String.char_len(name)) }
+    if i < 0 { "" } else { text_range(name.as_bytes(), i + 1, name.len()) }
 }
 pub let extension (p: String): String = extension_in(IS_WINDOWS, p)
 
@@ -275,7 +275,7 @@ pub let extension (p: String): String = extension_in(IS_WINDOWS, p)
 pub let stem_in (windows: Bool) (p: String): String = {
     let name = basename_in(windows, p);
     let i = ext_index(name);
-    if i < 0 { name } else { String.slice(name, 0, i) }
+    if i < 0 { name } else { text_range(name.as_bytes(), 0, i) }
 }
 pub let stem (p: String): String = stem_in(IS_WINDOWS, p)
 
