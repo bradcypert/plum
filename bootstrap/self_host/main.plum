@@ -699,7 +699,6 @@ let cmd_doc_items (items: Array[parser.ItemNode]) (out: String): Unit =
     cmd_doc_render(items, out, false, "")
 
 let cmd_doc_render (items: Array[parser.ItemNode]) (out: String) (html: Bool) (home: String): Unit = {
-    doc_make_dirs(out);
     let mods = sorted_namespaces(doc_modules(items, 0, []), 0);
     if html { doc_write_html(items, mods, out, home) }
     else {
@@ -708,30 +707,6 @@ let cmd_doc_render (items: Array[parser.ItemNode]) (out: String) (html: Bool) (h
         println("wrote ${mods.len().to_string()} module(s) to ${out}")
     }
 }
-
-// `Os.make_dir` creates ONE level, so `-o docs/stdlib` failed when
-// `docs` did not exist. Create each prefix, accepting a failed mkdir
-// only when the path is already a directory (including a concurrent
-// creator). A file at a prefix must stop generation before any writes.
-let doc_make_dirs (path: String): Unit =
-    doc_make_acc(String.split(Path.clean(path), Path.separator()), 0, "")
-
-let doc_make_acc (parts: Array[String]) (i: Int) (acc: String): Unit =
-    if i >= parts.len() { () }
-    else {
-        // An absolute path's first segment is empty; joining it back on
-        // keeps the leading separator instead of turning `/a/b` into
-        // `a/b`.
-        let here = if String.is_empty(acc) && String.is_empty(parts[i]) { Path.separator() }
-            else if String.is_empty(acc) { parts[i] }
-            else { Path.join(acc, parts[i]) };
-        match Os.make_dir(here) {
-            Ok(_) => (),
-            Err(e) => if Result.unwrap_or(Os.is_directory(here), false) { () }
-                else { doc_fail(e) },
-        };
-        doc_make_acc(parts, i + 1, here)
-    }
 
 let doc_modules (items: Array[parser.ItemNode]) (i: Int) (acc: Array[String]): Array[String] =
     if i >= items.len() { acc }
@@ -751,8 +726,17 @@ let doc_write_modules (items: Array[parser.ItemNode]) (mods: Array[String]) (out
         doc_write_modules(items, mods, out, i + 1)
     }
 
-let doc_write (path: String) (body: String): Unit =
-    match Os.write_file(path, body) { Ok(_) => (), Err(e) => doc_fail(e) }
+extern "C" {
+    fn plum_write_generated_file(path: CStr, data: CStr, length: Int) -> Int;
+}
+
+// Keep strict output traversal in the native filesystem boundary, shared by
+// both renderers. The payload is borrowed only for this synchronous call.
+let doc_write (path: String) (body: String): Unit = {
+    let result = unsafe { plum_write_generated_file(path.as_cstr(), body.as_cstr(), body.len()) };
+    if result != 0 { doc_fail("could not write ${path} (unsafe output path or filesystem error)") }
+    else { () }
+}
 
 // These helpers belong to the doc command. Stop at the first failure so
 // neither renderer can continue writing or print its success summary.

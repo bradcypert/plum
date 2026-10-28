@@ -597,6 +597,14 @@ plum doc my-project -o docs --html    # a browsable site, with search
 plum doc my-project -o docs --with-deps   # and every package it depends on
 ```
 
+The output directory defaults to `docs`; missing directories are created.
+Generated files are published individually through exclusive temporary files
+and atomic replacement. Symlinked pages, symlinked ancestor directories, and
+special files are refused with a path-specific error. Use a physical output
+path rather than an alias through a symlink. Windows also rejects junctions
+and output paths exceeding 128 ancestor directories. A failed run can leave
+pages published earlier in the run; publication is atomic per file.
+
 **Your modules, not your dependencies'.** `plum doc my-project`
 documents the modules in `my-project` and stops there. What you publish
 under your own name is your own API.

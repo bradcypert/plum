@@ -34,6 +34,7 @@ set -uo pipefail
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$root"
 plum="${1:-./sh}"
+case "$plum" in /*) ;; *) plum="$root/${plum#./}" ;; esac
 
 work="$(mktemp -d 2>/dev/null || mktemp -d -t plum-cli)"
 trap 'rm -rf "$work"' EXIT
@@ -49,7 +50,7 @@ check() {
 
 # Run from INSIDE the temp directory: `new` takes a name, not a path,
 # and creates the directory relative to the working directory.
-( cd "$work" && SH_TIMEOUT="${SH_TIMEOUT:-60}" "$root/$plum" new hello ) > "$work/new.log" 2>&1
+( cd "$work" && SH_TIMEOUT="${SH_TIMEOUT:-60}" "$plum" new hello ) > "$work/new.log" 2>&1
 check $? "plum new exited nonzero: $(head -n 1 "$work/new.log")"
 
 [ -f "$work/hello/main.plum" ]; check $? "plum new did not write main.plum"
@@ -70,7 +71,7 @@ out="$(SH_MEM="${SH_MEM:-512M}" SH_TIMEOUT="${SH_TIMEOUT:-120}" "$plum" test "$w
 printf '%s' "$out" | grep -q '1 passed; 0 failed'; check $? "plum new's scaffold test did not pass: $(printf '%s' "$out" | tail -n 1)"
 
 # Refusing to overwrite is the one destructive-adjacent behaviour here.
-( cd "$work" && "$root/$plum" new hello ) > "$work/new2.log" 2>&1
+( cd "$work" && "$plum" new hello ) > "$work/new2.log" 2>&1
 [ $? -ne 0 ]; check $? "plum new overwrote an existing directory"
 
 # --- plum doc on a PROJECT --------------------------------------------
@@ -136,6 +137,33 @@ for mode in --with-deps --html; do
         mkdir -p "$work/blocked/$artifact"
         doc_must_fail "$work/blocked" "$mode" "$work/blocked/$artifact"
         rm -rf "$work/blocked"
+
+        # Every renderer artifact rejects existing and dangling symlinks.
+        for target in "$work/outside-sentinel" "$work/absent-target"; do
+            printf 'preserved' > "$work/outside-sentinel"
+            mkdir -p "$work/linked-page"
+            ln -s "$target" "$work/linked-page/$artifact"
+            doc_must_fail "$work/linked-page" "$mode" "$work/linked-page/$artifact"
+            [ -L "$work/linked-page/$artifact" ]; check $? "doc replaced a page symlink"
+            [ "$(cat "$work/outside-sentinel")" = preserved ]; check $? "doc overwrote a symlink target"
+            [ ! -e "$work/absent-target" ]; check $? "doc created a dangling symlink target"
+            rm -rf "$work/linked-page"
+        done
+    done
+
+    # Refuse the output directory itself and links at intermediate ancestors,
+    # including links to missing directories. No directory is created outside.
+    mkdir -p "$work/outside-dir"
+    printf 'preserved' > "$work/outside-dir/keep"
+    for target in "$work/outside-dir" "$work/missing-dir"; do
+        ln -s "$target" "$work/linked-dir"
+        doc_must_fail "$work/linked-dir" "$mode" "$work/linked-dir"
+        doc_must_fail "$work/linked-dir/new/deep" "$mode" "$work/linked-dir"
+        [ -L "$work/linked-dir" ]; check $? "doc replaced a directory symlink"
+        [ "$(ls -A "$work/outside-dir")" = keep ]; check $? "doc wrote through a directory symlink"
+        [ "$(cat "$work/outside-dir/keep")" = preserved ]; check $? "doc altered outside contents"
+        [ ! -e "$work/missing-dir" ]; check $? "doc created a dangling directory target"
+        rm "$work/linked-dir"
     done
 
 done
@@ -364,7 +392,7 @@ done
 
 mkdir -p "$work/myapp"
 printf 'let main (): Unit = println("from-dot")\n' > "$work/myapp/main.plum"
-( cd "$work/myapp" && SH_MEM="${SH_MEM:-512M}" SH_TIMEOUT="${SH_TIMEOUT:-180}" "$root/$plum" build . ) > "$work/dot.out" 2> "$work/dot.err"
+( cd "$work/myapp" && SH_MEM="${SH_MEM:-512M}" SH_TIMEOUT="${SH_TIMEOUT:-180}" "$plum" build . ) > "$work/dot.out" 2> "$work/dot.err"
 check $? "plum build . exited nonzero: $(head -n 1 "$work/dot.err"; head -n 1 "$work/dot.out")"
 [ -x "$work/myapp/myapp" ]
 check $? "plum build . did not write a binary named after the directory"
@@ -375,7 +403,7 @@ check $? "plum build . left IR named ..ll"
 
 mkdir -p "$work/parent/child"
 printf 'let main (): Unit = println("from-dotdot")\n' > "$work/parent/main.plum"
-( cd "$work/parent/child" && SH_MEM="${SH_MEM:-512M}" SH_TIMEOUT="${SH_TIMEOUT:-180}" "$root/$plum" build .. ) > "$work/dotdot.out" 2> "$work/dotdot.err"
+( cd "$work/parent/child" && SH_MEM="${SH_MEM:-512M}" SH_TIMEOUT="${SH_TIMEOUT:-180}" "$plum" build .. ) > "$work/dotdot.out" 2> "$work/dotdot.err"
 check $? "plum build .. exited nonzero: $(head -n 1 "$work/dotdot.err"; head -n 1 "$work/dotdot.out")"
 [ -x "$work/parent/child/parent" ]
 check $? "plum build .. did not write a binary named after the parent directory"
@@ -384,7 +412,7 @@ check $? "the binary from plum build .. did not run"
 
 mkdir -p "$work/slashproj"
 printf 'let main (): Unit = println("from-slash")\n' > "$work/slashproj/main.plum"
-( cd "$work/slashproj" && SH_MEM="${SH_MEM:-512M}" SH_TIMEOUT="${SH_TIMEOUT:-180}" "$root/$plum" build ./ ) > "$work/slash.out" 2> "$work/slash.err"
+( cd "$work/slashproj" && SH_MEM="${SH_MEM:-512M}" SH_TIMEOUT="${SH_TIMEOUT:-180}" "$plum" build ./ ) > "$work/slash.out" 2> "$work/slash.err"
 check $? "plum build ./ exited nonzero: $(head -n 1 "$work/slash.err"; head -n 1 "$work/slash.out")"
 [ -x "$work/slashproj/slashproj" ]
 check $? "plum build ./ did not write a binary named after the directory"

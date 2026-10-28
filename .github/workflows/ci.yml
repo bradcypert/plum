@@ -493,6 +493,11 @@ jobs:
       - name: clang version
         run: clang --version
 
+      - name: generated output resists Windows directory swaps
+        run: |
+          clang -O1 -g -Wall -Wextra -Werror bootstrap/generated-output-test.c -o generated-output-test.exe
+          ./generated-output-test.exe
+
       - name: seed -> compiler
         run: |
           ./bootstrap/from-seed -o sh.seed

@@ -1,6 +1,9 @@
 // Run the real writer against real files, injecting failures at each boundary.
 // Verify contents and native lifetimes before the next call, not only at exit.
 #define _FILE_OFFSET_BITS 64
+#if defined(__APPLE__)
+#define _DARWIN_C_SOURCE 1
+#endif
 #define _POSIX_C_SOURCE 200809L
 #include <assert.h>
 #include <errno.h>

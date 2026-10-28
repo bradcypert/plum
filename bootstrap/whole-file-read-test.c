@@ -2,6 +2,9 @@
 // tests cannot force allocation, positioning or late read/close failures,
 // or prove cleanup happened before the next operation.
 #define _FILE_OFFSET_BITS 64
+#if defined(__APPLE__)
+#define _DARWIN_C_SOURCE 1
+#endif
 #define _POSIX_C_SOURCE 200809L
 #include <assert.h>
 #include <stdint.h>
