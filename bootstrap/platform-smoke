@@ -138,6 +138,9 @@ for dir in bootstrap/exec_corpus/*/; do
     rc=$?
     if [ $rc -ne 0 ]; then
         printf 'FAIL  %-24s exited %s: %s\n' "$name" "$rc" "$(head -n 1 "$work/$name.rt")"
+        # Plum runtime assertions and panic messages are written to stdout.
+        # Preserve both streams before the temporary fixture directory is removed.
+        cat "$work/$name.out" "$work/$name.rt"
         fail=$((fail + 1))
         continue
     fi
