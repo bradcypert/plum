@@ -5185,7 +5185,7 @@ let cg_arm_scoped (p: CgProgram) (sity: typecheck.ITy) (tail: Bool): Bool =
     !tail && Option.is_some(typecheck.first_handle_within(p.ctx, cg_concrete(p, sity), []))
 
 // The block a guarded arm branches to when its guard says no: it
-// releases what the pattern bound, then falls through to the next arm.
+// releases the pattern bindings and guard temporaries, then falls through.
 let cg_guard_fail_label (n: Int): String = "Lgf".concat(n.to_string())
 
 struct ArmsEmit { code: String, allocas: String, releases: String, globals: String, n: Int }
@@ -5257,6 +5257,9 @@ let cg_match_arms (p: CgProgram) (env: Array[CgSlot]) (n: Int) (arms: Array[type
             Some(gexpr) => {
                 let guard_label = cg_label(pat.n);
                 let g = cg_expr(p, pat.env, pat.n + 1, gexpr);
+                // Both exits after evaluating the guard own these slots.
+                // Body temporaries belong only to the successful exit.
+                let guarded_releases = pat.releases.concat(g.releases);
                 let body_label = cg_label(g.n);
                 // The GUARD is not in tail position -- it decides which
                 // arm runs, so the body still follows it.
@@ -5270,9 +5273,8 @@ let cg_match_arms (p: CgProgram) (env: Array[CgSlot]) (n: Int) (arms: Array[type
                     .concat(guard_label).concat(":\n")
                     // The guard READS the arm's bindings, so they have to
                     // be stored before it runs rather than in the body
-                    // block. A guard that then fails leaves the extra
-                    // reference in a slot the function's own exit release
-                    // already covers -- delayed, not leaked.
+                    // block. Both guard outcomes must release those slots
+                    // when the arm owns its cleanup.
                     .concat(pat.binds)
                     .concat(g.code)
                     // A guarded arm has TWO ways out, and the bindings
@@ -5280,7 +5282,7 @@ let cg_match_arms (p: CgProgram) (env: Array[CgSlot]) (n: Int) (arms: Array[type
                     // guard runs AFTER `pat.binds`, because it is
                     // allowed to read them. So the failing path needs a
                     // cleanup edge of its own, or an arm whose guard
-                    // says no leaks everything it bound.
+                    // says no retains its bindings AND guard temporaries.
                     //
                     // The second copy of the release text is RENAMED,
                     // for the reason `cg_tail_releases` renames its own:
@@ -5293,20 +5295,20 @@ let cg_match_arms (p: CgProgram) (env: Array[CgSlot]) (n: Int) (arms: Array[type
 ")
                     .concat(if cg_arm_scoped(p, sity, tail) {
                         cg_guard_fail_label(pat.n).concat(":\n")
-                            .concat(String.replace(pat.releases, "_end", "_end.g".concat(pat.n.to_string())))
+                            .concat(String.replace(guarded_releases, "_end", "_end.g".concat(pat.n.to_string())))
                             .concat("  br label %").concat(next_label).concat("\n")
                     } else { "" })
                     .concat(body_label).concat(":\n")
                     .concat(b.code)
                     .concat("  store ").concat(lty).concat(" ").concat(b.val).concat(", ptr ").concat(slot).concat("
 ")
-                    .concat(if cg_arm_scoped(p, sity, tail) { pat.releases.concat(g.releases).concat(b.releases) } else { "" })
+                    .concat(if cg_arm_scoped(p, sity, tail) { guarded_releases.concat(b.releases) } else { "" })
                     .concat("  br label %").concat(end_label).concat("
 ");
                 cg_match_arms(p, env, b.n, arms, i + 1, sval, sity, slot, lty, end_label, fail_label,
                     code.concat(this_code),
                     allocas.concat(pat.allocas).concat(g.allocas).concat(b.allocas),
-                    if cg_arm_scoped(p, sity, tail) { releases } else { releases.concat(pat.releases).concat(g.releases).concat(b.releases) },
+                    if cg_arm_scoped(p, sity, tail) { releases } else { releases.concat(guarded_releases).concat(b.releases) },
                     globals.concat(pat.globals).concat(g.globals).concat(b.globals), tail, pending)
             },
         }

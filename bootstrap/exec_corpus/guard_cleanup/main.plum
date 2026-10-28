@@ -1,0 +1,63 @@
+extern "C" {
+    fn guard_open() -> Int;
+    fn guard_close(h: Int);
+    fn guard_live() -> Int;
+}
+handle Resource { on_drop: guard_close }
+let acquire (): Resource = unsafe { Resource.from_raw(guard_open()) }
+let live (): Int = unsafe { guard_live() }
+
+// The guard binds an ordinary closure, whose captured handle lets us observe
+// its deferred release. A direct handle let would clean up inside the block
+// already and would never exercise the arm's guard-temporary cleanup.
+let capture (): () -> Int = {
+    let r = acquire();
+    || unsafe { r.raw() }
+}
+
+enum Choice { Left(Resource), Right(Resource), Empty }
+
+let exercise (accept: Bool): Unit = {
+    let owner = acquire();
+    let escaped = ref("");
+    for i in 0..100 {
+        let input = if i % 2 == 0 { Left(owner) } else { Right(owner) };
+        let result = match input {
+            Empty if { panic_raw("unmatched guard ran"); true } => "wrong",
+            Left(r) | Right(r) if {
+                let text = "guard-".concat(i.to_string());
+                let values = [text, text];
+                let held = capture();
+                assert_eq(live(), 2);
+                assert_eq(held(), 2);
+                assert_eq(values[0], text);
+                escaped.set(values[1]);
+                accept
+            } => {
+                assert_eq(live(), 2);
+                unsafe { r.raw() };
+                escaped.get()
+            },
+            Left(r) | Right(r) => {
+                // Must release the failed guard BEFORE entering this arm.
+                assert_eq(live(), 1);
+                unsafe { r.raw() };
+                escaped.get()
+            },
+            Empty => "wrong",
+        };
+        assert_eq(live(), 1);
+        assert_eq(result, "guard-".concat(i.to_string()));
+        assert_eq(escaped.get(), result)
+    };
+    // All-false and all-true loops must both reclaim the final guard values.
+    assert_eq(live(), 1)
+}
+
+let main (): Unit = {
+    exercise(false);
+    assert_eq(live(), 0);
+    exercise(true);
+    assert_eq(live(), 0);
+    println("guard temporaries released on both exits; escaped values survive")
+}

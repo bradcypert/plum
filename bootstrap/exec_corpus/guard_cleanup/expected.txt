@@ -1,0 +1,1 @@
+guard temporaries released on both exits; escaped values survive
