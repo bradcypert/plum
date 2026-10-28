@@ -114,14 +114,14 @@ pub let parse_request (body: String): Option[Request] =
 // --- Responses ---
 
 pub let response (id: JsonValue) (result: JsonValue): String =
-    json_stringify(JsonObject([
+    encode_json(JsonObject([
         JsonEntry { key: "jsonrpc", value: JsonString("2.0") },
         JsonEntry { key: "id", value: id },
         JsonEntry { key: "result", value: result },
     ]))
 
 pub let notification (method: String) (params: JsonValue): String =
-    json_stringify(JsonObject([
+    encode_json(JsonObject([
         JsonEntry { key: "jsonrpc", value: JsonString("2.0") },
         JsonEntry { key: "method", value: JsonString(method) },
         JsonEntry { key: "params", value: params },
@@ -717,4 +717,12 @@ pub let test_lsp_uri_separators (): Unit = {
 
     // Not a `file:` URI: handed back untouched rather than guessed at.
     assert_eq(uri_to_path_in(WINDOWS_SEP(), "untitled:Untitled-1"), "untitled:Untitled-1")
+}
+
+// Compiler-generated protocol/index values contain strings, booleans and
+// finite positions. A serialization error violates that internal invariant;
+// stop before writing a malformed or substituted protocol message.
+pub let encode_json (value: JsonValue): String = match json_stringify(value) {
+    Ok(text) => text,
+    Err(e) => { panic_raw("compiler JSON serialization failed: ".concat(e)); "" },
 }

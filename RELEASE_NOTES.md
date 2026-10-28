@@ -3,6 +3,14 @@ resource ownership, safer I/O, and faster native builds.
 
 ## Compatibility and migration
 
+- **JSON serialization can fail.** `json_stringify(value)` now returns
+  `Result[String, String]`. Match `Ok(text)` before sending or writing it;
+  `Err("non-finite JSON number")` rejects NaN and either infinity, including
+  inside arrays and objects. JSON parsing, `String.parse_float`, and source
+  float literals also reject binary64 overflow. Underflow still rounds to
+  subnormal values or signed zero. `Float.is_finite` is available to validate
+  values before constructing JSON.
+
 - **Channels report disconnection.** `Receiver.recv()` now returns `Option[T]`:
   match `Some(value)` for a message and `None` after the final sender drops and
   buffered messages have drained. `Sender.send(value)` now returns

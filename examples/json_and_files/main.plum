@@ -31,24 +31,28 @@ let describe (v: JsonValue): String = match v {
 
 let main (): Unit = {
     let config = build_config(());
-    let text = json_stringify(config);
-    println(text);
+    match json_stringify(config) {
+        Err(e) => println("serialization failed: ".concat(e)),
+        Ok(text) => {
+            println(text);
 
-    let path = "plum_demo_config.json";
-    match Os.write_file(path, text) {
-        Err(e) => println("write failed: ".concat(e)),
-        Ok(_) => {
-            match Os.read_file(path) {
-                Err(e) => println("read failed: ".concat(e)),
-                Ok(contents) => match json_parse(contents) {
-                    Err(e) => println("parse failed: ".concat(e)),
-                    Ok(parsed) => {
-                        println(describe(parsed));
-                        // Structural equality — generated for every
-                        // type automatically, works recursively through
-                        // the whole nested JsonValue tree.
-                        println(parsed == config);
-                    },
+            let path = "plum_demo_config.json";
+            match Os.write_file(path, text) {
+                Err(e) => println("write failed: ".concat(e)),
+                Ok(_) => {
+                    match Os.read_file(path) {
+                        Err(e) => println("read failed: ".concat(e)),
+                        Ok(contents) => match json_parse(contents) {
+                            Err(e) => println("parse failed: ".concat(e)),
+                            Ok(parsed) => {
+                                println(describe(parsed));
+                                // Structural equality — generated for every
+                                // type automatically, works recursively through
+                                // the whole nested JsonValue tree.
+                                println(parsed == config);
+                            },
+                        },
+                    }
                 },
             }
         },

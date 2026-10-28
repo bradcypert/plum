@@ -21201,3 +21201,34 @@ substituted the input size into a template with `sed`, and the first
 substitution consumed the pattern, so all four sizes ran the same input
 and the timings looked flat. A benchmark that shows no variation is more
 often broken than interesting.
+
+### Finite JSON numbers and fallible serialization (#158, #249)
+
+`JsonNumber` remains a public binary64 wrapper, so arithmetic can construct
+NaN or infinity even when parsed numbers are finite. The shared decimal
+parser now rejects non-finite conversion results for JSON, `String.parse_float`,
+and compiler float literals. Underflow retains binary64 rounding to subnormal
+values or signed zero; it is not an overflow error.
+
+`json_stringify` returns `Result[String, String]`. Its existing explicit-stack
+emitter checks each number before formatting it, returning
+`Err("non-finite JSON number")` at any depth. It neither substitutes `null` nor
+returns a partial document. Validation belongs to the serializer; callers
+handle the result. Compiler protocol/index output shares one invariant-checking
+adapter in the LSP module, while the file example reports failure before writing.
+
+The successful path retains linear output construction, O(output size) storage,
+and O(nesting depth) traversal storage, without a validation pass or copied
+JSON tree. Returning success adds one Result cell per document, not per value
+or traversal transition. Error returns release accumulated fragments and pending
+traversal state through normal reference counting; sanitizer regressions cover
+repeated failures with shared inputs, unvisited siblings and 10,000 nested
+containers. This change does not redesign ownership, shrink JsonValue/Float,
+bound document sizes, or promise lower application peak RSS. Allocation-byte
+checks guard the existing builder behavior separately from leak detection.
+
+On Linux x86_64, the unchanged JSON allocation workload (three documents:
+wide array, deep array and escaped object) changes from 61,081 allocations /
+3,754,889 cumulative bytes to 61,084 / 3,754,961: exactly three 24-byte Result
+cells. String, concatenation and array counters are unchanged. These are
+cumulative allocation measurements, not peak-live-memory or RSS measurements.

@@ -258,7 +258,7 @@ Every declaration, linked to the page that documents it.
 - [`enum JsonValue`](prelude.md#JsonValue)
 - [`struct ParseResult`](prelude.md#ParseResult)
 - [`let json_parse (s: String): Result[JsonValue, String]`](prelude.md#json_parse)
-- [`let json_stringify (v: JsonValue): String`](prelude.md#json_stringify)
+- [`let json_stringify (v: JsonValue): Result[String, String]`](prelude.md#json_stringify)
 - [`let hash (self: T): Int`](prelude.md#hash)
 - [`let to_string (self: T): String`](prelude.md#to_string)
 - [`let args (): Array[String]`](prelude.md#args)
@@ -322,6 +322,7 @@ Every declaration, linked to the page that documents it.
 ### [prelude.Float](prelude.Float.md)
 
 - [`let Float.abs (a: Float): Float`](prelude.Float.md#Float.abs)
+- [`let Float.is_finite (x: Float): Bool`](prelude.Float.md#Float.is_finite)
 - [`let Float.min (a: Float) (b: Float): Float`](prelude.Float.md#Float.min)
 - [`let Float.max (a: Float) (b: Float): Float`](prelude.Float.md#Float.max)
 - [`let Float.clamp (x: Float) (lo: Float) (hi: Float): Float`](prelude.Float.md#Float.clamp)

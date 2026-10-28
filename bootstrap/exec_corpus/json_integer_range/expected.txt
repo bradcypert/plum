@@ -14,8 +14,8 @@
 9223372036854775808 => ERR expected a Number in the safe integer range at the root
 -9223372036854775809 => ERR expected a Number in the safe integer range at the root
 9.007199254740993e15 => ERR expected a Number in the safe integer range at the root
-1e309 => ERR expected a Number in the safe integer range at the root
--1e309 => ERR expected a Number in the safe integer range at the root
+1e309 => ERR float out of range
+-1e309 => ERR float out of range
 expected a Number in the safe integer range at ids[1]
 expected a Number in the safe integer range at the root
 Float accepts rounded numbers

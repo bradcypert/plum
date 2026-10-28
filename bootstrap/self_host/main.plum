@@ -118,7 +118,7 @@ let member_answer (items: Array[parser.ItemNode]) (cs: Array[String]) (path: Str
                         let name = ident_text(cs, start, "");
                         match member_detail(items, type_namespace(base_ty), name, 0) {
                             None => None,
-                            Some(detail) => Some(json_stringify(JsonObject([
+                            Some(detail) => Some(lsp.encode_json(JsonObject([
                                 JsonEntry { key: "name", value: JsonString(name) },
                                 JsonEntry { key: "type", value: JsonString(detail) },
                             ]))),
@@ -155,7 +155,7 @@ let field_type_named (decl: parser.StructDeclNode) (name: String) (i: Int): Opti
 let query_answer (nodes: Array[typecheck.NodeType]) (path: String) (off: Int) (i: Int): String =
     if i >= nodes.len() { "{}" }
     else if nodes[i].path == path && off >= nodes[i].offset && off < nodes[i].offset + nodes[i].name.len() {
-        json_stringify(JsonObject(Array.concat(
+        lsp.encode_json(JsonObject(Array.concat(
             [
                 JsonEntry { key: "name", value: JsonString(nodes[i].name) },
                 JsonEntry { key: "type", value: JsonString(nodes[i].ty) },
@@ -189,7 +189,7 @@ let def_position_fields (path: String) (off: Int): Array[JsonEntry] =
 // simply yields no index.
 let cmd_defs (dir: String): Unit = {
     let items = collect_project(dir);
-    println(json_stringify(JsonArray(defs_of(items, 0, []))));
+    println(lsp.encode_json(JsonArray(defs_of(items, 0, []))));
 }
 
 // Members of whatever is immediately before a `.` -- the struct's own
@@ -226,7 +226,7 @@ let cmd_members (dir: String) (path: String) (line: Int) (col: Int): Unit = {
                 else {
                     match recorded_type_at(typecheck.recorded_types(()), path, start, 0) {
                         None => println("[]"),
-                        Some(ty) => println(json_stringify(JsonArray(
+                        Some(ty) => println(lsp.encode_json(JsonArray(
                             members_of(items, type_namespace(ty), 0,
                                 builtin_members(typecheck.builtin_methods(), type_namespace(ty), 0, []))))),
                     }
@@ -1294,7 +1294,7 @@ let doc_signature_of (item: parser.ItemNode): Option[String] =
 // backslashes, and hand-rolled escaping is how a search index becomes a
 // syntax error.
 let doc_search_index (items: Array[parser.ItemNode]) (mods: Array[String]): String =
-    "window.PLUM_DOCS = ".concat(json_stringify(JsonArray(doc_index_mods(items, mods, 0, [])))).concat(";\n")
+    "window.PLUM_DOCS = ".concat(lsp.encode_json(JsonArray(doc_index_mods(items, mods, 0, [])))).concat(";\n")
 
 let doc_index_mods (items: Array[parser.ItemNode]) (mods: Array[String]) (i: Int) (acc: Array[JsonValue]): Array[JsonValue] =
     if i >= mods.len() { acc }
@@ -1405,7 +1405,7 @@ let cmd_complete (dir: String): Unit = {
     let with_std = completions_of(std, 0, mine, true);
     let with_prelude = completions_of(prelude, 0, with_std, true);
     let with_builtins = Array.concat(with_prelude, builtin_completions(()));
-    println(json_stringify(JsonArray(Array.concat(with_builtins, keyword_completions(())))))
+    println(lsp.encode_json(JsonArray(Array.concat(with_builtins, keyword_completions(())))))
 }
 
 // Locals in scope, as their OWN command, and deliberately not part of
@@ -1425,7 +1425,7 @@ let cmd_locals (dir: String) (path: String) (line: Int) (col: Int): Unit =
             typecheck.record_types(true);
             let all = codegen.cg_with_prelude(parser.ProgramNode { items: collect_project(dir) }).items;
             typecheck.check_program(parser.ProgramNode { items: all });
-            println(json_stringify(JsonArray(
+            println(lsp.encode_json(JsonArray(
                 locals_in_scope(all, typecheck.recorded_types(()), path, lexer.offset_of(src, line, col)))))
         },
     }

@@ -11,8 +11,14 @@ let repeated (n: Int) (xs: Array[String]): String =
     if n == 0 { Array.concat_all(xs) } else { repeated(n - 1, xs.push("é\n\t\\\"")) }
 
 let main (): Unit = {
-    println(Bytes.len(json_stringify(JsonArray(values(4000, JsonString("abcdefgh"), []))).as_bytes()).to_string());
-    println(Bytes.len(json_stringify(nested(1000, JsonNull)).as_bytes()).to_string());
+    println(Bytes.len(stringify_valid(JsonArray(values(4000, JsonString("abcdefgh"), []))).as_bytes()).to_string());
+    println(Bytes.len(stringify_valid(nested(1000, JsonNull)).as_bytes()).to_string());
     let s = repeated(4000, []);
-    println(Bytes.len(json_stringify(JsonObject([JsonEntry { key: s, value: JsonString(s) }])).as_bytes()).to_string());
+    println(Bytes.len(stringify_valid(JsonObject([JsonEntry { key: s, value: JsonString(s) }])).as_bytes()).to_string());
+}
+
+// These fixtures construct finite JSON. Fail loudly if that invariant changes.
+let stringify_valid (value: JsonValue): String = match json_stringify(value) {
+    Ok(text) => text,
+    Err(e) => { panic_raw(e); "" },
 }

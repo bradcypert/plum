@@ -1,0 +1,24 @@
+true
+true
+true
+true
+true
+true
+false
+false
+false
+Err("float out of range")
+float out of range
+Err("float out of range")
+float out of range
+Err("float out of range")
+float out of range
+Err("float out of range")
+float out of range
+Ok(0)
+0
+Ok(-0)
+-0
+Ok(4.94065645841247e-324)
+4.94065645841247e-324
+Err("float out of range")

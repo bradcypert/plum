@@ -192,6 +192,8 @@ the two compilers DISAGREE. `String.parse_float("1e3")` gave
 The JSON parser was already in this same prelude, already
 handling exponents, already correct. Reusing it is not absurd;
 writing a second one was.
+Overflow returns `Err`; underflow follows binary64 rounding to a
+subnormal value or signed zero.
 
 ## `let String.trim_start (s: String): String`
 

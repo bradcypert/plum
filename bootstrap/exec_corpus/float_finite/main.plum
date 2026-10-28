@@ -1,0 +1,11 @@
+let main (): Unit = {
+    let zero = 0.0;
+    for x in [zero, -0.0, 5e-324, -5e-324, 1.7976931348623157e308, -1.7976931348623157e308, 1.0 / zero, -1.0 / zero, zero / zero] {
+        println(Float.is_finite(x).to_string());
+    };
+    for text in ["1e400", "-1e400", "1.7976931348623159e308", "1e99999999999999999999", "1e-400", "-1e-400", "5e-324"] {
+        println(String.parse_float(text).to_string());
+        println(match json_parse(text) { Ok(JsonNumber(x)) => x.to_string(), Err(e) => e, _ => "unexpected value" });
+    };
+    println(json_parse("{\"kept\":[1,2],\"bad\":1e400}").to_string());
+}

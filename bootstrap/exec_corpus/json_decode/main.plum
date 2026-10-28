@@ -164,7 +164,7 @@ let main (): Unit = {
     //
     // `value` hands back the `JsonValue` untouched, for a field whose
     // shape is not known ahead of time; `succeed` ignores the input.
-    show_str("value", Json.decode_string(Json.map(Json.field("payload", Json.value()), json_stringify), "{\"payload\":{\"id\":7}}"));
+    show_str("value", Json.decode_string(Json.map(Json.field("payload", Json.value()), stringify_valid), "{\"payload\":{\"id\":7}}"));
     show_str("succeed", Json.decode_string(Json.succeed("ignored the input"), "[1,2,3]"));
 
     // `decode` is the same thing against an already-parsed value, for
@@ -174,4 +174,10 @@ let main (): Unit = {
         Ok(v) => String.pad_right("decode", 12, " ")
             .concat(Result.unwrap_or(Result.map(Json.decode(repo(), v), show_repo), "?")),
     });
+}
+
+// These fixtures construct finite JSON. Fail loudly if that invariant changes.
+let stringify_valid (value: JsonValue): String = match json_stringify(value) {
+    Ok(text) => text,
+    Err(e) => { panic_raw(e); "" },
 }
