@@ -5,6 +5,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <windows.h>
+#include <winternl.h>
 #include <winioctl.h>
 #include <direct.h>
 
@@ -42,27 +43,35 @@ static BOOL WINAPI tracked_info(HANDLE h, LPBY_HANDLE_FILE_INFORMATION info) {
     }
     return GetFileInformationByHandle(h, info);
 }
-static BOOL WINAPI tracked_publish(HANDLE file, FILE_INFO_BY_HANDLE_CLASS kind, LPVOID info, DWORD size) {
-    assert(kind == FileRenameInfo);
-    if (fail_rename) { SetLastError(ERROR_ACCESS_DENIED); return FALSE; }
-    BOOL ok = SetFileInformationByHandle(file, kind, info, size);
-    if (!ok && !fail_at) fprintf(stderr, "SetFileInformationByHandle(FileRenameInfo): error %lu\n",
-                                (unsigned long)GetLastError());
-    return ok;
+static NTSTATUS NTAPI tracked_publish(HANDLE file, PIO_STATUS_BLOCK io, PVOID info, ULONG size,
+                                      FILE_INFORMATION_CLASS kind) {
+    assert(kind == FileRenameInformation);
+    if (fail_rename) return (NTSTATUS)0xc0000022;
+    typedef NTSTATUS (NTAPI *Rename)(HANDLE, PIO_STATUS_BLOCK, PVOID, ULONG, FILE_INFORMATION_CLASS);
+    Rename rename_file = (Rename)(void *)GetProcAddress(GetModuleHandleW(L"ntdll.dll"), "NtSetInformationFile");
+    assert(rename_file);
+    NTSTATUS status = rename_file(file, io, info, size, kind);
+    if (status < 0 && !fail_at) fprintf(stderr, "NtSetInformationFile(FileRenameInformation): status 0x%lx\n",
+                                      (unsigned long)status);
+    return status;
+}
+static FARPROC WINAPI tracked_proc(HMODULE module, LPCSTR name) {
+    if (!strcmp(name, "NtSetInformationFile")) return (FARPROC)(void *)tracked_publish;
+    return GetProcAddress(module, name);
 }
 #define malloc tracked_malloc
 #define free tracked_free
 #define CreateFileW tracked_create
 #define CloseHandle tracked_close
 #define GetFileInformationByHandle tracked_info
-#define SetFileInformationByHandle tracked_publish
+#define GetProcAddress tracked_proc
 #include "../native_stdlib/whole_file_shim.c"
 #undef malloc
 #undef free
 #undef CreateFileW
 #undef CloseHandle
 #undef GetFileInformationByHandle
-#undef SetFileInformationByHandle
+#undef GetProcAddress
 long long os_rename_file(const char *from, const char *to) {
     wchar_t *a = plum_whole_wide(from), *b = plum_whole_wide(to);
     long long rc = a && b && MoveFileExW(a, b, MOVEFILE_REPLACE_EXISTING) ? 0 : -1;

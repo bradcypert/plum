@@ -25,6 +25,7 @@
 
 #if defined(_WIN32)
 #include <windows.h>
+#include <winternl.h>
 #include <fcntl.h>
 #include <io.h>
 #else
@@ -121,15 +122,20 @@ static int plum_whole_rename_at(const wchar_t *from, const wchar_t *to, HANDLE p
     rename_info->RootDirectory = parent;
     rename_info->FileNameLength = (DWORD)bytes;
     memcpy(rename_info->FileName, leaf, bytes);
+    typedef NTSTATUS (NTAPI *Rename)(HANDLE, PIO_STATUS_BLOCK, PVOID, ULONG, FILE_INFORMATION_CLASS);
+    HMODULE ntdll = GetModuleHandleW(L"ntdll.dll");
+    Rename rename_file = ntdll ? (Rename)(void *)GetProcAddress(ntdll, "NtSetInformationFile") : NULL;
+    if (!rename_file) { free(rename_info); return -1; }
     HANDLE file = CreateFileW(from, DELETE | FILE_READ_ATTRIBUTES,
         FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, NULL, OPEN_EXISTING,
         FILE_FLAG_OPEN_REPARSE_POINT, NULL);
     int ok = 0;
     if (file != INVALID_HANDLE_VALUE) {
         BY_HANDLE_FILE_INFORMATION info;
+        IO_STATUS_BLOCK status;
         ok = GetFileInformationByHandle(file, &info) &&
             !(info.dwFileAttributes & (FILE_ATTRIBUTE_DIRECTORY | FILE_ATTRIBUTE_REPARSE_POINT)) &&
-            SetFileInformationByHandle(file, FileRenameInfo, rename_info, (DWORD)size);
+            rename_file(file, &status, rename_info, (ULONG)size, FileRenameInformation) >= 0;
         CloseHandle(file);
     }
     free(rename_info);
