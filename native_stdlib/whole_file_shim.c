@@ -252,7 +252,10 @@ static wchar_t *plum_generated_lock(const char *path, HANDLE *dirs, size_t *coun
         if (i != start - 1 && !CreateDirectoryW(full, NULL) && GetLastError() != ERROR_ALREADY_EXISTS) {
             full[end] = tail; goto fail;
         }
-        HANDLE h = CreateFileW(full, FILE_READ_ATTRIBUTES, FILE_SHARE_READ,
+        // An attributes-only open does not participate in Windows sharing
+        // checks. Directory-list access makes denial of write/delete sharing
+        // effective, so the checked ancestor really stays pinned.
+        HANDLE h = CreateFileW(full, FILE_LIST_DIRECTORY | FILE_READ_ATTRIBUTES, FILE_SHARE_READ,
                                NULL, OPEN_EXISTING,
                                FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT, NULL);
         full[end] = tail;

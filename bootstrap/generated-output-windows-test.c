@@ -90,6 +90,13 @@ int main(void) {
     deny_swap = 1;
     assert(plum_write_generated_file("held/page", "new", 3) == 0 && !deny_swap);
     assert(buffers == 0 && handles == 0);
+    // Sharing restrictions must end with the call: no retained handle may
+    // prevent later renames or writes to the directory.
+    assert(MoveFileW(L"held", L"parked") && MoveFileW(L"parked", L"held"));
+    HANDLE writer = CreateFileW(L"held", GENERIC_WRITE,
+        FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, NULL,
+        OPEN_EXISTING, FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT, NULL);
+    assert(writer != INVALID_HANDLE_VALUE && CloseHandle(writer));
     // Fail each allocation boundary; all native allocations and ancestor
     // handles must be gone before retrying, including partial lock walks.
     for (int i = 1; i < 30; i++) {
