@@ -36,7 +36,8 @@ a relative path with a drive attached.
 Removes duplicate separators, `.` segments, and resolvable `..`
 segments, and drops a trailing separator. An empty result is `.`,
 matching Go's `filepath.Clean`. The empty string is not a path,
-and `.` is the one it means.
+and `.` is the one it means. Windows UNC server/share components
+form the root: parent segments cannot climb above that share.
 
 ## `let clean (p: String): String`
 
@@ -92,7 +93,8 @@ trailing separator is ignored (`a/b/` is `b`).
 ## `let dirname_in (windows: Bool) (p: String): String`
 
 Everything before the last component, cleaned. A path with no
-separator is `.`, the directory it is in.
+separator is `.`, the directory it is in. A Windows UNC share root
+is returned intact.
 
 ## `let dirname (p: String): String`
 

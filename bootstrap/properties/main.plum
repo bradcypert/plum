@@ -1689,3 +1689,49 @@ pub let test_json_finite_number_roundtrip (): Unit = {
         assert_eq(json_parse(stringify_valid(JsonNumber(x))), Ok(JsonNumber(x)));
     };
 }
+
+// The root is structural: parent segments cannot change a UNC volume,
+// and dirname cannot split its server/share pair (issues #117/#272).
+pub let test_path_unc_roots (): Unit = {
+    for prefix in ["//server/share", "\\\\server\\share", "//sérver/共享"] {
+        let root = String.replace(prefix, "/", "\\");
+        for tail in ["", "/", "/..", "/../../..", "/a/../.."] {
+            let path = prefix.concat(tail);
+            check_eq("UNC clean clamps at share", path, Path.clean_in(true, path), root);
+            check_eq("UNC clean idempotent", path, Path.clean_in(true, Path.clean_in(true, path)), root);
+        };
+        for tail in ["", "/", "///", "/file", "/file/"] {
+            let path = prefix.concat(tail);
+            check_eq("UNC dirname keeps share", path, Path.dirname_in(true, path), root);
+        };
+        check_eq("UNC descendant", prefix, Path.clean_in(true, prefix.concat("/a/../../other")), root.concat("\\other"));
+        check_eq("UNC join clamps", prefix, Path.join_in(true, prefix, "../other"), root.concat("\\other"));
+    };
+    check_eq("UNC duplicate root separators", "//server//share///a/../../x", Path.clean_in(true, "//server//share///a/../../x"), "\\\\server\\share\\x");
+    check_eq("three slashes are not UNC", "///server/share/../x", Path.clean_in(true, "///server/share/../x"), "\\server\\x");
+    check_eq("POSIX double slash", "//server/share/../x", Path.clean_in(false, "//server/share/../x"), "/server/x")
+}
+
+pub let test_path_long_unicode (): Unit = {
+    for windows in [false, true] {
+        let sep = Path.separator_in(windows);
+        for n in [1, 16, 256, 4096] {
+            let stem = String.repeat("é中🙂.", n).concat("名");
+            let name = stem.concat(".扩展");
+            let path = "目录/".concat(name).concat(String.repeat("/", n));
+            check_eq("long basename", "UTF-8", Path.basename_in(windows, path), name);
+            check_eq("long dirname", "UTF-8", Path.dirname_in(windows, path), "目录");
+            check_eq("long extension", "UTF-8", Path.extension_in(windows, path), "扩展");
+            check_eq("long stem", "UTF-8", Path.stem_in(windows, path), stem);
+            check_eq("long with_extension", "UTF-8", Path.with_extension_in(windows, path, "new"), "目录".concat(sep).concat(stem).concat(".new"));
+            let deep = String.repeat("目录/", n);
+            check_eq("deep stack drains", "segments", Path.clean_in(windows, deep), String.replace(String.repeat("目录/", n - 1).concat("目录"), "/", sep));
+            check_eq("deep stack pops", "segments", Path.clean_in(windows, deep.concat(String.repeat("../", n))), ".");
+            check_eq("relative parents kept", "segments", Path.clean_in(windows, deep.concat(String.repeat("../", n + 2))), "..".concat(sep).concat(".."));
+        };
+        check_eq("hidden UTF-8", "dot", Path.extension_in(windows, ".隐"), "");
+        check_eq("trailing dot", "dot", Path.stem_in(windows, "名."), "名");
+        check_eq("all separators", "root", Path.basename_in(windows, String.repeat("/", 4096)), sep);
+        check_eq("drive parent clamp", "C:/../../名", Path.clean_in(windows, "C:/../../名"), if windows { "C:\\名" } else { "../名" });
+    }
+}
