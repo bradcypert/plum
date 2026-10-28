@@ -6,6 +6,8 @@ import sys
 import tempfile
 from pathlib import Path
 
+from lsp_test_support import file_uri
+
 
 def frame(message):
     body = json.dumps(message, ensure_ascii=False).encode()
@@ -45,7 +47,7 @@ def check(compiler):
         disk = 'let disk (): Int = 1\n'
         a.write_text(disk)
         b.write_text('let other (): Int = 2\n')
-        uri_a, uri_b = "file://" + a.as_posix(), "file://" + b.as_posix()
+        uri_a, uri_b = file_uri(a), file_uri(b)
         messages = [{"id": 1, "method": "initialize", "params": {}}]
         expected = {}
 

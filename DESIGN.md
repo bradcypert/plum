@@ -21301,3 +21301,36 @@ Perceus ownership/reuse machinery and introduces no collector, arena, native
 allocation, or persistent cache. Stack nodes and temporary strings remain
 ordinary owned values. The allocation fixture and focused path properties also run
 under AddressSanitizer with leak detection during validation.
+
+### LSP snapshots: one document version per semantic request
+
+Hover, definition, completion and diagnostics share a snapshot builder. It
+copies the requested file's containing directory and overlays the latest text
+of every open document beneath that directory, including new unsaved files.
+Identifier lookup, checker queries, definition indexes and ranges consume that
+same view. Locations inside the snapshot are translated back to real paths
+before cleanup; external paths retain their identity. A copy or overlay-write
+failure makes the request unavailable rather than analyzing a partial project.
+Diagnostics publish nothing on snapshot failure, preserving the last published
+state. Clearing stale cross-file diagnostics remains separate work (#286).
+
+Snapshot construction owns cleanup on failure; semantic requests own a complete
+snapshot until their answer has been constructed, and diagnostics until range
+widening and publication finish. Temporary directories are removed on success
+and on parse/type-check failures in child processes. Removal is best effort if
+the filesystem itself refuses cleanup. Parsing/type checking stay in subprocesses
+because those errors abort the compiler; they must not abort the language server.
+Incomplete-buffer completion can fall back to disk names/keywords, but never to
+stale member types or locals.
+
+The persistent memory cost remains one latest string per open URI, with no edit
+history or semantic cache. Snapshot overlays borrow those strings through Plum's
+reference counting; request temporaries use ordinary ownership, and compiler
+subprocess state ends with each child. This changes no runtime ownership/reuse
+rules for compiled applications. There is still project-sized temporary disk I/O
+per semantic request, scanning of open-document keys, and child compiler memory
+proportional to the analyzed project. The server handles requests sequentially,
+so it holds at most one project snapshot at a time. This is a consistency fix,
+not a claim of lower application RSS or a replacement for profiling large
+projects. The directory-based project boundary and dependency resolution are
+unchanged; a workspace-wide virtual filesystem would be a separate design.
