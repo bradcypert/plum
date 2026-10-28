@@ -502,8 +502,11 @@ pub let query_int (out: String) (key: String): Int =
 // `len` is the length of the name being jumped to, so the editor lands
 // with that name SELECTED rather than with a bare caret before it.
 pub let location_at (path: String) (line: Int) (col: Int) (len: Int): JsonValue =
+    location_at_in(Path.separator(), path, line, col, len)
+
+let location_at_in (sep: String) (path: String) (line: Int) (col: Int) (len: Int): JsonValue =
     JsonObject([
-        JsonEntry { key: "uri", value: JsonString("file://".concat(path)) },
+        JsonEntry { key: "uri", value: JsonString(path_to_uri_in(sep, path)) },
         JsonEntry { key: "range", value: range_json(Rng { sl: line, sc: col, el: line, ec: col + len }) },
     ])
 
@@ -694,6 +697,15 @@ pub let test_lsp_uri_roundtrip (): Unit = {
     // lose its round trip for being unusual.
     uri_round_trip(POSIX(), "file:///C:/x/a.plum");
     uri_round_trip(WINDOWS_SEP(), "file:///home/x/a.plum")
+}
+
+pub let test_lsp_definition_location_uri (): Unit = {
+    let windows = location_at_in(WINDOWS_SEP(), "C:\\project\\main.plum", 2, 3, 4);
+    assert_eq(json_field_str(windows, "uri"), "file:///C:/project/main.plum");
+    let posix = location_at_in(POSIX(), "/project/main.plum", 2, 3, 4);
+    assert_eq(json_field_str(posix, "uri"), "file:///project/main.plum");
+    let backslash = location_at_in(POSIX(), "/project/odd\\name.plum", 2, 3, 4);
+    assert_eq(json_field_str(backslash, "uri"), "file:///project/odd\\name.plum")
 }
 
 // The conversion itself, spelled out. The round trip above would still
