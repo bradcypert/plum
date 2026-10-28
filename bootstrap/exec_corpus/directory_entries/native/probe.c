@@ -1,3 +1,4 @@
+#include <errno.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -11,7 +12,15 @@ long long directory_bad_name(const char *root) {
     memcpy(path, root, n);
     memcpy(path + n, "/\xff", 3);
     FILE *f = fopen(path, "wb");
+    int error = errno;
     free(path);
-    if (!f) return -1;
+    if (!f) {
+        // Some filesystems reject malformed UTF-8 at creation. That already
+        // prevents an invalid name from reaching list_dir; other I/O failures
+        // must still fail this fixture rather than silently skipping it.
+        if (error == EILSEQ) return 1;
+        fprintf(stderr, "creating invalid directory name failed: %s\n", strerror(error));
+        return -1;
+    }
     return fclose(f);
 }

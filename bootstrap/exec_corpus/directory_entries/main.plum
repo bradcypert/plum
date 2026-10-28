@@ -37,8 +37,10 @@ let main (): Unit = {
     println("open failures: ok");
     // Windows filesystem encoding is covered separately by issue #109.
     if Os.platform() != "windows" {
-        require(unsafe { directory_bad_name(root.as_cstr()) } == 0);
-        for iteration in 0..32 {
+        let created = unsafe { directory_bad_name(root.as_cstr()) };
+        require(created == 0 || created == 1);
+        if created == 1 { repeat_listing(root, 2) };
+        for iteration in 0..(if created == 0 { 32 } else { 0 }) {
             require(match Os.list_dir(root) {
                 Err(e) => String.contains(e, "not valid UTF-8"),
                 Ok(_) => false,

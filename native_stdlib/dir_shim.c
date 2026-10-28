@@ -49,14 +49,6 @@ const char *dir_entry_data(long long handle) {
     return dir == NULL ? "" : dir->name;
 }
 
-// Compatibility for the checked-in bootstrap seed's String-only adapter.
-// New programs use dir_next_size and validate bytes in Os.list_dir. Keeping
-// this symbol lets from-seed link against current native sources without
-// restoring the old per-entry allocation leak.
-const char *dir_read_next(long long handle) {
-    return dir_next_size(handle) > 0 ? dir_entry_data(handle) : "";
-}
-
 void dir_close(long long handle) {
     PlumDir *dir = (PlumDir *)(intptr_t)handle;
     if (dir != NULL) {

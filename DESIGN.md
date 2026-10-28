@@ -21260,10 +21260,11 @@ and negative read failure. The Plum wrapper rejects malformed UTF-8 and read
 failures, discards partial results, and closes before returning `Err`. Callers
 that deliberately discard that error remain separate problems (#175, #177,
 #331); independent copy-tree enumeration needs its own error handling (#184).
-The checked-in seed's legacy String adapter retains a compatible native symbol
-with borrowed storage, so bootstrapping does not reintroduce the per-entry leak.
+The checked-in seed is regenerated with the new adapter and embedded native
+sources, so bootstrapping uses the same ownership and validation contract.
 
 `bootstrap/directory-smoke` checks allocation/read failure injection, independent
 stream lifetimes, zero native allocations while advancing, and repeated public
 listings under ASan/LSan. The execution corpus also checks invalid UTF-8 errors
-on POSIX and that returned names survive subsequent reads and stream closure.
+where the filesystem permits creating malformed names, and that returned names
+survive subsequent reads and stream closure.
