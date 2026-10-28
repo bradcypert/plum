@@ -301,7 +301,7 @@ jobs:
           clang -O1 -g -Wall -Wextra bootstrap/directory-test.c -o directory-native.exe
           ./directory-native.exe
           ./sh.real build bootstrap/exec_corpus/directory_entries -o directory-entries.exe
-          ./directory-entries.exe > directory-entries.out
+          ./directory-entries.exe > directory-entries.out || { cat directory-entries.out; exit 1; }
           cat directory-entries.out
           diff -u bootstrap/exec_corpus/directory_entries/expected.txt directory-entries.out
 
@@ -528,7 +528,7 @@ jobs:
           clang -O1 -g -Wall -Wextra bootstrap/directory-test.c -o directory-native.exe
           ./directory-native.exe
           ./sh.real build bootstrap/exec_corpus/directory_entries -o directory-entries.exe
-          ./directory-entries.exe > directory-entries.out
+          ./directory-entries.exe > directory-entries.out || { cat directory-entries.out; exit 1; }
           cat directory-entries.out
           diff -u bootstrap/exec_corpus/directory_entries/expected.txt directory-entries.out
 
