@@ -1693,7 +1693,8 @@ pub let test_json_finite_number_roundtrip (): Unit = {
 // The root is structural: parent segments cannot change a UNC volume,
 // and dirname cannot split its server/share pair (issues #117/#272).
 pub let test_path_unc_roots (): Unit = {
-    for prefix in ["//server/share", "\\\\server\\share", "//sérver/共享"] {
+    let prefixes = ["//server/share", "\\\\server\\share", "//sérver/共享"];
+    for prefix in prefixes {
         let root = String.replace(prefix, "/", "\\");
         for tail in ["", "/", "/..", "/../../..", "/a/../.."] {
             let path = prefix.concat(tail);
