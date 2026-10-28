@@ -1,0 +1,6 @@
+// The empty-arm diagnostic takes precedence over missing enum tags.
+enum E { A, B }
+
+let main (): Unit = {
+    match A {}
+}

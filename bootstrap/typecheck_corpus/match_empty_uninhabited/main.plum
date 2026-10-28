@@ -1,0 +1,7 @@
+// A zero-variant enum must not let an empty match reach codegen either.
+// Plum requires an arm regardless of the scrutinee's type.
+enum Never {}
+
+let f (x: Never): Unit = match x {}
+
+let main (): Unit = ()
