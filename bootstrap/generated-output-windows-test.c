@@ -46,6 +46,9 @@ static BOOL WINAPI tracked_info(HANDLE h, LPBY_HANDLE_FILE_INFORMATION info) {
 static NTSTATUS NTAPI tracked_publish(HANDLE file, PIO_STATUS_BLOCK io, PVOID info, ULONG size,
                                       FILE_INFORMATION_CLASS kind) {
     assert(kind == FileRenameInformation);
+    FILE_RENAME_INFORMATION *rename_info = info;
+    assert(rename_info->RootDirectory == NULL);
+    assert(wcschr(rename_info->FileName, L'\\') == NULL);
     if (fail_rename) return (NTSTATUS)0xc0000022;
     typedef NTSTATUS (NTAPI *Rename)(HANDLE, PIO_STATUS_BLOCK, PVOID, ULONG, FILE_INFORMATION_CLASS);
     Rename rename_file = (Rename)(void *)GetProcAddress(GetModuleHandleW(L"ntdll.dll"), "NtSetInformationFile");
