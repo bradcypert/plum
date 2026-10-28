@@ -1707,57 +1707,58 @@ let lsp_check (dir: String): Option[lsp.Diagnostic] =
         Ok(r) => if r.exit_code == 0 { None } else { lsp.parse_diagnostic(r.stdout.concat(r.stderr)) },
     }
 
-// Check a project whose edited file has UNSAVED content.
-//
-// The checker reads from disk, so it is given a disk that matches the
-// buffer: the project is copied into a temp directory and the edited
-// file is overwritten there with the text the editor sent. Nothing in
-// the user's tree is touched -- writing the buffer into the real file
-// would be a language server silently saving on your behalf, which is
-// never acceptable.
-//
-// The copy is per keystroke. A Plum project is a handful of small
-// files, and the alternative -- threading an in-memory overlay through
-// `collect_project` and every path it resolves -- is a much larger
-// change for a cost that has not been shown to matter. Measurable
-// later if it does.
-//
-// Paths in the resulting diagnostic point INTO the temp directory, so
-// the caller maps them back; see `lsp_real_path`.
-struct BufferCheck { diagnostic: Option[lsp.Diagnostic], scratch: String }
-
-let lsp_check_buffer (path: String) (text: String): BufferCheck =
+// A request gets one complete project copy with every open buffer under
+// the same directory overlaid. Creation owns failure cleanup; callers own
+// successful snapshots until all results (including paths) are consumed.
+// No source/index cache or edit history is retained between requests.
+let lsp_snapshot (path: String): Option[String] =
     match Os.temp_dir() {
-        Err(_) => BufferCheck { diagnostic: None, scratch: "" },
-        Ok(raw_scratch) => {
-            // CLEANED, and that is not tidiness -- `lsp_real_path`
-            // recognises a diagnostic from the scratch copy by testing
-            // whether its path STARTS WITH this one, and the paths it
-            // compares against are built by `Path.join`, which cleans.
-            // Both sides have to be normalized or the test silently
-            // fails and every cross-file error is attributed to the
-            // scratch file instead of the real one.
-            //
-            // `Os.temp_dir` really can hand back a path needing it:
-            // macOS sets `TMPDIR` WITH a trailing slash, so the shim's
-            // `"%s/plum-XXXXXX"` produces `/var/.../T//plum-abc`. Linux
-            // usually leaves `TMPDIR` unset and gets `/tmp`, which is
-            // why this passed everywhere it was run by hand and failed
-            // on macOS and Windows in CI. `TMPDIR=/tmp/ bootstrap/lsp-smoke`
-            // reproduces it here.
-            let scratch = Path.clean(raw_scratch);
+        Err(_) => None,
+        Ok(raw) => {
+            let scratch = Path.clean(raw);
             let dir = Path.dirname(path);
-            // `Os.copy_tree` copies the CONTENTS of `dir`, so the
-            // project lands directly in the scratch dir rather than
-            // nested inside a directory named after it -- module paths
-            // depend on that. It replaced `cp -r <dir>/. <scratch>`,
-            // which meant the same thing and needed a `cp` binary.
-            let copied = Os.copy_tree(dir, scratch);
-            let target = Path.join(scratch, Path.basename(path));
-            match Os.write_file(target, text) {
-                Err(_) => { let c = Os.remove_tree(scratch); BufferCheck { diagnostic: None, scratch: "" } },
-                Ok(_) => BufferCheck { diagnostic: lsp_check(scratch), scratch: scratch },
+            let ready = match Os.copy_tree(dir, scratch) {
+                Err(_) => false,
+                Ok(_) => lsp_overlay(scratch, dir, BUFFERS.get()),
+            };
+            if ready { Some(scratch) }
+            else { let c = Os.remove_tree(scratch); None }
+        },
+    }
+
+let lsp_directory_prefix (dir: String): String = {
+    let child = Path.join(dir, "_");
+    String.slice(child, 0, child.len() - 1)
+}
+
+let lsp_overlay (scratch: String) (dir: String) (buffers: Map[String, String]): Bool = {
+    let uris = Map.keys(buffers);
+    let mut ready = true;
+    for uri in uris {
+        let path = Path.clean(lsp.uri_to_path(uri));
+        if ready && path.starts_with(lsp_directory_prefix(dir)) {
+            let relative = String.slice(path, lsp_directory_prefix(dir).len(), path.len());
+            let target = Path.join(scratch, relative);
+            match Map.get(buffers, uri) {
+                None => (),
+                Some(text) => {
+                    ready = Result.is_ok(Os.write_file(target, text));
+                },
             }
+        };
+    };
+    ready
+}
+
+// Keep cleanup in one place for semantic requests, including null/empty
+// answers after a child fails to parse or type-check an unfinished edit.
+let lsp_with_snapshot (path: String) (unavailable: JsonValue) (answer: (String) -> JsonValue): JsonValue =
+    match lsp_snapshot(path) {
+        None => unavailable,
+        Some(scratch) => {
+            let result = answer(Path.join(scratch, Path.basename(path)));
+            let c = Os.remove_tree(scratch);
+            result
         },
     }
 
@@ -1804,15 +1805,13 @@ let line_width (src: String) (line: Int): Int = {
 // A diagnostic reported inside the scratch copy, mapped back to the
 // file the user is actually editing. Without this every error would
 // point at a temp directory that will not exist a moment later.
-// Both arguments arrive CLEANED -- `scratch` from `lsp_check_buffer`
+// Both arguments arrive CLEANED -- `scratch` from `lsp_snapshot`
 // and `dir` from `Path.dirname` -- because this compares them against a
 // diagnostic's path as raw text, and that path was built by `Path.join`
 // and is therefore clean. A prefix test between a normalized string and
 // an un-normalized one is a silent no-match, not an error.
 let lsp_real_path (d: lsp.Diagnostic) (scratch: String) (dir: String): String =
-    if scratch != "" && d.path.starts_with(scratch) {
-        dir.concat(String.slice(d.path, scratch.len(), d.path.len()))
-    } else { d.path }
+    if scratch == "" { d.path } else { lsp_restore_path(d.path, scratch, dir) }
 
 // Publish for the edited document AND, when the error lives in another
 // file of the same project, for that one too.
@@ -1862,23 +1861,7 @@ let lsp_handle (body: String): Bool =
                 false
             } else if req.method == "textDocument/completion" {
                 let path = lsp.uri_to_path(lsp.document_uri(req.params));
-                // MEMBERS first. `plum members` answers with an empty
-                // list for anything that is not a position just after a
-                // dot, so this one call decides which kind of
-                // completion the request is -- the lexing lives in the
-                // compiler, where the lexer is, rather than being
-                // reimplemented over here.
-                let members = lsp_members(path, lsp.params_line(req.params), lsp.params_col(req.params));
-                // Names, keywords and LOCALS, merged. Locals come from
-                // their own process because finding them type-checks
-                // the project and a type error aborts -- see
-                // `cmd_locals`. If that half fails you still get the
-                // other one.
-                let general = Array.concat(
-                    lsp_completions(path),
-                    lsp_locals(path, lsp.params_line(req.params), lsp.params_col(req.params)));
-                lsp_reply(req.id, lsp.completion_result(
-                    if Array.is_empty(members) { general } else { members }));
+                lsp_reply(req.id, lsp_with_snapshot(path, JsonArray([]), |target| lsp_answer_completion(target, path, req.params)));
                 true
             } else if req.method == "textDocument/formatting" {
                 let uri = lsp.document_uri(req.params);
@@ -1935,7 +1918,7 @@ let lsp_handle (body: String): Bool =
                 // Errors AS YOU TYPE. The buffer is unsaved, so the
                 // check runs against a snapshot of the project with
                 // this file's text substituted -- see
-                // `lsp_check_buffer`.
+                // `lsp_snapshot`.
                 let uri = lsp.document_uri(req.params);
                 if uri == "" { () }
                 else {
@@ -1994,12 +1977,14 @@ let buffer_text (uri: String) (path: String): Option[String] =
 // formatting sees, including a save notification with no text field.
 let lsp_diagnose_document (uri: String): Unit = {
     let path = lsp.uri_to_path(uri);
-    match Map.get(BUFFERS.get(), uri) {
-        None => lsp_publish(uri, lsp_check(Path.dirname(path)), ""),
-        Some(text) => {
-            let bc = lsp_check_buffer(path, text);
-            lsp_publish(uri, bc.diagnostic, bc.scratch);
-            if bc.scratch == "" { () } else { let c = Os.remove_tree(bc.scratch); () }
+    match lsp_snapshot(path) {
+        // An incomplete project is unavailable, not a project with
+        // missing imports. Do not publish invented diagnostics from it.
+        None => (),
+        Some(scratch) => {
+            lsp_publish(uri, lsp_check(scratch), scratch);
+            let c = Os.remove_tree(scratch);
+            ()
         },
     }
 }
@@ -2027,45 +2012,67 @@ let lsp_answer_query (method: String) (params: JsonValue): JsonValue = {
     let uri = lsp.document_uri(params);
     let path = lsp.uri_to_path(uri);
     if uri == "" { JsonNull }
-    else {
-        match Os.read_file(path) {
-            Err(_) => JsonNull,
-            Ok(src) => {
-                let off = lexer.offset_of(src, lsp.params_line(params), lsp.params_col(params));
-                let name = lexer.ident_at(src, off);
-                if name == "" { JsonNull }
+    else { lsp_with_snapshot(path, JsonNull, |target| lsp_answer_query_in(method, params, path, target)) }
+}
+
+let lsp_answer_query_in (method: String) (params: JsonValue) (real: String) (path: String): JsonValue = {
+    match Os.read_file(path) {
+        Err(_) => JsonNull,
+        Ok(src) => {
+            let off = lexer.offset_of(src, lsp.params_line(params), lsp.params_col(params));
+            let name = lexer.ident_at(src, off);
+            if name == "" { JsonNull }
+            else {
+                // Hover prefers the checker: it knows a local's type,
+                // where the name index only knows top-level
+                // definitions and would answer for whatever
+                // top-level name a local happens to shadow.
+                // Go-to-definition still uses the index -- the
+                // checker records types, not binding SITES.
+                let answer = lsp_query(path, lsp.params_line(params), lsp.params_col(params));
+                let inferred = lsp.query_field(answer, "type");
+                let def_line = lsp.query_int(answer, "defLine");
+                // What the answer is ABOUT: the name under the
+                // cursor. `ident_at` already found it, so its extent
+                // is the cursor's line and the name's own length --
+                // no span table needed for this one, and no parse.
+                let here = ident_range(src, off, name);
+                if method == "textDocument/hover" && inferred != "" { lsp.hover_text(name.concat(": ").concat(inferred), here) }
+                // A LOCAL's binding site, which the name index does
+                // not have: it only knows top-level definitions, so
+                // without this a local jumps to whatever top-level
+                // name it happens to share.
+                else if method == "textDocument/definition" && def_line > 0 {
+                    lsp.location_at(real, def_line, lsp.query_int(answer, "defCol"), name.len())
+                }
                 else {
-                    // Hover prefers the checker: it knows a local's type,
-                    // where the name index only knows top-level
-                    // definitions and would answer for whatever
-                    // top-level name a local happens to shadow.
-                    // Go-to-definition still uses the index -- the
-                    // checker records types, not binding SITES.
-                    let answer = lsp_query(path, lsp.params_line(params), lsp.params_col(params));
-                    let inferred = lsp.query_field(answer, "type");
-                    let def_line = lsp.query_int(answer, "defLine");
-                    // What the answer is ABOUT: the name under the
-                    // cursor. `ident_at` already found it, so its extent
-                    // is the cursor's line and the name's own length --
-                    // no span table needed for this one, and no parse.
-                    let here = ident_range(src, off, name);
-                    if method == "textDocument/hover" && inferred != "" { lsp.hover_text(name.concat(": ").concat(inferred), here) }
-                    // A LOCAL's binding site, which the name index does
-                    // not have: it only knows top-level definitions, so
-                    // without this a local jumps to whatever top-level
-                    // name it happens to share.
-                    else if method == "textDocument/definition" && def_line > 0 {
-                        lsp.location_at(path, def_line, lsp.query_int(answer, "defCol"), name.len())
-                    }
-                    else {
-                        match lsp.find_def(lsp_defs(path), name, 0) {
-                            None => JsonNull,
-                            Some(d) => if method == "textDocument/hover" { lsp.hover_result(d, here) } else { lsp.location_result(d) },
-                        }
+                    match lsp.find_def(lsp_defs(path), name, 0) {
+                        None => JsonNull,
+                        Some(d) => if method == "textDocument/hover" { lsp.hover_result(d, here) } else { lsp.location_at(lsp_restore_path(d.path, Path.dirname(path), Path.dirname(real)), d.line, d.col, d.name.len()) },
                     }
                 }
-            },
-        }
+            }
+        },
+    }
+}
+
+// Translate only descendants of this snapshot; prelude/dependency paths
+// outside it must retain their original locations.
+let lsp_restore_path (path: String) (scratch: String) (dir: String): String =
+    if path.starts_with(lsp_directory_prefix(scratch)) {
+        Path.join(dir, String.slice(path, lsp_directory_prefix(scratch).len(), path.len()))
+    } else { path }
+
+let lsp_answer_completion (path: String) (real: String) (params: JsonValue): JsonValue = {
+    let members = lsp_members(path, lsp.params_line(params), lsp.params_col(params));
+    if !Array.is_empty(members) { lsp.completion_result(members) }
+    else {
+        let names = lsp_completions(path);
+        // Half-written buffers may not parse. Keep disk names/keywords useful
+        // in that case, but never fall back to stale member types or locals.
+        lsp.completion_result(Array.concat(
+            if Array.is_empty(names) { lsp_completions(real) } else { names },
+            lsp_locals(path, lsp.params_line(params), lsp.params_col(params))))
     }
 }
 
@@ -2100,14 +2107,7 @@ let lsp_members (path: String) (line: Int) (col: Int): Array[lsp.Completion] =
         Ok(r) => if r.exit_code == 0 { lsp.parse_completions(r.stdout) } else { [] },
     }
 
-// Candidates for the project the edited file belongs to.
-//
-// Read from DISK, not from the unsaved buffer, unlike diagnostics. A
-// name you are halfway through typing is not a name you want offered
-// back to you, and a project whose buffer does not currently parse
-// would otherwise offer nothing at all -- which is exactly when
-// completion is most wanted. The cost is that a function added and not
-// yet saved is missing from the list until you save.
+// Names and keywords from the supplied project view.
 let lsp_completions (path: String): Array[lsp.Completion] =
     match run_process(self_exe(), ["complete", Path.dirname(path)]) {
         Err(_) => [],

@@ -307,5 +307,6 @@ echo "$out" | grep -q "$multi/other.plum\",\"diagnostics\":\[{" || { echo "FAIL:
 echo "$out" | grep -q "$multi/main.plum\",\"diagnostics\":\[\]" || { echo "FAIL: the edited file should have no diagnostics of its own"; fail=1; }
 
 "$PY_BIN" bootstrap/lsp-format-test.py "$plum" || fail=1
+"$PY_BIN" bootstrap/lsp-snapshot-test.py "$plum" || fail=1
 [ $fail -eq 0 ] && echo "lsp smoke: ok"
 exit $fail
