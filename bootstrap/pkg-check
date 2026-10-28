@@ -737,6 +737,64 @@ cache: 0 package(s), 0 file(s), 0 bytes" "$plum" cache list
         fail=$((fail + 1))
     fi
 
+    # Identity isolation uses its own cache so lifecycle counts above
+    # stay meaningful. No content pin: URL identity must stand alone.
+    export PLUM_CACHE="$work/identity-cache"
+    identity_url="$work/identity:remote"
+    cp -a "$work/remote" "$identity_url"
+    identity_manifest() {
+        printf 'Package { name: "consumer", deps: [ Dep { name: "greeter", git: "%s", rev: "%s" } ] }\n' \
+            "$identity_url" "$rev" > "$work/consumer/plum.pkg"
+    }
+    rm -rf "$work/consumer/vendor"
+    identity_manifest
+    expect_ok "fetch first colliding URL" "hello, world" bash -c '"$1" fetch "$2" >/dev/null && "$1" run "$2"' _ "$plum" "$work/consumer"
+    expect_ok "vendor first colliding URL" "hello, world" bash -c '"$1" vendor "$2" >/dev/null && "$1" run "$2"' _ "$plum" "$work/consumer"
+
+    # This remote does not exist yet. Previously both paths mapped to
+    # identity_remote, so fetch skipped Git and builds used the wrong
+    # vendor tree without detecting the changed provenance.
+    identity_url="$work/identity_remote"
+    identity_manifest
+    expect_c_err "another URL cannot reuse vendor or cache" 'Run `plum fetch`' "$plum" check "$work/consumer"
+    expect_c_err "another URL must actually be cloned" 'could not clone' "$plum" fetch "$work/consumer"
+    cp -a "$work/remote" "$identity_url"
+    expect_ok "fetch second colliding URL" "hello, world" bash -c '"$1" fetch "$2" >/dev/null && "$1" run "$2"' _ "$plum" "$work/consumer"
+    expect_ok "vendor second colliding URL" "hello, world" bash -c '"$1" vendor "$2" >/dev/null && "$1" run "$2"' _ "$plum" "$work/consumer"
+    identity_list="$("$plum" cache list 2>&1)"
+    case "$identity_list" in
+        *"3 package(s)"*) pass=$((pass + 1)) ;;
+        *) printf 'FAIL  %-44s\n        got: %s\n' "colliding URLs have separate entries" "$identity_list"
+           fail=$((fail + 1)) ;;
+    esac
+
+    # Adding .git must not alias a different local repository either.
+    identity_url="$work/identity_remote.git"
+    identity_manifest
+    expect_c_err "a git suffix preserves remote identity" 'Run `plum fetch`' "$plum" check "$work/consumer"
+    expect_c_err "a git suffix must actually be cloned" 'could not clone' "$plum" fetch "$work/consumer"
+
+    # The pre-v2 encoding cannot establish provenance. Seed legacy
+    # cache and vendor entries explicitly, using the old local-URL path,
+    # and ensure neither is accepted, even when it holds valid source.
+    export PLUM_CACHE="$work/legacy-cache"
+    identity_url="$work/remote"
+    identity_manifest
+    rm -rf "$work/consumer/vendor"
+    legacy_path="${identity_url#/}/$rev"
+    mkdir -p "$PLUM_CACHE/pkg/$legacy_path" "$work/consumer/vendor/$legacy_path"
+    cp -a "$work/remote/." "$PLUM_CACHE/pkg/$legacy_path/"
+    cp -a "$work/remote/." "$work/consumer/vendor/$legacy_path/"
+    expect_c_err "legacy storage is never reused" 'dependency `greeter` has not been fetched.' "$plum" check "$work/consumer"
+    expect_ok "explicit fetch replaces legacy identity" "hello, world" bash -c '"$1" fetch "$2" >/dev/null && "$1" run "$2"' _ "$plum" "$work/consumer"
+    legacy_list="$("$plum" cache list 2>&1)"
+    case "$legacy_list" in
+        *"3 package(s)"*) pass=$((pass + 1)) ;;
+        *) printf 'FAIL  %-44s\n        got: %s\n' "legacy entries remain listable" "$legacy_list"
+           fail=$((fail + 1)) ;;
+    esac
+    expect_ok "explicit vendor upgrades offline tree" "hello, world" bash -c '"$1" vendor "$2" >/dev/null && mv "$3/pkg" "$3/pkg.hidden" && "$1" run "$2"' _ "$plum" "$work/consumer" "$PLUM_CACHE"
+
     unset PLUM_CACHE
 fi
 
