@@ -2969,9 +2969,6 @@ let cg_runtime_fn (name: String): Option[String] =
     else if name == "process_stderr_raw" { Some("@plum_process_stderr_raw") }
     else if name == "process_free_raw" { Some("@plum_process_free_raw") }
     else if name == "path_is_dir_raw" { Some("@plum_path_is_dir") }
-    else if name == "dir_open_handle" { Some("@plum_dir_open") }
-    else if name == "dir_next_entry" { Some("@plum_dir_next") }
-    else if name == "dir_close_handle" { Some("@plum_dir_close") }
     else if name == "os_temp_dir_raw" { Some("@plum_os_temp_dir") }
     else if name == "os_self_exe_raw" { Some("@plum_os_self_exe") }
     else if name == "os_make_dir_raw" { Some("@plum_os_make_dir") }

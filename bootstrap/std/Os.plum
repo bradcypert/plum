@@ -516,27 +516,44 @@ pub let mtime (path: String): Result[Int, String] = Result.map(stat(path), |m| m
 // not exist is a real `Err`, not silently `Ok(false)`.
 
 let path_is_dir_raw (path: String): Int = 0
-let dir_open_handle (path: String): Int = 0
-let dir_next_entry (handle: Int): String = ""
-let dir_close_handle (handle: Int): Unit = ()
+extern "C" {
+    fn dir_open(path: CStr) -> Int;
+    fn dir_next_size(handle: Int) -> Int;
+    fn dir_entry_data(handle: Int) -> CStr;
+    fn dir_close(handle: Int) -> Unit;
+}
 
-let dir_read_all_acc (handle: Int) (acc: Array[String]): Array[String] = {
-    let name = dir_next_entry(handle);
-    if String.is_empty(name) { acc } else { dir_read_all_acc(handle, acc.push(name)) }
+let dir_read_all_acc (handle: Int) (acc: Array[String]): Result[Array[String], String] = unsafe {
+    let n = dir_next_size(handle);
+    if n < 0 { Err("directory read failed") }
+    else if n == 0 { Ok(acc) }
+    else {
+        // Copy while the stream still owns this entry, then validate without
+        // another copy. No unchecked OS bytes enter a Plum String.
+        match Bytes.from_cstr(dir_entry_data(handle), n).as_string() {
+            Err(_) => Err("directory entry is not valid UTF-8"),
+            Ok(name) => dir_read_all_acc(handle, acc.push(name)),
+        }
+    }
 }
 
 /// Lists a directory's entries by NAME, without `.` or `..`, in
 /// whatever order the filesystem gives.
 ///
 /// Names, not paths: join them onto the directory with `Path.join` to
-/// get something you can open.
-pub let list_dir (path: String): Result[Array[String], String] = {
-    let handle = dir_open_handle(path);
+/// get something you can open. Returns `Err` if opening or reading fails,
+/// or an entry name is not valid UTF-8; never returns a partial listing.
+/// Native entry storage is released before returning, including on errors.
+pub let list_dir (path: String): Result[Array[String], String] = unsafe {
+    let handle = dir_open(path.as_cstr());
     if handle < 0 { Err("Os.list_dir: could not open directory: ".concat(path)) }
     else {
         let entries = dir_read_all_acc(handle, []);
-        dir_close_handle(handle);
-        Ok(entries)
+        dir_close(handle);
+        match entries {
+            Ok(names) => Ok(names),
+            Err(e) => Err("Os.list_dir: ".concat(e).concat(": ").concat(path)),
+        }
     }
 }
 

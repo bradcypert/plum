@@ -21232,3 +21232,38 @@ wide array, deep array and escaped object) changes from 61,081 allocations /
 3,754,889 cumulative bytes to 61,084 / 3,754,961: exactly three 24-byte Result
 cells. String, concatenation and array counters are unchanged. These are
 cumulative allocation measurements, not peak-live-memory or RSS measurements.
+
+### Directory entry ownership and checked text (#128, #137)
+
+`Os.list_dir` copies each borrowed `readdir` name into Plum-owned `Bytes`
+while its stream is still open, then uses `Bytes.as_string` to validate UTF-8
+without copying again. The stream owns the borrowed name until its next
+read or close. Each open stream has one small native wrapper allocation;
+there is no native allocation per entry and no shared or thread-local scratch
+buffer. Closing the stream frees both that wrapper and the directory library's
+storage on success, read failure, or invalid text. Failure to allocate the
+wrapper also closes the newly opened stream.
+
+Previously each entry had an additional `malloc(strlen(name) + 1)` copy
+whose pointer was lost after conversion to a Plum string. Repeating a listing
+therefore accumulated native memory proportional to all names ever read.
+These allocations were outside Plum's reference counting and runtime allocation
+counters: precise Perceus drops cannot reclaim a pointer that was never given
+an owner. Removing that copy fixes this native ownership gap independently of
+the compiler's ownership/reuse algorithm. The returned array still requires
+O(entry count + total name bytes) live storage; `list_dir` is not a streaming
+API or a bound on directory size, and allocator retention can keep RSS high
+after values are freed. No measured RSS reduction is claimed here.
+
+The native size result distinguishes positive entry length, zero exhaustion,
+and negative read failure. The Plum wrapper rejects malformed UTF-8 and read
+failures, discards partial results, and closes before returning `Err`. Callers
+that deliberately discard that error remain separate problems (#175, #177,
+#331); independent copy-tree enumeration needs its own error handling (#184).
+The checked-in seed's legacy String adapter retains a compatible native symbol
+with borrowed storage, so bootstrapping does not reintroduce the per-entry leak.
+
+`bootstrap/directory-smoke` checks allocation/read failure injection, independent
+stream lifetimes, zero native allocations while advancing, and repeated public
+listings under ASan/LSan. The execution corpus also checks invalid UTF-8 errors
+on POSIX and that returned names survive subsequent reads and stream closure.

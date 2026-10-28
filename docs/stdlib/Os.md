@@ -273,7 +273,9 @@ Lists a directory's entries by NAME, without `.` or `..`, in
 whatever order the filesystem gives.
 
 Names, not paths: join them onto the directory with `Path.join` to
-get something you can open.
+get something you can open. Returns `Err` if opening or reading fails,
+or an entry name is not valid UTF-8; never returns a partial listing.
+Native entry storage is released before returning, including on errors.
 
 ## `let is_directory (path: String): Result[Bool, String]`
 

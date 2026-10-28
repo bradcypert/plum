@@ -164,6 +164,8 @@ jobs:
         run: ./bootstrap/handle-registry-smoke
       - name: tree removal stays inside held directories and releases resources
         run: ./bootstrap/remove-tree-smoke
+      - name: directory listings release storage and reject partial or invalid names
+        run: ./bootstrap/directory-smoke
       - name: OS path results survive concurrent native calls
         run: ./bootstrap/os-path-smoke
       - name: task and channel failures preserve ownership
