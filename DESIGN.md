@@ -2564,6 +2564,25 @@ parent directory) path — each backend independently. Workspace now
 
 ### Chunk 9: JSON — `json_parse`/`json_stringify`, pure Plum prelude source, plus two real compiler bugs found and fixed
 
+Current self-hosted behavior supersedes the historical scope below:
+`json_parse` scans UTF-8 bytes, builds decoded strings from runs and escape
+chunks, and accepts at most 128 nested arrays/objects (root included).
+It supports the JSON string/number grammar, including surrogate pairs,
+and rejects duplicate decoded object keys. The serializer uses its own
+explicit traversal stack and can emit values deeper than the parse limit.
+
+Builders update their owned accumulator slots so appends can reuse array
+capacity under the compiler's copy-on-write rules. This avoids quadratic
+prefix copying for decoded strings and collection accumulation, as well
+as the old per-codepoint input strings. Memory still scales with input,
+decoded output, and container entries; the depth bound limits recursive
+parser frames, not total document size. Duplicate-key detection still
+compares against previous keys and can take quadratic time for wide
+objects. Framing limits (#111) and binary64 overflow policy (#249) remain
+separate concerns. This parser change does not establish new ownership,
+reclamation, or allocator guarantees for the rest of the language.
+
+
 Next stdlib area after file I/O, explicitly named by the user as the
 intended direct follow-on. Two scope questions were resolved with the
 user via `AskUserQuestion` before design: (1) API surface is **parse +

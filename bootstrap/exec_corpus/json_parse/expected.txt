@@ -1,0 +1,60 @@
+unexpected end of input
+invalid literal
+unterminated string
+unterminated escape
+unsupported escape sequence
+unexpected character
+expected ':'
+expected ',' or ']'
+expected ',' or '}'
+trailing characters after JSON value
+leading zero in JSON number
+leading zero in JSON number
+leading zero in JSON number
+expected digit
+expected digit
+expected digit
+invalid unicode escape
+invalid unicode escape
+invalid unicode escape
+invalid unicode escape
+invalid unicode escape
+invalid unicode surrogate pair
+invalid unicode surrogate pair
+invalid unicode surrogate pair
+invalid unicode surrogate pair
+invalid unicode surrogate pair
+unescaped control character
+duplicate object member name
+"\b\f\n\r\t/\\\""
+"\u0000\u001f߿ࠀ￿"
+"𐀀􏿿😀"
+"é λ 😀"
+[0,-0,0.125,100,-0.01]
+{"éa":[true,false,null]}
+at limit: ok
+JSON nesting limit exceeded (128)
+at limit: ok
+JSON nesting limit exceeded (128)
+at limit: ok
+JSON nesting limit exceeded (128)
+at limit: ok
+JSON nesting limit exceeded (128)
+at limit: ok
+JSON nesting limit exceeded (128)
+at limit: ok
+JSON nesting limit exceeded (128)
+at limit: ok
+JSON nesting limit exceeded (128)
+at limit: ok
+JSON nesting limit exceeded (128)
+at limit: ok
+JSON nesting limit exceeded (128)
+raw controls: ok
+long UTF-8 string: ok
+wide array: ok
+JSON nesting limit exceeded (128)
+0
+0
+1
+sibling depths: ok

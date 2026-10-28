@@ -52,12 +52,7 @@ One key and value stored in a map bucket.
 
 ## `struct JsonEntry`
 
-Mirrored from `crates/plumc/src/lib.rs`'s STDLIB_JSON_SRC, minus its
-own `chars_of` (the runtime already provides that one, since it is the
-single thing this prelude cannot write in Plum). Everything else is
-character-for-character the real compiler's, so the two agree on
-number formatting, escape handling and parse errors by construction
-rather than by inspection.
+An object member, with a decoded key and JSON value.
 
 ## `enum JsonValue`
 
@@ -81,6 +76,14 @@ Parses JSON text.
 value and rejects trailing text after it. Object member names must
 be unique within each object, compared after decoding escapes;
 duplicate names return `Err("duplicate object member name")`.
+Strings support JSON escapes, including UTF-16 surrogate pairs, and
+reject raw control characters and unpaired surrogates. Numbers must
+follow JSON syntax (no leading zeros).
+At most 128 arrays/objects may be nested, counting the root container;
+a deeper container returns `Err("JSON nesting limit exceeded (128)")`.
+Input bytes and decoded strings use linear storage; this is not a
+total input-size limit. Wide objects still compare each key against
+preceding keys to reject duplicates.
 
 ## `let json_stringify (v: JsonValue): String`
 

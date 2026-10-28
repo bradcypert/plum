@@ -1621,3 +1621,27 @@ pub let test_hash_equality_and_map_laws (): Unit = {
         assert_eq(n.to_string().hash(), String.hash(n.to_string()));
     };
 }
+
+// Exercise every control byte and multi-byte UTF-8 alongside escapes.
+// Compare decoded values: re-serialization alone could hide data loss.
+let json_string_bytes (seed: Int) (left: Int) (acc: Array[Int]): String =
+    if left == 0 { Result.unwrap_or(Bytes.as_string(Bytes.from_array(acc)), "invalid generated UTF-8") }
+    else {
+        let c = rand_between(seed, 0, 255);
+        let next = if c < 128 { acc.push(c) } else { acc.push(192 + c / 64).push(128 + c % 64) };
+        json_string_bytes(next_seed(seed), left - 1, next)
+    }
+
+let json_string_roundtrips (seed: Int) (left: Int): Unit =
+    if left > 0 {
+        let text = json_string_bytes(seed, rand_between(seed, 0, 128), []);
+        let encoded = json_stringify(JsonString(text));
+        let decoded = match json_parse(encoded) {
+            Ok(JsonString(s)) => s,
+            _ => { panic_raw("generated JSON string did not parse"); "" },
+        };
+        check_eq("JSON string value round trip", encoded, decoded, text);
+        json_string_roundtrips(next_seed(seed), left - 1)
+    } else { () }
+
+pub let test_json_string_values (): Unit = json_string_roundtrips(155, 500)

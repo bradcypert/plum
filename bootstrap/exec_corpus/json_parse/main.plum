@@ -1,0 +1,76 @@
+// Parser grammar and diagnostic coverage independent of round trips.
+let status (text: String): String = match json_parse(text) {
+    Ok(v) => json_stringify(v),
+    Err(e) => e,
+}
+
+let nested_text (n: Int) (kind: Int) (leaf: String): String =
+    if n == 0 { leaf }
+    else if kind == 0 { nested_text(n - 1, kind, "[".concat(leaf).concat("]")) }
+    else if kind == 1 { nested_text(n - 1, kind, "{\"k\":".concat(leaf).concat("}")) }
+    else { nested_text(n - 1, kind, if n % 2 == 0 { "[".concat(leaf).concat("]") } else { "{\"k\":".concat(leaf).concat("}") }) }
+
+let main (): Unit = {
+    println(status(""));
+    println(status("tru"));
+    println(status("\"abc"));
+    println(status("\"a\\"));
+    println(status("\"\\q\""));
+    println(status("[1,]"));
+    println(status("{\"x\" 1}"));
+    println(status("[1 2]"));
+    println(status("{\"x\":1 \"y\":2}"));
+    println(status("null false"));
+    println(status("01"));
+    println(status("-01"));
+    println(status("[00]"));
+    println(status("1."));
+    println(status("1e+"));
+    println(status("-.2"));
+    println(status("\"\\u\""));
+    println(status("\"\\u0\""));
+    println(status("\"\\u00\""));
+    println(status("\"\\u000\""));
+    println(status("\"\\u00xz\""));
+    println(status("\"\\ud800\""));
+    println(status("\"\\udc00\""));
+    println(status("\"\\ud800x\""));
+    println(status("\"\\ud800\\u0041\""));
+    println(status("\"\\ud800\\ud800\""));
+    println(status("\"a\nb\""));
+    println(status("{\"a\":1,\"\\u0061\":2}"));
+    println(status("\"\\b\\f\\n\\r\\t\\/\\\\\\\"\""));
+    println(status("\"\\u0000\\u001f\\u007f\\u0080\\u07ff\\u0800\\uffff\""));
+    println(status("\"\\ud800\\udc00\\udbff\\udfff\\uD83D\\uDE00\""));
+    println(status("\"é λ 😀\""));
+    println(status("[0,-0,0.125,1E+2,-1e-2]"));
+    println(status(" \r\n\t {\"é\\u0061\": [true,false,null]} \t"));
+    for kind in [0, 1, 2] {
+        for leaf in ["null", "[]", "{}"] {
+            let at = nested_text(if leaf == "null" { 128 } else { 127 }, kind, leaf);
+            println(if status(at) == at { "at limit: ok" } else { "at limit: FAIL" });
+            println(status(nested_text(129, kind, leaf)));
+        }
+    };
+    for code in 0..32 {
+        let raw = Result.unwrap_or(Bytes.as_string(Bytes.from_array([34, code, 34])), "bad");
+        if status(raw) != "unescaped control character" { panic_raw("accepted raw control") };
+    };
+    println("raw controls: ok");
+    let long = String.repeat("é λ 😀\n\t\\\"", 10000);
+    let encoded = json_stringify(JsonString(long));
+    let decoded = match json_parse(encoded) { Ok(JsonString(v)) => v, _ => "bad" };
+    println(if long == decoded && encoded == json_stringify(JsonString(long)) { "long UTF-8 string: ok" } else { "long UTF-8 string: FAIL" });
+    let wide = "[".concat(String.repeat("null,", 20000)).concat("null]");
+    match json_parse(wide) {
+        Ok(JsonArray(xs)) => println(if xs.len() == 20001 { "wide array: ok" } else { "wide array: FAIL" }),
+        _ => println("wide array: FAIL"),
+    };
+    println(status(String.repeat("[", 10000)));
+    println(status("0.".concat(String.repeat("0", 100000)).concat("1")));
+    println(status("1e-100000"));
+    println(Result.unwrap_or(String.parse_float("0001.0"), 0.0).to_string());
+    let sibling = "[".concat(nested_text(127, 2, "null"));
+    let siblings = sibling.concat(",").concat(nested_text(127, 2, "null")).concat("]");
+    println(if status(siblings) == siblings { "sibling depths: ok" } else { "sibling depths: FAIL" });
+}
