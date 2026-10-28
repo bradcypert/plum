@@ -3274,18 +3274,25 @@ let infer_struct_fields (p2: Program2) (state: FreshState) (env: TyEnv) (acc: Su
         infer_struct_fields(p2, r.state, env, s2, info, gen_args, fields, i + 1, texprs.push(r.texpr))
     }
 
-let infer_match (p2: Program2) (state: FreshState) (env: TyEnv) (acc: Subst) (scrutinee: parser.PExpr) (arms: Array[parser.MatchArmNode]): InferResult = {
-    // The position to come BACK to. The arms move it, and an error
-    // raised after them -- exhaustiveness, or anything later in the
-    // enclosing statement -- would otherwise be reported against
-    // whichever arm happened to be checked last.
-    let here = current_err_offset(());
-    let sr = infer_expr(p2, state, env, acc, scrutinee);
-    let ar = infer_match_arms(p2, sr.state, env, sr.subst, subst_apply(sr.subst, sr.ty), arms, 0, None, []);
-    set_stmt_pos(here);
-    check_exhaustive(p2, subst_apply(ar.subst, sr.ty), ar.tarms);
-    ir_leaf(ar.ty, ar.subst, ar.state, TMatch(sr.texpr, ar.tarms))
-}
+let infer_match (p2: Program2) (state: FreshState) (env: TyEnv) (acc: Subst) (scrutinee: parser.PExpr) (arms: Array[parser.MatchArmNode]): InferResult =
+    if Array.is_empty(arms) {
+        // Every lowered match branches to its first arm. Enforce the
+        // nonempty shape here for all scrutinee types, before inference
+        // can give an empty match a Unit result and pass it to codegen.
+        fail_tc("`match` needs at least one arm");
+        ir_unsupported(acc, state, "empty match")
+    } else {
+        // The position to come BACK to. The arms move it, and an error
+        // raised after them -- exhaustiveness, or anything later in the
+        // enclosing statement -- would otherwise be reported against
+        // whichever arm happened to be checked last.
+        let here = current_err_offset(());
+        let sr = infer_expr(p2, state, env, acc, scrutinee);
+        let ar = infer_match_arms(p2, sr.state, env, sr.subst, subst_apply(sr.subst, sr.ty), arms, 0, None, []);
+        set_stmt_pos(here);
+        check_exhaustive(p2, subst_apply(ar.subst, sr.ty), ar.tarms);
+        ir_leaf(ar.ty, ar.subst, ar.state, TMatch(sr.texpr, ar.tarms))
+    }
 
 struct ArmsResult { ty: ITy, subst: Subst, state: FreshState, tarms: Array[TArm] }
 

@@ -72,6 +72,11 @@ Selected fixtures, and what each pins down:
   the half that catches an over-strict fix. See DESIGN.md's "The
   annotation the parser threw away".
 - `non_exhaustive_match/` — below.
+- `match_empty_int/`, `match_empty_string/`, `match_empty_enum/`, and
+  `match_empty_uninhabited/` — a `match` needs at least one arm,
+  regardless of the scrutinee type, including zero-variant enums. Both
+  checking and compilation must report the shape error at its source
+  location before an empty match can reach LLVM generation.
 
 ## The one exclusion, now closed
 

@@ -1,0 +1,5 @@
+// Empty matches must be rejected before reaching LLVM, even in an
+// unused function with a Unit return type.
+let f (x: Int): Unit = match x {}
+
+let main (): Unit = ()

@@ -1,0 +1,5 @@
+// Heap-owned scrutinees follow the same shape rule as scalar values.
+let main (): Unit = {
+    let value = "owned".concat(" string");
+    match value {}
+}
