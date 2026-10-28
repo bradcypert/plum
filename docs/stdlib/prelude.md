@@ -79,13 +79,15 @@ duplicate names return `Err("duplicate object member name")`.
 Strings support JSON escapes, including UTF-16 surrogate pairs, and
 reject raw control characters and unpaired surrogates. Numbers must
 follow JSON syntax (no leading zeros).
+Numbers overflowing binary64 return `Err`; underflow rounds to a
+subnormal value or signed zero.
 At most 128 arrays/objects may be nested, counting the root container;
 a deeper container returns `Err("JSON nesting limit exceeded (128)")`.
 Input bytes and decoded strings use linear storage; this is not a
 total input-size limit. Wide objects still compare each key against
 preceding keys to reject duplicates.
 
-## `let json_stringify (v: JsonValue): String`
+## `let json_stringify (v: JsonValue): Result[String, String]`
 
 Renders a `JsonValue` as compact JSON — no spaces, no newlines.
 
@@ -94,6 +96,8 @@ document is the order they were read. All U+0000–U+001F control
 characters are escaped, including in keys. Output construction takes
 linear time and space in the output size, with an explicit traversal
 stack proportional to nesting depth instead of native stack recursion.
+Returns `Err("non-finite JSON number")` for NaN or either infinity,
+including inside arrays and objects. No partial output is returned.
 
 ## `let hash (self: T): Int`
 

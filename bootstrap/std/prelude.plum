@@ -184,6 +184,9 @@ let PLUM_NIBBLE_ONES: Array[Int] = [0, 1, 1, 2, 1, 2, 2, 3, 1, 2, 2, 3, 2, 3, 3,
 /// The absolute value, clearing the sign bit (including on negative zero).
 /// NaN remains NaN.
 pub let Float.abs (a: Float): Float = abs_raw(a)
+/// Whether `x` is neither infinity nor NaN. Includes both signed zeros
+/// and subnormal values.
+pub let Float.is_finite (x: Float): Bool = x - x == 0.0
 /// The smaller of two. NaN does not compare, so a NaN argument gives
 /// an answer that is not meaningful.
 pub let Float.min (a: Float) (b: Float): Float = if a < b { a } else { b }
@@ -845,6 +848,8 @@ pub let String.parse_int (s: String): Result[Int, String] = {
 /// The JSON parser was already in this same prelude, already
 /// handling exponents, already correct. Reusing it is not absurd;
 /// writing a second one was.
+/// Overflow returns `Err`; underflow follows binary64 rounding to a
+/// subnormal value or signed zero.
 pub let String.parse_float (s: String): Result[Float, String] = {
     let cs = bytes_of_str_raw(s);
     match parse_number(cs, 0) {
@@ -1454,7 +1459,14 @@ let parse_number (bytes: Bytes) (pos: Int): Result[ParseResult[Float], String] =
             let exp_start = if has_exp && after_e < n && (bytes_at_raw(bytes, after_e) == 45 || bytes_at_raw(bytes, after_e) == 43) { after_e + 1 } else { after_e };
             let end = if has_exp { parse_digits(bytes, exp_start) } else { frac_end };
             if has_exp && end == exp_start { Err("expected digit") }
-            else { Ok(ParseResult { value: parse_float_raw(str_of_bytes_raw(bytes_slice_raw(bytes, pos, end))), next_pos: end }) }
+            else {
+                let converted = parse_float_raw(str_of_bytes_raw(bytes_slice_raw(bytes, pos, end)));
+                // Some CRTs return positive zero on negative underflow.
+                // Preserve the token's sign independently of that behavior.
+                let value = if converted == 0.0 && start > pos { -0.0 } else { converted };
+                if Float.is_finite(value) { Ok(ParseResult { value: value, next_pos: end }) }
+                else { Err("float out of range") }
+            }
         }
     }
 }
@@ -1627,6 +1639,8 @@ let parse_object_entries (bytes: Bytes) (pos: Int) (depth: Int) (acc: Array[Json
 /// Strings support JSON escapes, including UTF-16 surrogate pairs, and
 /// reject raw control characters and unpaired surrogates. Numbers must
 /// follow JSON syntax (no leading zeros).
+/// Numbers overflowing binary64 return `Err`; underflow rounds to a
+/// subnormal value or signed zero.
 /// At most 128 arrays/objects may be nested, counting the root container;
 /// a deeper container returns `Err("JSON nesting limit exceeded (128)")`.
 /// Input bytes and decoded strings use linear storage; this is not a
@@ -1681,8 +1695,8 @@ enum JsonWriteStack {
 // Append only through self-rebinding here: passing parts through nested
 // helpers keeps aliases alive and defeats geometric array growth.
 // concat_all then copies the fragments into one final allocation.
-let json_emit (stack: JsonWriteStack) (parts: Array[String]): String = match stack {
-    JsonWriteDone => Array.concat_all(parts),
+let json_emit (stack: JsonWriteStack) (parts: Array[String]): Result[String, String] = match stack {
+    JsonWriteDone => Ok(Array.concat_all(parts)),
     JsonWriteText(text, rest) => {
         parts = parts.push(text);
         json_emit(rest, parts)
@@ -1708,8 +1722,10 @@ let json_emit (stack: JsonWriteStack) (parts: Array[String]): String = match sta
             json_emit(rest, parts)
         },
         JsonNumber(n) => {
-            parts = parts.push(n.to_string());
-            json_emit(rest, parts)
+            if Float.is_finite(n) {
+                parts = parts.push(n.to_string());
+                json_emit(rest, parts)
+            } else { Err("non-finite JSON number") }
         },
         JsonString(s) => {
             parts = parts.push("\"");
@@ -1752,7 +1768,9 @@ let json_emit (stack: JsonWriteStack) (parts: Array[String]): String = match sta
 /// characters are escaped, including in keys. Output construction takes
 /// linear time and space in the output size, with an explicit traversal
 /// stack proportional to nesting depth instead of native stack recursion.
-pub let json_stringify (v: JsonValue): String = json_emit(JsonWriteValue(v, JsonWriteDone), [])
+/// Returns `Err("non-finite JSON number")` for NaN or either infinity,
+/// including inside arrays and objects. No partial output is returned.
+pub let json_stringify (v: JsonValue): Result[String, String] = json_emit(JsonWriteValue(v, JsonWriteDone), [])
 /// `pub` because the PARSER generates calls to these when it
 /// desugars `requires`/`ensures`, and that generated code lands in
 /// the user's own module. Nobody writes them by hand.

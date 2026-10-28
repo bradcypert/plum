@@ -9,6 +9,11 @@ Part of [`prelude`](prelude.md).
 The absolute value, clearing the sign bit (including on negative zero).
 NaN remains NaN.
 
+## `let Float.is_finite (x: Float): Bool`
+
+Whether `x` is neither infinity nor NaN. Includes both signed zeros
+and subnormal values.
+
 ## `let Float.min (a: Float) (b: Float): Float`
 
 The smaller of two. NaN does not compare, so a NaN argument gives

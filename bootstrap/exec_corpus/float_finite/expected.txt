@@ -1,0 +1,24 @@
+true
+true
+true
+true
+true
+true
+false
+false
+false
+Err("float out of range")
+float out of range
+Err("float out of range")
+float out of range
+Err("float out of range")
+float out of range
+Err("float out of range")
+float out of range
+true
+true
+true
+true
+true
+true
+Err("float out of range")

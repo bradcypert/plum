@@ -1,0 +1,26 @@
+let main (): Unit = {
+    let zero = 0.0;
+    for x in [zero, -0.0, 5e-324, -5e-324, 1.7976931348623157e308, -1.7976931348623157e308, 1.0 / zero, -1.0 / zero, zero / zero] {
+        println(Float.is_finite(x).to_string());
+    };
+    for text in ["1e400", "-1e400", "1.7976931348623159e308", "1e99999999999999999999"] {
+        println(String.parse_float(text).to_string());
+        println(match json_parse(text) { Ok(JsonNumber(x)) => x.to_string(), Err(e) => e, _ => "unexpected value" });
+    };
+    // Check numerical value and zero sign rather than pinning a CRT's
+    // decimal rendering of subnormals. Derive the smallest subnormal
+    // arithmetically so parsing the test's expected value cannot mask a bug.
+    let tiny = 2.2250738585072014e-308 / 4503599627370496.0;
+    for pair in [("1e-400", 0.0), ("-1e-400", -0.0), ("5e-324", tiny)] {
+        let (text, expected) = pair;
+        println(match String.parse_float(text) {
+            Ok(value) => value == expected && 1.0 / value == 1.0 / expected,
+            Err(_) => false,
+        });
+        println(match json_parse(text) {
+            Ok(JsonNumber(value)) => value == expected && 1.0 / value == 1.0 / expected,
+            _ => false,
+        });
+    };
+    println(json_parse("{\"kept\":[1,2],\"bad\":1e400}").to_string());
+}

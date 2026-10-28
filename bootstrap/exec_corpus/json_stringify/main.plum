@@ -12,16 +12,38 @@ let controls (n: Int) (xs: Array[Int]): Array[Int] =
     if n == 32 { xs } else { controls(n + 1, xs.push(n)) }
 
 let main (): Unit = {
+    let zero = 0.0;
+    for n in [1.0 / zero, -1.0 / zero, zero / zero] {
+        let bad = JsonNumber(n);
+        println(json_stringify(bad) == Err("non-finite JSON number"));
+        let mixed = JsonObject([
+            JsonEntry { key: "written", value: JsonString("prefix\nλ") },
+            JsonEntry { key: "nested", value: JsonArray([JsonBool(true), bad, JsonString("unvisited")]) },
+        ]);
+        for i in 0..100 { assert_eq(json_stringify(mixed), Err("non-finite JSON number")); };
+        println(json_stringify(mixed) == Err("non-finite JSON number"));
+        println(json_stringify(nest(10000, bad)) == Err("non-finite JSON number"));
+    };
+    for n in [-0.0, 5e-324, -5e-324, 1.7976931348623157e308, -1.7976931348623157e308] {
+        let encoded = stringify_valid(JsonNumber(n));
+        println(match json_parse(encoded) { Ok(JsonNumber(value)) => value == n, _ => false });
+    };
     let text = Result.unwrap_or(Bytes.as_string(Bytes.from_array(controls(0, []))), "bad UTF-8");
-    println(json_stringify(JsonString(text)));
-    println(json_stringify(JsonObject([JsonEntry { key: text, value: JsonString("\"\\/ é λ 😀") }])));
-    println(json_stringify(JsonArray([JsonNull, JsonBool(false), JsonNumber(-2.5), JsonString(""), JsonArray([]), JsonObject([])])));
-    println(json_stringify(nest(4, JsonBool(true))));
+    println(stringify_valid(JsonString(text)));
+    println(stringify_valid(JsonObject([JsonEntry { key: text, value: JsonString("\"\\/ é λ 😀") }])));
+    println(stringify_valid(JsonArray([JsonNull, JsonBool(false), JsonNumber(-2.5), JsonString(""), JsonArray([]), JsonObject([])])));
+    println(stringify_valid(nest(4, JsonBool(true))));
     let value = nest(10000, JsonNull);
-    let first = json_stringify(value);
-    let second = json_stringify(value);
+    let first = stringify_valid(value);
+    let second = stringify_valid(value);
     println(if first == second && Bytes.len(first.as_bytes()) == 40004 { "deep mixed: ok" } else { "deep mixed: FAIL" });
     let arr = JsonArray(wide(20000, JsonBool(true), []));
-    let out = json_stringify(arr);
+    let out = stringify_valid(arr);
     println(if Bytes.len(out.as_bytes()) == 100001 { "wide: ok" } else { "wide: FAIL" });
+}
+
+// These fixtures construct finite JSON. Fail loudly if that invariant changes.
+let stringify_valid (value: JsonValue): String = match json_stringify(value) {
+    Ok(text) => text,
+    Err(e) => { panic_raw(e); "" },
 }

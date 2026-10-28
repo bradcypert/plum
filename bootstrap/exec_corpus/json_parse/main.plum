@@ -1,6 +1,6 @@
 // Parser grammar and diagnostic coverage independent of round trips.
 let status (text: String): String = match json_parse(text) {
-    Ok(v) => json_stringify(v),
+    Ok(v) => stringify_valid(v),
     Err(e) => e,
 }
 
@@ -58,9 +58,9 @@ let main (): Unit = {
     };
     println("raw controls: ok");
     let long = String.repeat("é λ 😀\n\t\\\"", 10000);
-    let encoded = json_stringify(JsonString(long));
+    let encoded = stringify_valid(JsonString(long));
     let decoded = match json_parse(encoded) { Ok(JsonString(v)) => v, _ => "bad" };
-    println(if long == decoded && encoded == json_stringify(JsonString(long)) { "long UTF-8 string: ok" } else { "long UTF-8 string: FAIL" });
+    println(if long == decoded && encoded == stringify_valid(JsonString(long)) { "long UTF-8 string: ok" } else { "long UTF-8 string: FAIL" });
     let wide = "[".concat(String.repeat("null,", 20000)).concat("null]");
     match json_parse(wide) {
         Ok(JsonArray(xs)) => println(if xs.len() == 20001 { "wide array: ok" } else { "wide array: FAIL" }),
@@ -73,4 +73,10 @@ let main (): Unit = {
     let sibling = "[".concat(nested_text(127, 2, "null"));
     let siblings = sibling.concat(",").concat(nested_text(127, 2, "null")).concat("]");
     println(if status(siblings) == siblings { "sibling depths: ok" } else { "sibling depths: FAIL" });
+}
+
+// These fixtures construct finite JSON. Fail loudly if that invariant changes.
+let stringify_valid (value: JsonValue): String = match json_stringify(value) {
+    Ok(text) => text,
+    Err(e) => { panic_raw(e); "" },
 }
