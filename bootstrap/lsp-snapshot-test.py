@@ -9,6 +9,8 @@ import tempfile
 import threading
 from pathlib import Path
 
+from lsp_test_support import file_uri as uri, native_path
+
 
 def frame(message):
     body = json.dumps({"jsonrpc": "2.0", **message}).encode()
@@ -17,7 +19,8 @@ def frame(message):
 
 class Client:
     def __init__(self, compiler, scratch):
-        env = {**os.environ, "TMPDIR": str(scratch) + "/", "TMP": str(scratch), "TEMP": str(scratch)}
+        temp = native_path(scratch)
+        env = {**os.environ, "TMPDIR": temp + "/", "TMP": temp, "TEMP": temp}
         self.proc = subprocess.Popen([compiler, "lsp"], stdin=subprocess.PIPE,
                                      stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=env)
         self.answers = queue.Queue()
@@ -74,11 +77,6 @@ class Client:
         return self.request("textDocument/" + method, {
             "textDocument": {"uri": uri(path)},
             "position": {"line": prefix.count("\n"), "character": len(prefix.rsplit("\n", 1)[-1])}})
-
-
-def uri(path):
-    # Match this server's current file-URI contract (escaping is #160).
-    return ("file:///" if path.drive else "file://") + path.as_posix()
 
 
 def check(compiler):
