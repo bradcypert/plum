@@ -20,6 +20,8 @@ static HANDLE WINAPI tracked_create(LPCWSTR p, DWORD a, DWORD s, LPSECURITY_ATTR
                                     DWORD c, DWORD f, HANDLE t) {
     HANDLE h = CreateFileW(p, a, s, sa, c, f, t);
     if (h != INVALID_HANDLE_VALUE) handles++;
+    else if (!fail_at) fprintf(stderr, "CreateFileW(%ls, access=0x%lx, share=0x%lx): error %lu\n", p,
+                              (unsigned long)a, (unsigned long)s, (unsigned long)GetLastError());
     return h;
 }
 static BOOL WINAPI tracked_close(HANDLE h) { handles--; return CloseHandle(h); }
@@ -54,6 +56,7 @@ static BOOL WINAPI tracked_info(HANDLE h, LPBY_HANDLE_FILE_INFORMATION info) {
 long long os_rename_file(const char *from, const char *to) {
     wchar_t *a = plum_whole_wide(from), *b = plum_whole_wide(to);
     long long rc = a && b && MoveFileExW(a, b, MOVEFILE_REPLACE_EXISTING) ? 0 : -1;
+    if (rc && !fail_at) fprintf(stderr, "MoveFileExW(%s, %s): error %lu\n", from, to, (unsigned long)GetLastError());
     tracked_free(a); tracked_free(b);
     return rc;
 }
@@ -88,7 +91,11 @@ int main(void) {
     assert(DeleteFileW(root) && CreateDirectoryW(root, NULL) && SetCurrentDirectoryW(root));
     assert(CreateDirectoryW(L"held", NULL) && CreateDirectoryW(L"outside", NULL));
     deny_swap = 1;
-    assert(plum_write_generated_file("held/page", "new", 3) == 0 && !deny_swap);
+    long long result = plum_write_generated_file("held/page", "new", 3);
+    if (result) fprintf(stderr, "initial generated write: result=%lld, swap hook pending=%d, error=%lu, errno=%d\n",
+                        result, deny_swap, (unsigned long)GetLastError(), errno);
+    assert(result == 0);
+    assert(!deny_swap);
     assert(buffers == 0 && handles == 0);
     // Sharing restrictions must end with the call: no retained handle may
     // prevent later renames or writes to the directory.
