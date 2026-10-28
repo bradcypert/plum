@@ -1,0 +1,6 @@
+empty directory: ok
+repeated listings: ok
+names outlive native storage: ok
+open failures: ok
+invalid UTF-8 rejected: ok
+cleanup: ok

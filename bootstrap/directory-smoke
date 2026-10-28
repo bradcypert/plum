@@ -1,0 +1,15 @@
+#!/usr/bin/env bash
+# Native fault injection and the public API, both with leak detection.
+set -euo pipefail
+root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+cd "$root"
+plum="${PLUM:-./sh}"
+work="$(mktemp -d)"
+trap 'rm -rf "$work"' EXIT
+clang -O1 -g -Wall -Wextra -fsanitize=address,undefined -fno-sanitize-recover=all \
+    bootstrap/directory-test.c -o "$work/native-test"
+ASAN_OPTIONS=detect_leaks=1 timeout 30 "$work/native-test"
+"$plum" build bootstrap/exec_corpus/directory_entries --asan -o "$work/public-test"
+ASAN_OPTIONS=detect_leaks=1 timeout 30 "$work/public-test" > "$work/out"
+diff -u bootstrap/exec_corpus/directory_entries/expected.txt "$work/out"
+echo 'directory smoke: ok'

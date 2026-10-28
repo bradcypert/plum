@@ -1,64 +1,59 @@
-// A thin ABI-adapter shim for POSIX directory listing — `opendir`/
-// `readdir`/`closedir` return a `struct dirent *`/`DIR *`, neither of
-// which fit Plum's `extern "C"` type surface (`Int`/`Float`/`Bool`/
-// `CStr`/qualifying-struct only, no raw pointers/opaque types). Same
-// pattern as `net_shim.c` (see its own doc comment for the general
-// story) — flat `Int`/`CStr` functions, real POSIX structs built/
-// consumed internally.
-//
-// **Handle-based, not a single call returning `Array[String]`** — the
-// extern surface has no way to return an array at all. Mirrors `net_
-// shim.c`'s own accept-loop shape: `dir_open` returns an opaque `Int`
-// handle, `dir_read_next` returns ONE entry name per call (`""`, a
-// real non-null empty `CStr`, when exhausted — same "never return
-// null, an empty result is a normal outcome" convention `tcp_recv`
-// already established, not a new one), and the Plum-level wrapper
-// (`list_dir` in `STDLIB_OS_SRC`) loops via the SAME tail-recursive
-// accumulator idiom every other "read until done" stdlib function
-// already uses. `.` and `..` are skipped here, C-side, once — no
-// caller of `list_dir` should ever have to filter them out themselves.
-//
-// **Unix-only (Linux/macOS)** — same documented v1 scope as every
-// other native_stdlib shim.
+// Directory streams own their borrowed entry storage. No entry allocation
+// escapes the shim: callers copy dir_entry_data before advancing or closing
+// that handle. Separate handles have independent storage (no global/TLS buffer).
 #include <dirent.h>
 #include <sys/stat.h>
 #include <string.h>
 #include <stdlib.h>
 #include <stdint.h>
+#include <errno.h>
+
+typedef struct {
+    DIR *stream;
+    const char *name;
+} PlumDir;
 
 long long dir_open(const char *path) {
-    DIR *d = opendir(path);
-    if (d == NULL) {
+    DIR *stream = opendir(path);
+    if (stream == NULL) return -1;
+    PlumDir *dir = malloc(sizeof(*dir));
+    if (dir == NULL) {
+        closedir(stream);
         return -1;
     }
-    return (long long)(intptr_t)d;
+    dir->stream = stream;
+    dir->name = "";
+    return (long long)(intptr_t)dir;
 }
 
-const char *dir_read_next(long long handle) {
-    DIR *d = (DIR *)(intptr_t)handle;
-    if (d == NULL) {
-        return "";
-    }
-    struct dirent *entry;
-    while ((entry = readdir(d)) != NULL) {
-        if (strcmp(entry->d_name, ".") == 0 || strcmp(entry->d_name, "..") == 0) {
+// Positive byte length = entry; zero = exhaustion; -1 = read failure.
+// Clear errno immediately before EACH read: skipped entries and callers
+// can leave unrelated errors behind. Never turn a failed read into EOF.
+long long dir_next_size(long long handle) {
+    PlumDir *dir = (PlumDir *)(intptr_t)handle;
+    if (dir == NULL) return -1;
+    dir->name = "";
+    for (;;) {
+        errno = 0;
+        struct dirent *entry = readdir(dir->stream);
+        if (entry == NULL) return errno == 0 ? 0 : -1;
+        if (strcmp(entry->d_name, ".") == 0 || strcmp(entry->d_name, "..") == 0)
             continue;
-        }
-        size_t len = strlen(entry->d_name);
-        char *copy = malloc(len + 1);
-        if (copy == NULL) {
-            return "";
-        }
-        memcpy(copy, entry->d_name, len + 1);
-        return copy;
+        dir->name = entry->d_name;
+        return (long long)strlen(dir->name);
     }
-    return "";
+}
+
+const char *dir_entry_data(long long handle) {
+    PlumDir *dir = (PlumDir *)(intptr_t)handle;
+    return dir == NULL ? "" : dir->name;
 }
 
 void dir_close(long long handle) {
-    DIR *d = (DIR *)(intptr_t)handle;
-    if (d != NULL) {
-        closedir(d);
+    PlumDir *dir = (PlumDir *)(intptr_t)handle;
+    if (dir != NULL) {
+        closedir(dir->stream);
+        free(dir);
     }
 }
 

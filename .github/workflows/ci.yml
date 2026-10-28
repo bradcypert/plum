@@ -164,6 +164,8 @@ jobs:
         run: ./bootstrap/handle-registry-smoke
       - name: tree removal stays inside held directories and releases resources
         run: ./bootstrap/remove-tree-smoke
+      - name: directory listings release storage and reject partial or invalid names
+        run: ./bootstrap/directory-smoke
       - name: OS path results survive concurrent native calls
         run: ./bootstrap/os-path-smoke
       - name: task and channel failures preserve ownership
@@ -292,6 +294,16 @@ jobs:
         run: |
           ./bootstrap/from-seed -o sh.seed
           ./sh.seed build bootstrap/self_host -o sh.real
+
+      # Check the changed directory adapter before the long platform suites.
+      - name: directory listings preserve ownership and platform filename semantics
+        run: |
+          clang -O1 -g -Wall -Wextra bootstrap/directory-test.c -o directory-native.exe
+          ./directory-native.exe
+          ./sh.real build bootstrap/exec_corpus/directory_entries -o directory-entries.exe
+          ./directory-entries.exe > directory-entries.out || { cat directory-entries.out; exit 1; }
+          cat directory-entries.out
+          diff -u bootstrap/exec_corpus/directory_entries/expected.txt directory-entries.out
 
       - name: archive freshly built compiler
         run: tar -czf plum-macos-compiler.tar.gz sh.real
@@ -509,6 +521,16 @@ jobs:
           ./sh.real build bootstrap/exec_corpus/float_finite -o float-finite.exe
           ./float-finite.exe > float-finite.out
           diff -u bootstrap/exec_corpus/float_finite/expected.txt float-finite.out
+
+      # Check the changed directory adapter before the long platform suites.
+      - name: directory listings preserve ownership and platform filename semantics
+        run: |
+          clang -O1 -g -Wall -Wextra bootstrap/directory-test.c -o directory-native.exe
+          ./directory-native.exe
+          ./sh.real build bootstrap/exec_corpus/directory_entries -o directory-entries.exe
+          ./directory-entries.exe > directory-entries.out || { cat directory-entries.out; exit 1; }
+          cat directory-entries.out
+          diff -u bootstrap/exec_corpus/directory_entries/expected.txt directory-entries.out
 
       - name: archive freshly built compiler
         run: tar -czf plum-windows-compiler.tar.gz sh.real
