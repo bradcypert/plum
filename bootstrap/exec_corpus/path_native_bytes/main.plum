@@ -1,0 +1,27 @@
+use Path;
+
+extern "C" {
+    fn native_path_bytes() -> CStr;
+    fn native_path_leaf() -> CStr;
+}
+
+let main (): Unit = {
+    let path = unsafe { native_path_bytes().as_string() };
+    let leaf = unsafe { native_path_leaf().as_string() };
+    assert(!path.as_bytes().is_utf8());
+    for windows in [false, true] {
+        let sep = Path.separator_in(windows);
+        let dir = Path.dirname_in(windows, path);
+        assert_eq(dir.as_bytes().to_hex(), "6469722dfd");
+        assert_eq(Path.basename_in(windows, path), leaf);
+        assert_eq(Path.clean_in(windows, "./".concat(path).concat("/../").concat(leaf)), dir.concat(sep).concat(leaf));
+        assert_eq(Path.join_in(windows, dir, leaf), dir.concat(sep).concat(leaf));
+        assert_eq(Path.extension_in(windows, path).as_bytes().to_hex(), "6578742dfe");
+        assert_eq(Path.stem_in(windows, path).as_bytes().to_hex(), "6c6561662dfc");
+        assert_eq(Path.with_extension_in(windows, path, "ll"), dir.concat(sep).concat(Path.stem_in(windows, path)).concat(".ll"));
+    };
+    // Lexical slices preserve their explicit length, even across a NUL.
+    let nul_path = Result.unwrap_or(Bytes.from_array([97, 47, 98, 0, 99]).as_string(), "");
+    assert_eq(Path.basename_in(false, nul_path).as_bytes().to_hex(), "620063");
+    println("native path bytes: preserved")
+}

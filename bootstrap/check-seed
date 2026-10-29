@@ -7,6 +7,7 @@
 #   2. clang alone turns the seed into a compiler
 #   3. that compiler compiles TODAY's `bootstrap/self_host`
 #   4. what it produces emits the same IR as the current compiler does
+#   5. the resulting compiler can process native filename bytes
 #
 # Step 4 is the one that matters. A seed that builds but produces a
 # DIFFERENT compiler would be a seed that silently bootstraps something
@@ -24,6 +25,12 @@
 # bootstrap step, as an unresolved-symbol link error with nothing to
 # connect it to the seed. Cheap to check here; expensive to diagnose
 # there.
+#
+# Equal emitted IR does not prove that the resulting compiler's OWN
+# stdlib is current. A seed with an old embedded Path can compile today's
+# source but give that compiler old path handling. Its newly embedded
+# Path then fixes user programs, while the compiler itself still fails
+# on native filenames. Exercise the same single rebuild CI distributes.
 #
 # When this fails, the fix is `bootstrap/gen-seed` — the seed has fallen
 # behind the language the compiler's own source now uses. That is
@@ -96,6 +103,32 @@ echo "seed compiler -> today's source ..."
 (cd "$work" && SH_MEM="${SH_MEM:-1G}" SH_TIMEOUT="${SH_TIMEOUT:-600}" "$seed_compiler" build "$root/bootstrap/self_host" -o "$work/sh.next" > "$work/next.log" 2>&1) || {
     echo "the seed compiler could not build today's source -- run bootstrap/gen-seed:" >&2
     head -20 "$work/next.log" >&2; exit 1; }
+
+echo "source-built compiler preserves native filename bytes ..."
+py="$(command -v python3 || command -v python)"
+"$py" - "$work/sh.next" "$work" <<'PY'
+import os
+from pathlib import Path
+import subprocess
+import sys
+
+compiler, work = Path(sys.argv[1]), Path(sys.argv[2])
+# Native Windows argv may use ANSI bytes. POSIX filenames need not be
+# UTF-8 at all. Exercise both a filename and its containing directory.
+windows = os.name == "nt" or sys.platform.startswith(("msys", "cygwin"))
+component = "native-ü" if windows else os.fsdecode(b"native-\xfc")
+directory = work / component
+directory.mkdir()
+source = directory / (component + ".plum")
+source.write_text('let main (): Unit = println("native path ok")\n')
+env = dict(os.environ, PLUM_CACHE=str(work / "path-cache"))
+result = subprocess.run([str(compiler), "run", str(source)], cwd=work,
+                        env=env, capture_output=True, timeout=180)
+if result.returncode != 0 or result.stdout != b"native path ok\n":
+    sys.stderr.buffer.write(result.stdout + result.stderr)
+    sys.exit("SEED STALE: the single-rebuild compiler rejects native filenames; "
+             "run bootstrap/gen-seed")
+PY
 
 # BOTH from this directory, naming the source the SAME way. That is not
 # tidiness: since debug builds carry line tables, the emitted IR records

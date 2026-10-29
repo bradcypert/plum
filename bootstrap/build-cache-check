@@ -7,10 +7,12 @@ on an unsupported host; IR reuse is required on every supported host.
 """
 import os
 from pathlib import Path
+import queue
 import shutil
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -496,6 +498,60 @@ with tempfile.TemporaryDirectory(prefix="plum-cache-check-") as tmp:
         stdout, stderr = process.communicate(timeout=180)
         require(process.returncode == 0 and stdout == "file\n", "concurrent build failed: " + stderr)
     run("file\n", "hit", target=src)
+
+    if os.name == "nt":
+        # Native Windows Python exposes the Win32 handle API. Hold the
+        # cache root without FILE_SHARE_DELETE. Wait until the
+        # cleaner has actually hit the sharing conflict before releasing it;
+        # a startup delay cannot accidentally turn this into an unlocked test.
+        ready, release = work / "reader-ready", work / "reader-release"
+        holder_code = '''import ctypes, pathlib, sys, time
+from ctypes import wintypes
+kernel = ctypes.WinDLL("kernel32", use_last_error=True)
+kernel.CreateFileW.argtypes = [wintypes.LPCWSTR, wintypes.DWORD, wintypes.DWORD,
+                              ctypes.c_void_p, wintypes.DWORD, wintypes.DWORD, wintypes.HANDLE]
+kernel.CreateFileW.restype = wintypes.HANDLE
+kernel.CloseHandle.argtypes = [wintypes.HANDLE]
+handle = kernel.CreateFileW(sys.argv[1], 1, 3, None, 3, 0x02000000, None)
+if handle == ctypes.c_void_p(-1).value:
+    raise ctypes.WinError(ctypes.get_last_error())
+try:
+    pathlib.Path(sys.argv[2]).touch()
+    deadline = time.monotonic() + 30
+    while not pathlib.Path(sys.argv[3]).exists():
+        if time.monotonic() > deadline:
+            raise SystemExit("cache reader barrier timed out")
+        time.sleep(0.01)
+finally:
+    kernel.CloseHandle(handle)
+'''
+        holder = subprocess.Popen([sys.executable, "-c", holder_code,
+            str(cache / "build" / "v1"), str(ready), str(release)],
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        cleaner = None
+        try:
+            deadline = time.monotonic() + 30
+            while not ready.exists() and holder.poll() is None and time.monotonic() < deadline:
+                time.sleep(0.01)
+            require(ready.exists(), "cache reader did not acquire its directory handle")
+            cleaner = subprocess.Popen([str(COMPILER), "cache", "clean", "build"], env=env,
+                stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, cwd=work)
+            lines = queue.Queue()
+            threading.Thread(target=lambda: lines.put(cleaner.stderr.readline()), daemon=True).start()
+            first = lines.get(timeout=30)
+            require(first == "cache: waiting for busy build cache\n", "cleaner did not wait: " + first)
+            release.touch()
+            stdout, stderr = cleaner.communicate(timeout=30)
+            require(cleaner.returncode == 0, "busy cache clean failed: " + stderr)
+            require(not (cache / "build" / "v1").exists(), "busy cache was not detached")
+        finally:
+            release.touch()
+            if cleaner is not None and cleaner.poll() is None:
+                cleaner.kill()
+                cleaner.communicate(timeout=30)
+            stdout, stderr = holder.communicate(timeout=30)
+        require(holder.returncode == 0, "cache reader failed: " + stderr)
+        run("file\n", "miss", target=src)
 
     # A concurrent cleaner may remove shared inputs during fingerprinting
     # or native compilation. Both object reuse and IR-only reuse recover

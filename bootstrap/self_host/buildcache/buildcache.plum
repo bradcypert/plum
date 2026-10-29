@@ -195,6 +195,49 @@ let tree_size (path: String): Int =
                 size
             },
     }
+// Windows readers can temporarily deny a directory rename. Keep the
+// detach atomic, but allow active readers to finish before reporting a
+// busy cache. Retry policy is separate from I/O so its bound is testable.
+let detach_retry (remaining: Int) (attempt: (Unit) -> Result[Unit, String]) (exists: (Unit) -> Bool) (pause: (Unit) -> Unit): Result[Unit, String] = {
+    let moved = attempt(());
+    match moved {
+        Ok(_) => moved,
+        Err(_) => if remaining <= 0 || !exists(()) { moved }
+            else { pause(()); detach_retry(remaining - 1, attempt, exists, pause) },
+    }
+}
+
+pub let test_cache_detach_retry (): Unit = {
+    let calls = ref(0);
+    let pauses = ref(0);
+    let transient = detach_retry(3, |ignored| {
+        calls.set(calls.get() + 1);
+        if calls.get() < 3 { Err("busy") } else { Ok(()) }
+    }, |ignored| true, |ignored| pauses.set(pauses.get() + 1));
+    assert_eq(transient, Ok(()));
+    assert_eq(calls.get(), 3);
+    assert_eq(pauses.get(), 2);
+    calls.set(0);
+    pauses.set(0);
+    let permanent = detach_retry(2, |ignored| { calls.set(calls.get() + 1); Err("busy") },
+        |ignored| true, |ignored| pauses.set(pauses.get() + 1));
+    assert_eq(permanent, Err("busy"));
+    assert_eq(calls.get(), 3);
+    assert_eq(pauses.get(), 2);
+    calls.set(0);
+    let missing = detach_retry(50, |ignored| { calls.set(calls.get() + 1); Err("missing") },
+        |ignored| false, |ignored| pauses.set(pauses.get() + 1));
+    assert_eq(missing, Err("missing"));
+    assert_eq(calls.get(), 1);
+    assert_eq(pauses.get(), 2);
+    calls.set(0);
+    let no_retry = detach_retry(0, |ignored| { calls.set(calls.get() + 1); Err("busy") },
+        |ignored| true, |ignored| pauses.set(pauses.get() + 1));
+    assert_eq(no_retry, Err("busy"));
+    assert_eq(calls.get(), 1);
+    assert_eq(pauses.get(), 2)
+}
+
 pub let clean_cache (): Unit = {
     let dir = root(());
     if dir == "" { println("build cache: unavailable") }
@@ -209,7 +252,14 @@ pub let clean_cache (): Unit = {
             Os.exit_with(1)
         } else {
             let detached = Path.join(stage, "removed");
-            let moved = Os.rename_file(dir, detached);
+            // Up to five seconds of backoff on Windows. Persistent access
+            // errors remain errors; never traverse a live cache as fallback.
+            let retries = if Os.platform() == "windows" { 50 } else { 0 };
+            let moved = detach_retry(retries, |ignored| Os.rename_file(dir, detached),
+                |ignored| Result.unwrap_or(Os.exists(dir), true), |ignored| {
+                    diagnostic("waiting for busy build cache");
+                    Time.sleep(Time.millis(100))
+                });
             let cleaned = Os.remove_tree(stage);
             match moved {
                 Ok(_) => match cleaned {

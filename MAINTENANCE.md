@@ -136,8 +136,8 @@ way to get a compiler from a clean clone** — nothing else in the
 repository can build `bootstrap/self_host`.
 
 **Refresh it when `check-seed` fails, and not before.** The seed does
-not need to be current; it needs to be new enough to compile today's
-source.
+not need to be current; it needs to compile today's source into a
+compiler with the required behavior after CI's single source rebuild.
 
 ```sh
 ./bootstrap/check-seed     # fails when the seed has fallen behind
@@ -149,15 +149,15 @@ Each refresh puts ~6MB of generated text into history, so it belongs in
 its own commit with a reason. A good reason: `check-seed` failed, or
 you are cutting a release.
 
-`check-seed` proves four things, and the last is the one that
-matters: the seed carries every shim in `native_stdlib/`, at its
+`check-seed` proves five things: the seed carries every shim in `native_stdlib/`, at its
 current content; clang can build the seed; the seed compiler can build
 today's source; and what it produces emits IR identical to the current
+compiler. It also exercises native filename bytes using that source-built
 compiler. A seed that built
 but produced a *different* compiler would silently bootstrap something
 other than this source tree.
 
-**What makes the seed go stale** has two causes, and only the first is
+**What makes the seed go stale** has three causes, and only the first is
 obvious.
 
 1. The compiler's own source uses a language or prelude feature the
@@ -171,6 +171,15 @@ obvious.
    `native_stdlib/*.c` at the moment the seed was built. Nothing else
    can see this: the seed's *output* is identical whether its embedded
    copy is current or three edits stale.
+3. **An embedded stdlib change affects the compiler's own behavior.**
+   The seed's embedded library compiles the compiler, while the source
+   library is embedded for programs that compiler will build. Thus a
+   newly built compiler can still run old `Path` code while compiling
+   correct path code into user programs. Comparing its emitted IR does
+   not detect that difference. The native-filename smoke test catches
+   this case; validate other affected behavior with the compiler from
+   `from-seed` followed by exactly one source rebuild, rather than a
+   locally rebuilt compiler that has already propagated the change.
 
 Cause 2 was found on 2026-08-23 and is why `check-seed` grew its first
 step. It is invisible on Linux — every harness passes, because the
