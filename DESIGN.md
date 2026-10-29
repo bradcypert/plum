@@ -21276,8 +21276,12 @@ helpers decoded the full string for every character and copied the surviving
 segment array for every `..`. Precise reference counting could reclaim those
 temporaries, but could not make their cumulative O(n²) work disappear.
 
-`Path` now scans normalized UTF-8 bytes by index; ASCII separators and dots
-establish safe codepoint boundaries. Cleaning uses an owned linked segment
+`Path` now scans normalized path bytes by index; ASCII separators and dots
+establish safe codepoint boundaries for UTF-8 input. Native argv and filesystem
+paths can also contain non-UTF-8 bytes. Component slices preserve the original
+bytes and explicit length through a private runtime retag, rather than calling
+the validating `Bytes.as_string` decoder. The slice keeps its ordinary
+refcounted ownership without another copy or allocation. Cleaning uses an owned linked segment
 stack with constant-time push/pop, then drains it explicitly into output
 fragments. Scanning and draining use tail calls, including for deep paths.
 The same root boundaries keep Windows UNC server/share components out of
@@ -21293,6 +21297,12 @@ workload goes from 60,810,986 allocations / 2,457,395,676 cumulative bytes to
 2,000 units are 1,288,918 / 2,574,390 / 5,145,622. The fixture builds its input
 from fragments rather than repeated string concatenation so input construction
 does not mask that linear growth; it pins both count and a 4 MB byte ceiling.
+
+Preserving native path bytes also removes the temporary `Result` allocation
+for each component decode. The same 1,000-unit fixture now measures 72,397
+allocations / 2,333,862 cumulative bytes, down from the 82,419 / 2,574,390
+baseline above. The slice is retagged without copying its storage; its
+existing refcount still determines when that storage is reclaimed.
 
 These are cumulative allocation measurements, not peak-live-memory or RSS
 claims. Both implementations require O(n) live space; the change removes

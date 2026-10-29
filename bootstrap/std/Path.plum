@@ -34,11 +34,14 @@ let drive_end (windows: Bool) (b: Bytes): Int =
     if windows && b.len() >= 2 && alpha(byte_at(b, 0)) && byte_at(b, 1) == 58 { 2 } else { 0 }
 let has_drive_in (windows: Bool) (p: String): Bool = drive_end(windows, p.as_bytes()) == 2
 
+// Native argv and filesystem paths can carry non-UTF-8 bytes (POSIX
+// filenames and Windows ANSI paths). Slicing an existing path must
+// preserve those bytes, rather than decode them as newly received text.
+// This private runtime retag keeps the slice's explicit length and
+// ownership, including embedded NULs; Bytes.as_string stays validating.
+let str_of_bytes_raw (b: Bytes): String = ""
 let text_range (b: Bytes) (start: Int) (end: Int): String =
-    match Bytes.as_string(b.slice(start, end)) {
-        Ok(s) => s,
-        Err(e) => { panic_raw(e); "" },
-    }
+    str_of_bytes_raw(b.slice(start, end))
 
 // Input is normalized once. The root includes the UNC server/share,
 // but base still names the last component (including a bare share).
