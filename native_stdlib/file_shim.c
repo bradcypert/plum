@@ -23,19 +23,20 @@
 // Plum has no move semantics, so both really do run, and the second one
 // must be harmless. A cast pointer cannot be: `fclose` on an
 // already-closed `FILE *` is undefined, and the fd number underneath may
-// by then belong to a completely different file. A slot the shim owns
-// can simply be marked empty, and every later close on it does nothing.
+// by then belong to a completely different file.
 //
-// So the number Plum holds is an INDEX (biased by one so that 0 is never
-// a live handle), and the real `FILE *` never leaves this file. That is
-// also what the `handle` design meant by "the state does not have to fit
-// in the number".
+// Each opening gets a positive identity: slot index plus a generation.
+// Reusing storage never reuses an identity. At Int exhaustion the slot
+// is retired rather than wrapping to an identity a stale value may hold.
+// Closed handles need no heap record or tombstone: the slot remembers
+// only its last identity, so memory stays bounded across repeated opens.
 //
-// **Not thread-safe**, matching `dir_shim.c` and `process_shim.c`: the
-// table is unguarded, so opening and closing files from several threads
-// at once is not supported. The read BUFFER is thread-local, because
-// that one is cheap to make safe and `net_shim.c` learned the hard way
-// what a shared one costs.
+// Each slot has a mutex covering identity checks AND the entire stdio
+// operation, including fclose. Locking just lookup would leave a FILE *
+// vulnerable to concurrent close. Separate slots can perform I/O in
+// parallel; allocation skips reserved slots without waiting on their
+// I/O locks. Concurrent operations on one file are serialized. The read
+// buffer remains thread-local, independent of the slot's lifetime.
 
 #if defined(__APPLE__)
 #define _DARWIN_C_SOURCE 1
@@ -50,6 +51,7 @@
 #endif
 
 #include <limits.h>
+#include <pthread.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -68,14 +70,49 @@ _Static_assert(sizeof(off_t) >= sizeof(long long), "File.seek requires 64-bit of
 
 #define PLUM_MAX_FILES 256
 
-static FILE *slots[PLUM_MAX_FILES];
+typedef struct {
+    pthread_mutex_t lock;
+    FILE *stream;
+    long long identity;
+    int reserved; // Protected by slots_allocator, not the I/O lock.
+} PlumFileSlot;
 
-// A handle is `index + 1`, so a valid one is never 0 and never collides
-// with the -1 every wrapper here uses for failure.
-static int slot_of(long long h) {
-    if (h < 1 || h > PLUM_MAX_FILES) return -1;
-    if (slots[h - 1] == NULL) return -1;
-    return (int)(h - 1);
+static PlumFileSlot slots[PLUM_MAX_FILES];
+// Allocation never holds this mutex while waiting on I/O or a slot lock.
+static pthread_mutex_t slots_allocator = PTHREAD_MUTEX_INITIALIZER;
+static pthread_once_t slots_once = PTHREAD_ONCE_INIT;
+static int slots_ready;
+
+static void slots_init(void) {
+    for (int i = 0; i < PLUM_MAX_FILES; i++) {
+        if (pthread_mutex_init(&slots[i].lock, NULL) != 0) {
+            while (i > 0) pthread_mutex_destroy(&slots[--i].lock);
+            return;
+        }
+    }
+    slots_ready = 1;
+}
+
+// Returns a locked live slot, or NULL. No caller may keep its FILE *
+// after unlocking. Positive identities encode (identity - 1) % 256.
+static PlumFileSlot *slot_lock(long long h) {
+    if (h <= 0) return NULL;
+    pthread_once(&slots_once, slots_init);
+    if (!slots_ready) return NULL;
+    PlumFileSlot *slot = &slots[(h - 1) % PLUM_MAX_FILES];
+    pthread_mutex_lock(&slot->lock);
+    if (slot->stream == NULL || slot->identity != h) {
+        pthread_mutex_unlock(&slot->lock);
+        return NULL;
+    }
+    return slot;
+}
+
+// Publish a closed/failed slot for reuse. Called with its I/O lock held.
+static void slot_make_available(PlumFileSlot *slot) {
+    pthread_mutex_lock(&slots_allocator);
+    slot->reserved = 0;
+    pthread_mutex_unlock(&slots_allocator);
 }
 
 // Modes are passed as small integers rather than strings: an extern
@@ -88,13 +125,30 @@ static int slot_of(long long h) {
 long long file_open(const char *path, long long mode) {
     const char *m = mode == 0 ? "rb" : mode == 1 ? "wb" : mode == 2 ? "ab" : NULL;
     if (m == NULL) return -1;
+    pthread_once(&slots_once, slots_init);
+    if (!slots_ready) return -1;
     for (int i = 0; i < PLUM_MAX_FILES; i++) {
-        if (slots[i] == NULL) {
-            FILE *f = fopen(path, m);
-            if (f == NULL) return -1;
-            slots[i] = f;
-            return (long long)i + 1;
+        PlumFileSlot *slot = &slots[i];
+        pthread_mutex_lock(&slots_allocator);
+        int available = !slot->reserved;
+        if (available) slot->reserved = 1;
+        pthread_mutex_unlock(&slots_allocator);
+        if (!available) continue;
+        pthread_mutex_lock(&slot->lock);
+        if (slot->identity > LLONG_MAX - PLUM_MAX_FILES) {
+            // Keep an exhausted slot reserved permanently.
+            pthread_mutex_unlock(&slot->lock);
+            continue;
         }
+        FILE *f = fopen(path, m);
+        long long h = -1;
+        if (f != NULL) {
+            slot->identity = slot->identity == 0 ? i + 1 : slot->identity + PLUM_MAX_FILES;
+            slot->stream = f;
+            h = slot->identity;
+        } else slot_make_available(slot);
+        pthread_mutex_unlock(&slot->lock);
+        return h;
     }
     return -1;
 }
@@ -104,11 +158,14 @@ long long file_open(const char *path, long long mode) {
 // well-written program, and reporting that as a failure would make the
 // safe pattern the noisy one.
 long long file_close_checked(long long h) {
-    int i = slot_of(h);
-    if (i < 0) return 0;
-    FILE *f = slots[i];
-    slots[i] = NULL;
-    return fclose(f) == 0 ? 0 : -1;
+    PlumFileSlot *slot = slot_lock(h);
+    if (slot == NULL) return 0;
+    FILE *f = slot->stream;
+    slot->stream = NULL;
+    long long result = fclose(f) == 0 ? 0 : -1;
+    slot_make_available(slot);
+    pthread_mutex_unlock(&slot->lock);
+    return result;
 }
 
 // The `on_drop` hook. A release runs while a value is being freed and
@@ -136,7 +193,10 @@ static PLUM_TLS size_t read_cap = 0;
 static int read_ensure(size_t need) {
     if (read_cap >= need) return 1;
     size_t next = read_cap ? read_cap : 4096;
-    while (next < need) next *= 2;
+    while (next < need) {
+        if (next > SIZE_MAX / 2) { next = need; break; }
+        next *= 2;
+    }
     char *bigger = (char *)realloc(read_buf, next);
     if (bigger == NULL) return 0;
     read_buf = bigger;
@@ -145,16 +205,20 @@ static int read_ensure(size_t need) {
 }
 
 long long file_read_n(long long h, long long max_len) {
-    int i = slot_of(h);
-    if (i < 0) return -1;
     // Only a positive request can report zero bytes as end of file.
-    // Reject invalid sizes before allocating or touching the stream.
-    if (max_len <= 0) return -1;
-    if (!read_ensure((size_t)max_len + 1)) return -1;
-    size_t got = fread(read_buf, 1, (size_t)max_len, slots[i]);
-    if (got == 0 && ferror(slots[i])) return -1;
-    read_buf[got] = '\0';
-    return (long long)got;
+    if (max_len <= 0 || (uintmax_t)max_len >= SIZE_MAX) return -1;
+    PlumFileSlot *slot = slot_lock(h);
+    if (slot == NULL) return -1;
+    long long result = -1;
+    if (read_ensure((size_t)max_len + 1)) {
+        size_t got = fread(read_buf, 1, (size_t)max_len, slot->stream);
+        if (got != 0 || !ferror(slot->stream)) {
+            read_buf[got] = '\0';
+            result = (long long)got;
+        }
+    }
+    pthread_mutex_unlock(&slot->lock);
+    return result;
 }
 
 // The bytes `file_read_n` just read. Valid until the next read on this
@@ -169,10 +233,11 @@ const char *file_read_data(void) {
 // semantics and is NOT retried here; the Plum wrapper reports the count
 // and lets the caller decide, matching `tcp_send`'s own scope note.
 long long file_write(long long h, const char *buf, long long len) {
-    int i = slot_of(h);
-    if (i < 0) return -1;
-    if (len < 0) return -1;
-    size_t wrote = fwrite(buf, 1, (size_t)len, slots[i]);
+    if (len < 0 || (uintmax_t)len > SIZE_MAX) return -1;
+    PlumFileSlot *slot = slot_lock(h);
+    if (slot == NULL) return -1;
+    size_t wrote = fwrite(buf, 1, (size_t)len, slot->stream);
+    pthread_mutex_unlock(&slot->lock);
     return (long long)wrote;
 }
 
@@ -180,17 +245,15 @@ long long file_write(long long h, const char *buf, long long len) {
 // 2 end -- the same order `SEEK_SET`/`SEEK_CUR`/`SEEK_END` are usually
 // written in, but passed as Plum's own constants rather than assuming
 // the C macros have those values on every platform.
-long long file_seek(long long h, long long offset, long long whence) {
-    int i = slot_of(h);
-    if (i < 0) return -1;
+static long long file_seek_locked(FILE *stream, long long offset, long long whence) {
     int w = whence == 0 ? SEEK_SET : whence == 1 ? SEEK_CUR : whence == 2 ? SEEK_END : -1;
     if (w == -1) return -1;
 #if defined(_WIN32)
-    if (_fseeki64(slots[i], offset, w) != 0) return -1;
-    __int64 position = _ftelli64(slots[i]);
+    if (_fseeki64(stream, offset, w) != 0) return -1;
+    __int64 position = _ftelli64(stream);
 #else
-    if (fseeko(slots[i], (off_t)offset, w) != 0) return -1;
-    off_t position = ftello(slots[i]);
+    if (fseeko(stream, (off_t)offset, w) != 0) return -1;
+    off_t position = ftello(stream);
 #endif
     // Preserve tell failures and reject positions outside Plum Int's range
     // before narrowing, including on platforms with a wider off_t.
@@ -198,10 +261,20 @@ long long file_seek(long long h, long long offset, long long whence) {
     return (long long)position;
 }
 
+long long file_seek(long long h, long long offset, long long whence) {
+    PlumFileSlot *slot = slot_lock(h);
+    if (slot == NULL) return -1;
+    long long result = file_seek_locked(slot->stream, offset, whence);
+    pthread_mutex_unlock(&slot->lock);
+    return result;
+}
+
 // Flushes buffered writes without closing, so a caller can make data
 // visible to another process and keep the handle.
 long long file_flush(long long h) {
-    int i = slot_of(h);
-    if (i < 0) return -1;
-    return fflush(slots[i]) == 0 ? 0 : -1;
+    PlumFileSlot *slot = slot_lock(h);
+    if (slot == NULL) return -1;
+    long long result = fflush(slot->stream) == 0 ? 0 : -1;
+    pthread_mutex_unlock(&slot->lock);
+    return result;
 }

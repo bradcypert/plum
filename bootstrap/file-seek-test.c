@@ -6,7 +6,11 @@
 int main(void) {
     FILE *f = tmpfile();
     assert(f != NULL);
-    slots[0] = f;
+    pthread_once(&slots_once, slots_init);
+    assert(slots_ready);
+    slots[0].stream = f;
+    slots[0].reserved = 1;
+    slots[0].identity = 1;
     assert(file_write(1, "abc", 3) == 3);
     const long long large = 4294967313LL;
     assert(file_seek(1, 2147483648LL, 0) == 2147483648LL);

@@ -108,7 +108,7 @@ else
 fi
 
 # Exercise large offsets through the host CRT, including Windows LLP64.
-if clang -O1 -g -Wall -Wextra -Werror bootstrap/file-seek-test.c \
+if clang -O1 -g -Wall -Wextra -Werror -pthread bootstrap/file-seek-test.c \
         -o "$work/file-seek-test.bin" > "$work/file-seek-test.log" 2>&1 &&
         "$work/file-seek-test.bin"; then
     printf 'OK    %-24s\n' "native_file_seek"
@@ -116,6 +116,18 @@ if clang -O1 -g -Wall -Wextra -Werror bootstrap/file-seek-test.c \
 else
     printf 'FAIL  %-24s\n' "native_file_seek"
     cat "$work/file-seek-test.log"
+    fail=$((fail + 1))
+fi
+
+# Exercise stale identities and concurrent lifetime on every platform.
+if clang -O1 -g -Wall -Wextra -Werror -pthread bootstrap/file-handle-test.c \
+        -o "$work/file-handle-test.bin" > "$work/file-handle-test.log" 2>&1 &&
+        "$work/file-handle-test.bin" "$work/file-handle-data"; then
+    printf 'OK    %-24s\n' "native_file_handles"
+    ok=$((ok + 1))
+else
+    printf 'FAIL  %-24s\n' "native_file_handles"
+    cat "$work/file-handle-test.log"
     fail=$((fail + 1))
 fi
 

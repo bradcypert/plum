@@ -1,0 +1,4 @@
+stale write rejected
+new file wrote 3
+410042
+cleanup ok

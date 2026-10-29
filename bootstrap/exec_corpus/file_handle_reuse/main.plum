@@ -1,0 +1,45 @@
+use Os;
+
+// Return B beyond A's scope: A's automatic drop must not close B after
+// explicit close freed A's slot. Keep a copied handle alive as well.
+let reopen (path: String): Result[File, String] = match Os.open(path, Mode.Write) {
+    Err(e) => Err(e),
+    Ok(a) => {
+        let alias = a;
+        match a.close() {
+            Err(e) => Err(e),
+            Ok(_) => match Os.open(path, Mode.Write) {
+                Err(e) => Err(e),
+                Ok(b) => {
+                    match alias.write(Bytes.from_array([88])) {
+                        Err(_) => println("stale write rejected"),
+                        Ok(_) => println("stale write accepted"),
+                    };
+                    Ok(b)
+                },
+            },
+        }
+    },
+}
+
+let main (): Unit = match Os.temp_dir() {
+    Err(e) => println(e),
+    Ok(root) => {
+        let path = root.concat("/reuse.bin");
+        match reopen(path) {
+            Err(e) => println(e),
+            Ok(b) => {
+                match b.write(Bytes.from_array([65, 0, 66])) {
+                    Ok(n) => println("new file wrote ".concat(n.to_string())),
+                    Err(e) => println(e),
+                };
+                match b.close() { Ok(_) => (), Err(e) => println(e) }
+            },
+        };
+        match Os.read_bytes(path) {
+            Ok(data) => println(data.to_hex()),
+            Err(e) => println(e),
+        };
+        match Os.remove_tree(root) { Ok(_) => println("cleanup ok"), Err(e) => println(e) }
+    },
+}
