@@ -414,21 +414,6 @@ let fail_at (pos: Int) (msg: String): Unit = {
     else { panic_raw(lexer.render_at(ctx.source, ctx.path, ctx.starts[pos], msg)) }
 }
 
-// Interpolation expressions are re-lexed from raw text, so their token
-// positions belong to a temporary string. Map diagnostics back through
-// the enclosing string token before rendering them.
-let fail_interp_at (pos: Int) (src: String) (inner_offset: Int) (msg: String): Unit = {
-    let ctx = CTX.get();
-    if ctx.source == "" || pos >= ctx.starts.len() || pos >= ctx.ends.len() { panic_raw(msg) }
-    else {
-        let raw = String.slice(ctx.source, ctx.starts[pos], ctx.ends[pos]);
-        match String.index_of(raw, src) {
-            Some(i) => panic_raw(lexer.render_at(ctx.source, ctx.path, ctx.starts[pos] + i + inner_offset, msg)),
-            None => panic_raw(msg),
-        }
-    }
-}
-
 let check (tokens: Array[lexer.Token]) (pos: Int) (expected: lexer.Token): Bool = tokens[pos] == expected
 
 struct Bumped { matched: Bool, next_pos: Int }
@@ -1531,7 +1516,7 @@ let parse_primary (tokens: Array[lexer.Token]) (pos: Int) (ns: Bool): ExprResult
         TokInt(n) => ExprResult { value: EInt(n), next_pos: pos + 1 },
         TokFloat(f) => ExprResult { value: EFloat(f), next_pos: pos + 1 },
         TokStr(s) => ExprResult { value: EStr(s), next_pos: pos + 1 },
-        TokInterpStr(parts) => ExprResult { value: desugar_interp_str(parts, pos), next_pos: pos + 1 },
+        TokInterpStr(parts) => ExprResult { value: desugar_interp_str(parts), next_pos: pos + 1 },
         TokBuiltin(name) => parse_builtin(tokens, pos, name),
         TokTrue => ExprResult { value: EBool(true), next_pos: pos + 1 },
         TokFalse => ExprResult { value: EBool(false), next_pos: pos + 1 },
@@ -1554,35 +1539,45 @@ let parse_primary (tokens: Array[lexer.Token]) (pos: Int) (ns: Bool): ExprResult
 // mirrors `crates/plum-syntax/src/parser.rs::desugar_interp_str`
 // exactly, re-lexing/re-parsing each `${...}` piece's raw source text
 // via THIS SAME lexer/parser (recursive, not a separate code path).
-let desugar_interp_str (parts: Array[lexer.InterpPiece]) (outer_pos: Int): PExpr = desugar_interp_str_acc(parts, outer_pos, 1, first_literal_expr(parts))
+let desugar_interp_str (parts: Array[lexer.InterpPiece]): PExpr = desugar_interp_str_acc(parts, 1, first_literal_expr(parts))
 
 let first_literal_expr (parts: Array[lexer.InterpPiece]): Option[PExpr] =
     match parts[0] {
         PieceLiteral(s) => if s == "" { None } else { Some(EStr(s)) },
-        PieceExpr(_) => None,
+        PieceExpr(_, _) => None,
     }
 
-let desugar_interp_str_acc (parts: Array[lexer.InterpPiece]) (outer_pos: Int) (i: Int) (acc: Option[PExpr]): PExpr =
+let desugar_interp_str_acc (parts: Array[lexer.InterpPiece]) (i: Int) (acc: Option[PExpr]): PExpr =
     if i >= parts.len() { Option.unwrap_or(acc, EStr("")) }
     else {
-        let inner = match parts[i] { PieceExpr(src) => reparse_interp_expr_at(src, outer_pos), PieceLiteral(_) => { fail("interpolation pieces must alternate Literal/Expr"); EStr("") } };
+        let inner = match parts[i] { PieceExpr(src, start) => reparse_interp_expr_at(src, start), PieceLiteral(_) => { fail("interpolation pieces must alternate Literal/Expr"); EStr("") } };
         let stringified = ECall(EField(inner, "to_string"), []);
         let acc2 = match acc { None => stringified, Some(prev) => ECall(EField(prev, "concat"), [stringified]) };
-        let lit = match parts[i + 1] { PieceLiteral(s) => s, PieceExpr(_) => { fail("interpolation pieces must alternate Expr/Literal"); "" } };
+        let lit = match parts[i + 1] { PieceLiteral(s) => s, PieceExpr(_, _) => { fail("interpolation pieces must alternate Expr/Literal"); "" } };
         let acc3 = if lit == "" { acc2 } else { ECall(EField(acc2, "concat"), [EStr(lit)]) };
-        desugar_interp_str_acc(parts, outer_pos, i + 2, Some(acc3))
+        desugar_interp_str_acc(parts, i + 2, Some(acc3))
     }
 
-let reparse_interp_expr_at (src: String) (outer_pos: Int): PExpr = {
-    let inner_tokens = lexer.tokenize(src);
-    match inner_tokens[0] {
+// Reuse the original source/character array and restore the parent context
+// after parsing. Nested interpolations therefore keep absolute file offsets.
+let reparse_interp_expr_at (src: String) (start: Int): PExpr = {
+    let saved = CTX.get();
+    let has_source = saved.source != "";
+    let spanned = if has_source { lexer.tokenize_fragment_at(src, saved.source, saved.path, start) }
+        else { lexer.tokenize_spanned(src) };
+    if has_source {
+        CTX.set(SourceContext { path: saved.path, source: saved.source, chars: saved.chars,
+            starts: Array.map(spanned.starts, |i| start + i), ends: Array.map(spanned.ends, |i| start + i) });
+    } else { () };
+    let value = match spanned.tokens[0] {
         TokIf => {
-            let spanned = lexer.tokenize_spanned(src);
-            fail_interp_at(outer_pos, src, spanned.starts[0], "a block can't appear inside \${...}; bind it to a variable first");
+            fail_at(0, "a block can't appear inside \${...}; bind it to a variable first");
             EInt(0)
         },
-        _ => parse_expr(inner_tokens, 0).value,
-    }
+        _ => parse_expr(spanned.tokens, 0).value,
+    };
+    CTX.set(saved);
+    value
 }
 
 let parse_paren_or_tuple (tokens: Array[lexer.Token]) (pos: Int): ExprResult = {
