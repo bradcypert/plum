@@ -32,6 +32,15 @@ let main (): Unit = match Os.temp_dir() {
         report("exists dir", Os.exists(root));
         report("exists missing", Os.exists(root.concat("/nope")));
 
+        // --- is_directory ---
+        // Only an existing non-directory is Ok(false); absence is Err.
+        report("is_directory file", Os.is_directory(path));
+        report("is_directory dir", Os.is_directory(root));
+        println(match Os.is_directory(root.concat("/nope")) {
+            Ok(_) => "is_directory missing: UNEXPECTEDLY OK",
+            Err(_) => "is_directory missing: err",
+        });
+
         // --- stat ---
         //
         // A missing path is an `Err` here, matching `is_directory`. So a

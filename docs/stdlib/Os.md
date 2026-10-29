@@ -279,6 +279,7 @@ Native entry storage is released before returning, including on errors.
 
 ## `let is_directory (path: String): Result[Bool, String]`
 
-Whether the path is a directory. `Ok(false)` for a file, and for
-something that is not there at all — use `Os.exists` to tell those
-apart.
+Returns `Ok(true)` for a directory and `Ok(false)` for an existing
+path that is not a directory. Returns `Err` if the path is missing
+or its metadata cannot be read (for example, due to permissions).
+Use `Os.exists` when a missing path should return `Ok(false)`.
