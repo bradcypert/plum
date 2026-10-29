@@ -1,0 +1,12 @@
+let x = a | b
+//        ^ operator
+let x = a ^ b
+//        ^ operator
+let x = a & b
+//        ^ operator
+let x = a << n
+//        ^ operator
+let x = a >> n
+//        ^ operator
+let x = ~mask
+//      ^ operator

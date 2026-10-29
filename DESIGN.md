@@ -21334,3 +21334,72 @@ so it holds at most one project snapshot at a time. This is a consistency fix,
 not a claim of lower application RSS or a replacement for profiling large
 projects. The directory-based project boundary and dependency resolution are
 unchanged; a workspace-wide virtual filesystem would be a separate design.
+
+### Package storage: exact Git identity before reuse
+
+Issue #171 (also reported as #277) came from using a display encoding as
+identity: removing schemes and `.git`, dropping empty path segments and
+replacing punctuation with underscores merged distinct remotes. Vendoring
+used the same encoding and could select the wrong source without touching
+the cache. Both stores now use one relative-path function:
+`v2/<SHA-256(length-prefixed git, rev)>/<sanitized revision label>`.
+Git receives the original URL; Plum does not guess which transport or local
+repository spellings are equivalent. Manifest revisions remain full commit
+hashes. The optional source-tree `sha256` remains an independent integrity
+check, including on warm reuse.
+
+The version boundary deliberately refuses legacy cache and vendor paths:
+without provenance metadata their intended origin cannot be recovered.
+An explicit fetch/vendor repopulates storage. Legacy cache entries remain
+listable and removable through the existing package-cache commands. Staging
+races (#172) and symlink-sensitive tree hashing (#176) have separate causes
+and remain separate work.
+
+Key construction holds temporary data proportional to URL-plus-revision
+length, then stores a fixed 64-character digest and the commit label in the
+path. It does not read package contents or retain an identity index. Values
+use the existing reference-counting runtime; runtime ownership, application
+heap behavior and tree-hashing memory costs are unchanged. No RSS reduction
+is claimed. Equivalent-looking remotes now deliberately occupy separate
+checkouts, and upgrading can temporarily retain both legacy and new trees:
+this can increase disk use. Package storage still has no automatic budget or
+garbage collection; `plum cache list` and `plum cache clean` remain its
+lifecycle controls. Build-artifact cache budgets are independent.
+
+### Empty-separator split: one owning codepoint array (#248)
+
+`plum_str_split(s, "")` previously built a `chars_of` array, copied its
+string pointers into a second array with empty strings at both ends, and
+abandoned the first array. Dropping the result reclaimed the strings but
+leaked the temporary array's `16 + 8 * byte_length(s)` requested bytes on
+every call. Compiler last-use drops cannot repair an allocation hidden
+inside a runtime helper and never returned to a generated owner. This is
+an ownership gap at the runtime boundary, independent of the Perceus
+placement work in #349 and analogous to the native-copy gap in #128.
+
+Both primitives now use `plum_str_codepoints`: zero edge padding for
+`chars_of`, one empty string at each edge for empty-separator split. The
+builder counts codepoints, allocates one exact-capacity result, and creates
+each string directly in its owning slot. No intermediate array, pointer
+transfer, or extra retain/release pair is needed. Existing element-aware
+array destruction remains responsible for the returned strings. Aliasing
+and extracted strings follow the existing compiler ownership rules.
+
+For B input bytes and C codepoints, empty split now requests `16 + 8*(C+2)`
+array bytes instead of that result plus a leaked `16 + 8*B` temporary.
+`chars_of` requests `16 + 8*C` instead of `16 + 8*B`. String allocations
+are unchanged: C for `chars_of`, C+2 for empty split. Counting adds a pass
+over the input; time remains O(B), with O(C) returned pointers and O(B)
+returned character bytes. Repeated splitting no longer retains an array
+per completed call. Actual RSS also depends on allocator retention and
+caller-held results; this makes no process-wide RSS guarantee and changes
+no cycle collection, threading, or unrelated runtime/native ownership.
+
+The allocation fixture runs both operations 1,000 times on `aé中😀`:
+13,000 allocations / 446,000 requested bytes before, versus 12,000 /
+302,000 after. Its byte ceiling also catches byte-sized Unicode array
+capacity. These are cumulative allocation counters, not live-memory or
+RSS measurements. The execution fixture separately runs under ASan/LSan
+and covers empty input, UTF-8 widths, combining marks, escaping pieces,
+shared arrays, and repeated calls; the old runtime leaks 112,408 bytes
+in that fixture. Source doc comments and public split semantics are unchanged.

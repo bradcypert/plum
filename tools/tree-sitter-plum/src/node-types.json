@@ -105,6 +105,51 @@
     }
   },
   {
+    "type": "bit_and_expr",
+    "named": true,
+    "fields": {},
+    "children": {
+      "multiple": true,
+      "required": true,
+      "types": [
+        {
+          "type": "range_expr",
+          "named": true
+        }
+      ]
+    }
+  },
+  {
+    "type": "bit_or_expr",
+    "named": true,
+    "fields": {},
+    "children": {
+      "multiple": true,
+      "required": true,
+      "types": [
+        {
+          "type": "bit_xor_expr",
+          "named": true
+        }
+      ]
+    }
+  },
+  {
+    "type": "bit_xor_expr",
+    "named": true,
+    "fields": {},
+    "children": {
+      "multiple": true,
+      "required": true,
+      "types": [
+        {
+          "type": "bit_and_expr",
+          "named": true
+        }
+      ]
+    }
+  },
+  {
     "type": "block",
     "named": true,
     "fields": {},
@@ -220,11 +265,11 @@
       "required": true,
       "types": [
         {
-          "type": "compare_op",
+          "type": "bit_or_expr",
           "named": true
         },
         {
-          "type": "range_expr",
+          "type": "compare_op",
           "named": true
         }
       ]
@@ -1597,6 +1642,10 @@
     "named": false
   },
   {
+    "type": "&",
+    "named": false
+  },
+  {
     "type": "&&",
     "named": false
   },
@@ -1653,6 +1702,10 @@
     "named": false
   },
   {
+    "type": "<<",
+    "named": false
+  },
+  {
     "type": "<=",
     "named": false
   },
@@ -1677,11 +1730,19 @@
     "named": false
   },
   {
+    "type": ">>",
+    "named": false
+  },
+  {
     "type": "[",
     "named": false
   },
   {
     "type": "]",
+    "named": false
+  },
+  {
+    "type": "^",
     "named": false
   },
   {
@@ -1807,6 +1868,10 @@
   },
   {
     "type": "}",
+    "named": false
+  },
+  {
+    "type": "~",
     "named": false
   }
 ]

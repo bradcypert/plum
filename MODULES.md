@@ -400,8 +400,19 @@ Fetched packages live in a **global cache**, shared between your
 projects, not in a directory inside this one — `$PLUM_CACHE`, else
 `$XDG_CACHE_HOME/plum`, else `~/.cache/plum`. Each commit gets its own
 directory, so two projects wanting two versions of one package is two
-directories rather than a conflict. The path is readable on purpose:
-`<cache>/pkg/github.com/someone/parsec/<commit>/`.
+directories rather than a conflict. Entries live at
+`<cache>/pkg/v2/<identity>/<commit>/`, where `identity` is SHA-256 over
+length-prefixed exact `git` and `rev` strings. Schemes, punctuation and
+`.git` suffixes remain distinct; Plum leaves interpretation of remotes
+to Git. The commit label is readable, but only the digest establishes
+identity. The optional content `sha256` remains an independent check.
+
+Older cache and vendor paths used a lossy URL encoding and are never
+reused or automatically migrated. After upgrading, run `plum fetch` to
+populate the new cache, and `plum vendor` again before taking an existing
+vendored project offline. Old cache entries remain visible to `plum cache
+list` and removable with `plum cache clean`; remove obsolete vendor trees
+when no longer needed.
 
 `plum cache list` uses that same root and reports each cached commit plus
 the file count and exact byte total. `plum cache clean` removes only
@@ -413,7 +424,7 @@ is safe; a removed dependency is simply fetched again on the next explicit
 `plum vendor` copies every resolved Git dependency, including transitive
 ones, into `vendor/` below the project. It keeps `git`, `rev` and `sha256`
 in the manifest: builds prefer the matching vendored tree and verify its
-hash. The layout mirrors the cache (`vendor/github.com/acme/parsec/<commit>/`)
+hash. The layout mirrors the cache (`vendor/v2/<identity>/<commit>/`)
 so two commits coexist, and `vendor/` is never scanned as one of the
 project's own modules. A vendored project builds with no cache or network.
 

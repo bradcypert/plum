@@ -23,11 +23,14 @@ const PREC = {
   OR: 2,
   AND: 3,
   COMPARE: 4,
-  RANGE: 5,
-  ADD: 6,
-  MUL: 7,
-  UNARY: 8,
-  POSTFIX: 9,
+  BIT_OR: 5,
+  BIT_XOR: 6,
+  BIT_AND: 7,
+  RANGE: 8,
+  ADD: 9,
+  MUL: 10,
+  UNARY: 11,
+  POSTFIX: 12,
 };
 
 module.exports = grammar({
@@ -197,30 +200,40 @@ module.exports = grammar({
     // application (non-associative)" rule structurally (a plain
     // `optional(...)`, not a `repeat(...)`) instead of needing a
     // runtime check a highlighter-only grammar has no way to perform.
+    // The repeated operands form flat chains, evaluated left to right by
+    // the compiler. Right precedence here resolves an unbraced closure's
+    // body in favor of consuming the following operator, rather than
+    // applying it to the closure itself (`|x| x | mask`, for example).
     _expr: ($) => $.pipe_expr,
 
     pipe_expr: ($) =>
-      prec.left(PREC.PIPE, seq($.or_expr, repeat(seq("|>", $.or_expr)))),
-    or_expr: ($) => prec.left(PREC.OR, seq($.and_expr, repeat(seq("||", $.and_expr)))),
+      prec.right(PREC.PIPE, seq($.or_expr, repeat(seq("|>", $.or_expr)))),
+    or_expr: ($) => prec.right(PREC.OR, seq($.and_expr, repeat(seq("||", $.and_expr)))),
     and_expr: ($) =>
-      prec.left(PREC.AND, seq($.compare_expr, repeat(seq("&&", $.compare_expr)))),
+      prec.right(PREC.AND, seq($.compare_expr, repeat(seq("&&", $.compare_expr)))),
     compare_expr: ($) =>
-      prec.left(
+      prec.right(
         PREC.COMPARE,
-        seq($.range_expr, optional(seq($.compare_op, $.range_expr))),
+        seq($.bit_or_expr, optional(seq($.compare_op, $.bit_or_expr))),
       ),
     compare_op: () => choice("==", "!=", "<", ">", "<=", ">="),
+    bit_or_expr: ($) =>
+      prec.right(PREC.BIT_OR, seq($.bit_xor_expr, repeat(seq("|", $.bit_xor_expr)))),
+    bit_xor_expr: ($) =>
+      prec.right(PREC.BIT_XOR, seq($.bit_and_expr, repeat(seq("^", $.bit_and_expr)))),
+    bit_and_expr: ($) =>
+      prec.right(PREC.BIT_AND, seq($.range_expr, repeat(seq("&", $.range_expr)))),
     range_expr: ($) =>
-      prec.left(PREC.RANGE, seq($.add_expr, optional(seq("..", $.add_expr)))),
+      prec.right(PREC.RANGE, seq($.add_expr, optional(seq("..", $.add_expr)))),
     add_expr: ($) =>
-      prec.left(PREC.ADD, seq($.mul_expr, repeat(seq(choice("+", "-"), $.mul_expr)))),
+      prec.right(PREC.ADD, seq($.mul_expr, repeat(seq(choice("+", "-"), $.mul_expr)))),
     mul_expr: ($) =>
-      prec.left(
+      prec.right(
         PREC.MUL,
-        seq($.unary_expr, repeat(seq(choice("*", "/", "%"), $.unary_expr))),
+        seq($.unary_expr, repeat(seq(choice("*", "/", "%", "<<", ">>"), $.unary_expr))),
       ),
     unary_expr: ($) =>
-      choice(prec(PREC.UNARY, seq(choice("-", "!"), $.unary_expr)), $.postfix_expr),
+      choice(prec(PREC.UNARY, seq(choice("-", "!", "~"), $.unary_expr)), $.postfix_expr),
 
     postfix_expr: ($) => prec.left(PREC.POSTFIX, seq($._primary_expr, repeat($._postfix))),
     _postfix: ($) =>
@@ -290,8 +303,10 @@ module.exports = grammar({
     unsafe_expr: ($) => seq("unsafe", $.block),
     spawn_expr: ($) => seq("spawn", $.block),
 
+    // A closure consumes its full expression body before surrounding
+    // operators resume, including `|` after the parameter delimiter.
     closure_expr: ($) =>
-      choice(
+      prec.right(PREC.PIPE, choice(
         // `||` (an empty closure's param list) lexes as ONE token under
         // tree-sitter's own longest-match rule, exactly the same
         // maximal-munch interaction `plum-syntax`'s own lexer has to
@@ -300,7 +315,7 @@ module.exports = grammar({
         // — this alternative is that same fix at the grammar level.
         seq("||", field("body", $._expr)),
         seq("|", optional(commaSep1($.closure_param)), "|", field("body", $._expr)),
-      ),
+      )),
     closure_param: ($) => seq($.identifier, optional(seq(":", $._type))),
 
     match_expr: ($) =>

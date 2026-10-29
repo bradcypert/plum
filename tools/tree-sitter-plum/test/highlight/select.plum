@@ -1,13 +1,13 @@
 let f rx = select {
-//         ^ keyword
+    //     ^ keyword
     value = rx => value,
-//             ^ operator
+    //         ^ operator
     else => None,
-//  ^ keyword
+    //^ keyword
 }
 let g rx budget = select {
     _ = rx => 1,
     budget => 0,
-//  ^ variable
-//         ^ operator
+    //^ variable
+    //     ^ operator
 }

@@ -44,15 +44,13 @@ use Process;
 //
 // A global cache, not a `deps/` directory inside the project.
 //
-// The decision rests on the content hash. Packages are addressed by URL
-// and commit and verified by `sha256`, so two projects that name the
-// same commit are naming the same bytes, which is exactly what makes a
-// shared cache safe rather than a correctness hazard. Without the hash,
-// vendoring would be the only honest option.
+// Packages are addressed by the exact Git URL and commit. Two projects
+// naming that same pair share one checkout. An optional `sha256` checks
+// the source bytes independently on every use; it is not the cache key
+// and cannot substitute for preserving the requested Git identity.
 //
-// The rest follows: other people's code stays out of your tree and out
-// of your grep results, and a `plum vendor` that copies the cache into
-// a project is an addition later rather than something to walk back.
+// Other people's code stays out of your tree and grep results unless
+// you explicitly copy the cache into the project with `plum vendor`.
 
 // `PLUM_CACHE`, then `XDG_CACHE_HOME/plum`, then `~/.cache/plum`.
 //
@@ -88,11 +86,10 @@ let non_empty_env (name: String): Option[String] =
 
 pub let package_cache (unit: Unit): String = Path.join(cache_root(()), "pkg")
 
-// The cache is deliberately readable by hand, but a command is still
-// better than asking every caller to rediscover the layout with `find`.
-// A package entry is a full Git object ID directory; stopping at that
-// boundary matters, since a package is allowed to contain a directory
-// whose name happens to look like a commit.
+// List both legacy and versioned layouts without asking callers to
+// rediscover them with `find`. A package entry ends at a full Git commit
+// directory (40 hex characters), below the v2 identity (64 characters).
+// Stop there: package source may itself contain commit-shaped names.
 pub let cached_packages (unit: Unit): Array[String] =
     Array.sort_string(cache_package_dirs(package_cache(()),
         Result.unwrap_or(Os.list_dir(package_cache(())), []), 0, []))
@@ -136,26 +133,28 @@ pub let clear_package_cache (unit: Unit): Result[Unit, String] =
         Os.remove_tree(package_cache(()))
     } else { Ok(()) }
 
-// Where one commit of one repository lives.
+// Where one exact Git URL-and-revision pair lives.
 //
-// `<cache>/pkg/github.com/someone/parsec/<rev>/`. Readable on purpose:
-// a cache you cannot navigate by hand is a cache you cannot debug, and
-// the first question anyone asks is "what did it actually download".
+// `pkg/v2/<sha256>/<commit>/`: the digest is the identity; the final
+// revision is only a readable label. Schemes, punctuation, repeated
+// slashes and `.git` suffixes can all distinguish real Git remotes, so
+// none may be discarded before hashing. Lengths frame the two fields
+// unambiguously, even if a URL contains delimiters or newlines.
 //
-// The commit is a directory level of its own, so two projects wanting
-// two commits of the same package is not a conflict -- it is two
-// directories, both valid, neither invalidating the other. That is the
-// property `node_modules` has and a single-checkout-per-repo cache does
-// not.
+// Both stores use this relative path. Old, lossy entries are deliberately
+// not reused or migrated: their paths cannot prove which URL made them.
 pub let cache_dir (git: String) (rev: String): String =
-    Path.join(join_segments(package_cache(()), url_segments(git), 0),
-        sanitize_segment(rev))
+    Path.join(package_cache(()), package_identity_path(git, rev))
 
-// The project-local counterpart of `cache_dir`. Keep the same identity
-// below `vendor/`: a package name alone cannot distinguish two commits
-// of one repository, and the manifest remains the authority for both.
+// The project-local counterpart of `cache_dir`, with the same identity.
 pub let vendor_dir (root: String) (git: String) (rev: String): String =
-    Path.join(Path.join(root, "vendor"), Path.join(join_segments("", url_segments(git), 0), sanitize_segment(rev)))
+    Path.join(Path.join(root, "vendor"), package_identity_path(git, rev))
+
+let package_identity_path (git: String) (rev: String): String = {
+    let framed = "${git.len().to_string()}:${git}${rev.len().to_string()}:${rev}";
+    let key = Bytes.to_hex(Crypto.sha256(Bytes.from_string(framed)));
+    Path.join(Path.join("v2", key), sanitize_segment(rev))
+}
 
 pub let vendor_dep (root: String) (d: Dep): String = {
     let src = fetch_dep(d);
@@ -182,36 +181,9 @@ pub let vendor_dep (root: String) (d: Dep): String = {
     dst
 }
 
-// The URL, as directory names.
-//
-// Every segment is sanitized and `.`/`..`/empty can never survive, so a
-// URL cannot address anything outside the cache no matter what it says.
-// That matters more than it looks: the URL comes from a manifest, and a
-// manifest can come from a dependency of a dependency.
-let url_segments (git: String): Array[String] =
-    Array.map(non_empty(String.split(strip_dot_git(strip_scheme(git)), "/"), 0, []),
-        |s| sanitize_segment(s))
-
-let strip_scheme (url: String): String =
-    match String.index_of(url, "://") {
-        Some(i) => String.slice(url, i + 3, url.len()),
-        None => url,
-    }
-
-// `foo.git` and `foo` are the same repository, and a cache that stored
-// them twice would fetch twice and hash twice for one package.
-let strip_dot_git (url: String): String =
-    if url.ends_with(".git") { String.slice(url, 0, url.len() - 4) } else { url }
-
-let non_empty (xs: Array[String]) (i: Int) (acc: Array[String]): Array[String] =
-    if i >= xs.len() { acc }
-    else if String.is_empty(xs[i]) { non_empty(xs, i + 1, acc) }
-    else { non_empty(xs, i + 1, acc.push(xs[i])) }
-
-// Anything that is not a plain name becomes `_`.
-//
-// `:` and `@` in an scp-style URL, a space, a backslash, and above all
-// `.` and `..`, which are the only two that could escape the cache.
+// The revision label is decorative, never the identity. Replace unsafe
+// characters and reject dot segments so even direct API calls with a
+// non-commit revision cannot escape the digest directory.
 let sanitize_segment (s: String): String = {
     let mapped = Array.fold(chars_of(s), "", |acc, c| acc.concat(if is_safe_char(c) { c } else { "_" }));
     if mapped == "." || mapped == ".." || String.is_empty(mapped) { "_" } else { mapped }
@@ -219,10 +191,6 @@ let sanitize_segment (s: String): String = {
 
 let is_safe_char (c: String): Bool =
     Array.contains(chars_of("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789._-"), c)
-
-let join_segments (base: String) (segs: Array[String]) (i: Int): String =
-    if i >= segs.len() { base }
-    else { join_segments(Path.join(base, segs[i]), segs, i + 1) }
 
 // -------------------------------------------------------- the tree hash
 //
@@ -409,3 +377,46 @@ let ensure_acc (parts: Array[String]) (i: Int) (acc: String): Unit =
         match Os.make_dir(here) { Ok(_) => (), Err(_) => () };
         ensure_acc(parts, i + 1, here)
     }
+
+// These pairs all lost identity in the old display-path encoding. Test
+// both stores: build resolution and publication must use the same key.
+pub let test_package_storage_identity (): Unit = {
+    let rev = "0123456789012345678901234567890123456789";
+    let urls = [
+        ["https://git.example/repo", "ssh://git.example/repo"],
+        ["git@example:repo", "git_example_repo"],
+        ["/tmp/repo:one", "/tmp/repo_one"],
+        ["/tmp/repo.git", "/tmp/repo"],
+        ["https://git.example/a//b", "https://git.example/a/b"],
+        ["https://git.example/../repo", "https://git.example/_/repo"],
+        ["https://git.example/é", "https://git.example/_"],
+    ];
+    for pair in urls {
+        assert(cache_dir(pair[0], rev) != cache_dir(pair[1], rev));
+        assert(vendor_dir("project", pair[0], rev) != vendor_dir("project", pair[1], rev));
+    };
+    // Manifests currently reject refs, but the path API still preserves
+    // its revision input and never lets it escape the storage root.
+    assert(cache_dir("repo", "release/v1") != cache_dir("repo", "release_v1"));
+    assert(vendor_dir("project", "repo", "release/v1") != vendor_dir("project", "repo", "release_v1"));
+    assert(cache_dir("ab", "c") != cache_dir("a", "bc"));
+    assert(cache_dir("a\nb", "c") != cache_dir("a", "b\nc"));
+    assert_eq(cache_dir("repo", rev), cache_dir("repo", rev));
+    assert_eq(Path.basename(cache_dir("repo", rev)), rev);
+    assert_eq(Path.basename(vendor_dir("project", "repo", rev)), rev);
+}
+
+pub let test_package_identity_layout (): Unit = {
+    // Fixed framing vector, calculated independently of the Plum helper.
+    assert_eq(package_identity_path("a\nb", "c"),
+        Path.join(Path.join("v2", "7a6f128b2268aa9b0008b684852adec17c5971548097472d84a5ece2e5607483"), "c"));
+    for rev in ["", ".", "..", "../../escape", "C:\\escape"] {
+        let parts = String.split(package_identity_path("../../remote", rev), Path.separator());
+        assert_eq(parts.len(), 3);
+        assert_eq(parts[0], "v2");
+        assert_eq(parts[1].len(), 64);
+        assert(Array.fold(chars_of(parts[1]), true, |ok, c|
+            ok && Array.contains(chars_of("0123456789abcdef"), c)));
+        assert(parts[2] != "" && parts[2] != "." && parts[2] != "..");
+    }
+}

@@ -1,0 +1,13 @@
+// One array per call, sized by codepoints rather than UTF-8 bytes.
+// Each iteration creates six strings for split and four for chars_of;
+// literal inputs are static. The byte ceiling pins exact array capacity.
+let main (): Unit = {
+    for i in 0..1000 {
+        let pieces = "aé中😀".split("");
+        assert_eq(pieces.len(), 6);
+        assert_eq(pieces[4], "😀");
+        let chars = chars_of("aé中😀");
+        assert_eq(chars.len(), 4);
+        assert_eq(chars[3], "😀");
+    }
+}
