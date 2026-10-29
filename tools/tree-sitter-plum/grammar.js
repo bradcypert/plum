@@ -431,7 +431,9 @@ module.exports = grammar({
     bool_literal: () => choice("true", "false"),
 
     string_literal: ($) =>
-      seq('"', repeat(choice($.escape_sequence, /[^"\\\n]+/)), '"'),
+      // Newlines are string content. Leaving them to `extras` can make
+      // a following `//` consume the closing quote as a comment.
+      seq('"', repeat(choice($.escape_sequence, /[^"\\]+/)), '"'),
     escape_sequence: () => /\\./,
 
     comment: () => token(seq("//", /.*/)),
