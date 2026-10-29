@@ -32,110 +32,140 @@ let withdraw (account: Account) (amount: Int): Account
           (or_expr
             (and_expr
               (compare_expr
-                (range_expr
-                  (add_expr
-                    (mul_expr
-                      (unary_expr
-                        (postfix_expr
-                          (identifier))))))
+                (bit_or_expr
+                  (bit_xor_expr
+                    (bit_and_expr
+                      (range_expr
+                        (add_expr
+                          (mul_expr
+                            (unary_expr
+                              (postfix_expr
+                                (identifier)))))))))
                 (compare_op)
-                (range_expr
-                  (add_expr
-                    (mul_expr
-                      (unary_expr
-                        (postfix_expr
-                          (int_literal))))))))))
+                (bit_or_expr
+                  (bit_xor_expr
+                    (bit_and_expr
+                      (range_expr
+                        (add_expr
+                          (mul_expr
+                            (unary_expr
+                              (postfix_expr
+                                (int_literal)))))))))))))
         (string_literal))
       (require_clause
         (pipe_expr
           (or_expr
             (and_expr
               (compare_expr
-                (range_expr
-                  (add_expr
-                    (mul_expr
-                      (unary_expr
-                        (postfix_expr
-                          (identifier))))))
+                (bit_or_expr
+                  (bit_xor_expr
+                    (bit_and_expr
+                      (range_expr
+                        (add_expr
+                          (mul_expr
+                            (unary_expr
+                              (postfix_expr
+                                (identifier)))))))))
                 (compare_op)
-                (range_expr
-                  (add_expr
-                    (mul_expr
-                      (unary_expr
-                        (postfix_expr
-                          (identifier)
-                          (identifier))))))))))
+                (bit_or_expr
+                  (bit_xor_expr
+                    (bit_and_expr
+                      (range_expr
+                        (add_expr
+                          (mul_expr
+                            (unary_expr
+                              (postfix_expr
+                                (identifier)
+                                (identifier)))))))))))))
         (string_literal))
       (ensure_clause
         (pipe_expr
           (or_expr
             (and_expr
               (compare_expr
-                (range_expr
-                  (add_expr
-                    (mul_expr
-                      (unary_expr
-                        (postfix_expr
-                          (identifier)
-                          (identifier))))))
+                (bit_or_expr
+                  (bit_xor_expr
+                    (bit_and_expr
+                      (range_expr
+                        (add_expr
+                          (mul_expr
+                            (unary_expr
+                              (postfix_expr
+                                (identifier)
+                                (identifier)))))))))
                 (compare_op)
-                (range_expr
-                  (add_expr
-                    (mul_expr
-                      (unary_expr
-                        (postfix_expr
-                          (int_literal)))))))))))
+                (bit_or_expr
+                  (bit_xor_expr
+                    (bit_and_expr
+                      (range_expr
+                        (add_expr
+                          (mul_expr
+                            (unary_expr
+                              (postfix_expr
+                                (int_literal))))))))))))))
       (ensure_clause
         (pipe_expr
           (or_expr
             (and_expr
               (compare_expr
-                (range_expr
-                  (add_expr
-                    (mul_expr
-                      (unary_expr
-                        (postfix_expr
-                          (identifier)
-                          (identifier))))))
+                (bit_or_expr
+                  (bit_xor_expr
+                    (bit_and_expr
+                      (range_expr
+                        (add_expr
+                          (mul_expr
+                            (unary_expr
+                              (postfix_expr
+                                (identifier)
+                                (identifier)))))))))
                 (compare_op)
-                (range_expr
-                  (add_expr
-                    (mul_expr
-                      (unary_expr
-                        (postfix_expr
-                          (identifier)
-                          (identifier))))))))))
+                (bit_or_expr
+                  (bit_xor_expr
+                    (bit_and_expr
+                      (range_expr
+                        (add_expr
+                          (mul_expr
+                            (unary_expr
+                              (postfix_expr
+                                (identifier)
+                                (identifier)))))))))))))
         (string_literal))
       (pipe_expr
         (or_expr
           (and_expr
             (compare_expr
-              (range_expr
-                (add_expr
-                  (mul_expr
-                    (unary_expr
-                      (postfix_expr
-                        (struct_literal
-                          (path
-                            (identifier))
-                          (field_init_list
-                            (field_init
-                              (identifier)
-                              (pipe_expr
-                                (or_expr
-                                  (and_expr
-                                    (compare_expr
-                                      (range_expr
-                                        (add_expr
-                                          (mul_expr
-                                            (unary_expr
-                                              (postfix_expr
-                                                (identifier)
-                                                (identifier))))
-                                          (mul_expr
-                                            (unary_expr
-                                              (postfix_expr
-                                                (identifier)))))))))))))))))))))))))
+              (bit_or_expr
+                (bit_xor_expr
+                  (bit_and_expr
+                    (range_expr
+                      (add_expr
+                        (mul_expr
+                          (unary_expr
+                            (postfix_expr
+                              (struct_literal
+                                (path
+                                  (identifier))
+                                (field_init_list
+                                  (field_init
+                                    (identifier)
+                                    (pipe_expr
+                                      (or_expr
+                                        (and_expr
+                                          (compare_expr
+                                            (bit_or_expr
+                                              (bit_xor_expr
+                                                (bit_and_expr
+                                                  (range_expr
+                                                    (add_expr
+                                                      (mul_expr
+                                                        (unary_expr
+                                                          (postfix_expr
+                                                            (identifier)
+                                                            (identifier))))
+                                                      (mul_expr
+                                                        (unary_expr
+                                                          (postfix_expr
+                                                            (identifier)))))))))))))))))))))))))))))))
 
 ====================
 Preconditions only
@@ -168,33 +198,42 @@ let average (total: Int) (count: Int): Int
           (or_expr
             (and_expr
               (compare_expr
-                (range_expr
-                  (add_expr
-                    (mul_expr
-                      (unary_expr
-                        (postfix_expr
-                          (identifier))))))
+                (bit_or_expr
+                  (bit_xor_expr
+                    (bit_and_expr
+                      (range_expr
+                        (add_expr
+                          (mul_expr
+                            (unary_expr
+                              (postfix_expr
+                                (identifier)))))))))
                 (compare_op)
-                (range_expr
-                  (add_expr
-                    (mul_expr
-                      (unary_expr
-                        (postfix_expr
-                          (int_literal))))))))))
+                (bit_or_expr
+                  (bit_xor_expr
+                    (bit_and_expr
+                      (range_expr
+                        (add_expr
+                          (mul_expr
+                            (unary_expr
+                              (postfix_expr
+                                (int_literal)))))))))))))
         (string_literal))
       (pipe_expr
         (or_expr
           (and_expr
             (compare_expr
-              (range_expr
-                (add_expr
-                  (mul_expr
-                    (unary_expr
-                      (postfix_expr
-                        (identifier)))
-                    (unary_expr
-                      (postfix_expr
-                        (identifier)))))))))))))
+              (bit_or_expr
+                (bit_xor_expr
+                  (bit_and_expr
+                    (range_expr
+                      (add_expr
+                        (mul_expr
+                          (unary_expr
+                            (postfix_expr
+                              (identifier)))
+                          (unary_expr
+                            (postfix_expr
+                              (identifier))))))))))))))))
 
 ====================
 Postconditions only
@@ -220,30 +259,39 @@ let identity (value: Int): Int ensure result == value : "identity" = value
           (or_expr
             (and_expr
               (compare_expr
-                (range_expr
-                  (add_expr
-                    (mul_expr
-                      (unary_expr
-                        (postfix_expr
-                          (identifier))))))
+                (bit_or_expr
+                  (bit_xor_expr
+                    (bit_and_expr
+                      (range_expr
+                        (add_expr
+                          (mul_expr
+                            (unary_expr
+                              (postfix_expr
+                                (identifier)))))))))
                 (compare_op)
-                (range_expr
-                  (add_expr
-                    (mul_expr
-                      (unary_expr
-                        (postfix_expr
-                          (identifier))))))))))
+                (bit_or_expr
+                  (bit_xor_expr
+                    (bit_and_expr
+                      (range_expr
+                        (add_expr
+                          (mul_expr
+                            (unary_expr
+                              (postfix_expr
+                                (identifier)))))))))))))
         (string_literal))
       (pipe_expr
         (or_expr
           (and_expr
             (compare_expr
-              (range_expr
-                (add_expr
-                  (mul_expr
-                    (unary_expr
-                      (postfix_expr
-                        (identifier)))))))))))))
+              (bit_or_expr
+                (bit_xor_expr
+                  (bit_and_expr
+                    (range_expr
+                      (add_expr
+                        (mul_expr
+                          (unary_expr
+                            (postfix_expr
+                              (identifier))))))))))))))))
 
 ====================
 Contracts without return annotations
@@ -267,47 +315,62 @@ let positive (n: Int) require n > 0 ensure result > 0 = n
           (or_expr
             (and_expr
               (compare_expr
-                (range_expr
-                  (add_expr
-                    (mul_expr
-                      (unary_expr
-                        (postfix_expr
-                          (identifier))))))
+                (bit_or_expr
+                  (bit_xor_expr
+                    (bit_and_expr
+                      (range_expr
+                        (add_expr
+                          (mul_expr
+                            (unary_expr
+                              (postfix_expr
+                                (identifier)))))))))
                 (compare_op)
-                (range_expr
-                  (add_expr
-                    (mul_expr
-                      (unary_expr
-                        (postfix_expr
-                          (int_literal)))))))))))
+                (bit_or_expr
+                  (bit_xor_expr
+                    (bit_and_expr
+                      (range_expr
+                        (add_expr
+                          (mul_expr
+                            (unary_expr
+                              (postfix_expr
+                                (int_literal))))))))))))))
       (ensure_clause
         (pipe_expr
           (or_expr
             (and_expr
               (compare_expr
-                (range_expr
-                  (add_expr
-                    (mul_expr
-                      (unary_expr
-                        (postfix_expr
-                          (identifier))))))
+                (bit_or_expr
+                  (bit_xor_expr
+                    (bit_and_expr
+                      (range_expr
+                        (add_expr
+                          (mul_expr
+                            (unary_expr
+                              (postfix_expr
+                                (identifier)))))))))
                 (compare_op)
-                (range_expr
-                  (add_expr
-                    (mul_expr
-                      (unary_expr
-                        (postfix_expr
-                          (int_literal)))))))))))
+                (bit_or_expr
+                  (bit_xor_expr
+                    (bit_and_expr
+                      (range_expr
+                        (add_expr
+                          (mul_expr
+                            (unary_expr
+                              (postfix_expr
+                                (int_literal))))))))))))))
       (pipe_expr
         (or_expr
           (and_expr
             (compare_expr
-              (range_expr
-                (add_expr
-                  (mul_expr
-                    (unary_expr
-                      (postfix_expr
-                        (identifier)))))))))))))
+              (bit_or_expr
+                (bit_xor_expr
+                  (bit_and_expr
+                    (range_expr
+                      (add_expr
+                        (mul_expr
+                          (unary_expr
+                            (postfix_expr
+                              (identifier))))))))))))))))
 
 ====================
 Generic associated function contracts
@@ -337,22 +400,28 @@ pub let Box.identity[T] (value: T): T ensure true = value
           (or_expr
             (and_expr
               (compare_expr
-                (range_expr
-                  (add_expr
-                    (mul_expr
-                      (unary_expr
-                        (postfix_expr
-                          (bool_literal)))))))))))
+                (bit_or_expr
+                  (bit_xor_expr
+                    (bit_and_expr
+                      (range_expr
+                        (add_expr
+                          (mul_expr
+                            (unary_expr
+                              (postfix_expr
+                                (bool_literal))))))))))))))
       (pipe_expr
         (or_expr
           (and_expr
             (compare_expr
-              (range_expr
-                (add_expr
-                  (mul_expr
-                    (unary_expr
-                      (postfix_expr
-                        (identifier)))))))))))))
+              (bit_or_expr
+                (bit_xor_expr
+                  (bit_and_expr
+                    (range_expr
+                      (add_expr
+                        (mul_expr
+                          (unary_expr
+                            (postfix_expr
+                              (identifier))))))))))))))))
 
 ====================
 Contract words remain identifiers
@@ -381,12 +450,15 @@ let check (require: Int) (ensure: Int): Int
         (or_expr
           (and_expr
             (compare_expr
-              (range_expr
-                (add_expr
-                  (mul_expr
-                    (unary_expr
-                      (postfix_expr
-                        (int_literal))))))))))))
+              (bit_or_expr
+                (bit_xor_expr
+                  (bit_and_expr
+                    (range_expr
+                      (add_expr
+                        (mul_expr
+                          (unary_expr
+                            (postfix_expr
+                              (int_literal)))))))))))))))
   (item
     (let_def
       (identifier)
@@ -394,12 +466,15 @@ let check (require: Int) (ensure: Int): Int
         (or_expr
           (and_expr
             (compare_expr
-              (range_expr
-                (add_expr
-                  (mul_expr
-                    (unary_expr
-                      (postfix_expr
-                        (int_literal))))))))))))
+              (bit_or_expr
+                (bit_xor_expr
+                  (bit_and_expr
+                    (range_expr
+                      (add_expr
+                        (mul_expr
+                          (unary_expr
+                            (postfix_expr
+                              (int_literal)))))))))))))))
   (item
     (let_def
       (identifier)
@@ -411,16 +486,19 @@ let check (require: Int) (ensure: Int): Int
         (or_expr
           (and_expr
             (compare_expr
-              (range_expr
-                (add_expr
-                  (mul_expr
-                    (unary_expr
-                      (postfix_expr
-                        (identifier))))
-                  (mul_expr
-                    (unary_expr
-                      (postfix_expr
-                        (identifier))))))))))))
+              (bit_or_expr
+                (bit_xor_expr
+                  (bit_and_expr
+                    (range_expr
+                      (add_expr
+                        (mul_expr
+                          (unary_expr
+                            (postfix_expr
+                              (identifier))))
+                        (mul_expr
+                          (unary_expr
+                            (postfix_expr
+                              (identifier)))))))))))))))
   (item
     (let_def
       (identifier)
@@ -440,52 +518,64 @@ let check (require: Int) (ensure: Int): Int
         (or_expr
           (and_expr
             (compare_expr
-              (range_expr
-                (add_expr
-                  (mul_expr
-                    (unary_expr
-                      (postfix_expr
-                        (block
-                          (let_stmt
-                            (pattern
-                              (identifier))
-                            (pipe_expr
-                              (or_expr
-                                (and_expr
-                                  (compare_expr
-                                    (range_expr
-                                      (add_expr
-                                        (mul_expr
-                                          (unary_expr
-                                            (postfix_expr
-                                              (identifier)))))))))))
-                          (let_stmt
-                            (pattern
-                              (identifier))
-                            (pipe_expr
-                              (or_expr
-                                (and_expr
-                                  (compare_expr
-                                    (range_expr
-                                      (add_expr
-                                        (mul_expr
-                                          (unary_expr
-                                            (postfix_expr
-                                              (identifier)))))))))))
-                          (pipe_expr
-                            (or_expr
-                              (and_expr
-                                (compare_expr
-                                  (range_expr
-                                    (add_expr
-                                      (mul_expr
-                                        (unary_expr
-                                          (postfix_expr
-                                            (identifier))))
-                                      (mul_expr
-                                        (unary_expr
-                                          (postfix_expr
-                                            (identifier))))))))))))))))))))))
+              (bit_or_expr
+                (bit_xor_expr
+                  (bit_and_expr
+                    (range_expr
+                      (add_expr
+                        (mul_expr
+                          (unary_expr
+                            (postfix_expr
+                              (block
+                                (let_stmt
+                                  (pattern
+                                    (identifier))
+                                  (pipe_expr
+                                    (or_expr
+                                      (and_expr
+                                        (compare_expr
+                                          (bit_or_expr
+                                            (bit_xor_expr
+                                              (bit_and_expr
+                                                (range_expr
+                                                  (add_expr
+                                                    (mul_expr
+                                                      (unary_expr
+                                                        (postfix_expr
+                                                          (identifier))))))))))))))
+                                (let_stmt
+                                  (pattern
+                                    (identifier))
+                                  (pipe_expr
+                                    (or_expr
+                                      (and_expr
+                                        (compare_expr
+                                          (bit_or_expr
+                                            (bit_xor_expr
+                                              (bit_and_expr
+                                                (range_expr
+                                                  (add_expr
+                                                    (mul_expr
+                                                      (unary_expr
+                                                        (postfix_expr
+                                                          (identifier))))))))))))))
+                                (pipe_expr
+                                  (or_expr
+                                    (and_expr
+                                      (compare_expr
+                                        (bit_or_expr
+                                          (bit_xor_expr
+                                            (bit_and_expr
+                                              (range_expr
+                                                (add_expr
+                                                  (mul_expr
+                                                    (unary_expr
+                                                      (postfix_expr
+                                                        (identifier))))
+                                                  (mul_expr
+                                                    (unary_expr
+                                                      (postfix_expr
+                                                        (identifier))))))))))))))))))))))))))))
   (item
     (let_def
       (identifier)
@@ -506,47 +596,62 @@ let check (require: Int) (ensure: Int): Int
           (or_expr
             (and_expr
               (compare_expr
-                (range_expr
-                  (add_expr
-                    (mul_expr
-                      (unary_expr
-                        (postfix_expr
-                          (identifier))))))
+                (bit_or_expr
+                  (bit_xor_expr
+                    (bit_and_expr
+                      (range_expr
+                        (add_expr
+                          (mul_expr
+                            (unary_expr
+                              (postfix_expr
+                                (identifier)))))))))
                 (compare_op)
-                (range_expr
-                  (add_expr
-                    (mul_expr
-                      (unary_expr
-                        (postfix_expr
-                          (int_literal)))))))))))
+                (bit_or_expr
+                  (bit_xor_expr
+                    (bit_and_expr
+                      (range_expr
+                        (add_expr
+                          (mul_expr
+                            (unary_expr
+                              (postfix_expr
+                                (int_literal))))))))))))))
       (ensure_clause
         (pipe_expr
           (or_expr
             (and_expr
               (compare_expr
-                (range_expr
-                  (add_expr
-                    (mul_expr
-                      (unary_expr
-                        (postfix_expr
-                          (identifier))))))
+                (bit_or_expr
+                  (bit_xor_expr
+                    (bit_and_expr
+                      (range_expr
+                        (add_expr
+                          (mul_expr
+                            (unary_expr
+                              (postfix_expr
+                                (identifier)))))))))
                 (compare_op)
-                (range_expr
-                  (add_expr
-                    (mul_expr
-                      (unary_expr
-                        (postfix_expr
-                          (identifier)))))))))))
+                (bit_or_expr
+                  (bit_xor_expr
+                    (bit_and_expr
+                      (range_expr
+                        (add_expr
+                          (mul_expr
+                            (unary_expr
+                              (postfix_expr
+                                (identifier))))))))))))))
       (pipe_expr
         (or_expr
           (and_expr
             (compare_expr
-              (range_expr
-                (add_expr
-                  (mul_expr
-                    (unary_expr
-                      (postfix_expr
-                        (identifier)))))))))))))
+              (bit_or_expr
+                (bit_xor_expr
+                  (bit_and_expr
+                    (range_expr
+                      (add_expr
+                        (mul_expr
+                          (unary_expr
+                            (postfix_expr
+                              (identifier))))))))))))))))
 
 ====================
 Contract expressions reuse the expression grammar
@@ -575,92 +680,122 @@ let bounded (n: Int): Int
           (or_expr
             (and_expr
               (compare_expr
-                (range_expr
-                  (add_expr
-                    (mul_expr
-                      (unary_expr
-                        (postfix_expr
-                          (identifier)
-                          (arguments
-                            (argument
-                              (pipe_expr
-                                (or_expr
-                                  (and_expr
-                                    (compare_expr
-                                      (range_expr
-                                        (add_expr
-                                          (mul_expr
-                                            (unary_expr
-                                              (postfix_expr
-                                                (identifier))))))))))))))))))
+                (bit_or_expr
+                  (bit_xor_expr
+                    (bit_and_expr
+                      (range_expr
+                        (add_expr
+                          (mul_expr
+                            (unary_expr
+                              (postfix_expr
+                                (identifier)
+                                (arguments
+                                  (argument
+                                    (pipe_expr
+                                      (or_expr
+                                        (and_expr
+                                          (compare_expr
+                                            (bit_or_expr
+                                              (bit_xor_expr
+                                                (bit_and_expr
+                                                  (range_expr
+                                                    (add_expr
+                                                      (mul_expr
+                                                        (unary_expr
+                                                          (postfix_expr
+                                                            (identifier))))))))))))))))))))))))
               (compare_expr
-                (range_expr
-                  (add_expr
-                    (mul_expr
-                      (unary_expr
-                        (postfix_expr
-                          (identifier))))))
+                (bit_or_expr
+                  (bit_xor_expr
+                    (bit_and_expr
+                      (range_expr
+                        (add_expr
+                          (mul_expr
+                            (unary_expr
+                              (postfix_expr
+                                (identifier)))))))))
                 (compare_op)
-                (range_expr
-                  (add_expr
-                    (mul_expr
-                      (unary_expr
-                        (postfix_expr
-                          (int_literal))))))))))
+                (bit_or_expr
+                  (bit_xor_expr
+                    (bit_and_expr
+                      (range_expr
+                        (add_expr
+                          (mul_expr
+                            (unary_expr
+                              (postfix_expr
+                                (int_literal)))))))))))))
         (string_literal))
       (ensure_clause
         (pipe_expr
           (or_expr
             (and_expr
               (compare_expr
-                (range_expr
-                  (add_expr
-                    (mul_expr
-                      (unary_expr
-                        (postfix_expr
-                          (paren_or_tuple_expr
-                            (pipe_expr
-                              (or_expr
-                                (and_expr
-                                  (compare_expr
-                                    (range_expr
-                                      (add_expr
-                                        (mul_expr
-                                          (unary_expr
-                                            (postfix_expr
-                                              (identifier))))))
-                                    (compare_op)
-                                    (range_expr
-                                      (add_expr
-                                        (mul_expr
-                                          (unary_expr
-                                            (postfix_expr
-                                              (identifier))))))))
-                                (and_expr
-                                  (compare_expr
-                                    (range_expr
-                                      (add_expr
-                                        (mul_expr
-                                          (unary_expr
-                                            (postfix_expr
-                                              (identifier))))))
-                                    (compare_op)
-                                    (range_expr
-                                      (add_expr
-                                        (mul_expr
-                                          (unary_expr
-                                            (postfix_expr
-                                              (int_literal)))))))))))))))))))))
+                (bit_or_expr
+                  (bit_xor_expr
+                    (bit_and_expr
+                      (range_expr
+                        (add_expr
+                          (mul_expr
+                            (unary_expr
+                              (postfix_expr
+                                (paren_or_tuple_expr
+                                  (pipe_expr
+                                    (or_expr
+                                      (and_expr
+                                        (compare_expr
+                                          (bit_or_expr
+                                            (bit_xor_expr
+                                              (bit_and_expr
+                                                (range_expr
+                                                  (add_expr
+                                                    (mul_expr
+                                                      (unary_expr
+                                                        (postfix_expr
+                                                          (identifier)))))))))
+                                          (compare_op)
+                                          (bit_or_expr
+                                            (bit_xor_expr
+                                              (bit_and_expr
+                                                (range_expr
+                                                  (add_expr
+                                                    (mul_expr
+                                                      (unary_expr
+                                                        (postfix_expr
+                                                          (identifier)))))))))))
+                                      (and_expr
+                                        (compare_expr
+                                          (bit_or_expr
+                                            (bit_xor_expr
+                                              (bit_and_expr
+                                                (range_expr
+                                                  (add_expr
+                                                    (mul_expr
+                                                      (unary_expr
+                                                        (postfix_expr
+                                                          (identifier)))))))))
+                                          (compare_op)
+                                          (bit_or_expr
+                                            (bit_xor_expr
+                                              (bit_and_expr
+                                                (range_expr
+                                                  (add_expr
+                                                    (mul_expr
+                                                      (unary_expr
+                                                        (postfix_expr
+                                                          (int_literal)))))))))))))))))))))))))))
       (pipe_expr
         (or_expr
           (and_expr
             (compare_expr
-              (range_expr
-                (add_expr
-                  (mul_expr
-                    (unary_expr
-                      (postfix_expr
-                        (identifier)))))))))))))
+              (bit_or_expr
+                (bit_xor_expr
+                  (bit_and_expr
+                    (range_expr
+                      (add_expr
+                        (mul_expr
+                          (unary_expr
+                            (postfix_expr
+                              (identifier))))))))))))))))
 
 ====================
 Contract comments and multiline conditions
@@ -692,73 +827,98 @@ let positive (n: Int): Int
           (or_expr
             (and_expr
               (compare_expr
-                (range_expr
-                  (add_expr
-                    (mul_expr
-                      (unary_expr
-                        (postfix_expr
-                          (paren_or_tuple_expr
-                            (pipe_expr
-                              (or_expr
-                                (and_expr
-                                  (compare_expr
-                                    (range_expr
-                                      (add_expr
-                                        (mul_expr
-                                          (unary_expr
-                                            (postfix_expr
-                                              (identifier))))))
-                                    (compare_op)
-                                    (range_expr
-                                      (add_expr
-                                        (mul_expr
-                                          (unary_expr
-                                            (postfix_expr
-                                              (int_literal)))))))
-                                  (compare_expr
-                                    (range_expr
-                                      (add_expr
-                                        (mul_expr
-                                          (unary_expr
-                                            (postfix_expr
-                                              (identifier))))))
-                                    (compare_op)
-                                    (range_expr
-                                      (add_expr
-                                        (mul_expr
-                                          (unary_expr
-                                            (postfix_expr
-                                              (int_literal)))))))))))))))))))))
+                (bit_or_expr
+                  (bit_xor_expr
+                    (bit_and_expr
+                      (range_expr
+                        (add_expr
+                          (mul_expr
+                            (unary_expr
+                              (postfix_expr
+                                (paren_or_tuple_expr
+                                  (pipe_expr
+                                    (or_expr
+                                      (and_expr
+                                        (compare_expr
+                                          (bit_or_expr
+                                            (bit_xor_expr
+                                              (bit_and_expr
+                                                (range_expr
+                                                  (add_expr
+                                                    (mul_expr
+                                                      (unary_expr
+                                                        (postfix_expr
+                                                          (identifier)))))))))
+                                          (compare_op)
+                                          (bit_or_expr
+                                            (bit_xor_expr
+                                              (bit_and_expr
+                                                (range_expr
+                                                  (add_expr
+                                                    (mul_expr
+                                                      (unary_expr
+                                                        (postfix_expr
+                                                          (int_literal))))))))))
+                                        (compare_expr
+                                          (bit_or_expr
+                                            (bit_xor_expr
+                                              (bit_and_expr
+                                                (range_expr
+                                                  (add_expr
+                                                    (mul_expr
+                                                      (unary_expr
+                                                        (postfix_expr
+                                                          (identifier)))))))))
+                                          (compare_op)
+                                          (bit_or_expr
+                                            (bit_xor_expr
+                                              (bit_and_expr
+                                                (range_expr
+                                                  (add_expr
+                                                    (mul_expr
+                                                      (unary_expr
+                                                        (postfix_expr
+                                                          (int_literal)))))))))))))))))))))))))))
       (comment)
       (ensure_clause
         (pipe_expr
           (or_expr
             (and_expr
               (compare_expr
-                (range_expr
-                  (add_expr
-                    (mul_expr
-                      (unary_expr
-                        (postfix_expr
-                          (identifier))))))
+                (bit_or_expr
+                  (bit_xor_expr
+                    (bit_and_expr
+                      (range_expr
+                        (add_expr
+                          (mul_expr
+                            (unary_expr
+                              (postfix_expr
+                                (identifier)))))))))
                 (compare_op)
-                (range_expr
-                  (add_expr
-                    (mul_expr
-                      (unary_expr
-                        (postfix_expr
-                          (int_literal))))))))))
+                (bit_or_expr
+                  (bit_xor_expr
+                    (bit_and_expr
+                      (range_expr
+                        (add_expr
+                          (mul_expr
+                            (unary_expr
+                              (postfix_expr
+                                (int_literal)))))))))))))
         (string_literal))
       (pipe_expr
         (or_expr
           (and_expr
             (compare_expr
-              (range_expr
-                (add_expr
-                  (mul_expr
-                    (unary_expr
-                      (postfix_expr
-                        (identifier)))))))))))))
+              (bit_or_expr
+                (bit_xor_expr
+                  (bit_and_expr
+                    (range_expr
+                      (add_expr
+                        (mul_expr
+                          (unary_expr
+                            (postfix_expr
+                              (identifier))))))))))))))))
+
 ====================
 Preconditions cannot follow postconditions
 :error
@@ -802,4 +962,3 @@ let f (n: Int): Int require n > 0 : 123 = n
 ---
 
 (ERROR)
-
