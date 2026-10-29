@@ -1,0 +1,30 @@
+// Shared-prefix construction must preserve duplicate handling and heap ownership.
+let main (): Unit = {
+    let keys = ["a", "b", "a", "ignored"];
+    let values = ["first", "second", "last"];
+    let m = Map.from_arrays(keys, values);
+    assert_eq(Map.len(m), 2);
+    assert_eq(Map.get(m, "a"), Some("last"));
+    assert_eq(Map.get(m, "b"), Some("second"));
+    assert_eq(Map.get(m, "ignored"), None);
+    assert_eq(keys, ["a", "b", "a", "ignored"]);
+    assert_eq(values, ["first", "second", "last"]);
+
+    // The unpaired duplicate must not replace the paired value.
+    let shorter_values = Map.from_arrays(["a", "b", "a"], ["first", "second"]);
+    assert_eq(Map.len(shorter_values), 2);
+    assert_eq(Map.get(shorter_values, "a"), Some("first"));
+    let shorter_keys = Map.from_arrays(["a", "a"], ["first", "last", "ignored"]);
+    assert_eq(Map.len(shorter_keys), 1);
+    assert_eq(Map.get(shorter_keys, "a"), Some("last"));
+    let equal = Map.from_arrays(["a", "b"], ["first", "second"]);
+    assert_eq(Map.get(equal, "b"), Some("second"));
+    assert_eq(Map.len(equal), 2);
+
+    let no_keys: Array[String] = [];
+    let no_values: Array[String] = [];
+    assert_eq(Map.len(Map.from_arrays(no_keys, values)), 0);
+    assert_eq(Map.len(Map.from_arrays(keys, no_values)), 0);
+    assert_eq(Map.len(Map.from_arrays(no_keys, no_values)), 0);
+    println("map_from_arrays: ok");
+}
