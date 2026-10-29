@@ -2322,24 +2322,46 @@
       "type": "SEQ",
       "members": [
         {
-          "type": "FIELD",
-          "name": "pattern",
-          "content": {
-            "type": "SYMBOL",
-            "name": "pattern"
-          }
-        },
-        {
-          "type": "STRING",
-          "value": "="
-        },
-        {
-          "type": "FIELD",
-          "name": "channel",
-          "content": {
-            "type": "SYMBOL",
-            "name": "_expr"
-          }
+          "type": "CHOICE",
+          "members": [
+            {
+              "type": "SEQ",
+              "members": [
+                {
+                  "type": "FIELD",
+                  "name": "pattern",
+                  "content": {
+                    "type": "SYMBOL",
+                    "name": "pattern"
+                  }
+                },
+                {
+                  "type": "STRING",
+                  "value": "="
+                },
+                {
+                  "type": "FIELD",
+                  "name": "channel",
+                  "content": {
+                    "type": "SYMBOL",
+                    "name": "_expr"
+                  }
+                }
+              ]
+            },
+            {
+              "type": "STRING",
+              "value": "else"
+            },
+            {
+              "type": "FIELD",
+              "name": "duration",
+              "content": {
+                "type": "SYMBOL",
+                "name": "_expr"
+              }
+            }
+          ]
         },
         {
           "type": "STRING",
@@ -3084,6 +3106,22 @@
     [
       "param",
       "ensure_clause"
+    ],
+    [
+      "_primary_expr",
+      "_primary_pattern"
+    ],
+    [
+      "paren_or_tuple_expr",
+      "tuple_pattern"
+    ],
+    [
+      "field_init",
+      "field_pattern"
+    ],
+    [
+      "struct_literal",
+      "struct_pattern"
     ]
   ],
   "precedences": [],

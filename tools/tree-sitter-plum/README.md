@@ -12,8 +12,7 @@ context-free-grammar-unresolvable ambiguity.
 ## Layout
 
 - `grammar.js` — the grammar itself, one rule per `GRAMMAR.md`
-  production (plus two real syntax forms `GRAMMAR.md` doesn't document
-  yet: array literals and `select`).
+  production (plus array literals).
 - `queries/highlights.scm` — highlight query, using nvim-treesitter's
   standard capture names (`@keyword`, `@function`, `@type`, …), so it
   works with any existing theme.
@@ -39,6 +38,14 @@ truth; re-run that directory's `tree-sitter build` step after any
 grammar change here to pick it up.
 
 ## Known simplifications
+
+`select` arms follow `GRAMMAR.md`: `pattern = receiver => body`,
+`else => body`, and `duration => body`. All keep the `select_arm` node
+and `body` field; receive arms have `pattern` and `channel` fields,
+and timeout arms have a `duration` field. Pattern/expression prefixes
+are disambiguated by `=` versus `=>`. Semantic restrictions (such as
+requiring a channel arm and forbidding `else` together with a timeout)
+remain the compiler's responsibility.
 
 Both documented inline in `grammar.js` at the relevant rule:
 

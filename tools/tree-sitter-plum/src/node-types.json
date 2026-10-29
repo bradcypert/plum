@@ -1283,7 +1283,17 @@
       },
       "channel": {
         "multiple": false,
-        "required": true,
+        "required": false,
+        "types": [
+          {
+            "type": "pipe_expr",
+            "named": true
+          }
+        ]
+      },
+      "duration": {
+        "multiple": false,
+        "required": false,
         "types": [
           {
             "type": "pipe_expr",
@@ -1293,7 +1303,7 @@
       },
       "pattern": {
         "multiple": false,
-        "required": true,
+        "required": false,
         "types": [
           {
             "type": "pattern",
