@@ -130,7 +130,7 @@ pub let read (root: String): Manifest = {
 }
 
 pub let parse (path: String) (src: String): Manifest = {
-    let lexed = lexer.tokenize_spanned(src);
+    let lexed = lexer.tokenize_spanned_at(src, path);
     // The same per-file source context every other parse sets, so a
     // malformed manifest gets `plum.pkg:3:9` with a caret rather than a
     // bare message.

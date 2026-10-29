@@ -4188,8 +4188,8 @@ let main (): Unit = {
                 // more than leading whitespace checkable: two files
                 // whose token texts agree, in order, are the same
                 // program however the whitespace between them differs.
-                else if argv.len() > 2 && argv[2] == "--tokens" { print(lexer.token_texts(src)) }
-                else { print(lexer.relex(src)) },
+                else if argv.len() > 2 && argv[2] == "--tokens" { print(lexer.token_texts_at(src, argv[1])) }
+                else { print(lexer.relex_at(src, argv[1])) },
             Err(e) => { println("relex: ".concat(e)); Os.exit_with(1) },
         };
     } else if argv[0] == "run" {
@@ -4203,9 +4203,9 @@ let main (): Unit = {
                 let lexed0 = lexer.tokenize_spanned_at(src, argv[1]);
                 parser.set_source_context(argv[1], src, lexed0.starts, lexed0.ends);
                 if argv[0] == "tokens" || argv[0] == "dump-tokens" {
-                    println(lexer.render_tokens(lexer.tokenize(src)));
+                    println(lexer.render_tokens(lexed0.tokens));
                 } else if argv[0] == "ast" || argv[0] == "dump-ast" {
-                    println(parser.render_program(parser.parse_program(lexer.tokenize(src))));
+                    println(parser.render_program(parser.parse_program(lexed0.tokens)));
                 } else if argv[0] == "emit-llvm" {
                     // Stage 5. NO separate `check_program` call: the
                     // backend prepends the prelude and then type-checks
@@ -4221,7 +4221,7 @@ let main (): Unit = {
                     // `builtin_sig` table. That hazard is gone: `check`
                     // prepends the prelude too now, and the table with
                     // it. See DESIGN.md's "One prelude, not two".
-                    println(codegen.cg_emit_program(parser.parse_program(lexer.tokenize(src))));
+                    println(codegen.cg_emit_program(parser.parse_program(lexed0.tokens)));
                 } else if argv[0] == "run" {
                     // A single FILE runs the same way a project does --
                     // compiled. `collect_project` accepts either, so

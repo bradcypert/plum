@@ -111,12 +111,11 @@ pub enum Token {
     TokEof,
 }
 
-// One piece of an interpolated string — mirrors `plum_syntax::lexer::
-// InterpPart`, minus the span (see this file's own top comment on why
-// spans are dropped entirely here).
+// A literal or raw expression plus its absolute character offset. The
+// parser re-lexes expressions against the original file for diagnostics.
 pub enum InterpPiece {
     PieceLiteral(String),
-    PieceExpr(String),
+    PieceExpr(String, Int),
 }
 
 // --- Character classification ---
@@ -161,6 +160,13 @@ let skip_ws_and_comments (chars: Array[String]) (pos: Int): Int =
         skip_ws_and_comments(chars, skip_line_comment(chars, pos + 2))
     }
     else { pos }
+
+// Source context is shared for a scan, including raw interpolation fragments.
+// Offsets in a fragment are local; diagnostics add its original source base.
+struct LexContext { source: String, path: String, base: Int }
+
+let fail_lex (ctx: LexContext) (offset: Int) (msg: String): Unit =
+    panic_raw(render_at(ctx.source, ctx.path, ctx.base + offset, msg))
 
 // --- Numbers ---
 
@@ -207,7 +213,7 @@ let scan_exponent (chars: Array[String]) (pos: Int): Int = {
     }
 }
 
-let lex_number (chars: Array[String]) (pos: Int): NumResult = {
+let lex_number (ctx: LexContext) (chars: Array[String]) (pos: Int): NumResult = {
     let int_end = scan_digit_run(chars, pos);
     let has_point = int_end < chars.len() && chars[int_end] == "." && int_end + 1 < chars.len() && is_digit_char(chars[int_end + 1]);
     let mantissa_end = if has_point { scan_digit_run(chars, int_end + 1) } else { int_end };
@@ -220,13 +226,13 @@ let lex_number (chars: Array[String]) (pos: Int): NumResult = {
         let text = Array.concat_all(Array.filter(Array.slice(chars, pos, frac_end), |c| c != "_"));
         match String.parse_float(text) {
             Ok(f) => NumResult { token: TokFloat(f), next_pos: frac_end },
-            Err(_) => { panic_raw("float literal out of range: ".concat(text)); NumResult { token: TokFloat(0.0), next_pos: frac_end } },
+            Err(_) => { fail_lex(ctx, pos, "float literal out of range: ".concat(text)); NumResult { token: TokFloat(0.0), next_pos: frac_end } },
         }
     } else {
         let text = Array.concat_all(Array.filter(Array.slice(chars, pos, int_end), |c| c != "_"));
         match String.parse_int(text) {
             Ok(n) => NumResult { token: TokInt(n), next_pos: int_end },
-            Err(_) => { panic_raw("integer literal out of range: ${text} (Int is a 64-bit signed integer)"); NumResult { token: TokInt(0), next_pos: int_end } },
+            Err(_) => { fail_lex(ctx, pos, "integer literal out of range: ${text} (Int is a 64-bit signed integer)"); NumResult { token: TokInt(0), next_pos: int_end } },
         }
     }
 }
@@ -243,8 +249,8 @@ let hex_digit (c: String): Int = match c {
     _ => -1,
 }
 
-let escape_error (source: String) (offset: Int) (msg: String) (next_pos: Int): EscResult = {
-    panic_raw(render_at(source, "<source>", offset, msg));
+let escape_error (ctx: LexContext) (offset: Int) (msg: String) (next_pos: Int): EscResult = {
+    fail_lex(ctx, offset, msg);
     EscResult { ch: "", next_pos: next_pos }
 }
 
@@ -267,8 +273,8 @@ let unicode_escape_end (chars: Array[String]) (pos: Int) (limit: Int): Int =
     if pos >= chars.len() || pos >= limit || chars[pos] == "}" { pos }
     else { unicode_escape_end(chars, pos + 1, limit) }
 
-let escape_char (source: String) (chars: Array[String]) (pos: Int) (slash: Int): EscResult =
-    if pos >= chars.len() { escape_error(source, slash, "incomplete escape sequence", pos) }
+let escape_char (ctx: LexContext) (chars: Array[String]) (pos: Int) (slash: Int): EscResult =
+    if pos >= chars.len() { escape_error(ctx, slash, "incomplete escape sequence", pos) }
     else if chars[pos] == "n" { EscResult { ch: "\n", next_pos: pos + 1 } }
     else if chars[pos] == "t" { EscResult { ch: "\t", next_pos: pos + 1 } }
     else if chars[pos] == "r" { EscResult { ch: "\r", next_pos: pos + 1 } }
@@ -277,7 +283,7 @@ let escape_char (source: String) (chars: Array[String]) (pos: Int) (slash: Int):
     else if chars[pos] == "$" { EscResult { ch: "$", next_pos: pos + 1 } }
     else if chars[pos] == "x" {
         if pos + 2 >= chars.len() || hex_digit(chars[pos + 1]) < 0 || hex_digit(chars[pos + 2]) < 0 {
-            escape_error(source, slash, "\\x escape requires exactly two hexadecimal digits", if pos + 1 < chars.len() { pos + 2 } else { chars.len() })
+            escape_error(ctx, slash, "\\x escape requires exactly two hexadecimal digits", if pos + 1 < chars.len() { pos + 2 } else { chars.len() })
         } else {
             let code = hex_digit(chars[pos + 1]) * 16 + hex_digit(chars[pos + 2]);
             EscResult { ch: scalar_string(code), next_pos: pos + 3 }
@@ -285,23 +291,23 @@ let escape_char (source: String) (chars: Array[String]) (pos: Int) (slash: Int):
     }
     else if chars[pos] == "u" {
         if pos + 1 >= chars.len() || chars[pos + 1] != "{" {
-            escape_error(source, slash, "\\u escape must use the form \\u{...}", pos + 1)
+            escape_error(ctx, slash, "\\u escape must use the form \\u{...}", pos + 1)
         } else {
             let hex_end = unicode_escape_end(chars, pos + 2, pos + 9);
             let count = hex_end - (pos + 2);
             let digits_ok = count > 0 && count <= 6 && hex_end < chars.len() && chars[hex_end] == "}" &&
                 Array.all(Array.slice(chars, pos + 2, hex_end), |c| hex_digit(c) >= 0);
             if !digits_ok {
-                escape_error(source, slash, "\\u escape requires 1 to 6 hexadecimal digits in braces", if hex_end < chars.len() && chars[hex_end] == "}" { hex_end + 1 } else { hex_end })
+                escape_error(ctx, slash, "\\u escape requires 1 to 6 hexadecimal digits in braces", if hex_end < chars.len() && chars[hex_end] == "}" { hex_end + 1 } else { hex_end })
             } else {
                 let code = scan_hex(chars, pos + 2, hex_end, 0);
                 if code > 1114111 || (code >= 55296 && code <= 57343) {
-                    escape_error(source, slash, "\\u escape is not a Unicode scalar value", hex_end + 1)
+                    escape_error(ctx, slash, "\\u escape is not a Unicode scalar value", hex_end + 1)
                 } else { EscResult { ch: scalar_string(code), next_pos: hex_end + 1 } }
             }
         }
     }
-    else { escape_error(source, slash, "unknown escape ".concat("\\").concat(chars[pos]).concat("; supported escapes: n, t, r, backslash, quote, dollar, xNN, u{...}"), pos + 1) }
+    else { escape_error(ctx, slash, "unknown escape ".concat("\\").concat(chars[pos]).concat("; supported escapes: n, t, r, backslash, quote, dollar, xNN, u{...}"), pos + 1) }
 
 struct InterpExprResult { text: String, next_pos: Int }
 
@@ -309,31 +315,31 @@ struct InterpExprResult { text: String, next_pos: Int }
 // (opening quote through closing quote/EOF, escapes un-interpreted) —
 // mirrors `lex_interp_expr_source`'s own `Some('"')` arm exactly, same
 // "never re-interpreted as its own interpolation" rule.
-let scan_nested_string_body (chars: Array[String]) (pos: Int) (acc: String): InterpExprResult =
-    if pos >= chars.len() { InterpExprResult { text: acc, next_pos: pos } }
+let scan_nested_string_body (ctx: LexContext) (open: Int) (chars: Array[String]) (pos: Int) (acc: String): InterpExprResult =
+    if pos >= chars.len() { fail_lex(ctx, open, "unterminated string literal"); InterpExprResult { text: acc, next_pos: pos } }
     else if chars[pos] == "\"" { InterpExprResult { text: acc.concat(chars[pos]), next_pos: pos + 1 } }
     else if chars[pos] == "\\" && pos + 1 < chars.len() {
-        scan_nested_string_body(chars, pos + 2, acc.concat(chars[pos]).concat(chars[pos + 1]))
+        scan_nested_string_body(ctx, open, chars, pos + 2, acc.concat(chars[pos]).concat(chars[pos + 1]))
     }
-    else { scan_nested_string_body(chars, pos + 1, acc.concat(chars[pos])) }
+    else { scan_nested_string_body(ctx, open, chars, pos + 1, acc.concat(chars[pos])) }
 
-let scan_nested_string (chars: Array[String]) (pos: Int): InterpExprResult =
-    scan_nested_string_body(chars, pos + 1, chars[pos])
+let scan_nested_string (ctx: LexContext) (chars: Array[String]) (pos: Int): InterpExprResult =
+    scan_nested_string_body(ctx, pos, chars, pos + 1, chars[pos])
 
 // Scans the raw source text of one `${...}` interpolation, called
 // right after its opening `${` has already been consumed — mirrors
 // `lex_interp_expr_source`'s `(`/`[`-depth tracking exactly (see that
 // function's own doc comment in the Rust lexer for the full "why").
-let scan_interp_expr (chars: Array[String]) (pos: Int) (acc: String) (depth: Int): InterpExprResult =
-    if pos >= chars.len() { InterpExprResult { text: acc, next_pos: pos } }
+let scan_interp_expr (ctx: LexContext) (open: Int) (chars: Array[String]) (pos: Int) (acc: String) (depth: Int): InterpExprResult =
+    if pos >= chars.len() { fail_lex(ctx, open, "unterminated string interpolation"); InterpExprResult { text: acc, next_pos: pos } }
     else if chars[pos] == "}" && depth == 0 { InterpExprResult { text: acc, next_pos: pos + 1 } }
-    else if chars[pos] == "(" || chars[pos] == "[" { scan_interp_expr(chars, pos + 1, acc.concat(chars[pos]), depth + 1) }
-    else if chars[pos] == ")" || chars[pos] == "]" { scan_interp_expr(chars, pos + 1, acc.concat(chars[pos]), depth - 1) }
+    else if chars[pos] == "(" || chars[pos] == "[" { scan_interp_expr(ctx, open, chars, pos + 1, acc.concat(chars[pos]), depth + 1) }
+    else if chars[pos] == ")" || chars[pos] == "]" { scan_interp_expr(ctx, open, chars, pos + 1, acc.concat(chars[pos]), depth - 1) }
     else if chars[pos] == "\"" {
-        let nested = scan_nested_string(chars, pos);
-        scan_interp_expr(chars, nested.next_pos, acc.concat(nested.text), depth)
+        let nested = scan_nested_string(ctx, chars, pos);
+        scan_interp_expr(ctx, open, chars, nested.next_pos, acc.concat(nested.text), depth)
     }
-    else { scan_interp_expr(chars, pos + 1, acc.concat(chars[pos]), depth) }
+    else { scan_interp_expr(ctx, open, chars, pos + 1, acc.concat(chars[pos]), depth) }
 
 struct StrResult { token: Token, next_pos: Int }
 
@@ -346,30 +352,29 @@ let finish_string (pieces: Array[InterpPiece]) (acc: String) (has_interp: Bool) 
 // if none yet); `has_interp` mirrors the Rust lexer's own `parts.is_
 // empty()` check — a plain `Str`, unless at least one `${...}` was
 // seen, in which case the whole thing becomes an `InterpStr`.
-let scan_string_body (source: String) (chars: Array[String]) (pos: Int) (acc: String) (pieces: Array[InterpPiece]) (has_interp: Bool): StrResult =
+let scan_string_body (ctx: LexContext) (open: Int) (chars: Array[String]) (pos: Int) (acc: String) (pieces: Array[InterpPiece]) (has_interp: Bool): StrResult =
     if pos >= chars.len() {
-        // Unterminated — same permissive "just stop" precedent the
-        // Rust lexer uses.
+        fail_lex(ctx, open, "unterminated string literal");
         finish_string(pieces, acc, has_interp, pos)
     }
     else if chars[pos] == "\"" {
         finish_string(pieces, acc, has_interp, pos + 1)
     }
     else if chars[pos] == "\\" {
-        let esc = escape_char(source, chars, pos + 1, pos);
-        scan_string_body(source, chars, esc.next_pos, acc.concat(esc.ch), pieces, has_interp)
+        let esc = escape_char(ctx, chars, pos + 1, pos);
+        scan_string_body(ctx, open, chars, esc.next_pos, acc.concat(esc.ch), pieces, has_interp)
     }
     else if chars[pos] == "$" && pos + 1 < chars.len() && chars[pos + 1] == "{" {
         let with_literal = pieces.push(PieceLiteral(acc));
-        let expr = scan_interp_expr(chars, pos + 2, "", 0);
-        scan_string_body(source, chars, expr.next_pos, "", with_literal.push(PieceExpr(expr.text)), true)
+        let expr = scan_interp_expr(ctx, pos, chars, pos + 2, "", 0);
+        scan_string_body(ctx, open, chars, expr.next_pos, "", with_literal.push(PieceExpr(expr.text, ctx.base + pos + 2)), true)
     }
     else {
-        scan_string_body(source, chars, pos + 1, acc.concat(chars[pos]), pieces, has_interp)
+        scan_string_body(ctx, open, chars, pos + 1, acc.concat(chars[pos]), pieces, has_interp)
     }
 
-let lex_string (source: String) (chars: Array[String]) (pos: Int): StrResult =
-    scan_string_body(source, chars, pos + 1, "", [], false)
+let lex_string (ctx: LexContext) (chars: Array[String]) (pos: Int): StrResult =
+    scan_string_body(ctx, pos, chars, pos + 1, "", [], false)
 
 // --- Identifiers and keywords ---
 
@@ -400,10 +405,10 @@ let keyword_or_ident (text: String): Token = match text {
 // A keyword after `@` is accepted here and rejected in the parser as an
 // unknown builtin -- `@match` should say "there is no builtin called
 // match", not "expected an identifier".
-let lex_builtin (chars: Array[String]) (pos: Int): IdentResult = {
+let lex_builtin (ctx: LexContext) (chars: Array[String]) (pos: Int): IdentResult = {
     let end = scan_ident_chars(chars, pos + 1);
     if end == pos + 1 {
-        panic_raw("expected a builtin name after `@`");
+        fail_lex(ctx, pos, "expected a builtin name after `@`");
         IdentResult { token: TokEof, next_pos: pos + 1 }
     } else {
         IdentResult { token: TokBuiltin(Array.concat_all(Array.slice(chars, pos + 1, end))), next_pos: end }
@@ -433,16 +438,16 @@ let code_hex (n: Int) (width: Int): String =
     if n == 0 && width <= 0 { "" }
     else { code_hex(n / 16, width - 1).concat("0123456789ABCDEF".slice(n % 16, n % 16 + 1)) }
 
-let unexpected_char (source: String) (path: String) (pos: Int) (c: String): OpResult = {
+let unexpected_char (ctx: LexContext) (pos: Int) (c: String): OpResult = {
     let n = char_code(c);
     // Codes also make invisible Unicode characters unambiguous without
     // requiring a Unicode printability table in the compiler.
     let shown = if n >= 32 && n <= 126 { "`${c}`" } else { "U+".concat(code_hex(n, 4)) };
-    panic_raw(render_at(source, path, pos, "unexpected character ".concat(shown)));
+    fail_lex(ctx, pos, "unexpected character ".concat(shown));
     OpResult { token: TokEof, next_pos: 0 }
 }
 
-let lex_operator (source: String) (path: String) (chars: Array[String]) (pos: Int): OpResult =
+let lex_operator (ctx: LexContext) (chars: Array[String]) (pos: Int): OpResult =
     if chars[pos] == "(" { OpResult { token: TokLParen, next_pos: pos + 1 } }
     else if chars[pos] == ")" { OpResult { token: TokRParen, next_pos: pos + 1 } }
     else if chars[pos] == "{" { OpResult { token: TokLBrace, next_pos: pos + 1 } }
@@ -498,19 +503,19 @@ let lex_operator (source: String) (path: String) (chars: Array[String]) (pos: In
         else if pos + 1 < chars.len() && chars[pos + 1] == "|" { OpResult { token: TokOrOr, next_pos: pos + 2 } }
         else { OpResult { token: TokPipe, next_pos: pos + 1 } }
     }
-    else { unexpected_char(source, path, pos, chars[pos]) }
+    else { unexpected_char(ctx, pos, chars[pos]) }
 
 // --- Top-level driver ---
 
 struct FullTokResult { token: Token, next_pos: Int }
 
-let lex_one (source: String) (path: String) (chars: Array[String]) (pos: Int): FullTokResult =
+let lex_one (ctx: LexContext) (chars: Array[String]) (pos: Int): FullTokResult =
     if pos >= chars.len() { FullTokResult { token: TokEof, next_pos: pos } }
-    else if is_digit_char(chars[pos]) { let r = lex_number(chars, pos); FullTokResult { token: r.token, next_pos: r.next_pos } }
-    else if chars[pos] == "\"" { let r = lex_string(source, chars, pos); FullTokResult { token: r.token, next_pos: r.next_pos } }
-    else if chars[pos] == "@" { let r = lex_builtin(chars, pos); FullTokResult { token: r.token, next_pos: r.next_pos } }
+    else if is_digit_char(chars[pos]) { let r = lex_number(ctx, chars, pos); FullTokResult { token: r.token, next_pos: r.next_pos } }
+    else if chars[pos] == "\"" { let r = lex_string(ctx, chars, pos); FullTokResult { token: r.token, next_pos: r.next_pos } }
+    else if chars[pos] == "@" { let r = lex_builtin(ctx, chars, pos); FullTokResult { token: r.token, next_pos: r.next_pos } }
     else if is_ident_start_char(chars[pos]) { let r = lex_ident_or_keyword(chars, pos); FullTokResult { token: r.token, next_pos: r.next_pos } }
-    else { let r = lex_operator(source, path, chars, pos); FullTokResult { token: r.token, next_pos: r.next_pos } }
+    else { let r = lex_operator(ctx, chars, pos); FullTokResult { token: r.token, next_pos: r.next_pos } }
 
 // `let mut`/`for` (a bounded loop, NOT the original's unbounded
 // self-recursion) — a real, deliberate workaround, not just a style
@@ -576,8 +581,14 @@ pub struct LexedSource { pub tokens: Array[Token], pub starts: Array[Int], pub e
 pub let tokenize_spanned (source: String): LexedSource = tokenize_spanned_at(source, "<source>")
 
 // File-aware entry point: lexer failures happen before parser context exists.
-pub let tokenize_spanned_at (source: String) (path: String): LexedSource = {
-    let chars = chars_of(source);
+pub let tokenize_spanned_at (source: String) (path: String): LexedSource =
+    tokenize_fragment_at(source, source, path, 0)
+
+// Fragment spans stay local to the fragment; only diagnostics use `base`.
+// The parser maps these spans back to the original file when re-parsing.
+pub let tokenize_fragment_at (fragment: String) (source: String) (path: String) (base: Int): LexedSource = {
+    let ctx = LexContext { source: source, path: path, base: base };
+    let chars = chars_of(fragment);
     let mut pos = 0;
     let mut acc = [];
     let mut starts = [];
@@ -586,7 +597,7 @@ pub let tokenize_spanned_at (source: String) (path: String): LexedSource = {
     for tok_step in 0..(chars.len() + 1) {
         if !done {
             let start = skip_ws_and_comments(chars, pos);
-            let r = lex_one(source, path, chars, start);
+            let r = lex_one(ctx, chars, start);
             match r.token {
                 // EOF is empty and sits at the very end, so the final
                 // gap -- a trailing comment, a trailing newline -- is
@@ -668,8 +679,10 @@ pub let gap_is_trivia (chars: Array[String]) (from: Int) (to: Int): Bool =
 // exactly what lies between them, so two files with the same token
 // texts in the same order differ only in formatting. That is the
 // property a formatter has to preserve, and the only one it has to.
-pub let token_texts (source: String): String = {
-    let lexed = tokenize_spanned(source);
+pub let token_texts (source: String): String = token_texts_at(source, "<source>")
+
+pub let token_texts_at (source: String) (path: String): String = {
+    let lexed = tokenize_spanned_at(source, path);
     let chars = chars_of(source);
     token_texts_acc(chars, lexed, 0, "")
 }
@@ -678,8 +691,10 @@ let token_texts_acc (chars: Array[String]) (lexed: LexedSource) (i: Int) (acc: S
     if i >= lexed.tokens.len() { acc }
     else { token_texts_acc(chars, lexed, i + 1, acc.concat(slice_chars(chars, lexed.starts[i], lexed.ends[i])).concat("\n")) }
 
-pub let relex (source: String): String = {
-    let lexed = tokenize_spanned(source);
+pub let relex (source: String): String = relex_at(source, "<source>")
+
+pub let relex_at (source: String) (path: String): String = {
+    let lexed = tokenize_spanned_at(source, path);
     let chars = chars_of(source);
     relex_acc(chars, lexed, 0, "")
 }
@@ -860,7 +875,7 @@ let string_join_with_space (strs: Array[String]): String = {
 
 let render_interp_piece (p: InterpPiece): String = match p {
     PieceLiteral(s) => "Literal(${quote(s)})",
-    PieceExpr(s) => "Expr(${quote(s)})",
+    PieceExpr(s, _) => "Expr(${quote(s)})",
 }
 
 pub let render_token (t: Token): String = match t {

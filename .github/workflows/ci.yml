@@ -130,6 +130,8 @@ jobs:
         run: ./bootstrap/self-test ./sh.real
       - name: plum test really runs tests
         run: ./bootstrap/test-smoke
+      - name: lexer diagnostics preserve source locations
+        run: python3 ./bootstrap/lexer-diagnostic-check.py ./sh.real
       - name: properties hold
         run: ./bootstrap/property-check
       - name: the tutorial still works
