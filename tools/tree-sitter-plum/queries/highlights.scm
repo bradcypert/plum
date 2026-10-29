@@ -108,7 +108,6 @@
 ; identifier itself is one level further down.
 (let_stmt pattern: (pattern (identifier) @variable))
 (assign_stmt target: (identifier) @variable)
-(field_init name: (identifier) @property)
 (field_pattern name: (identifier) @property)
 
 ; `a.b` field access vs. `a.b()` method call — distinguished by
@@ -126,6 +125,10 @@
 ((identifier) @constructor
   (#match? @constructor "^[A-Z]"))
 (identifier) @variable
+
+; Each segment of a struct update path is a field name. Keep this
+; after the identifier fallback so it also wins for shorthand fields.
+(field_init name: (identifier) @property)
 
 ; ---- Patterns ----
 (variant_pattern path: (path) @constructor)

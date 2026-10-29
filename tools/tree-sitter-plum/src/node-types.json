@@ -475,7 +475,7 @@
     "named": true,
     "fields": {
       "name": {
-        "multiple": false,
+        "multiple": true,
         "required": true,
         "types": [
           {

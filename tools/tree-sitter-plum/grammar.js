@@ -376,7 +376,17 @@ module.exports = grammar({
         seq(commaSep1($.field_init), optional(","), optional(seq("..", $._expr))),
         seq("..", $._expr),
       ),
-    field_init: ($) => seq(field("name", $.identifier), optional(seq(":", field("value", $._expr)))),
+    field_init: ($) =>
+      seq(
+        field("name", $.identifier),
+        // Only a single identifier can be shorthand. Dotted update paths
+        // require a value, as in the compiler's parse_field_init.
+        optional(seq(
+          repeat(seq(".", field("name", $.identifier))),
+          ":",
+          field("value", $._expr),
+        )),
+      ),
 
     // ---- Blocks (GRAMMAR.md "Blocks (the statement/expression rule)") ----
     block: ($) => seq("{", repeat($._block_stmt), optional($._expr), "}"),
