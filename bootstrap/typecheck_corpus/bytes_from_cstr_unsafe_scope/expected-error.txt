@@ -1,0 +1,2 @@
+error: calling 'Bytes.from_cstr' requires an 'unsafe' block
+main.plum:5:5

@@ -1,0 +1,5 @@
+// A user-defined associated function with the same spelling has its
+// own contract. The compiler's unsafe rule belongs to the prelude only.
+let Bytes.from_cstr (pointer: CStr) (len: Int): Bytes = Bytes.from_array([len])
+
+pub let copy_marker (pointer: CStr): Bytes = Bytes.from_cstr(pointer, 7)

@@ -70,8 +70,14 @@ low eight bits.
 
 Copies `len` bytes from a C pointer.
 
-For `extern \"C\"` results only, and `unsafe` for the obvious reason:
-nothing checks that the pointer is valid or that `len` is right.
+Requires an `unsafe` block and all arguments at the call site;
+it cannot be used as a function value or partially applied.
+For positive `len`, the caller must ensure `c` points to at least
+`len` readable bytes that remain valid throughout the copy.
+No pointer, lifetime, or allocation-bound validation is performed.
+Nonpositive lengths return empty bytes without reading `c`.
+The result owns a fresh copy, including any embedded NUL bytes;
+the source is neither retained nor freed.
 
 ## `let Bytes.to_array (b: Bytes): Array[Int]`
 

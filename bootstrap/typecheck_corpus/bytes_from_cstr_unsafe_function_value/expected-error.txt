@@ -1,0 +1,2 @@
+error: 'Bytes.from_cstr' cannot be used as a function value or partially applied; call it with all arguments inside an 'unsafe' block
+main.plum:2:25

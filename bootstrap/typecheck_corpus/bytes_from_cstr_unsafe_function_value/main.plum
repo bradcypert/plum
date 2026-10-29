@@ -1,0 +1,4 @@
+let main (): Unit = {
+    let copy = unsafe { Bytes.from_cstr };
+    ()
+}
