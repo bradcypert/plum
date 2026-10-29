@@ -11,14 +11,12 @@
 // Same ABI conventions as its neighbours: every function takes and
 // returns only `long long` (Plum `Int`).
 //
-// **Nanoseconds throughout**, which is what `Duration` stores. A signed
-// 64-bit count of nanoseconds spans about 292 years either side of its
-// origin -- far more than a duration needs, and enough for a wall clock
-// until 2262. Go and Rust both made this trade; the alternative,
-// milliseconds, buys range nobody wants and loses precision that timing
-// code does.
+// Durations and monotonic instants use nanoseconds (about 292 years of
+// signed 64-bit range). Wall-clock milliseconds are converted directly,
+// so their range is independent of the nanosecond epoch limit in 2262.
 
 #include <stdint.h>
+#include <limits.h>
 
 #if defined(_WIN32)
 #include <windows.h>
@@ -27,24 +25,49 @@
 #include <errno.h>
 #endif
 
-// Wall clock: nanoseconds since the Unix epoch. Moves when the system
+#if !defined(_WIN32)
+// A normalized timespec has a nonnegative fractional second. Round the
+// total timestamp toward zero, including before 1970, and saturate only
+// if the final millisecond value cannot fit in Plum Int.
+static long long plum_epoch_millis(long long seconds, long nanos) {
+    long long fraction;
+    if (seconds < 0) {
+        seconds++;
+        fraction = -((1000000000LL - nanos) / 1000000LL);
+    } else {
+        fraction = nanos / 1000000LL;
+    }
+    if (seconds > LLONG_MAX / 1000LL) return LLONG_MAX;
+    if (seconds < LLONG_MIN / 1000LL) return LLONG_MIN;
+    long long whole = seconds * 1000LL;
+    if (fraction > 0 && whole > LLONG_MAX - fraction) return LLONG_MAX;
+    if (fraction < 0 && whole < LLONG_MIN - fraction) return LLONG_MIN;
+    return whole + fraction;
+}
+#endif
+
+// Wall clock: milliseconds since the Unix epoch. Moves when the system
 // clock is set, which is exactly why it must not be used for measuring
 // elapsed time -- see `time_monotonic_nanos`.
-long long time_now_nanos(void) {
+long long time_now_millis(void) {
 #if defined(_WIN32)
-    // A FILETIME counts 100-nanosecond ticks since 1601-01-01. The
-    // constant is the number of such ticks between then and the Unix
-    // epoch, and is exact rather than approximate.
+    // FILETIME counts 100-nanosecond ticks since 1601-01-01. Subtract
+    // origins in the correct direction before dividing: unsigned
+    // subtraction would wrap for dates before 1970. Every FILETIME
+    // millisecond magnitude fits in a signed 64-bit Int.
     FILETIME ft;
     ULARGE_INTEGER t;
+    const unsigned long long epoch = 116444736000000000ULL;
     GetSystemTimeAsFileTime(&ft);
     t.LowPart = ft.dwLowDateTime;
     t.HighPart = ft.dwHighDateTime;
-    return (long long)((t.QuadPart - 116444736000000000ULL) * 100ULL);
+    if (t.QuadPart < epoch)
+        return -(long long)((epoch - t.QuadPart) / 10000ULL);
+    return (long long)((t.QuadPart - epoch) / 10000ULL);
 #else
     struct timespec ts;
     if (clock_gettime(CLOCK_REALTIME, &ts) != 0) return 0;
-    return (long long)ts.tv_sec * 1000000000LL + (long long)ts.tv_nsec;
+    return plum_epoch_millis((long long)ts.tv_sec, ts.tv_nsec);
 #endif
 }
 

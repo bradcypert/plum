@@ -19,7 +19,7 @@ pub let now (): Int = os_time_raw(true)
 // caller and every documented `iso8601` answer to buy precision
 // that belongs in a separate type anyway.
 extern "C" {
-    fn time_now_nanos() -> Int;
+    fn time_now_millis() -> Int;
     fn time_monotonic_nanos() -> Int;
     fn time_sleep_nanos(n: Int) -> Int;
 }
@@ -45,6 +45,10 @@ pub struct Duration { nanos: Int }
 /// unspecified. Two instants can be subtracted; one on its own
 /// means nothing, which is why this is a distinct type from a wall
 /// clock reading rather than another `Int`.
+///
+/// Stored as signed 64-bit nanoseconds: readings must fit within about
+/// 292 years of the platform clock origin; differences must fit in a
+/// `Duration`. This is independent of the wall clock and the year 2262.
 pub struct Instant { nanos: Int }
 
 /// Constructors, each naming its unit. Multiplication can overflow,
@@ -148,7 +152,12 @@ pub let Duration.max (a: Duration) (b: Duration): Duration = if a.nanos >= b.nan
 /// It can jump: setting the system clock or an NTP correction moves
 /// it, backwards included. Use it to say WHEN something happened;
 /// use `instant` to measure how long something took.
-pub let now_millis (): Int = unsafe { time_now_nanos() / 1000000 }
+///
+/// Converted directly to milliseconds, without a nanosecond timestamp
+/// intermediate. Sub-millisecond fractions truncate toward zero, even
+/// before 1970. Values outside `Int` saturate at its limits. A native
+/// clock-read failure returns zero.
+pub let now_millis (): Int = unsafe { time_now_millis() }
 
 /// A reading of the monotonic clock, for measuring elapsed time.
 /// Never moves backwards and is unaffected by the system clock being

@@ -24,6 +24,10 @@ unspecified. Two instants can be subtracted; one on its own
 means nothing, which is why this is a distinct type from a wall
 clock reading rather than another `Int`.
 
+Stored as signed 64-bit nanoseconds: readings must fit within about
+292 years of the platform clock origin; differences must fit in a
+`Duration`. This is independent of the wall clock and the year 2262.
+
 ## `let nanos (n: Int): Duration`
 
 Constructors, each naming its unit. Multiplication can overflow,
@@ -68,6 +72,11 @@ Wall clock, in milliseconds since the Unix epoch. The same clock
 It can jump: setting the system clock or an NTP correction moves
 it, backwards included. Use it to say WHEN something happened;
 use `instant` to measure how long something took.
+
+Converted directly to milliseconds, without a nanosecond timestamp
+intermediate. Sub-millisecond fractions truncate toward zero, even
+before 1970. Values outside `Int` saturate at its limits. A native
+clock-read failure returns zero.
 
 ## `let instant (): Instant`
 

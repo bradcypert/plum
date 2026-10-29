@@ -1,0 +1,9 @@
+use Time;
+
+// Wall-clock reads stay as unboxed Ints, with no heap allocation per call.
+let main (): Unit = {
+    for i in 0..10000 {
+        let millis = Time.now_millis();
+        assert(millis > 0);
+    }
+}
