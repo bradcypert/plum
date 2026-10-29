@@ -1,0 +1,5 @@
+let main (): Unit = unsafe {
+    let source = Bytes.from_array([65]);
+    let copy = Bytes.from_cstr(source.as_cstr());
+    ()
+}

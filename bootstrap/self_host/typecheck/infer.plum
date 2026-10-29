@@ -67,7 +67,7 @@ use lexer;
 // Whether the expression currently being checked is inside an `unsafe`
 // block. A cell rather than a threaded parameter for the same reason
 // the error position is one: it would otherwise be a new argument on
-// every `infer_*` function, and it is consulted in exactly one place.
+// every `infer_*` function, and it is consulted at FFI call boundaries.
 // Mirrors `plum_types::Infer::in_unsafe`, including that it is saved and
 // restored around the block rather than simply set -- a closure defined
 // inside an `unsafe` block and CALLED outside it must not carry the
@@ -2509,6 +2509,12 @@ let infer_println_call (p2: Program2) (state: FreshState) (env: TyEnv) (acc: Sub
 // rewrite exactly, and Plum expressions of this kind are pure, so the
 // two are observationally identical.
 let infer_partial_call (p2: Program2) (state: FreshState) (env: TyEnv) (acc: Subst) (sig: FnSig) (args: Array[parser.PExpr]): InferResult = {
+    // Ordinary function types cannot preserve an unsafe-call obligation.
+    // Do not erase it through eta expansion or partial application, even
+    // when the function value is constructed inside an unsafe block.
+    if is_unsafe_buffer_copy(sig) {
+        fail_tc("'${sig.name}' cannot be used as a function value or partially applied; call it with all arguments inside an 'unsafe' block")
+    };
     let fr = fresh_list(state, sig.generics.len());
     let inst_params = Array.map(sig.params, |t| instantiate_template(sig.generics, fr.tys, t));
     let inst_ret = instantiate_template(sig.generics, fr.tys, sig.ret);
@@ -2536,7 +2542,18 @@ let partial_param_refs (names: Array[String]) (tys: Array[ITy]) (i: Int) (acc: A
     if i >= names.len() { acc }
     else { partial_param_refs(names, tys, i + 1, acc.push(TExpr { ty: tys[i], node: TIdent(names[i]) })) }
 
+// These are Plum functions, not extern declarations: retain ordinary
+// code generation and the public wrapper's nonpositive-length behavior.
+// Key on the resolved prelude identity so user functions with the same
+// spelling do not acquire a compiler-imposed contract.
+let is_unsafe_buffer_copy (sig: FnSig): Bool =
+    sig.module == parser.PRELUDE_MODULE() &&
+        (sig.name == "Bytes.from_cstr" || sig.name == "bytes_from_cstr_raw")
+
 let infer_fn_call (p2: Program2) (state: FreshState) (env: TyEnv) (acc: Subst) (sig: FnSig) (args: Array[parser.PExpr]): InferResult = {
+    if is_unsafe_buffer_copy(sig) && !UNSAFE.get() {
+        fail_tc("calling '${sig.name}' requires an 'unsafe' block")
+    };
     if sig.is_extern {
         // No currying for an extern: there is no closure to build over
         // its remaining parameters, and a partial application would have

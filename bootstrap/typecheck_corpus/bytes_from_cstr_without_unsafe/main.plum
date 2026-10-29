@@ -1,0 +1,6 @@
+let main (): Unit = {
+    let source = Bytes.from_array([65]);
+    let pointer = unsafe { source.as_cstr() };
+    let copied = Bytes.from_cstr(pointer, 1000000);
+    println(copied.to_hex())
+}

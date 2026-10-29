@@ -1,0 +1,27 @@
+use shadow;
+
+extern "C" {
+    fn copy_test_data() -> CStr;
+    fn copy_test_null() -> CStr;
+    fn copy_test_reuse();
+}
+
+// A wrapper makes the caller's trust decision explicit in its body.
+let copy_known_buffer (pointer: CStr): Bytes = unsafe { Bytes.from_cstr(pointer, 4) }
+
+let main (): Unit = {
+    let pointer = unsafe { copy_test_data() };
+    println(shadow.copy_marker(pointer).to_hex());
+    let copied = unsafe { Bytes.from_cstr(pointer, 4) };
+    println(copied.to_hex());
+    unsafe { copy_test_reuse() };
+    println(copied.to_hex());
+    let wrapper = copy_known_buffer;
+    println(wrapper(pointer).to_hex());
+    unsafe {
+        println(Bytes.from_cstr(pointer, 1).to_hex());
+        let null = copy_test_null();
+        println(Bytes.from_cstr(null, 0).len().to_string());
+        println(Bytes.from_cstr(null, -1).len().to_string())
+    }
+}
