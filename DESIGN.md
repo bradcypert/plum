@@ -21334,3 +21334,34 @@ so it holds at most one project snapshot at a time. This is a consistency fix,
 not a claim of lower application RSS or a replacement for profiling large
 projects. The directory-based project boundary and dependency resolution are
 unchanged; a workspace-wide virtual filesystem would be a separate design.
+
+### Package storage: exact Git identity before reuse
+
+Issue #171 (also reported as #277) came from using a display encoding as
+identity: removing schemes and `.git`, dropping empty path segments and
+replacing punctuation with underscores merged distinct remotes. Vendoring
+used the same encoding and could select the wrong source without touching
+the cache. Both stores now use one relative-path function:
+`v2/<SHA-256(length-prefixed git, rev)>/<sanitized revision label>`.
+Git receives the original URL; Plum does not guess which transport or local
+repository spellings are equivalent. Manifest revisions remain full commit
+hashes. The optional source-tree `sha256` remains an independent integrity
+check, including on warm reuse.
+
+The version boundary deliberately refuses legacy cache and vendor paths:
+without provenance metadata their intended origin cannot be recovered.
+An explicit fetch/vendor repopulates storage. Legacy cache entries remain
+listable and removable through the existing package-cache commands. Staging
+races (#172) and symlink-sensitive tree hashing (#176) have separate causes
+and remain separate work.
+
+Key construction holds temporary data proportional to URL-plus-revision
+length, then stores a fixed 64-character digest and the commit label in the
+path. It does not read package contents or retain an identity index. Values
+use the existing reference-counting runtime; runtime ownership, application
+heap behavior and tree-hashing memory costs are unchanged. No RSS reduction
+is claimed. Equivalent-looking remotes now deliberately occupy separate
+checkouts, and upgrading can temporarily retain both legacy and new trees:
+this can increase disk use. Package storage still has no automatic budget or
+garbage collection; `plum cache list` and `plum cache clean` remain its
+lifecycle controls. Build-artifact cache budgets are independent.
