@@ -1,0 +1,16 @@
+#!/usr/bin/env bash
+# Identity reuse, bounded storage, and concurrent file lifetime checks.
+set -euo pipefail
+root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+cd "$root"
+plum="${PLUM:-./sh}"
+work="$(mktemp -d)"
+trap 'rm -rf "$work"' EXIT
+clang -O1 -g -Wall -Wextra -Werror -pthread \
+    -fsanitize=address,undefined -fno-sanitize-recover=all \
+    bootstrap/file-handle-test.c -o "$work/native-test"
+ASAN_OPTIONS=detect_leaks=1 timeout 30 "$work/native-test" "$work/data"
+"$plum" build bootstrap/exec_corpus/file_handle_reuse -o "$work/reuse"
+timeout 30 "$work/reuse" > "$work/out"
+diff -u bootstrap/exec_corpus/file_handle_reuse/expected.txt "$work/out"
+echo "file-handle smoke: ok"
