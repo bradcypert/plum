@@ -527,16 +527,24 @@ extern "C" {
     fn dir_close(handle: Int) -> Unit;
 }
 
-let dir_read_all_acc (handle: Int) (acc: Array[String]): Result[Array[String], String] = unsafe {
+let dir_read_all_acc (handle: Int) (builder: Ref[Array[String]]): Result[Array[String], String] = unsafe {
     let n = dir_next_size(handle);
     if n < 0 { Err("directory read failed") }
-    else if n == 0 { Ok(acc) }
+    else if n == 0 { Ok(builder.get()) }
     else {
         // Copy while the stream still owns this entry, then validate without
         // another copy. No unchecked OS bytes enter a Plum String.
         match Bytes.from_cstr(dir_entry_data(handle), n).as_string() {
             Err(_) => Err("directory entry is not valid UTF-8"),
-            Ok(name) => dir_read_all_acc(handle, acc.push(name)),
+            Ok(name) => {
+                // Keep the array unique during growth, including across the
+                // match and recursive call's owning parameter slots.
+                let mut names = builder.get();
+                builder.set([]);
+                names = names.push(name);
+                builder.set(names);
+                dir_read_all_acc(handle, builder)
+            },
         }
     }
 }
@@ -552,7 +560,7 @@ pub let list_dir (path: String): Result[Array[String], String] = unsafe {
     let handle = dir_open(path.as_cstr());
     if handle < 0 { Err("Os.list_dir: could not open directory: ".concat(path)) }
     else {
-        let entries = dir_read_all_acc(handle, []);
+        let entries = dir_read_all_acc(handle, ref([]));
         dir_close(handle);
         match entries {
             Ok(names) => Ok(names),

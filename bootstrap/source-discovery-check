@@ -1,0 +1,150 @@
+#!/usr/bin/env python3
+"""Check source order/metadata and linear allocation growth during discovery.
+
+Build the real compiler sources with a discovery-only entry point. This avoids
+parsing/LLVM generation obscuring the allocation cost being tested. Runtime
+allocated bytes catch prefix copying even when allocation counts stay linear.
+"""
+import os
+from pathlib import Path
+import re
+import shutil
+import subprocess
+import sys
+import tempfile
+
+ROOT = Path(__file__).resolve().parent.parent
+COMPILER = Path(sys.argv[1] if len(sys.argv) > 1 else ROOT / "sh.real").resolve()
+
+ENTRY = '''
+let main (): Unit = {
+    let argv = args();
+    let inputs = prepare_inputs(argv[1]);
+    if argv[0] == "count" { println(inputs.files.len().to_string()) }
+    else {
+        for dep in inputs.deps { println("D|${dep.name}|${dep.path}"); };
+        for f in inputs.files { println("F|${f.path}|${f.module_name}|${f.owner}|${f.dep_name}"); };
+    }
+}
+'''
+
+
+def run(command, ok=True, **kwargs):
+    result = subprocess.run(list(map(str, command)), capture_output=True, text=True,
+                            timeout=180, **kwargs)
+    assert (result.returncode == 0) == ok, result.stdout + result.stderr
+    return result
+
+
+def write(path, text=""):
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(text)
+
+
+with tempfile.TemporaryDirectory(prefix="plum-discovery-") as tmp:
+    work = Path(tmp)
+    harness = work / "bootstrap/self_host"
+    shutil.copytree(ROOT / "bootstrap/self_host", harness)
+    # Preserve relative @embed_file paths without symlinks (Windows CI too).
+    shutil.copytree(ROOT / "bootstrap/std", work / "bootstrap/std")
+    shutil.copytree(ROOT / "native_stdlib", work / "native_stdlib")
+    shutil.copytree(ROOT / "vendor", work / "vendor")
+    main = harness / "main.plum"
+    source = main.read_text()
+    assert source.count("let main (): Unit = {") == 1
+    main.write_text(source.replace("let main (): Unit = {", "let compiler_main (): Unit = {") + ENTRY)
+    binary = work / "discover"
+    run([COMPILER, "build", harness, "-o", binary])
+
+    def discover(path, mode="list", ok=True):
+        return run([binary, mode, path], ok=ok,
+                   env=dict(os.environ, PLUM_RT_STATS="1"))
+
+    def expected_path(path, module, owner="", dep=""):
+        if path.is_dir():
+            out = []
+            for entry in os.listdir(path):
+                if not entry.startswith("."):
+                    out.extend(expected_path(path / entry, module, owner, dep))
+            return out
+        return [f"F|{path}|{module}|{owner}|{dep}"] if str(path).endswith(".plum") else []
+
+    def expected_root(path, dep=""):
+        out = []
+        for entry in os.listdir(path):
+            if entry.startswith(".") or (not dep and entry == "vendor"):
+                continue
+            child = path / entry
+            if dep and not child.is_dir():
+                continue
+            module = entry if child.is_dir() else ""
+            if dep:
+                module = dep if module == dep else f"{dep}.{module}"
+            out.extend(expected_path(child, module, str(path) if dep else "", dep))
+        return out
+
+    app = work / "app"
+    # Include nested files, hidden entries, ignored files and nested vendor/.
+    # Files below a/b remain in module a under current language semantics.
+    for name in ["z.plum", "a/nested/one.plum", "a/two.plum", "a/vendor/v.plum",
+                 "b/three.plum", ".hidden.plum", ".hidden/f.plum",
+                 "a/.hidden.plum", "a/.hidden/f.plum", "vendor/skip.plum", "readme.txt"]:
+        write(app / name)
+    empty = work / "empty"
+    empty.mkdir()
+    for path in [app, empty, app / "z.plum", app / "readme.txt"]:
+        expected = expected_root(path) if path.is_dir() else expected_path(path, "")
+        assert discover(path).stdout.splitlines() == expected
+
+    for dep in ["alpha", "beta"]:
+        write(work / dep / dep / "one.plum")
+        write(work / dep / "extra/nested/two.plum")
+        write(work / dep / "vendor/v.plum")
+        write(work / dep / ".hidden/f.plum")
+        write(work / dep / "readme.txt")
+    write(app / "plum.pkg", 'Package { name: "app", deps: [ Dep { name: "alpha", path: "../alpha" }, Dep { name: "beta", path: "../beta" } ] }\n')
+    lines = discover(app).stdout.splitlines()
+    deps = [line.split("|")[1:] for line in lines if line.startswith("D|")]
+    assert {name for name, _ in deps} == {"alpha", "beta"}
+    expected = expected_root(app)
+    for name, path in deps:
+        expected.extend(expected_root(Path(path), name))
+    assert [line for line in lines if line.startswith("F|")] == expected
+    write(work / "alpha/bad.plum")
+    rejected = discover(app, ok=False)
+    assert "has Plum source at its root" in rejected.stdout + rejected.stderr
+    (work / "alpha/bad.plum").unlink()
+    print("source-discovery: order, filtering, modules, ownership and dependency rejection passed")
+
+    # No elapsed-time thresholds: total allocated bytes must scale linearly.
+    # Fixed-width names keep path-processing costs comparable at each size.
+    def allocated(path, count):
+        result = discover(path, "count")
+        assert result.stdout.strip() == str(count)
+        match = re.search(r"\[plum-rt\] alloc n=\d+ bytes=(\d+)", result.stderr)
+        assert match, result.stderr
+        return int(match[1])
+
+    for shape in ["flat", "nested", "dependencies"]:
+        amounts = []
+        for count in [1024, 2048, 4096]:
+            tree = work / f"{shape}-{count}"
+            if shape == "dependencies":
+                tree.mkdir()
+                dep_specs = []
+                for i in range(16):
+                    dep = work / f"deps-{count}-{i:02d}"
+                    dep_specs.append(f'Dep {{ name: "d{i:02d}", path: "../{dep.name}" }}')
+                    for j in range(count // 16):
+                        write(dep / f"d{i:02d}" / f"f{j:04d}.plum")
+                write(tree / "plum.pkg", 'Package { name: "app", deps: [' + ", ".join(dep_specs) + '] }\n')
+            else:
+                for i in range(count):
+                    directory = tree if shape == "flat" else tree / f"m{i % 16:02d}" / "nested"
+                    write(directory / f"f{i:04d}.plum")
+            amounts.append(allocated(tree, count))
+        print(f"source-discovery: {shape} allocated bytes for 1024/2048/4096 files: {amounts}")
+        for small, large in zip(amounts, amounts[1:]):
+            assert large < small * 2.6, f"{shape} discovery allocation growth is not linear: {amounts}"
+
+print("source-discovery: passed")

@@ -3576,47 +3576,66 @@ let source_entries (path: String): Array[String] =
         Err(e) => { panic_raw("cannot discover sources at ${path}: ${e}"); [] },
     }
 
-let source_path_files (path: String) (module_name: String): Array[SourceFile] =
+// A single builder spans directories and dependencies. Detach its array
+// before pushing: the builder must not keep an alias that would force the
+// growable array to copy its entire prefix on every append.
+let source_push (builder: Ref[Array[SourceFile]]) (file: SourceFile): Unit = {
+    let mut files = builder.get();
+    builder.set([]);
+    files = files.push(file);
+    builder.set(files)
+}
+
+let source_path_files (path: String) (module_name: String): Array[SourceFile] = {
+    let builder: Ref[Array[SourceFile]] = ref([]);
+    source_path_into(path, module_name, "", "", builder);
+    builder.get()
+}
+
+let source_path_into (path: String) (module_name: String) (owner: String) (dep_name: String) (builder: Ref[Array[SourceFile]]): Unit =
     if Result.unwrap_or(Os.is_directory(path), false) {
-        source_walk(path, module_name, source_entries(path), 0, [])
-    } else if path.ends_with(".plum") { [SourceFile { path: path, module_name: module_name, owner: "", dep_name: "" }] }
-    else { [] }
+        for entry in source_entries(path) {
+            if !entry.starts_with(".") {
+                source_path_into(Path.join(path, entry), module_name, owner, dep_name, builder);
+            } else { () };
+        }
+    } else if path.ends_with(".plum") {
+        source_push(builder, SourceFile { path: path, module_name: module_name, owner: owner, dep_name: dep_name })
+    } else { () }
 
-let source_walk (dir: String) (module_name: String) (entries: Array[String]) (i: Int) (acc: Array[SourceFile]): Array[SourceFile] =
-    if i >= entries.len() { acc }
-    else if entries[i].starts_with(".") { source_walk(dir, module_name, entries, i + 1, acc) }
-    else { source_walk(dir, module_name, entries, i + 1, Array.concat(acc, source_path_files(Path.join(dir, entries[i]), module_name))) }
-
-let source_root (dir: String) (dep_name: String) (entries: Array[String]) (i: Int) (acc: Array[SourceFile]): Array[SourceFile] =
-    if i >= entries.len() { acc }
-    else if entries[i].starts_with(".") || (dep_name == "" && entries[i] == "vendor") { source_root(dir, dep_name, entries, i + 1, acc) }
-    else {
-        let full = Path.join(dir, entries[i]);
-        let is_dir = Result.unwrap_or(Os.is_directory(full), false);
-        if dep_name != "" && !is_dir && entries[i].ends_with(".plum") {
-            panic_raw("dependency `${dep_name}` has Plum source at its root: ${full}\n  A dependency's code lives in module subdirectories, so its module names are the same whether it is built on its own or used from another project.\n  Move it into a directory named for the module it should be.")
+let source_root (dir: String) (dep_name: String) (builder: Ref[Array[SourceFile]]): Unit = {
+    let owner = if dep_name == "" { "" } else { dir };
+    for entry in source_entries(dir) {
+        if !entry.starts_with(".") && !(dep_name == "" && entry == "vendor") {
+            let full = Path.join(dir, entry);
+            let is_dir = Result.unwrap_or(Os.is_directory(full), false);
+            if dep_name != "" && !is_dir && entry.ends_with(".plum") {
+                panic_raw("dependency `${dep_name}` has Plum source at its root: ${full}\n  A dependency's code lives in module subdirectories, so its module names are the same whether it is built on its own or used from another project.\n  Move it into a directory named for the module it should be.")
+            } else { () };
+            let module_name = if !is_dir { "" } else if dep_name == "" { entry } else { dep_module_name(dep_name, entry) };
+            if dep_name == "" || is_dir {
+                source_path_into(full, module_name, owner, dep_name, builder);
+            } else { () };
         } else { () };
-        let module_name = if !is_dir { "" } else if dep_name == "" { entries[i] } else { dep_module_name(dep_name, entries[i]) };
-        let found = if dep_name != "" && !is_dir { [] } else { source_path_files(full, module_name) };
-        source_root(dir, dep_name, entries, i + 1, Array.concat(acc, found))
     }
+}
 
-let source_deps (deps: Array[pkg.Dep]) (i: Int) (acc: Array[SourceFile]): Array[SourceFile] =
-    if i >= deps.len() { acc }
-    else {
-        let files = Array.map(source_root(deps[i].path, deps[i].name, source_entries(deps[i].path), 0, []),
-            |f| SourceFile { path: f.path, module_name: f.module_name, owner: deps[i].path, dep_name: deps[i].name });
-        source_deps(deps, i + 1, Array.concat(acc, files))
+let source_deps (deps: Array[pkg.Dep]) (builder: Ref[Array[SourceFile]]): Unit = {
+    for dep in deps {
+        source_root(dep.path, dep.name, builder);
     }
+}
 
 let prepare_inputs (dir: String): BuildInputs = {
     let t = buildcache.start(());
     let deps = project_deps(dir);
     buildcache.finish("dependency resolution", t);
     let s = buildcache.start(());
-    let own = if Result.unwrap_or(Os.is_directory(dir), false) { source_root(dir, "", source_entries(dir), 0, []) }
-        else { source_path_files(dir, "") };
-    let files = source_deps(deps, 0, own);
+    let builder: Ref[Array[SourceFile]] = ref([]);
+    if Result.unwrap_or(Os.is_directory(dir), false) { source_root(dir, "", builder) }
+    else { source_path_into(dir, "", "", "", builder) };
+    source_deps(deps, builder);
+    let files = builder.get();
     buildcache.finish("source discovery", s);
     BuildInputs { files: files, deps: deps }
 }
@@ -3704,7 +3723,9 @@ let collect_project (root: String): Array[parser.ItemNode] =
 // that happens to contain a dot in a directory name.
 let collect_own (root: String): Array[parser.ItemNode] =
     if Result.unwrap_or(Os.is_directory(root), false) {
-        parse_source_files(source_root(root, "", source_entries(root), 0, []), 0, [])
+        let builder: Ref[Array[SourceFile]] = ref([]);
+        source_root(root, "", builder);
+        parse_source_files(builder.get(), 0, [])
     } else {
         collect_path_items(root, "")
     }

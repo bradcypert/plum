@@ -148,6 +148,8 @@ jobs:
         run: ./bootstrap/check-build-modes
       - name: the user-facing commands work
         run: ./bootstrap/cli-smoke
+      - name: source discovery preserves metadata and scales linearly
+        run: python3 ./bootstrap/source-discovery-check ./sh.real
       - name: packages resolve and manifests stay data
         run: ./bootstrap/pkg-check
       - name: allocations have not risen
