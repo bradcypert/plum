@@ -1,0 +1,475 @@
+====================
+Compiler nested field update example
+====================
+
+let case (g: Game) (nx: Int) (ny: Int): Game = Game { ship.position.x: nx, ship.position.y: ny, ..g }
+
+---
+
+(source_file
+  (item
+    (let_def
+      (identifier)
+      (param
+        (pattern
+          (identifier))
+        (path_type
+          (identifier)))
+      (param
+        (pattern
+          (identifier))
+        (path_type
+          (identifier)))
+      (param
+        (pattern
+          (identifier))
+        (path_type
+          (identifier)))
+      (path_type
+        (identifier))
+      (pipe_expr
+        (or_expr
+          (and_expr
+            (compare_expr
+              (bit_or_expr
+                (bit_xor_expr
+                  (bit_and_expr
+                    (range_expr
+                      (add_expr
+                        (mul_expr
+                          (unary_expr
+                            (postfix_expr
+                              (struct_literal
+                                (path
+                                  (identifier))
+                                (field_init_list
+                                  (field_init
+                                    (identifier)
+                                    (identifier)
+                                    (identifier)
+                                    (pipe_expr
+                                      (or_expr
+                                        (and_expr
+                                          (compare_expr
+                                            (bit_or_expr
+                                              (bit_xor_expr
+                                                (bit_and_expr
+                                                  (range_expr
+                                                    (add_expr
+                                                      (mul_expr
+                                                        (unary_expr
+                                                          (postfix_expr
+                                                            (identifier))))))))))))))
+                                  (field_init
+                                    (identifier)
+                                    (identifier)
+                                    (identifier)
+                                    (pipe_expr
+                                      (or_expr
+                                        (and_expr
+                                          (compare_expr
+                                            (bit_or_expr
+                                              (bit_xor_expr
+                                                (bit_and_expr
+                                                  (range_expr
+                                                    (add_expr
+                                                      (mul_expr
+                                                        (unary_expr
+                                                          (postfix_expr
+                                                            (identifier))))))))))))))
+                                  (pipe_expr
+                                    (or_expr
+                                      (and_expr
+                                        (compare_expr
+                                          (bit_or_expr
+                                            (bit_xor_expr
+                                              (bit_and_expr
+                                                (range_expr
+                                                  (add_expr
+                                                    (mul_expr
+                                                      (unary_expr
+                                                        (postfix_expr
+                                                          (identifier))))))))))))))))))))))))))))))
+
+====================
+Nested paths mixed with explicit fields and shorthand
+====================
+
+let update g nx score = Game { ship.position.x: nx, ship.health: 100, score, active: true, ..g }
+
+---
+
+(source_file
+  (item
+    (let_def
+      (identifier)
+      (param
+        (identifier))
+      (param
+        (identifier))
+      (param
+        (identifier))
+      (pipe_expr
+        (or_expr
+          (and_expr
+            (compare_expr
+              (bit_or_expr
+                (bit_xor_expr
+                  (bit_and_expr
+                    (range_expr
+                      (add_expr
+                        (mul_expr
+                          (unary_expr
+                            (postfix_expr
+                              (struct_literal
+                                (path
+                                  (identifier))
+                                (field_init_list
+                                  (field_init
+                                    (identifier)
+                                    (identifier)
+                                    (identifier)
+                                    (pipe_expr
+                                      (or_expr
+                                        (and_expr
+                                          (compare_expr
+                                            (bit_or_expr
+                                              (bit_xor_expr
+                                                (bit_and_expr
+                                                  (range_expr
+                                                    (add_expr
+                                                      (mul_expr
+                                                        (unary_expr
+                                                          (postfix_expr
+                                                            (identifier))))))))))))))
+                                  (field_init
+                                    (identifier)
+                                    (identifier)
+                                    (pipe_expr
+                                      (or_expr
+                                        (and_expr
+                                          (compare_expr
+                                            (bit_or_expr
+                                              (bit_xor_expr
+                                                (bit_and_expr
+                                                  (range_expr
+                                                    (add_expr
+                                                      (mul_expr
+                                                        (unary_expr
+                                                          (postfix_expr
+                                                            (int_literal))))))))))))))
+                                  (field_init
+                                    (identifier))
+                                  (field_init
+                                    (identifier)
+                                    (pipe_expr
+                                      (or_expr
+                                        (and_expr
+                                          (compare_expr
+                                            (bit_or_expr
+                                              (bit_xor_expr
+                                                (bit_and_expr
+                                                  (range_expr
+                                                    (add_expr
+                                                      (mul_expr
+                                                        (unary_expr
+                                                          (postfix_expr
+                                                            (bool_literal))))))))))))))
+                                  (pipe_expr
+                                    (or_expr
+                                      (and_expr
+                                        (compare_expr
+                                          (bit_or_expr
+                                            (bit_xor_expr
+                                              (bit_and_expr
+                                                (range_expr
+                                                  (add_expr
+                                                    (mul_expr
+                                                      (unary_expr
+                                                        (postfix_expr
+                                                          (identifier))))))))))))))))))))))))))))))
+
+====================
+Nested update values reuse the expression grammar
+====================
+
+let update g nx = Game { ship.position.x: nx + 1, ship.position.y: next(g.ship.position.y), ..g }
+
+---
+
+(source_file
+  (item
+    (let_def
+      (identifier)
+      (param
+        (identifier))
+      (param
+        (identifier))
+      (pipe_expr
+        (or_expr
+          (and_expr
+            (compare_expr
+              (bit_or_expr
+                (bit_xor_expr
+                  (bit_and_expr
+                    (range_expr
+                      (add_expr
+                        (mul_expr
+                          (unary_expr
+                            (postfix_expr
+                              (struct_literal
+                                (path
+                                  (identifier))
+                                (field_init_list
+                                  (field_init
+                                    (identifier)
+                                    (identifier)
+                                    (identifier)
+                                    (pipe_expr
+                                      (or_expr
+                                        (and_expr
+                                          (compare_expr
+                                            (bit_or_expr
+                                              (bit_xor_expr
+                                                (bit_and_expr
+                                                  (range_expr
+                                                    (add_expr
+                                                      (mul_expr
+                                                        (unary_expr
+                                                          (postfix_expr
+                                                            (identifier))))
+                                                      (mul_expr
+                                                        (unary_expr
+                                                          (postfix_expr
+                                                            (int_literal))))))))))))))
+                                  (field_init
+                                    (identifier)
+                                    (identifier)
+                                    (identifier)
+                                    (pipe_expr
+                                      (or_expr
+                                        (and_expr
+                                          (compare_expr
+                                            (bit_or_expr
+                                              (bit_xor_expr
+                                                (bit_and_expr
+                                                  (range_expr
+                                                    (add_expr
+                                                      (mul_expr
+                                                        (unary_expr
+                                                          (postfix_expr
+                                                            (identifier)
+                                                            (arguments
+                                                              (argument
+                                                                (pipe_expr
+                                                                  (or_expr
+                                                                    (and_expr
+                                                                      (compare_expr
+                                                                        (bit_or_expr
+                                                                          (bit_xor_expr
+                                                                            (bit_and_expr
+                                                                              (range_expr
+                                                                                (add_expr
+                                                                                  (mul_expr
+                                                                                    (unary_expr
+                                                                                      (postfix_expr
+                                                                                        (identifier)
+                                                                                        (identifier)
+                                                                                        (identifier)
+                                                                                        (identifier))))))))))))))))))))))))))))
+                                  (pipe_expr
+                                    (or_expr
+                                      (and_expr
+                                        (compare_expr
+                                          (bit_or_expr
+                                            (bit_xor_expr
+                                              (bit_and_expr
+                                                (range_expr
+                                                  (add_expr
+                                                    (mul_expr
+                                                      (unary_expr
+                                                        (postfix_expr
+                                                          (identifier))))))))))))))))))))))))))))))
+
+====================
+Ordinary fields shorthand and spread remain supported
+====================
+
+let origin x = Point { x, y: 0 }
+let copy p = Point { ..p }
+let empty = Empty {}
+
+---
+
+(source_file
+  (item
+    (let_def
+      (identifier)
+      (param
+        (identifier))
+      (pipe_expr
+        (or_expr
+          (and_expr
+            (compare_expr
+              (bit_or_expr
+                (bit_xor_expr
+                  (bit_and_expr
+                    (range_expr
+                      (add_expr
+                        (mul_expr
+                          (unary_expr
+                            (postfix_expr
+                              (struct_literal
+                                (path
+                                  (identifier))
+                                (field_init_list
+                                  (field_init
+                                    (identifier))
+                                  (field_init
+                                    (identifier)
+                                    (pipe_expr
+                                      (or_expr
+                                        (and_expr
+                                          (compare_expr
+                                            (bit_or_expr
+                                              (bit_xor_expr
+                                                (bit_and_expr
+                                                  (range_expr
+                                                    (add_expr
+                                                      (mul_expr
+                                                        (unary_expr
+                                                          (postfix_expr
+                                                            (int_literal))))))))))))))))))))))))))))))
+  (item
+    (let_def
+      (identifier)
+      (param
+        (identifier))
+      (pipe_expr
+        (or_expr
+          (and_expr
+            (compare_expr
+              (bit_or_expr
+                (bit_xor_expr
+                  (bit_and_expr
+                    (range_expr
+                      (add_expr
+                        (mul_expr
+                          (unary_expr
+                            (postfix_expr
+                              (struct_literal
+                                (path
+                                  (identifier))
+                                (field_init_list
+                                  (pipe_expr
+                                    (or_expr
+                                      (and_expr
+                                        (compare_expr
+                                          (bit_or_expr
+                                            (bit_xor_expr
+                                              (bit_and_expr
+                                                (range_expr
+                                                  (add_expr
+                                                    (mul_expr
+                                                      (unary_expr
+                                                        (postfix_expr
+                                                          (identifier)))))))))))))))))))))))))))))
+  (item
+    (let_def
+      (identifier)
+      (pipe_expr
+        (or_expr
+          (and_expr
+            (compare_expr
+              (bit_or_expr
+                (bit_xor_expr
+                  (bit_and_expr
+                    (range_expr
+                      (add_expr
+                        (mul_expr
+                          (unary_expr
+                            (postfix_expr
+                              (struct_literal
+                                (path
+                                  (identifier))))))))))))))))))
+
+====================
+Nested update without spread and with trailing comma
+====================
+
+let fresh nx = Game { ship.position.x: nx, }
+
+---
+
+(source_file
+  (item
+    (let_def
+      (identifier)
+      (param
+        (identifier))
+      (pipe_expr
+        (or_expr
+          (and_expr
+            (compare_expr
+              (bit_or_expr
+                (bit_xor_expr
+                  (bit_and_expr
+                    (range_expr
+                      (add_expr
+                        (mul_expr
+                          (unary_expr
+                            (postfix_expr
+                              (struct_literal
+                                (path
+                                  (identifier))
+                                (field_init_list
+                                  (field_init
+                                    (identifier)
+                                    (identifier)
+                                    (identifier)
+                                    (pipe_expr
+                                      (or_expr
+                                        (and_expr
+                                          (compare_expr
+                                            (bit_or_expr
+                                              (bit_xor_expr
+                                                (bit_and_expr
+                                                  (range_expr
+                                                    (add_expr
+                                                      (mul_expr
+                                                        (unary_expr
+                                                          (postfix_expr
+                                                            (identifier)))))))))))))))))))))))))))))))
+
+====================
+Nested paths cannot use shorthand
+:error
+====================
+
+let bad = Game { ship.position.x, ..g }
+
+---
+
+(ERROR)
+
+====================
+Nested paths require a segment after each dot
+:error
+====================
+
+let bad = Game { ship.: nx, ..g }
+
+---
+
+(ERROR)
+
+====================
+Nested paths require a value after the colon
+:error
+====================
+
+let bad = Game { ship.position.x: , ..g }
+
+---
+
+(ERROR)

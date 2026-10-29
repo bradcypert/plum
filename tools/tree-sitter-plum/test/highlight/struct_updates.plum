@@ -1,0 +1,7 @@
+let update g nx = Game { ship.position.x: nx, score, ..g }
+//                       ^ property
+//                            ^ property
+//                                     ^ property
+//                                        ^ variable
+//                                            ^ property
+//                                                   ^ operator
