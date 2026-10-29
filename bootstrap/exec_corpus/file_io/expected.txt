@@ -10,6 +10,19 @@ zero size at eof: File.read: read failed
 negative size at eof: File.read: read failed
 seek to 1
 after seek: ff41
+2 GiB: 2147483648
+4 GiB+17: 4294967313
+tell: 4294967313
+beyond eof empty: true
+back to payload: 1
+payload again: ff41
+large from end: 4294967319
+back from large end: 6
+last byte: 5
+last payload: 43
+negative start: File.seek: seek failed
+before start: File.seek: seek failed
+size unchanged: 6
 appended
 whole file: 00ff41420a4344
 missing: err

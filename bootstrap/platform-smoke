@@ -107,6 +107,18 @@ else
     fail=$((fail + 1))
 fi
 
+# Exercise large offsets through the host CRT, including Windows LLP64.
+if clang -O1 -g -Wall -Wextra -Werror bootstrap/file-seek-test.c \
+        -o "$work/file-seek-test.bin" > "$work/file-seek-test.log" 2>&1 &&
+        "$work/file-seek-test.bin"; then
+    printf 'OK    %-24s\n' "native_file_seek"
+    ok=$((ok + 1))
+else
+    printf 'FAIL  %-24s\n' "native_file_seek"
+    cat "$work/file-seek-test.log"
+    fail=$((fail + 1))
+fi
+
 for dir in bootstrap/exec_corpus/*/; do
     name="$(basename "$dir")"
     [ -f "$dir/main.plum" ] || continue

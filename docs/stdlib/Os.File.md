@@ -33,7 +33,11 @@ how that bug was found on the wire the first time.
 
 ## `let File.seek (f: File) (offset: Int) (from: Seek): Result[Int, String]`
 
-The new absolute position.
+The new absolute byte position, using 64-bit file offsets on every
+platform. Negative offsets are allowed relative to `Current` or `End`
+when the resulting position is nonnegative. Returns `Err` if seeking
+fails or the position cannot fit in `Int`. Seeking does not read or
+allocate the intervening bytes.
 
 ## `let File.flush (f: File): Result[Unit, String]`
 
