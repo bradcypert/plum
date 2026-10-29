@@ -1,11 +1,9 @@
 // Plum's tree-sitter grammar — transcribed from `GRAMMAR.md` (the
 // project's own formal EBNF, kept as the single source of truth both
 // this grammar and `plum-syntax`'s hand-written recursive-descent
-// parser answer to) plus two real syntax forms `GRAMMAR.md` doesn't
-// document yet (found by reading `plum-syntax` directly, not assumed):
-// array literals (`[e1, e2, ...]`) and `select { pattern = expr => body,
-// ... }` for reading from multiple channels. See this file's own
-// section comments for where a rule maps onto a specific `GRAMMAR.md`
+// parser answer to) plus array literals (`[e1, e2, ...]`). Select arms
+// follow GRAMMAR.md's receive, default, and timeout productions. See
+// this file's own section comments for where a rule maps onto a specific `GRAMMAR.md`
 // production, and where it deliberately doesn't.
 //
 // **Scope, deliberate**: this is a SEPARATE grammar from `plum-syntax`'s
@@ -52,6 +50,12 @@ module.exports = grammar({
     // both fit, matching the compiler's greedy parameter parsing.
     [$.param, $.require_clause],
     [$.param, $.ensure_clause],
+    // Select receive patterns and timeout expressions can share a prefix
+    // (including tuples). Keep both until `=` or `=>` distinguishes them.
+    [$._primary_expr, $._primary_pattern],
+    [$.paren_or_tuple_expr, $.tuple_pattern],
+    [$.field_init, $.field_pattern],
+    [$.struct_literal, $.struct_pattern],
   ],
 
   rules: {
@@ -315,9 +319,13 @@ module.exports = grammar({
     select_arm_list: ($) => seq(commaSep1($.select_arm), optional(",")),
     select_arm: ($) =>
       seq(
-        field("pattern", $.pattern),
-        "=",
-        field("channel", $._expr),
+        // GRAMMAR.md SelectArm: receive, default, or timeout. Keep the
+        // receive fields stable and share the arrow/body across all forms.
+        choice(
+          seq(field("pattern", $.pattern), "=", field("channel", $._expr)),
+          "else",
+          field("duration", $._expr),
+        ),
         "=>",
         field("body", $._expr),
       ),
