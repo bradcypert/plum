@@ -1,0 +1,10 @@
+let text = "first line
+// still string text"
+// ^ string
+let after = 42
+//  ^ variable
+//          ^ number
+let escaped = "first line
+second \"quoted\" line"
+//     ^ string.escape
+//       ^ string

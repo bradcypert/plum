@@ -41,12 +41,15 @@ sections.
 IntLiteral    ::= digit { digit | "_" }
 FloatLiteral  ::= digit { digit | "_" } "." digit { digit | "_" }
 StringLiteral ::= '"' { StringChar | Interpolation } '"'
-StringChar    ::= any character except '"', '$', or newline, or one of the escapes below
+StringChar    ::= any character except '"', '$', or '\', or one of the escapes below
 Interpolation ::= "${" InterpExprSource "}"
 BoolLiteral   ::= "true" | "false"
 Literal       ::= IntLiteral | FloatLiteral | StringLiteral | BoolLiteral
 Comment       ::= "//" { any character except newline }
 ```
+
+String literals may span multiple lines; literal newlines and indentation
+inside the quotes are part of the string value.
 
 String escapes are `\n` (newline), `\t` (tab), `\r` (carriage return),
 `\\` (backslash), `\"` (double quote), and `\$` (literal dollar sign).

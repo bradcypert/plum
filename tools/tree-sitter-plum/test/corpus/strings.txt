@@ -1,0 +1,270 @@
+====================
+Multiline string with blank lines and following code
+====================
+
+let text = "first line
+
+  last line"
+let after = 42
+
+---
+
+(source_file
+  (item
+    (let_def
+      (identifier)
+      (pipe_expr
+        (or_expr
+          (and_expr
+            (compare_expr
+              (bit_or_expr
+                (bit_xor_expr
+                  (bit_and_expr
+                    (range_expr
+                      (add_expr
+                        (mul_expr
+                          (unary_expr
+                            (postfix_expr
+                              (string_literal)))))))))))))))
+  (item
+    (let_def
+      (identifier)
+      (pipe_expr
+        (or_expr
+          (and_expr
+            (compare_expr
+              (bit_or_expr
+                (bit_xor_expr
+                  (bit_and_expr
+                    (range_expr
+                      (add_expr
+                        (mul_expr
+                          (unary_expr
+                            (postfix_expr
+                              (int_literal))))))))))))))))
+
+====================
+Comment-looking text cannot consume a multiline string closing quote
+====================
+
+let text = "first line
+// still string text"
+let after = 42
+
+---
+
+(source_file
+  (item
+    (let_def
+      (identifier)
+      (pipe_expr
+        (or_expr
+          (and_expr
+            (compare_expr
+              (bit_or_expr
+                (bit_xor_expr
+                  (bit_and_expr
+                    (range_expr
+                      (add_expr
+                        (mul_expr
+                          (unary_expr
+                            (postfix_expr
+                              (string_literal)))))))))))))))
+  (item
+    (let_def
+      (identifier)
+      (pipe_expr
+        (or_expr
+          (and_expr
+            (compare_expr
+              (bit_or_expr
+                (bit_xor_expr
+                  (bit_and_expr
+                    (range_expr
+                      (add_expr
+                        (mul_expr
+                          (unary_expr
+                            (postfix_expr
+                              (int_literal))))))))))))))))
+
+====================
+Multiline strings retain escapes and separate adjacent literals
+====================
+
+let text = "first \"quoted\" line
+second \\ path\n\t\r\$\x1b\u{1f600}"
+let next = "another
+string"
+let after = 42
+
+---
+
+(source_file
+  (item
+    (let_def
+      (identifier)
+      (pipe_expr
+        (or_expr
+          (and_expr
+            (compare_expr
+              (bit_or_expr
+                (bit_xor_expr
+                  (bit_and_expr
+                    (range_expr
+                      (add_expr
+                        (mul_expr
+                          (unary_expr
+                            (postfix_expr
+                              (string_literal
+                                (escape_sequence)
+                                (escape_sequence)
+                                (escape_sequence)
+                                (escape_sequence)
+                                (escape_sequence)
+                                (escape_sequence)
+                                (escape_sequence)
+                                (escape_sequence)
+                                (escape_sequence))))))))))))))))
+  (item
+    (let_def
+      (identifier)
+      (pipe_expr
+        (or_expr
+          (and_expr
+            (compare_expr
+              (bit_or_expr
+                (bit_xor_expr
+                  (bit_and_expr
+                    (range_expr
+                      (add_expr
+                        (mul_expr
+                          (unary_expr
+                            (postfix_expr
+                              (string_literal)))))))))))))))
+  (item
+    (let_def
+      (identifier)
+      (pipe_expr
+        (or_expr
+          (and_expr
+            (compare_expr
+              (bit_or_expr
+                (bit_xor_expr
+                  (bit_and_expr
+                    (range_expr
+                      (add_expr
+                        (mul_expr
+                          (unary_expr
+                            (postfix_expr
+                              (int_literal))))))))))))))))
+
+====================
+Multiline string patterns use the same literal rule
+====================
+
+let classify (text: String): Bool = match text {
+    "first
+// still a pattern" => true,
+    _ => false,
+}
+let after = 42
+
+---
+
+(source_file
+  (item
+    (let_def
+      (identifier)
+      (param
+        (pattern
+          (identifier))
+        (path_type
+          (identifier)))
+      (path_type
+        (identifier))
+      (pipe_expr
+        (or_expr
+          (and_expr
+            (compare_expr
+              (bit_or_expr
+                (bit_xor_expr
+                  (bit_and_expr
+                    (range_expr
+                      (add_expr
+                        (mul_expr
+                          (unary_expr
+                            (postfix_expr
+                              (match_expr
+                                (pipe_expr
+                                  (or_expr
+                                    (and_expr
+                                      (compare_expr
+                                        (bit_or_expr
+                                          (bit_xor_expr
+                                            (bit_and_expr
+                                              (range_expr
+                                                (add_expr
+                                                  (mul_expr
+                                                    (unary_expr
+                                                      (postfix_expr
+                                                        (identifier)))))))))))))
+                                (match_arm_list
+                                  (match_arm
+                                    (pattern
+                                      (string_literal))
+                                    (pipe_expr
+                                      (or_expr
+                                        (and_expr
+                                          (compare_expr
+                                            (bit_or_expr
+                                              (bit_xor_expr
+                                                (bit_and_expr
+                                                  (range_expr
+                                                    (add_expr
+                                                      (mul_expr
+                                                        (unary_expr
+                                                          (postfix_expr
+                                                            (bool_literal))))))))))))))
+                                  (match_arm
+                                    (pattern)
+                                    (pipe_expr
+                                      (or_expr
+                                        (and_expr
+                                          (compare_expr
+                                            (bit_or_expr
+                                              (bit_xor_expr
+                                                (bit_and_expr
+                                                  (range_expr
+                                                    (add_expr
+                                                      (mul_expr
+                                                        (unary_expr
+                                                          (postfix_expr
+                                                            (bool_literal))))))))))))))))))))))))))))))
+  (item
+    (let_def
+      (identifier)
+      (pipe_expr
+        (or_expr
+          (and_expr
+            (compare_expr
+              (bit_or_expr
+                (bit_xor_expr
+                  (bit_and_expr
+                    (range_expr
+                      (add_expr
+                        (mul_expr
+                          (unary_expr
+                            (postfix_expr
+                              (int_literal))))))))))))))))
+
+====================
+Multiline string still requires a closing quote
+:error
+====================
+
+let text = "first line
+last line
+
+---
+
+(ERROR)
