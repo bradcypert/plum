@@ -273,7 +273,11 @@ pub let File.write (f: File) (data: Bytes): Result[Int, String] = unsafe {
     if n < 0 { Err("File.write: write failed") } else { Ok(n) }
 }
 
-/// The new absolute position.
+/// The new absolute byte position, using 64-bit file offsets on every
+/// platform. Negative offsets are allowed relative to `Current` or `End`
+/// when the resulting position is nonnegative. Returns `Err` if seeking
+/// fails or the position cannot fit in `Int`. Seeking does not read or
+/// allocate the intervening bytes.
 pub let File.seek (f: File) (offset: Int) (from: Seek): Result[Int, String] = unsafe {
     let p = file_seek(File.raw(f), offset, seek_code(from));
     if p < 0 { Err("File.seek: seek failed") } else { Ok(p) }

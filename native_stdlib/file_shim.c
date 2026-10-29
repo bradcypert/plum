@@ -37,9 +37,28 @@
 // that one is cheap to make safe and `net_shim.c` learned the hard way
 // what a shared one costs.
 
+#if defined(__APPLE__)
+#define _DARWIN_C_SOURCE 1
+#endif
+#if !defined(_WIN32)
+#ifndef _FILE_OFFSET_BITS
+#define _FILE_OFFSET_BITS 64
+#endif
+#ifndef _POSIX_C_SOURCE
+#define _POSIX_C_SOURCE 200809L
+#endif
+#endif
+
+#include <limits.h>
+#include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#if !defined(_WIN32)
+#include <sys/types.h>
+// Fail at build time if the toolchain disables large-file support.
+_Static_assert(sizeof(off_t) >= sizeof(long long), "File.seek requires 64-bit off_t");
+#endif
 
 #if defined(_MSC_VER)
 #define PLUM_TLS __declspec(thread)
@@ -166,8 +185,17 @@ long long file_seek(long long h, long long offset, long long whence) {
     if (i < 0) return -1;
     int w = whence == 0 ? SEEK_SET : whence == 1 ? SEEK_CUR : whence == 2 ? SEEK_END : -1;
     if (w == -1) return -1;
-    if (fseek(slots[i], (long)offset, w) != 0) return -1;
-    return (long long)ftell(slots[i]);
+#if defined(_WIN32)
+    if (_fseeki64(slots[i], offset, w) != 0) return -1;
+    __int64 position = _ftelli64(slots[i]);
+#else
+    if (fseeko(slots[i], (off_t)offset, w) != 0) return -1;
+    off_t position = ftello(slots[i]);
+#endif
+    // Preserve tell failures and reject positions outside Plum Int's range
+    // before narrowing, including on platforms with a wider off_t.
+    if (position < 0 || (uintmax_t)position > (uintmax_t)LLONG_MAX) return -1;
+    return (long long)position;
 }
 
 // Flushes buffered writes without closing, so a caller can make data

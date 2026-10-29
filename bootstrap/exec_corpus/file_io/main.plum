@@ -16,6 +16,9 @@ use Os;
 let show (label: String) (r: Result[Bytes, String]): Unit =
     println(label.concat(": ").concat(match r { Ok(b) => b.to_hex(), Err(e) => e }))
 
+let position (label: String) (r: Result[Int, String]): Unit =
+    println(label.concat(": ").concat(match r { Ok(n) => n.to_string(), Err(e) => e }))
+
 let main (): Unit = match Os.temp_dir() {
     Err(e) => println(e),
     Ok(root) => {
@@ -64,7 +67,25 @@ let main (): Unit = match Os.temp_dir() {
                     Ok(pos) => println("seek to ".concat(pos.to_string())),
                     Err(e) => println(e),
                 };
-                show("after seek", f.read(2))
+                show("after seek", f.read(2));
+                // Cross both the signed and unsigned 32-bit boundaries.
+                // No writes at these offsets: the file stays six bytes.
+                position("2 GiB", f.seek(2147483648, Seek.Start));
+                position("4 GiB+17", f.seek(4294967313, Seek.Start));
+                position("tell", f.seek(0, Seek.Current));
+                match f.read(1) {
+                    Ok(b) => println("beyond eof empty: ".concat(b.is_empty().to_string())),
+                    Err(e) => println(e),
+                };
+                position("back to payload", f.seek(-4294967312, Seek.Current));
+                show("payload again", f.read(2));
+                position("large from end", f.seek(4294967313, Seek.End));
+                position("back from large end", f.seek(-4294967313, Seek.Current));
+                position("last byte", f.seek(-1, Seek.End));
+                show("last payload", f.read(1));
+                position("negative start", f.seek(-1, Seek.Start));
+                position("before start", f.seek(-7, Seek.End));
+                position("size unchanged", f.seek(0, Seek.End))
                 // NO close here, deliberately: the handle closes the
                 // file when `f` dies. If it did not, the `remove_tree`
                 // below would be deleting a file still held open.
