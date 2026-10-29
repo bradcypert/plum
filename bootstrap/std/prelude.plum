@@ -1362,7 +1362,7 @@ pub let Map.values[K, V] (m: Map[K, V]): Array[V] = {
 }
 
 let map_from_arrays_acc[K: Eq + Hash, V] (keys: Array[K]) (values: Array[V]) (i: Int) (acc: Map[K, V]): Map[K, V] =
-    if i >= keys.len() { acc } else { map_from_arrays_acc(keys, values, i + 1, Map.insert(acc, keys[i], values[i])) }
+    if i >= keys.len() || i >= values.len() { acc } else { map_from_arrays_acc(keys, values, i + 1, Map.insert(acc, keys[i], values[i])) }
 /// A map from parallel arrays, stopping at the shorter. A repeated
 /// key keeps the LAST value.
 pub let Map.from_arrays[K: Eq + Hash, V] (keys: Array[K]) (values: Array[V]): Map[K, V] = map_from_arrays_acc(keys, values, 0, Map.new(()))

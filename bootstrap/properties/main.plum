@@ -1646,6 +1646,28 @@ let json_string_roundtrips (seed: Int) (left: Int): Unit =
 
 pub let test_json_string_values (): Unit = json_string_roundtrips(155, 500)
 
+// Every pair of lengths includes both mismatch directions, empty inputs,
+// and enough entries to cross Map's resize threshold.
+pub let test_map_from_arrays_shared_prefix (): Unit = {
+    for key_count in 0..17 {
+        for value_count in 0..17 {
+            let mut keys = [];
+            let mut values = [];
+            for i in 0..key_count { keys = keys.push(i.to_string()); };
+            for i in 0..value_count { values = values.push("value-".concat(i.to_string())); };
+            let m = Map.from_arrays(keys, values);
+            let paired = Int.min(key_count, value_count);
+            assert_eq(Map.len(m), paired);
+            for i in 0..17 {
+                let expected = if i < paired { Some("value-".concat(i.to_string())) } else { None };
+                assert_eq(Map.get(m, i.to_string()), expected);
+            };
+            assert_eq(keys.len(), key_count);
+            assert_eq(values.len(), value_count);
+        }
+    }
+}
+
 pub let test_float_finite_and_overflow (): Unit = {
     let zero = 0.0;
     for x in [zero, -0.0, 1.0, -1.0, 1.7976931348623157e308, 5e-324] {
