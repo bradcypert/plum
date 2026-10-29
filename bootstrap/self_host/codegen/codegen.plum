@@ -726,8 +726,11 @@ let cg_line_starts (src: String): Array[Int] = cg_line_starts_acc(chars_of(src),
 
 let cg_line_starts_acc (cs: Array[String]) (i: Int) (acc: Array[Int]): Array[Int] =
     if i >= cs.len() { acc }
-    else if cs[i] == "\n" { cg_line_starts_acc(cs, i + 1, acc.push(i + 1)) }
-    else { cg_line_starts_acc(cs, i + 1, acc) }
+    else {
+        let width = lexer.source_newline_width(cs, i);
+        if width > 0 { cg_line_starts_acc(cs, i + width, acc.push(i + width)) }
+        else { cg_line_starts_acc(cs, i + 1, acc) }
+    }
 
 // The 1-based line holding `offset`, by binary search over the starts.
 let cg_line_at (starts: Array[Int]) (offset: Int): Int = cg_line_search(starts, offset, 0, starts.len() - 1)

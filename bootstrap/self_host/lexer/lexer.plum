@@ -151,7 +151,7 @@ let is_ident_continue_char (c: String): Bool = is_ident_start_char(c) || is_digi
 
 let skip_line_comment (chars: Array[String]) (pos: Int): Int =
     if pos >= chars.len() { pos }
-    else if chars[pos] == "\n" { pos }
+    else if source_newline_width(chars, pos) > 0 { pos }
     else { skip_line_comment(chars, pos + 1) }
 
 let skip_ws_and_comments (chars: Array[String]) (pos: Int): Int =
@@ -699,32 +699,48 @@ let relex_acc (chars: Array[String]) (lexed: LexedSource) (i: Int) (acc: String)
 
 pub struct LineCol { pub line: Int, pub col: Int }
 
-// 1-based, matching every compiler diagnostic anyone has ever read (and
-// `plum_syntax::span`'s own rendering). `offset` is a character index;
-// an offset past the end clamps to the last line, so a diagnostic at
-// EOF still points somewhere real.
+// One source newline is CRLF, CR, or LF. Keep the original character
+// offsets: normalizing the text would invalidate token and parser spans.
+// Forward scans advance by this width so CRLF is counted once.
+pub let source_newline_width (chars: Array[String]) (i: Int): Int =
+    if i >= chars.len() { 0 }
+    else if chars[i] == "\r" {
+        if i + 1 < chars.len() && chars[i + 1] == "\n" { 2 } else { 1 }
+    }
+    else if chars[i] == "\n" { 1 }
+    else { 0 }
+
+// 1-based lines and character columns. EOF clamps to the document end.
+// Both characters of CRLF map to the preceding line's end; there is no
+// source position between them. `offset_of` returns the CR for that end.
 pub let line_col (source: String) (offset: Int): LineCol = line_col_acc(chars_of(source), offset, 0, 1, 1)
 
 let line_col_acc (chars: Array[String]) (offset: Int) (i: Int) (line: Int) (col: Int): LineCol =
     if i >= offset || i >= chars.len() { LineCol { line: line, col: col } }
-    else if chars[i] == "\n" { line_col_acc(chars, offset, i + 1, line + 1, 1) }
-    else { line_col_acc(chars, offset, i + 1, line, col + 1) }
+    else {
+        let width = source_newline_width(chars, i);
+        if width > 0 {
+            if offset < i + width { LineCol { line: line, col: col } }
+            else { line_col_acc(chars, offset, i + width, line + 1, 1) }
+        }
+        else { line_col_acc(chars, offset, i + 1, line, col + 1) }
+    }
 
-// The inverse of `line_col`: a 1-based line and column back to a
-// character offset. Clamps past the end of a short line rather than
-// running into the next one -- an editor can and does send a column
-// past the end of a line.
+// The inverse of `line_col`. A column past a line's content clamps to
+// the start of its newline, and a line past EOF clamps to EOF.
 pub let offset_of (source: String) (line: Int) (col: Int): Int =
     offset_of_acc(chars_of(source), line, col, 0, 1, 1)
 
 let offset_of_acc (chars: Array[String]) (line: Int) (col: Int) (i: Int) (l: Int) (c: Int): Int =
     if i >= chars.len() { chars.len() }
     else if l == line && c == col { i }
-    else if chars[i] == "\n" {
-        // Asked for a column past this line's end: stop at the newline.
-        if l == line { i } else { offset_of_acc(chars, line, col, i + 1, l + 1, 1) }
+    else {
+        let width = source_newline_width(chars, i);
+        if width > 0 {
+            if l == line { i } else { offset_of_acc(chars, line, col, i + width, l + 1, 1) }
+        }
+        else { offset_of_acc(chars, line, col, i + 1, l, c + 1) }
     }
-    else { offset_of_acc(chars, line, col, i + 1, l, c + 1) }
 
 // The IDENTIFIER token containing `offset`, or "" if the position is on
 // anything else. This is what makes name-based hover and
@@ -751,15 +767,18 @@ let ident_at_acc (tokens: Array[Token]) (starts: Array[Int]) (offset: Int) (i: I
 // what a caret diagnostic underlines.
 pub let line_text (source: String) (offset: Int): String = {
     let chars = chars_of(source);
-    let start = line_start_at(chars, if offset >= chars.len() { chars.len() } else { offset });
+    let clamped = Int.max(0, Int.min(offset, chars.len()));
+    // The LF in CRLF belongs to the same line end as the CR.
+    let at = if clamped > 0 && clamped < chars.len() && chars[clamped] == "\n" && chars[clamped - 1] == "\r" { clamped - 1 } else { clamped };
+    let start = line_start_at(chars, at);
     Array.concat_all(Array.slice(chars, start, line_end_at(chars, start)))
 }
 
 let line_start_at (chars: Array[String]) (i: Int): Int =
-    if i <= 0 { 0 } else if chars[i - 1] == "\n" { i } else { line_start_at(chars, i - 1) }
+    if i <= 0 { 0 } else if source_newline_width(chars, i - 1) > 0 { i } else { line_start_at(chars, i - 1) }
 
 let line_end_at (chars: Array[String]) (i: Int): Int =
-    if i >= chars.len() { chars.len() } else if chars[i] == "\n" { i } else { line_end_at(chars, i + 1) }
+    if i >= chars.len() { chars.len() } else if source_newline_width(chars, i) > 0 { i } else { line_end_at(chars, i + 1) }
 
 // The `--> file:line:col` + source line + caret block every real
 // compiler error carries, and which no self-hosted diagnostic has ever
@@ -872,3 +891,58 @@ pub let render_token (t: Token): String = match t {
 // boilerplate every single token stream would otherwise end with.
 pub let render_tokens (tokens: Array[Token]): String =
     string_join_with_space(Array.map(Array.filter(tokens, |t| match t { TokEof => false, _ => true }), |t| render_token(t)))
+
+pub let test_source_positions_newlines (): Unit = {
+    for newline in ["\n", "\r", "\r\n"] {
+        let source = "é😀".concat(newline).concat(newline).concat("end").concat(newline);
+        let second = 2 + newline.len();
+        let third = second + newline.len();
+        let end = third + 3 + newline.len();
+        assert_eq(offset_of(source, 1, 99), 2);
+        assert_eq(offset_of(source, 2, 99), second);
+        assert_eq(offset_of(source, 3, 2), third + 1);
+        assert_eq(offset_of(source, 4, 1), end);
+        assert_eq(offset_of(source, 99, 99), end);
+        assert_eq(line_text(source, 2), "é😀");
+        assert_eq(line_text(source, second), "");
+        assert_eq(line_text(source, third + 1), "end");
+        assert_eq(line_text(source, end), "");
+        assert_eq(line_col(source, end + 99).line, 4);
+        assert_eq(line_col(source, end + 99).col, 1);
+        for i in 0..(end + 1) {
+            let lc = line_col(source, i);
+            let canonical = if i > 0 && i < end && String.slice(source, i - 1, i + 1) == "\r\n" { i - 1 } else { i };
+            assert_eq(offset_of(source, lc.line, lc.col), canonical);
+            if i == 3 && newline == "\r\n" { assert_eq(line_text(source, i), "é😀"); };
+        };
+        assert_eq(line_col(source, third).line, 3);
+        assert_eq(line_col(source, third).col, 1);
+    };
+    let mixed = "a\r\nb\rc\n\rd";
+    for pair in [[0, 1], [3, 2], [5, 3], [7, 4], [8, 5]] {
+        assert_eq(line_col(mixed, pair[0]).line, pair[1]);
+        assert_eq(line_col(mixed, pair[0]).col, 1);
+        assert_eq(offset_of(mixed, pair[1], 1), pair[0]);
+    };
+    assert_eq(line_col(mixed, 99).line, 5);
+    assert_eq(line_col(mixed, 99).col, 2);
+    assert_eq(offset_of(mixed, 5, 99), 9);
+    assert_eq(line_text(mixed, 99), "d");
+    assert_eq(line_col("", 99).line, 1);
+    assert_eq(line_col("", 99).col, 1);
+    assert_eq(offset_of("", 99, 99), 0);
+    assert_eq(line_text("", 0), "");
+    assert_eq(line_col("a", 0 - 1).col, 1);
+    assert_eq(line_text("a", 0 - 1), "a")
+}
+
+pub let test_source_newlines_comments_and_diagnostics (): Unit = {
+    for newline in ["\n", "\r", "\r\n"] {
+        let source = "// comment".concat(newline).concat("let value = 1");
+        assert_eq(token_texts(source), "let\nvalue\n=\n1\n\n");
+        assert_eq(relex(source), source);
+        let error_source = "let a = 1".concat(newline).concat("  bad");
+        assert_eq(render_at(error_source, "main.plum", 11 + newline.len(), "example"),
+            "error: example\n  --> main.plum:2:3\n  |\n2 |   bad\n  |   ^\n");
+    }
+}
