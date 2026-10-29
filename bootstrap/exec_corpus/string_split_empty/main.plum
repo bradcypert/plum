@@ -1,0 +1,27 @@
+// Empty separators preserve both edge strings and split codepoints, not
+// grapheme clusters. ASan/LSan must also reclaim every temporary array.
+let split_temporary (): Array[String] = String.concat("aé", "中😀").split("")
+let escaped_piece (): String = split_temporary()[3]
+
+let main (): Unit = {
+    assert_eq("".split(""), ["", ""]);
+    assert_eq("x".split(""), ["", "x", ""]);
+    assert_eq(String.split("abc", ""), ["", "a", "b", "c", ""]);
+    assert_eq(split_temporary(), ["", "a", "é", "中", "😀", ""]);
+    assert_eq("é".split(""), ["", "e", "́", ""]);
+    assert_eq(chars_of(""), []);
+    assert_eq(chars_of("aé中😀"), ["a", "é", "中", "😀"]);
+    assert_eq(escaped_piece(), "中");
+    let pieces = split_temporary();
+    let alias = pieces;
+    let changed = pieces.set(2, "other");
+    assert_eq(alias[2], "é");
+    assert_eq(changed[2], "other");
+    // Keep nonempty-separator behavior covered alongside the shared builder.
+    assert_eq("a::é::".split("::"), ["a", "é", ""]);
+    for i in 0..1000 {
+        assert_eq(split_temporary()[4], "😀");
+        assert_eq(String.split("", "").len(), 2);
+    };
+    println("empty-separator split: ok")
+}

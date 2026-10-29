@@ -21365,3 +21365,41 @@ checkouts, and upgrading can temporarily retain both legacy and new trees:
 this can increase disk use. Package storage still has no automatic budget or
 garbage collection; `plum cache list` and `plum cache clean` remain its
 lifecycle controls. Build-artifact cache budgets are independent.
+
+### Empty-separator split: one owning codepoint array (#248)
+
+`plum_str_split(s, "")` previously built a `chars_of` array, copied its
+string pointers into a second array with empty strings at both ends, and
+abandoned the first array. Dropping the result reclaimed the strings but
+leaked the temporary array's `16 + 8 * byte_length(s)` requested bytes on
+every call. Compiler last-use drops cannot repair an allocation hidden
+inside a runtime helper and never returned to a generated owner. This is
+an ownership gap at the runtime boundary, independent of the Perceus
+placement work in #349 and analogous to the native-copy gap in #128.
+
+Both primitives now use `plum_str_codepoints`: zero edge padding for
+`chars_of`, one empty string at each edge for empty-separator split. The
+builder counts codepoints, allocates one exact-capacity result, and creates
+each string directly in its owning slot. No intermediate array, pointer
+transfer, or extra retain/release pair is needed. Existing element-aware
+array destruction remains responsible for the returned strings. Aliasing
+and extracted strings follow the existing compiler ownership rules.
+
+For B input bytes and C codepoints, empty split now requests `16 + 8*(C+2)`
+array bytes instead of that result plus a leaked `16 + 8*B` temporary.
+`chars_of` requests `16 + 8*C` instead of `16 + 8*B`. String allocations
+are unchanged: C for `chars_of`, C+2 for empty split. Counting adds a pass
+over the input; time remains O(B), with O(C) returned pointers and O(B)
+returned character bytes. Repeated splitting no longer retains an array
+per completed call. Actual RSS also depends on allocator retention and
+caller-held results; this makes no process-wide RSS guarantee and changes
+no cycle collection, threading, or unrelated runtime/native ownership.
+
+The allocation fixture runs both operations 1,000 times on `aé中😀`:
+13,000 allocations / 446,000 requested bytes before, versus 12,000 /
+302,000 after. Its byte ceiling also catches byte-sized Unicode array
+capacity. These are cumulative allocation counters, not live-memory or
+RSS measurements. The execution fixture separately runs under ASan/LSan
+and covers empty input, UTF-8 widths, combining marks, escaping pieces,
+shared arrays, and repeated calls; the old runtime leaks 112,408 bytes
+in that fixture. Source doc comments and public split semantics are unchanged.
