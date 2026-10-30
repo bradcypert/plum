@@ -143,7 +143,7 @@ PY
 # varying the directory on BOTH sides.
 echo "comparing what it produces against the current compiler ..."
 SH_MEM="${SH_MEM:-256M}" SH_TIMEOUT="${SH_TIMEOUT:-600}" "$work/sh.next" emit-llvm bootstrap/self_host > "$work/next.ll" 2>&1
-SH_MEM="${SH_MEM:-256M}" SH_TIMEOUT="${SH_TIMEOUT:-600}" ./sh emit-llvm bootstrap/self_host > "$work/cur.ll" 2>&1
+SH_MEM="${SH_MEM:-256M}" SH_TIMEOUT="${SH_TIMEOUT:-600}" "${PLUM:-./sh}" emit-llvm bootstrap/self_host > "$work/cur.ll" 2>&1
 
 if cmp -s "$work/next.ll" "$work/cur.ll"; then
     echo "SEED OK: bootstraps to a compiler identical to the current one"

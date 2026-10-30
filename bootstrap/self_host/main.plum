@@ -3828,6 +3828,7 @@ let report_fetched (deps: Array[pkg.Dep]) (i: Int): Unit =
             // alternative is computing a tree hash by hand.
             println("  ${deps[i].name}  ${deps[i].git} @ ${String.slice(deps[i].rev, 0, 12)}");
             println("    ${deps[i].path}");
+            println("    hash_version: 2");
             println("    sha256: ${pkg.tree_hash(deps[i].path)}")
         };
         report_fetched(deps, i + 1)
@@ -3921,7 +3922,7 @@ let reject_dep_namespace (found: Array[pkg.Dep]) (dep: pkg.Dep) (i: Int): Unit =
 // change is small.
 let resolve_dep (dir: String) (d: pkg.Dep) (root: String) (fetch: Bool): pkg.Dep =
     if String.is_empty(d.git) {
-        pkg.Dep { name: d.name, path: dep_path(dir, d.path), git: "", rev: "", sha256: "" }
+        pkg.Dep { name: d.name, path: dep_path(dir, d.path), git: "", rev: "", sha256: "", hash_version: d.hash_version }
     } else {
         let vendored = pkg.vendor_dir(root, d.git, d.rev);
         let cached = pkg.cache_dir(d.git, d.rev);
@@ -3944,7 +3945,7 @@ let resolve_dep (dir: String) (d: pkg.Dep) (root: String) (fetch: Bool): pkg.Dep
             };
             cached
         };
-        pkg.Dep { name: d.name, path: chosen, git: d.git, rev: d.rev, sha256: d.sha256 }
+        pkg.Dep { name: d.name, path: chosen, git: d.git, rev: d.rev, sha256: d.sha256, hash_version: d.hash_version }
     }
 
 let dep_path (dir: String) (declared: String): String =

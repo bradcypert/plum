@@ -152,6 +152,8 @@ jobs:
         run: python3 ./bootstrap/source-discovery-check ./sh.real
       - name: packages resolve and manifests stay data
         run: ./bootstrap/pkg-check
+      - name: package hashes preserve links and validate roots before publication
+        run: python3 ./bootstrap/package-tree-test.py ./sh.real
       - name: allocations have not risen
         run: ./bootstrap/alloc-check
       - name: the token stream loses nothing

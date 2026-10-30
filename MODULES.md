@@ -366,6 +366,7 @@ Package {
             name: "parsec",
             git: "https://github.com/someone/parsec",
             rev: "9f2a1c4e8b7d3f6a0c5e2b9d4a8f1c3e7b6d0a52",
+            hash_version: 2,
             sha256: "3b8f1d0c6a24e7593f8c1b0d4a6e29f7c53b8d1a0f462e97c8b3d5a1f0e6c294",
         },
     ],
@@ -381,8 +382,21 @@ that can become ambiguous as a repository grows.
 **`sha256` is optional, and is how the manifest becomes a lockfile.**
 It is the hash of the package's contents. Declare one and every later
 fetch has to produce exactly those bytes, on any machine. `plum fetch`
-prints the hash of what it got, so adding one is a copy and a paste. It
-is checked on every build, not only when something is downloaded.
+prints both `hash_version: 2` and the hash; copy both fields into the
+dependency. It is checked on every build, not only when downloaded.
+
+Version 2 includes entry types, empty directories, and the stored target
+text of symbolic links. Files are hashed through bounded read buffers;
+link targets are not read as file contents. Relative internal links and
+dangling internal links can be stored. Absolute links, escaping link
+chains, unsupported reparse points, and special files are rejected before
+a fetched or vendored package is published, even without a declared hash.
+
+Omitting `hash_version` retains version 1 for existing manifests. Its hashes
+remain unchanged for link-free trees, but it refuses links with a migration
+diagnostic. To migrate, fetch without the old `sha256`, review the package,
+and set both fields printed by `plum fetch`. Verification never silently
+accepts a different hash version after a mismatch.
 
 **Fetching is a separate step.** `plum build` never touches the network;
 a dependency that is not in the cache is an error telling you to run

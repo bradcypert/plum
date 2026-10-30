@@ -106,9 +106,14 @@ int main(void) {
     assert(plum_tree_entry_open(held, "external/keep", 0) == 0);
     assert(plum_tree_entry_open(held, "../outside/keep", 0) == 0);
     assert(plum_tree_entry_open(held, "dangling", 0) == 0);
+    assert(plum_tree_validate_link(held, "dangling") == 0);
+    assert(plum_tree_validate_link(held, "external") == -1);
+    assert(symlink("missing/../../outside", "src/missing-escape") == 0);
+    assert(plum_tree_validate_link(held, "missing-escape") == -1);
     assert(plum_tree_entry_open(held, "nested/data/", 0) == 0);
     assert(symlink("loop", "src/loop") == 0);
     assert(plum_tree_entry_open(held, "loop", 0) == 0);
+    assert(plum_tree_validate_link(held, "loop") == -1);
     assert(symlink("/etc/passwd", "src/absolute") == 0);
     assert(plum_tree_entry_open(held, "absolute", 0) == 0);
     assert(symlink("../nested/data", "src/nested/internal") == 0);

@@ -953,6 +953,26 @@ long long os_remove_tree(const char *path) {
 
 #define PLUM_COPY_DEPTH 128
 #define PLUM_COPY_BUFFER 65536
+
+// A dangling link may be stored and hashed, but even its missing suffix must
+// not contain a lexical ascent above the held root. Future reads resolve the
+// path again with the ordinary strict resolver, never trust this validation.
+static int plum_tree_missing_tail(const char *path, unsigned depth) {
+    const char *p = path;
+    while (*p) {
+        const char *end = strchr(p, '/');
+        size_t n = end ? (size_t)(end - p) : strlen(p);
+        if (n == 2 && p[0] == '.' && p[1] == '.') {
+            if (!depth) return -1;
+            depth--;
+        } else if (n && !(n == 1 && p[0] == '.')) {
+            if (++depth >= PLUM_COPY_DEPTH) return -1;
+        }
+        if (!end) break;
+        p = end + 1;
+    }
+    return 0;
+}
 #if defined(_WIN32)
 // Windows adapters use native relative opens. Share-read-only handles pin
 // directories and reject writers/reparse changes while an operation owns them.
@@ -1005,7 +1025,7 @@ static int plum_tree_win_attrs(HANDLE h, FILE_ATTRIBUTE_TAG_INFO *info) {
 }
 // Return the stored relative substitute name of an ordinary symbolic link.
 // Junctions and other reparse tags never become traversal instructions.
-static int plum_tree_win_link(HANDLE h, WCHAR *target, size_t capacity) {
+static int plum_tree_win_link(HANDLE h, WCHAR *target, size_t capacity, int allow_absolute) {
     _Alignas(max_align_t) unsigned char data[MAXIMUM_REPARSE_DATA_BUFFER_SIZE];
     DWORD bytes;
     if (!DeviceIoControl(h, FSCTL_GET_REPARSE_POINT, NULL, 0, data, sizeof(data), &bytes, NULL)) return -1;
@@ -1017,7 +1037,7 @@ static int plum_tree_win_link(HANDLE h, WCHAR *target, size_t capacity) {
     };
     struct LinkData *link = (struct LinkData *)data;
     size_t prefix = offsetof(struct LinkData, path);
-    if (bytes < prefix || link->tag != IO_REPARSE_TAG_SYMLINK || link->flags != 1 ||
+    if (bytes < prefix || link->tag != IO_REPARSE_TAG_SYMLINK || (link->flags != 1 && !(allow_absolute && link->flags == 0)) ||
         (size_t)link->length + 8 > bytes || (size_t)link->length + 8 < prefix ||
         link->substitute_offset % sizeof(WCHAR) || link->substitute_length % sizeof(WCHAR) ||
         (size_t)link->substitute_offset + link->substitute_length > (size_t)link->length + 8 - prefix) return -1;
@@ -1026,10 +1046,10 @@ static int plum_tree_win_link(HANDLE h, WCHAR *target, size_t capacity) {
     memcpy(target, (unsigned char *)link->path + link->substitute_offset, link->substitute_length);
     target[count] = 0;
     for (size_t i = 0; i < count; i++) {
-        if (!target[i] || target[i] == L':') return -1;
+        if (!target[i] || (!allow_absolute && target[i] == L':')) return -1;
         if (target[i] == L'\\') target[i] = L'/';
     }
-    return target[0] == L'/' ? -1 : 0;
+    return !allow_absolute && target[0] == L'/' ? -1 : 0;
 }
 static HANDLE plum_tree_resolve(HANDLE root, const char *relative, int reject_links) {
     WCHAR pending[PLUM_PATH_MAX], target[PLUM_PATH_MAX];
@@ -1059,13 +1079,24 @@ static HANDLE plum_tree_resolve(HANDLE root, const char *relative, int reject_li
             if (!more) { result = parents[depth]; parents[depth] = INVALID_HANDLE_VALUE; break; }
             memmove(pending, rest, (wcslen(rest) + 1) * sizeof(WCHAR)); continue;
         }
+        NTSTATUS failure = 0;
         HANDLE child = plum_tree_win_child(parents[depth], pending,
-            (DWORD)(wcslen(pending) * sizeof(WCHAR)), GENERIC_READ, FILE_OPEN, 0, NULL);
-        if (child == INVALID_HANDLE_VALUE) break;
+            (DWORD)(wcslen(pending) * sizeof(WCHAR)), GENERIC_READ, FILE_OPEN, 0, &failure);
+        if (child == INVALID_HANDLE_VALUE) {
+            if (reject_links == 2 && failure == (NTSTATUS)0xc0000034) {
+                char tail[PLUM_PATH_MAX * 4];
+                if (slash) *slash = L'/';
+                if (WideCharToMultiByte(CP_UTF8, WC_ERR_INVALID_CHARS, pending, -1, tail, sizeof(tail), NULL, NULL) &&
+                    !plum_tree_missing_tail(tail, depth)) {
+                    result = parents[depth]; parents[depth] = INVALID_HANDLE_VALUE;
+                }
+            }
+            break;
+        }
         FILE_ATTRIBUTE_TAG_INFO info;
         if (plum_tree_win_attrs(child, &info)) { CloseHandle(child); break; }
         if (info.FileAttributes & FILE_ATTRIBUTE_REPARSE_POINT) {
-            int failed = reject_links || ++links > 40 || plum_tree_win_link(child, target, PLUM_PATH_MAX);
+            int failed = reject_links == 1 || ++links > 40 || plum_tree_win_link(child, target, PLUM_PATH_MAX, 0);
             CloseHandle(child);
             if (failed) break;
             size_t count = wcslen(target), suffix = wcslen(rest);
@@ -1315,9 +1346,17 @@ static int plum_tree_resolve(int root, const char *relative, int reject_links) {
             continue;
         }
         struct stat before, after;
-        if (fstatat(parents[depth], pending, &before, AT_SYMLINK_NOFOLLOW)) break;
+        if (fstatat(parents[depth], pending, &before, AT_SYMLINK_NOFOLLOW)) {
+            if (reject_links == 2 && errno == ENOENT) {
+                if (slash) *slash = '/';
+                if (!plum_tree_missing_tail(pending, depth)) {
+                    result = parents[depth]; parents[depth] = -1;
+                }
+            }
+            break;
+        }
         if (S_ISLNK(before.st_mode)) {
-            if (reject_links || ++links > 40) break;
+            if (reject_links == 1 || ++links > 40) break;
             ssize_t n = readlinkat(parents[depth], pending, target, sizeof(target));
             if (n <= 0 || (size_t)n >= sizeof(target) || target[0] == '/') break;
             if (fstatat(parents[depth], pending, &after, AT_SYMLINK_NOFOLLOW) ||
@@ -1528,6 +1567,19 @@ roots:
 }
 #endif
 
+long long plum_tree_validate_link(long long root, const char *relative) {
+    if (!root) return -1;
+#if defined(_WIN32)
+    HANDLE h = plum_tree_resolve((HANDLE)(intptr_t)root, relative, 2);
+    if (h == INVALID_HANDLE_VALUE) return -1;
+    return CloseHandle(h) ? 0 : -1;
+#else
+    int fd = plum_tree_resolve((int)(root - 1), relative, 2);
+    if (fd < 0) return -1;
+    return close(fd) ? -1 : 0;
+#endif
+}
+
 // Compiler filesystem consumers work on opened entries. Iterators and readers
 // consume an entry even on allocation failure, and own all borrowed buffers.
 long long plum_tree_entry_kind(long long entry) {
@@ -1724,7 +1776,7 @@ long long plum_tree_dir_next(long long handle) {
         if (plum_tree_win_attrs(child, &attrs)) { CloseHandle(child); return -1; }
         if (attrs.FileAttributes & FILE_ATTRIBUTE_REPARSE_POINT) {
             WCHAR target[PLUM_PATH_MAX];
-            if (plum_tree_win_link(child, target, PLUM_PATH_MAX) ||
+            if (plum_tree_win_link(child, target, PLUM_PATH_MAX, 1) ||
                 !WideCharToMultiByte(CP_UTF8, WC_ERR_INVALID_CHARS, target, -1, dir->link, sizeof(dir->link), NULL, NULL)) {
                 CloseHandle(child); return -1;
             }

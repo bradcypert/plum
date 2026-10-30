@@ -16,15 +16,19 @@ The Windows adapters now use native handle-relative opens, reparse inspection,
 relative-link resolution, and temporary-file replacement. Native Windows tests
 cover junction rejection, hard-link-safe replacement, allocation failures,
 Unicode entries, and supported symlink handling; they are wired into Windows
-CI and platform-smoke. Their execution on Windows remains to be verified.
+CI and platform-smoke. The Windows platform job passed the copy and resolver
+tests for commit `15d1665`.
 The `treefs` compiler module now owns roots, entries, directory iterators,
 and incremental hash states through Plum handles. Native file hashing streams
 through a 64 KiB buffer and has fixed vectors for the legacy framing and
 plain content hashes. Owned read buffers and independent directory iterators
 have binary-data and repeated-enumeration tests on both platform adapters.
 The compiler self-tests exercise the handle wrappers and hash results.
-Hash-format migration, discovery, and overlay integrations remain pending;
-production compiler workflows do not yet consume these primitives.
+Package hashing and validation now consume these primitives, including
+versioned manifests, legacy compatibility, typed version 2 records, and
+validation before fetch/vendor publication. Independent Python integration
+tests compare both formats with actual fetch output and exercise link errors.
+Source discovery, formatting, and overlay integrations remain pending.
 This intermediate implementation is not ready for release: preserved links
 must not be consumed by the old unrestricted compiler walks and overlays.
 
@@ -137,7 +141,7 @@ Close all snapshot handles and remove scratch output on every failure.
 
 ## Package hash migration
 
-Add an explicit proposed `hash_version: 2` field to `Dep`; absence means the
+The `hash_version: 2` field on `Dep` selects the new format; absence means the
 legacy algorithm. Keep `sha256` as 64 hexadecimal characters. Reject unknown
 versions. Fetch output must print the version with the digest.
 
@@ -146,12 +150,16 @@ but refuses links with a migration diagnostic. It must never fall back to
 following targets to reproduce an old digest. Do not automatically rewrite
 the user's manifest or accept either digest after a mismatch.
 
-Version 2 hashes typed, length-framed records in deterministic relative-path
-order. Paths use `/`. File records contain their streamed content digest;
-link records contain their exact stored target bytes. Directory records make
-empty directories explicit. Define the byte encoding, integer framing,
-ordering, exclusions, and domain-separation prefix in fixed test vectors
-before shipping. File modes remain excluded and documented. All entries
+Version 2 hashes records in ascending relative-path byte order. Paths use
+`/`. The hash input starts with the ASCII bytes `plum-tree-v2\n`. Each record
+is a one-byte type (`F`, `D`, or `L`), the decimal path byte length, a newline,
+the path bytes, a newline, the decimal payload byte length, a newline, and
+the payload bytes. Decimal lengths have no leading zeroes. A file payload
+is its raw 32-byte SHA-256 digest; a directory payload is empty; a link
+payload is its target text. Windows targets are decoded from UTF-16 to UTF-8
+with separators expressed as `/`. POSIX target bytes are preserved.
+The root itself and entries named `.git` are excluded. Empty directories
+are included. File modes remain excluded and documented. All entries
 inside the root are hashed independently, so changing an internal target
 changes the tree hash even though a link record hashes only its target text.
 

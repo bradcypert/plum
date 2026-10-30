@@ -71,6 +71,7 @@ pub struct Dep {
     pub git: String,
     pub rev: String,
     pub sha256: String,
+    pub hash_version: Int,
 }
 
 // `link` is library NAMES, not linker flags: `["sqlite3"]` becomes
@@ -85,6 +86,7 @@ pub struct Dep {
 pub struct Manifest {
     pub name: String,
     pub version: String,
+    pub symlinks: String,
     pub deps: Array[Dep],
     pub link: Array[String],
     pub link_linux: Array[String],
@@ -108,7 +110,7 @@ pub let manifest_name (unit: Unit): String = "plum.pkg"
 
 // What a project with no `plum.pkg` has. Not an error: the file is
 // optional, and its absence means "no dependencies", not "malformed".
-pub let no_manifest (unit: Unit): Manifest = Manifest { name: "", version: "", deps: [], link: [], link_linux: [], link_macos: [], link_windows: [], link_posix: [], native_deps: None }
+pub let no_manifest (unit: Unit): Manifest = Manifest { name: "", version: "", symlinks: "within-root", deps: [], link: [], link_linux: [], link_macos: [], link_windows: [], link_posix: [], native_deps: None }
 
 pub let manifest_path (root: String): String = Path.join(root, manifest_name(()))
 
@@ -214,10 +216,11 @@ let to_manifest (path: String) (src: String) (e: parser.PExpr): Manifest = match
             fail(path, "a manifest is one `Package { .. }`, but this one is `${last_segment(lit_path)}`")
         };
         reject_unknown(path, fields, 0,
-            ["name", "version", "deps", "link", "link_linux", "link_macos", "link_windows", "link_posix", "native_deps"], "Package");
+            ["name", "version", "deps", "link", "link_linux", "link_macos", "link_windows", "link_posix", "native_deps", "symlinks"], "Package");
         Manifest {
             name: required_string(path, fields, "name", "Package"),
             version: optional_string(path, fields, "version"),
+            symlinks: symlinks_field(path, fields),
             deps: deps_of(path, src, fields),
             link: link_field(path, fields, "link"),
             link_linux: link_field(path, fields, "link_linux"),
@@ -332,12 +335,13 @@ let dep_of (path: String) (e: parser.PExpr): Dep = match e {
         if last_segment(lit_path) != "Dep" {
             fail(path, "every entry in `deps` is a `Dep { .. }`, but this one is `${last_segment(lit_path)}`")
         };
-        reject_unknown(path, fields, 0, ["name", "path", "git", "rev", "sha256"], "Dep");
+        reject_unknown(path, fields, 0, ["name", "path", "git", "rev", "sha256", "hash_version"], "Dep");
         let name = required_string(path, fields, "name", "Dep");
         let dep_path = optional_string(path, fields, "path");
         let git = optional_string(path, fields, "git");
         let rev = optional_string(path, fields, "rev");
         let sha256 = optional_string(path, fields, "sha256");
+        let hash_version = hash_version_field(path, fields);
         // A package name is an identifier. It names no module -- a
         // dependency's modules are named by its own subdirectories --
         // but it is what a registry would resolve one day, and a name
@@ -358,9 +362,9 @@ let dep_of (path: String) (e: parser.PExpr): Dep = match e {
             None => (),
         };
         check_source(path, name, dep_path, git, rev, sha256);
-        Dep { name: name, path: dep_path, git: git, rev: rev, sha256: sha256 }
+        Dep { name: name, path: dep_path, git: git, rev: rev, sha256: sha256, hash_version: hash_version }
     },
-    _ => { fail(path, "every entry in `deps` is a `Dep { .. }`"); Dep { name: "", path: "", git: "", rev: "", sha256: "" } },
+    _ => { fail(path, "every entry in `deps` is a `Dep { .. }`"); Dep { name: "", path: "", git: "", rev: "", sha256: "", hash_version: 1 } },
 }
 
 // Where a dependency comes from, checked once, here.
@@ -485,3 +489,18 @@ pub let test_native_dependency_contract (): Unit = {
     assert(native_needs_tls(tls, true));
     assert(native_needs_tls(tls, false));
 }
+
+let hash_version_field (path: String) (fields: Array[parser.FieldInitNode]): Int =
+    match field_named(fields, "hash_version", 0) {
+        None => 1,
+        Some(EInt(v)) => if v == 1 || v == 2 { v } else { fail(path, "`hash_version` must be 1 or 2"); 1 },
+        _ => { fail(path, "`hash_version` must be the integer 1 or 2"); 1 },
+    }
+
+let symlinks_field (path: String) (fields: Array[parser.FieldInitNode]): String =
+    match field_named(fields, "symlinks", 0) {
+        None => "within-root",
+        Some(EStr(v)) => if v == "within-root" || v == "reject" { v }
+            else { fail(path, "`symlinks` must be `within-root` or `reject`"); "within-root" },
+        _ => { fail(path, "`symlinks` must be a string (`within-root` or `reject`)"); "within-root" },
+    }

@@ -6,6 +6,7 @@ extern "C" {
     fn plum_tree_root_open(path: CStr) -> Int;
     fn plum_tree_entry_open(root: Int, relative: CStr, reject_links: Int) -> Int;
     fn plum_tree_entry_close(entry: Int) -> Unit;
+    fn plum_tree_validate_link(root: Int, relative: CStr) -> Int;
     fn plum_tree_entry_kind(entry: Int) -> Int;
     fn plum_tree_entry_identity(entry: Int) -> CStr;
     fn plum_tree_file_hash(entry: Int, relative: CStr, version: Int) -> CStr;
@@ -108,4 +109,10 @@ pub let test_owned_tree_io (): Unit = {
         assert(hash_finish(hash) == "fb30593ca32df57a8a0f19d551710dc880a98b208b6e180b07e6aff59102d148");
     };
     assert(Result.is_ok(Os.remove_tree(path)));
+}
+
+// Validation allows dangling targets as data, but never an escaping chain.
+pub let validate_link (root: TreeRoot) (relative: String): Result[Unit, String] = unsafe {
+    if plum_tree_validate_link(TreeRoot.raw(root), relative.as_cstr()) == 0 { Ok(()) }
+    else { Err("refused package link ${relative}: absolute target, root escape, cycle, or unreadable target") }
 }
