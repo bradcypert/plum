@@ -74,6 +74,8 @@ static int descriptor_count(void) {
     return count;
 }
 
+#include "tree-io-test.h"
+
 int main(void) {
     char root[] = "/tmp/plum-copy-test-XXXXXX";
     assert(mkdtemp(root));
@@ -88,6 +90,7 @@ int main(void) {
     assert(symlink("nested/data", "src/file-link") == 0);
     assert(os_copy_tree("src/", "dst/") == 0);
     contents("dst/nested/data", "copied");
+    tree_io_tests();
     link_text("dst/cycle", ".."); link_text("dst/dangling", "absent");
     link_text("dst/external", "../outside"); link_text("dst/file-link", "nested/data");
     contents("outside/keep", "untouched");

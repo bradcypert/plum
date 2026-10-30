@@ -1528,6 +1528,251 @@ roots:
 }
 #endif
 
+// Compiler filesystem consumers work on opened entries. Iterators and readers
+// consume an entry even on allocation failure, and own all borrowed buffers.
+long long plum_tree_entry_kind(long long entry) {
+    if (!entry) return -1;
+#if defined(_WIN32)
+    FILE_ATTRIBUTE_TAG_INFO info;
+    if (plum_tree_win_attrs((HANDLE)(intptr_t)entry, &info)) return -1;
+    if (info.FileAttributes & FILE_ATTRIBUTE_REPARSE_POINT) return 3;
+    if (info.FileAttributes & FILE_ATTRIBUTE_DIRECTORY) return 2;
+    return GetFileType((HANDLE)(intptr_t)entry) == FILE_TYPE_DISK ? 1 : 4;
+#else
+    struct stat info;
+    if (fstat((int)(entry - 1), &info)) return -1;
+    return S_ISREG(info.st_mode) ? 1 : S_ISDIR(info.st_mode) ? 2 : S_ISLNK(info.st_mode) ? 3 : 4;
+#endif
+}
+const char *plum_tree_entry_identity(long long entry) {
+    static PLUM_OS_TLS char identity[80];
+    identity[0] = 0;
+    if (!entry) return identity;
+#if defined(_WIN32)
+    BY_HANDLE_FILE_INFORMATION info;
+    if (GetFileInformationByHandle((HANDLE)(intptr_t)entry, &info))
+        snprintf(identity, sizeof(identity), "%08lx:%08lx%08lx", (unsigned long)info.dwVolumeSerialNumber,
+                 (unsigned long)info.nFileIndexHigh, (unsigned long)info.nFileIndexLow);
+#else
+    struct stat info;
+    if (!fstat((int)(entry - 1), &info))
+        snprintf(identity, sizeof(identity), "%llx:%llx", (unsigned long long)info.st_dev, (unsigned long long)info.st_ino);
+#endif
+    return identity;
+}
+static long long plum_tree_entry_size(long long entry) {
+    if (plum_tree_entry_kind(entry) != 1) return -1;
+#if defined(_WIN32)
+    LARGE_INTEGER size;
+    return GetFileSizeEx((HANDLE)(intptr_t)entry, &size) ? size.QuadPart : -1;
+#else
+    struct stat st;
+    return fstat((int)(entry - 1), &st) ? -1 : st.st_size;
+#endif
+}
+static int plum_tree_rewind(long long entry) {
+#if defined(_WIN32)
+    LARGE_INTEGER zero; zero.QuadPart = 0;
+    return SetFilePointerEx((HANDLE)(intptr_t)entry, zero, NULL, FILE_BEGIN) ? 0 : -1;
+#else
+    return lseek((int)(entry - 1), 0, SEEK_SET) < 0 ? -1 : 0;
+#endif
+}
+static long long plum_tree_read(long long entry, unsigned char *buffer, size_t capacity) {
+#if defined(_WIN32)
+    DWORD got;
+    return ReadFile((HANDLE)(intptr_t)entry, buffer, (DWORD)capacity, &got, NULL) ? (long long)got : -1;
+#else
+    ssize_t got;
+    do { got = read((int)(entry - 1), buffer, capacity); } while (got < 0 && errno == EINTR);
+    return got;
+#endif
+}
+typedef struct { long long entry; unsigned char bytes[PLUM_COPY_BUFFER]; } plum_tree_reader;
+long long plum_tree_reader_open(long long entry) {
+    if (!entry) return 0;
+    plum_tree_reader *reader = NULL;
+    if (plum_tree_entry_kind(entry) == 1) reader = malloc(sizeof(*reader));
+    if (!reader) { plum_tree_entry_close(entry); return 0; }
+    reader->entry = entry;
+    return (long long)(intptr_t)reader;
+}
+long long plum_tree_reader_next(long long handle) {
+    plum_tree_reader *reader = (plum_tree_reader *)(intptr_t)handle;
+    return reader ? plum_tree_read(reader->entry, reader->bytes, sizeof(reader->bytes)) : -1;
+}
+const char *plum_tree_reader_data(long long handle) {
+    plum_tree_reader *reader = (plum_tree_reader *)(intptr_t)handle;
+    return reader ? (const char *)reader->bytes : "";
+}
+void plum_tree_reader_close(long long handle) {
+    plum_tree_reader *reader = (plum_tree_reader *)(intptr_t)handle;
+    if (reader) { plum_tree_entry_close(reader->entry); free(reader); }
+}
+// Hash the already-open file in bounded memory. Legacy framing remains byte
+// identical to the original Plum implementation; version 2 uses a content hash.
+const char *plum_tree_file_hash(long long entry, const char *relative, long long version) {
+    static PLUM_OS_TLS char digest[65];
+    digest[0] = 0;
+    long long size = plum_tree_entry_size(entry);
+    if (size < 0 || (version != 1 && version != 2) || plum_tree_rewind(entry)) return digest;
+    plum_cache_sha hash; plum_cache_init(&hash);
+    if (version == 1) {
+        char number[32];
+        int n = snprintf(number, sizeof(number), "%llu\n", (unsigned long long)strlen(relative));
+        plum_cache_update(&hash, (unsigned char *)number, (size_t)n);
+        plum_cache_update(&hash, (const unsigned char *)relative, strlen(relative));
+        n = snprintf(number, sizeof(number), "\n%lld\n", size);
+        plum_cache_update(&hash, (unsigned char *)number, (size_t)n);
+    }
+    unsigned char buffer[PLUM_COPY_BUFFER];
+    long long total = 0;
+    for (;;) {
+        long long n = plum_tree_read(entry, buffer, sizeof(buffer));
+        if (n < 0 || n > size - total) return digest;
+        if (!n) break;
+        total += n;
+        plum_cache_update(&hash, buffer, (size_t)n);
+    }
+    if (total != size || plum_tree_entry_size(entry) != size) return digest;
+    plum_cache_final(&hash, digest);
+    return digest;
+}
+// Incremental final tree hash: callers never build an Array[Int] of all file
+// digests. Handles own their state; finish borrows the state-owned hex string.
+typedef struct { plum_cache_sha hash; char digest[65]; int finished; } plum_tree_hasher;
+long long plum_tree_hash_open(void) {
+    plum_tree_hasher *h = calloc(1, sizeof(*h));
+    if (!h) return 0;
+    plum_cache_init(&h->hash);
+    return (long long)(intptr_t)h;
+}
+long long plum_tree_hash_update(long long handle, const char *bytes, long long size) {
+    plum_tree_hasher *h = (plum_tree_hasher *)(intptr_t)handle;
+    if (!h || h->finished || size < 0 || (uint64_t)size > SIZE_MAX) return -1;
+    plum_cache_update(&h->hash, (const unsigned char *)bytes, (size_t)size);
+    return 0;
+}
+const char *plum_tree_hash_finish(long long handle) {
+    plum_tree_hasher *h = (plum_tree_hasher *)(intptr_t)handle;
+    if (!h) return "";
+    if (!h->finished) { plum_cache_final(&h->hash, h->digest); h->finished = 1; }
+    return h->digest;
+}
+void plum_tree_hash_close(long long handle) { free((void *)(intptr_t)handle); }
+
+typedef struct {
+#if defined(_WIN32)
+    HANDLE entry;
+    _Alignas(max_align_t) unsigned char entries[4096];
+    DWORD offset;
+    int refill, first;
+#else
+    DIR *stream;
+#endif
+    char name[PLUM_PATH_MAX], link[PLUM_PATH_MAX];
+    int kind;
+} plum_tree_directory;
+long long plum_tree_dir_open(long long entry) {
+    if (!entry) return 0;
+    plum_tree_directory *dir = NULL;
+    if (plum_tree_entry_kind(entry) == 2) dir = calloc(1, sizeof(*dir));
+    if (!dir) { plum_tree_entry_close(entry); return 0; }
+#if defined(_WIN32)
+    // Reopen gives this iterator its own enumeration position, including when
+    // the entry originally came from a duplicated root handle.
+    dir->entry = ReOpenFile((HANDLE)(intptr_t)entry, FILE_LIST_DIRECTORY | FILE_READ_ATTRIBUTES,
+        FILE_SHARE_READ, FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT);
+    plum_tree_entry_close(entry);
+    if (dir->entry == INVALID_HANDLE_VALUE) { free(dir); return 0; }
+    dir->first = 1; dir->refill = 1;
+#else
+    dir->stream = fdopendir((int)(entry - 1));
+    if (!dir->stream) { plum_tree_entry_close(entry); free(dir); return 0; }
+#endif
+    return (long long)(intptr_t)dir;
+}
+long long plum_tree_dir_next(long long handle) {
+    plum_tree_directory *dir = (plum_tree_directory *)(intptr_t)handle;
+    if (!dir) return -1;
+    dir->name[0] = 0; dir->link[0] = 0; dir->kind = 0;
+    for (;;) {
+#if defined(_WIN32)
+        if (dir->refill) {
+            FILE_INFO_BY_HANDLE_CLASS kind = dir->first ? FileIdBothDirectoryRestartInfo : FileIdBothDirectoryInfo;
+            if (!GetFileInformationByHandleEx(dir->entry, kind, dir->entries, sizeof(dir->entries)))
+                return GetLastError() == ERROR_NO_MORE_FILES ? 0 : -1;
+            dir->first = 0; dir->refill = 0; dir->offset = 0;
+        }
+        FILE_ID_BOTH_DIR_INFO *item = (FILE_ID_BOTH_DIR_INFO *)(dir->entries + dir->offset);
+        DWORD bytes = item->FileNameLength, next = item->NextEntryOffset;
+        if (!bytes || bytes % sizeof(WCHAR) || bytes > sizeof(dir->entries) - dir->offset - offsetof(FILE_ID_BOTH_DIR_INFO, FileName)) return -1;
+        if (next) {
+            if (next % 8 || next < offsetof(FILE_ID_BOTH_DIR_INFO, FileName) + bytes ||
+                next > sizeof(dir->entries) - dir->offset - sizeof(FILE_ID_BOTH_DIR_INFO)) return -1;
+            dir->offset += next;
+        } else dir->refill = 1;
+        WCHAR *name = item->FileName;
+        if ((bytes == 2 && name[0] == L'.') || (bytes == 4 && name[0] == L'.' && name[1] == L'.')) continue;
+        int n = WideCharToMultiByte(CP_UTF8, WC_ERR_INVALID_CHARS, name, (int)(bytes / sizeof(WCHAR)),
+            dir->name, sizeof(dir->name) - 1, NULL, NULL);
+        if (n <= 0) return -1;
+        dir->name[n] = 0;
+        HANDLE child = plum_tree_win_child(dir->entry, name, bytes, FILE_READ_ATTRIBUTES, FILE_OPEN, 0, NULL);
+        if (child == INVALID_HANDLE_VALUE) return -1;
+        FILE_ATTRIBUTE_TAG_INFO attrs;
+        if (plum_tree_win_attrs(child, &attrs)) { CloseHandle(child); return -1; }
+        if (attrs.FileAttributes & FILE_ATTRIBUTE_REPARSE_POINT) {
+            WCHAR target[PLUM_PATH_MAX];
+            if (plum_tree_win_link(child, target, PLUM_PATH_MAX) ||
+                !WideCharToMultiByte(CP_UTF8, WC_ERR_INVALID_CHARS, target, -1, dir->link, sizeof(dir->link), NULL, NULL)) {
+                CloseHandle(child); return -1;
+            }
+            dir->kind = 3;
+        } else dir->kind = (attrs.FileAttributes & FILE_ATTRIBUTE_DIRECTORY) ? 2 : 1;
+        if (!CloseHandle(child)) return -1;
+#else
+        errno = 0;
+        struct dirent *item = readdir(dir->stream);
+        if (!item) return errno ? -1 : 0;
+        if (!strcmp(item->d_name, ".") || !strcmp(item->d_name, "..")) continue;
+        size_t n = strlen(item->d_name);
+        if (n >= sizeof(dir->name)) return -1;
+        memcpy(dir->name, item->d_name, n + 1);
+        struct stat st;
+        int parent = dirfd(dir->stream);
+        if (fstatat(parent, dir->name, &st, AT_SYMLINK_NOFOLLOW)) return -1;
+        dir->kind = S_ISREG(st.st_mode) ? 1 : S_ISDIR(st.st_mode) ? 2 : S_ISLNK(st.st_mode) ? 3 : 4;
+        if (dir->kind == 3) {
+            ssize_t count = readlinkat(parent, dir->name, dir->link, sizeof(dir->link));
+            if (count < 0 || (size_t)count >= sizeof(dir->link)) return -1;
+            dir->link[count] = 0;
+            struct stat after;
+            if (fstatat(parent, dir->name, &after, AT_SYMLINK_NOFOLLOW) || !plum_copy_same(&st, &after)) return -1;
+        }
+#endif
+        return dir->kind;
+    }
+}
+const char *plum_tree_dir_name(long long handle) {
+    plum_tree_directory *dir = (plum_tree_directory *)(intptr_t)handle;
+    return dir ? dir->name : "";
+}
+const char *plum_tree_dir_link(long long handle) {
+    plum_tree_directory *dir = (plum_tree_directory *)(intptr_t)handle;
+    return dir ? dir->link : "";
+}
+void plum_tree_dir_close(long long handle) {
+    plum_tree_directory *dir = (plum_tree_directory *)(intptr_t)handle;
+    if (!dir) return;
+#if defined(_WIN32)
+    CloseHandle(dir->entry);
+#else
+    closedir(dir->stream);
+#endif
+    free(dir);
+}
+
 long long os_copy_tree(const char *src, const char *dst) {
     return plum_copy_tree(src, dst) == 0 ? 0 : -1;
 }

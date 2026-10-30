@@ -17,8 +17,14 @@ relative-link resolution, and temporary-file replacement. Native Windows tests
 cover junction rejection, hard-link-safe replacement, allocation failures,
 Unicode entries, and supported symlink handling; they are wired into Windows
 CI and platform-smoke. Their execution on Windows remains to be verified.
-Hash migration, discovery, and overlay integrations remain pending; the
-compiler does not yet consume the resolver.
+The `treefs` compiler module now owns roots, entries, directory iterators,
+and incremental hash states through Plum handles. Native file hashing streams
+through a 64 KiB buffer and has fixed vectors for the legacy framing and
+plain content hashes. Owned read buffers and independent directory iterators
+have binary-data and repeated-enumeration tests on both platform adapters.
+The compiler self-tests exercise the handle wrappers and hash results.
+Hash-format migration, discovery, and overlay integrations remain pending;
+production compiler workflows do not yet consume these primitives.
 This intermediate implementation is not ready for release: preserved links
 must not be consumed by the old unrestricted compiler walks and overlays.
 

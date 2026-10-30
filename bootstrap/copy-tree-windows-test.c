@@ -60,6 +60,8 @@ static void junction(const char *name) {
 static DWORD handle_count(void) {
     DWORD count; assert(GetProcessHandleCount(GetCurrentProcess(), &count)); return count;
 }
+#include "tree-io-test.h"
+
 int main(void) {
     WCHAR tmp[MAX_PATH], root[MAX_PATH], cwd[4096];
     assert(GetCurrentDirectoryW(4096, cwd));
@@ -69,6 +71,7 @@ int main(void) {
     file("src/nested/data", "copied"); file("outside/keep", "untouched");
     assert(os_copy_tree("src/", "dst/") == 0);
     contents("dst/nested/data", "copied");
+    tree_io_tests();
     assert(os_copy_tree("src", "src") == -1);
     assert(os_copy_tree("src", "src/nested") == -1);
     assert(os_copy_tree("src/nested", "src") == -1);
