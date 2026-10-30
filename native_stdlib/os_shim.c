@@ -958,7 +958,10 @@ static int plum_remove_handle(PlumRemoveOpen open_child, HANDLE handle, unsigned
         FILE_DISPOSITION_INFO_EX disposition = {
             FILE_DISPOSITION_FLAG_DELETE | FILE_DISPOSITION_FLAG_IGNORE_READONLY_ATTRIBUTE
         };
-        if (SetFileInformationByHandle(handle, FileDispositionInfoEx, &disposition, sizeof(disposition))) return 0;
+        // MinGW hides this enum member at older SDK targets even though the
+        // exported function accepts its stable ABI value on supporting hosts.
+        const FILE_INFO_BY_HANDLE_CLASS disposition_class = (FILE_INFO_BY_HANDLE_CLASS)21;
+        if (SetFileInformationByHandle(handle, disposition_class, &disposition, sizeof(disposition))) return 0;
         plum_tree_os_error("mark read-only entry for deletion"); return -1;
     }
     FILE_DISPOSITION_INFO disposition = {TRUE};
