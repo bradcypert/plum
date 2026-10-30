@@ -16,6 +16,7 @@
 static int fail_enumeration;
 static int swap_source;
 static int swap_write;
+static int race_create;
 static int test_openat(int parent, const char *name, int flags, ...) {
     mode_t mode = 0;
     if (flags & O_CREAT) {
@@ -33,6 +34,11 @@ static int test_openat(int parent, const char *name, int flags, ...) {
         swap_write = 0;
         assert(renameat(parent, "write-victim", parent, "write-parked") == 0);
         assert(symlinkat("../outside/keep", parent, "write-victim") == 0);
+    }
+    if (race_create && (flags & O_CREAT) && !strncmp(name, ".plum-write-", 12)) {
+        race_create = 0;
+        int other = openat(parent, "new-victim", O_WRONLY | O_CREAT | O_EXCL, 0600);
+        assert(other >= 0 && write(other, "other", 5) == 5 && !close(other));
     }
     return openat(parent, name, flags, mode);
 }
@@ -143,6 +149,12 @@ int main(void) {
     contents("src/write-parked", "original");
     assert(descriptor_count() == resolver_baseline);
     assert(unlink("src/write-victim") == 0 && unlink("src/write-parked") == 0);
+    race_create = 1;
+    assert(plum_tree_write(held, "new-victim", 0, "", "editor", 6) == -1);
+    assert(!race_create);
+    contents("src/new-victim", "other");
+    assert(!unlink("src/new-victim"));
+    assert(descriptor_count() == resolver_baseline);
     plum_tree_entry_close(held);
     assert(os_copy_tree("src", "src") == -1);
     assert(os_copy_tree("src", "src/nested") == -1);

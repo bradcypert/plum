@@ -1,4 +1,5 @@
 use lexer;
+use treefs;
 use parser;
 
 // `plum.pkg` -- the package manifest.
@@ -120,14 +121,39 @@ pub let manifest_path (root: String): String = Path.join(root, manifest_name(())
 // a manifest that exists and cannot be read must never be silently
 // treated as a project without dependencies, because that would fail
 // much later as a pile of unbound variables.
-pub let read (root: String): Manifest = {
-    let path = manifest_path(root);
-    if !Result.unwrap_or(Os.exists(path), false) { no_manifest(()) }
+pub let read (root: String): Manifest =
+    if !Result.unwrap_or(Os.is_directory(root), false) { no_manifest(()) }
     else {
-        match Os.read_file(path) {
-            Err(e) => { panic_raw("failed to read ${path}: ${e}"); no_manifest(()) },
-            Ok(src) => parse(path, src),
-        }
+        let held = match treefs.open_root(root) {
+            Ok(r) => r, Err(e) => treefs.fail_root(e),
+        };
+        read_held(root, held)
+    }
+
+// Consumers that already acquired a root must load policy from that same
+// capability, not acquire the pathname a second time.
+pub let read_held (root: String) (held: treefs.TreeRoot): Manifest = {
+    let path = manifest_path(root);
+    let entries = match treefs.children(held, ".", false) {
+        Ok(xs) => xs, Err(e) => { panic_raw(e); [] },
+    };
+    let mut present = false;
+    for entry in entries { if entry.name == manifest_name(()) { present = true; () }; };
+    if !present { no_manifest(()) }
+    else {
+        let entry = match treefs.open_entry(held, manifest_name(()), false) {
+            Ok(e) => e, Err(e) => treefs.fail_entry("failed to read ${path}: ${e}"),
+        };
+        let src = match treefs.read_text(held, manifest_name(()), false, treefs.identity(entry)) {
+            Ok(s) => s, Err(e) => { panic_raw("failed to read ${path}: ${e}"); "" },
+        };
+        let manifest = parse(path, src);
+        if manifest.symlinks == "reject" {
+            match treefs.open_entry(held, manifest_name(()), true) {
+                Ok(_) => (), Err(e) => panic_raw("failed to read ${path}: ${e}"),
+            }
+        };
+        manifest
     }
 }
 

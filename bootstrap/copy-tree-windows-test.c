@@ -29,7 +29,9 @@ static void file(const char *path, const char *text) {
     assert(fclose(f) == 0);
 }
 static void contents(const char *path, const char *text) {
-    FILE *f = fopen(path, "rb"); assert(f);
+    FILE *f = fopen(path, "rb");
+    if (!f) fprintf(stderr, "cannot read %s: errno=%d, Windows error=%lu\n", path, errno, (unsigned long)GetLastError());
+    assert(f);
     for (size_t i = 0; text[i]; i++) assert(fgetc(f) == text[i]);
     assert(fgetc(f) == EOF && fclose(f) == 0);
 }
@@ -128,6 +130,27 @@ int main(void) {
     assert(os_copy_tree("one", "output") == 0);
     contents("outside/keep", "untouched"); contents("output/keep", "replacement");
     junction("src/escape");
+    // Names-only discovery can exclude a junction before resolving it;
+    // integrity inventory must still refuse its unsupported reparse data.
+    held = plum_tree_root_open("src"); assert(held);
+    long long inventory = plum_tree_dir_open_mode(plum_tree_entry_open(held, ".", 0), 0); assert(inventory);
+    int found_junction = 0;
+    for (;;) {
+        long long kind = plum_tree_dir_next(inventory); assert(kind >= 0);
+        if (!kind) break;
+        if (!strcmp(plum_tree_dir_name(inventory), "escape")) {
+            assert(kind == 3 && !*plum_tree_dir_link(inventory)); found_junction++;
+        }
+    }
+    assert(found_junction == 1);
+    plum_tree_dir_close(inventory);
+    inventory = plum_tree_dir_open(plum_tree_entry_open(held, ".", 0)); assert(inventory);
+    long long inventory_kind;
+    do { inventory_kind = plum_tree_dir_next(inventory); } while (inventory_kind > 0);
+    assert(inventory_kind == -1);
+    plum_tree_dir_close(inventory);
+    assert(!plum_tree_entry_open(held, "escape", 0));
+    plum_tree_entry_close(held);
     held = plum_tree_root_open("src");
     assert(held && !plum_tree_entry_open(held, "escape/keep", 0));
     plum_tree_entry_close(held);

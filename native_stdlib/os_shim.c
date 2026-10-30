@@ -1061,9 +1061,9 @@ static int plum_tree_win_link(HANDLE h, WCHAR *target, size_t capacity, int allo
     }
     return !allow_absolute && target[0] == L'/' ? -1 : 0;
 }
-typedef struct { HANDLE parent; WCHAR name[PLUM_PATH_MAX]; } plum_tree_location;
-static HANDLE plum_tree_resolve_at(HANDLE root, const char *relative, int reject_links, plum_tree_location *location) {
-    if (location) location->parent = INVALID_HANDLE_VALUE;
+typedef struct { HANDLE parent; WCHAR name[PLUM_PATH_MAX]; int missing; } plum_tree_location;
+static HANDLE plum_tree_resolve_at(HANDLE root, const char *relative, int reject_links, plum_tree_location *location, int allow_missing) {
+    if (location) { location->parent = INVALID_HANDLE_VALUE; location->missing = 0; }
     WCHAR pending[PLUM_PATH_MAX], target[PLUM_PATH_MAX];
     int n = plum_tree_win_path(relative, pending, PLUM_PATH_MAX);
     if (n <= 1) return INVALID_HANDLE_VALUE;
@@ -1095,6 +1095,10 @@ static HANDLE plum_tree_resolve_at(HANDLE root, const char *relative, int reject
         HANDLE child = plum_tree_win_child(parents[depth], pending,
             (DWORD)(wcslen(pending) * sizeof(WCHAR)), GENERIC_READ, FILE_OPEN, 0, &failure);
         if (child == INVALID_HANDLE_VALUE) {
+            if (location && allow_missing && !more && failure == (NTSTATUS)0xc0000034) {
+                location->parent = parents[depth]; parents[depth] = INVALID_HANDLE_VALUE;
+                location->missing = 1; wcscpy(location->name, pending);
+            }
             if (reject_links == 2 && failure == (NTSTATUS)0xc0000034) {
                 char tail[PLUM_PATH_MAX * 4];
                 if (slash) *slash = L'/';
@@ -1134,7 +1138,7 @@ static HANDLE plum_tree_resolve_at(HANDLE root, const char *relative, int reject
     return result;
 }
 static HANDLE plum_tree_resolve(HANDLE root, const char *relative, int reject_links) {
-    return plum_tree_resolve_at(root, relative, reject_links, NULL);
+    return plum_tree_resolve_at(root, relative, reject_links, NULL, 0);
 }
 long long plum_tree_root_open(const char *path) {
     HANDLE h = plum_copy_root(path);
@@ -1170,14 +1174,14 @@ static int plum_tree_win_replaceable(HANDLE parent, const WCHAR *name, DWORD byt
     if (!CloseHandle(h)) rc = -1;
     return rc;
 }
-static int plum_tree_win_publish(HANDLE temporary, const WCHAR *name, DWORD bytes) {
+static int plum_tree_win_publish_as(HANDLE temporary, const WCHAR *name, DWORD bytes, int replace) {
     typedef NTSTATUS (NTAPI *Rename)(HANDLE, PIO_STATUS_BLOCK, PVOID, ULONG, FILE_INFORMATION_CLASS);
     Rename api = (Rename)(void *)GetProcAddress(GetModuleHandleW(L"ntdll.dll"), "NtSetInformationFile");
     if (!api) return -1;
     size_t size = sizeof(FILE_RENAME_INFORMATION) + bytes;
     FILE_RENAME_INFORMATION *info = calloc(1, size);
     if (!info) return -1;
-    info->ReplaceIfExists = TRUE;
+    info->ReplaceIfExists = replace ? TRUE : FALSE;
     // A bare name renames within the existing handle's parent directory.
     info->RootDirectory = NULL; info->FileNameLength = bytes;
     memcpy(info->FileName, name, bytes);
@@ -1185,6 +1189,9 @@ static int plum_tree_win_publish(HANDLE temporary, const WCHAR *name, DWORD byte
     NTSTATUS status = api(temporary, &result, info, (ULONG)size, FileRenameInformation);
     free(info);
     return status < 0 ? -1 : 0;
+}
+static int plum_tree_win_publish(HANDLE temporary, const WCHAR *name, DWORD bytes) {
+    return plum_tree_win_publish_as(temporary, name, bytes, 1);
 }
 static int plum_tree_win_leaf(HANDLE input, HANDLE parent, const WCHAR *name,
                               DWORD bytes, const FILE_ATTRIBUTE_TAG_INFO *attrs,
@@ -1338,9 +1345,9 @@ static int plum_copy_root(const char *path) {
 // the resolved entry; callers must use that fd, never reopen the input path.
 // Links are interpreted ourselves, so absolute targets and attempts to climb
 // above the held root cannot escape through OS pathname resolution.
-typedef struct { int parent; char name[PLUM_PATH_MAX]; } plum_tree_location;
-static int plum_tree_resolve_at(int root, const char *relative, int reject_links, plum_tree_location *location) {
-    if (location) location->parent = -1;
+typedef struct { int parent; char name[PLUM_PATH_MAX]; int missing; } plum_tree_location;
+static int plum_tree_resolve_at(int root, const char *relative, int reject_links, plum_tree_location *location, int allow_missing) {
+    if (location) { location->parent = -1; location->missing = 0; }
     int parents[PLUM_COPY_DEPTH];
     unsigned depth = 0, links = 0;
     int result = -1;
@@ -1371,6 +1378,10 @@ static int plum_tree_resolve_at(int root, const char *relative, int reject_links
         }
         struct stat before, after;
         if (fstatat(parents[depth], pending, &before, AT_SYMLINK_NOFOLLOW)) {
+            if (location && allow_missing && !more && errno == ENOENT) {
+                location->parent = parents[depth]; parents[depth] = -1;
+                location->missing = 1; strcpy(location->name, pending);
+            }
             if (reject_links == 2 && errno == ENOENT) {
                 if (slash) *slash = '/';
                 if (!plum_tree_missing_tail(pending, depth)) {
@@ -1421,7 +1432,7 @@ static int plum_tree_resolve_at(int root, const char *relative, int reject_links
 // Native owned-entry ABI. Zero is failure; successful values are fd + 1.
 // These are internal compiler primitives, not additions to the public Os API.
 static int plum_tree_resolve(int root, const char *relative, int reject_links) {
-    return plum_tree_resolve_at(root, relative, reject_links, NULL);
+    return plum_tree_resolve_at(root, relative, reject_links, NULL, 0);
 }
 long long plum_tree_root_open(const char *path) {
     int fd = plum_copy_root(path);
@@ -1649,17 +1660,19 @@ const char *plum_tree_entry_identity(long long entry) {
 // Replace the resolved regular target, leaving any traversed symlink intact.
 // Both temporary creation and publication use the held target parent. The
 // expected identity prevents writing a file replaced since discovery/read.
+// An empty expected identity requests exclusive creation of a missing target.
 long long plum_tree_write(long long root, const char *relative, long long reject_links,
                           const char *expected, const char *bytes, long long size) {
-    if (!root || !expected || !*expected || size < 0 || (unsigned long long)size > SIZE_MAX) return -1;
+    if (!root || !expected || size < 0 || (unsigned long long)size > SIZE_MAX) return -1;
     plum_tree_location location;
     int rc = -1;
 #if defined(_WIN32)
-    HANDLE input = plum_tree_resolve_at((HANDLE)(intptr_t)root, relative, reject_links != 0, &location);
+    HANDLE input = plum_tree_resolve_at((HANDLE)(intptr_t)root, relative, reject_links != 0, &location, !*expected);
     HANDLE output = INVALID_HANDLE_VALUE;
-    if (input == INVALID_HANDLE_VALUE) return -1;
-    if (location.parent == INVALID_HANDLE_VALUE || plum_tree_entry_kind((long long)(intptr_t)input) != 1 ||
-        strcmp(plum_tree_entry_identity((long long)(intptr_t)input), expected)) goto win_done;
+    if (input == INVALID_HANDLE_VALUE && !location.missing) return -1;
+    if (location.parent == INVALID_HANDLE_VALUE || (!location.missing &&
+        (plum_tree_entry_kind((long long)(intptr_t)input) != 1 ||
+         strcmp(plum_tree_entry_identity((long long)(intptr_t)input), expected)))) goto win_done;
     DWORD name_bytes = (DWORD)(wcslen(location.name) * sizeof(WCHAR));
     for (unsigned attempt = 0; attempt < 1024; attempt++) {
         WCHAR temporary[80];
@@ -1683,10 +1696,10 @@ long long plum_tree_write(long long root, const char *relative, long long reject
     if (!FlushFileBuffers(output)) goto win_done;
     // The read handle pins the original until the complete replacement exists.
     // Windows requires releasing its delete-denying share before publication.
-    if (!CloseHandle(input)) { input = INVALID_HANDLE_VALUE; goto win_done; }
+    if (input != INVALID_HANDLE_VALUE && !CloseHandle(input)) { input = INVALID_HANDLE_VALUE; goto win_done; }
     input = INVALID_HANDLE_VALUE;
-    if (plum_tree_win_replaceable(location.parent, location.name, name_bytes) ||
-        plum_tree_win_publish(output, location.name, name_bytes)) goto win_done;
+    if ((!location.missing && plum_tree_win_replaceable(location.parent, location.name, name_bytes)) ||
+        plum_tree_win_publish_as(output, location.name, name_bytes, !location.missing)) goto win_done;
     rc = 0;
 win_done:
     if (output != INVALID_HANDLE_VALUE) {
@@ -1700,13 +1713,14 @@ win_done:
     if (location.parent != INVALID_HANDLE_VALUE) CloseHandle(location.parent);
 #else
     if (root < 1 || root > INT32_MAX) return -1;
-    int input = plum_tree_resolve_at((int)(root - 1), relative, reject_links != 0, &location);
-    if (input < 0) return -1;
+    int input = plum_tree_resolve_at((int)(root - 1), relative, reject_links != 0, &location, !*expected);
+    if (input < 0 && !location.missing) return -1;
     int output = -1;
     char temporary[80] = {0};
     struct stat info, current;
-    if (location.parent < 0 || fstat(input, &info) || !S_ISREG(info.st_mode) ||
-        strcmp(plum_tree_entry_identity((long long)input + 1), expected)) goto posix_done;
+    if (location.parent < 0 || (!location.missing &&
+        (fstat(input, &info) || !S_ISREG(info.st_mode) ||
+         strcmp(plum_tree_entry_identity((long long)input + 1), expected)))) goto posix_done;
     for (unsigned attempt = 0; attempt < 1024; attempt++) {
         snprintf(temporary, sizeof(temporary), ".plum-write-%ld-%u", (long)getpid(), attempt);
         if (!strcmp(temporary, location.name)) continue;
@@ -1723,10 +1737,17 @@ win_done:
         if (wrote <= 0) goto posix_done;
         offset += (size_t)wrote;
     }
-    if (fchmod(output, info.st_mode & 0777) || fsync(output)) goto posix_done;
-    if (fstatat(location.parent, location.name, &current, AT_SYMLINK_NOFOLLOW) ||
-        !S_ISREG(current.st_mode) || !plum_copy_same(&info, &current)) goto posix_done;
-    if (renameat(location.parent, temporary, location.parent, location.name)) goto posix_done;
+    if ((!location.missing && fchmod(output, info.st_mode & 0777)) || fsync(output)) goto posix_done;
+    if (location.missing) {
+        // linkat publishes only if the leaf is still absent. A racing creator
+        // must never be overwritten by an unsaved editor buffer.
+        if (linkat(location.parent, temporary, location.parent, location.name, 0) ||
+            unlinkat(location.parent, temporary, 0)) goto posix_done;
+    } else {
+        if (fstatat(location.parent, location.name, &current, AT_SYMLINK_NOFOLLOW) ||
+            !S_ISREG(current.st_mode) || !plum_copy_same(&info, &current)) goto posix_done;
+        if (renameat(location.parent, temporary, location.parent, location.name)) goto posix_done;
+    }
     rc = 0;
 posix_done:
     // Only an exclusively created temporary belongs to this operation.
@@ -1734,7 +1755,7 @@ posix_done:
         if (rc) unlinkat(location.parent, temporary, 0);
         if (close(output)) rc = -1;
     }
-    close(input);
+    if (input >= 0) close(input);
     if (location.parent >= 0) close(location.parent);
 #endif
     return rc;
@@ -1954,13 +1975,14 @@ typedef struct {
     DIR *stream;
 #endif
     char name[PLUM_PATH_MAX], link[PLUM_PATH_MAX];
-    int kind;
+    int kind, read_links;
 } plum_tree_directory;
-long long plum_tree_dir_open(long long entry) {
+long long plum_tree_dir_open_mode(long long entry, long long read_links) {
     if (!entry) return 0;
     plum_tree_directory *dir = NULL;
     if (plum_tree_entry_kind(entry) == 2) dir = calloc(1, sizeof(*dir));
     if (!dir) { plum_tree_entry_close(entry); return 0; }
+    dir->read_links = read_links != 0;
 #if defined(_WIN32)
     // An empty NT relative name opens the held directory itself with a new
     // file object (and independent enumeration position). ReOpenFile rejects
@@ -1976,6 +1998,7 @@ long long plum_tree_dir_open(long long entry) {
 #endif
     return (long long)(intptr_t)dir;
 }
+long long plum_tree_dir_open(long long entry) { return plum_tree_dir_open_mode(entry, 1); }
 long long plum_tree_dir_next(long long handle) {
     plum_tree_directory *dir = (plum_tree_directory *)(intptr_t)handle;
     if (!dir) return -1;
@@ -2002,14 +2025,21 @@ long long plum_tree_dir_next(long long handle) {
             dir->name, sizeof(dir->name) - 1, NULL, NULL);
         if (n <= 0) return -1;
         dir->name[n] = 0;
+        if (!dir->read_links) {
+            // Enumeration metadata is enough for exclusions; resolve selected
+            // entries later through the held root, with fresh type checks.
+            dir->kind = (item->FileAttributes & FILE_ATTRIBUTE_REPARSE_POINT) ? 3 :
+                (item->FileAttributes & FILE_ATTRIBUTE_DIRECTORY) ? 2 : 1;
+            return dir->kind;
+        }
         HANDLE child = plum_tree_win_child(dir->entry, name, bytes, FILE_READ_ATTRIBUTES, FILE_OPEN, 0, NULL);
         if (child == INVALID_HANDLE_VALUE) return -1;
         FILE_ATTRIBUTE_TAG_INFO attrs;
         if (plum_tree_win_attrs(child, &attrs)) { CloseHandle(child); return -1; }
         if (attrs.FileAttributes & FILE_ATTRIBUTE_REPARSE_POINT) {
             WCHAR target[PLUM_PATH_MAX];
-            if (plum_tree_win_link(child, target, PLUM_PATH_MAX, 1) ||
-                !WideCharToMultiByte(CP_UTF8, WC_ERR_INVALID_CHARS, target, -1, dir->link, sizeof(dir->link), NULL, NULL)) {
+            if (dir->read_links && (plum_tree_win_link(child, target, PLUM_PATH_MAX, 1) ||
+                !WideCharToMultiByte(CP_UTF8, WC_ERR_INVALID_CHARS, target, -1, dir->link, sizeof(dir->link), NULL, NULL))) {
                 CloseHandle(child); return -1;
             }
             dir->kind = 3;
@@ -2027,7 +2057,7 @@ long long plum_tree_dir_next(long long handle) {
         int parent = dirfd(dir->stream);
         if (fstatat(parent, dir->name, &st, AT_SYMLINK_NOFOLLOW)) return -1;
         dir->kind = S_ISREG(st.st_mode) ? 1 : S_ISDIR(st.st_mode) ? 2 : S_ISLNK(st.st_mode) ? 3 : 4;
-        if (dir->kind == 3) {
+        if (dir->kind == 3 && dir->read_links) {
             ssize_t count = readlinkat(parent, dir->name, dir->link, sizeof(dir->link));
             if (count < 0 || (size_t)count >= sizeof(dir->link)) return -1;
             dir->link[count] = 0;

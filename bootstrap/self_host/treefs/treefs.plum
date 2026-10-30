@@ -20,6 +20,7 @@ extern "C" {
     fn plum_tree_entry_identity(entry: Int) -> CStr;
     fn plum_tree_file_hash(entry: Int, relative: CStr, version: Int) -> CStr;
     fn plum_tree_dir_open(entry: Int) -> Int;
+    fn plum_tree_dir_open_mode(entry: Int, read_links: Int) -> Int;
     fn plum_tree_dir_next(dir: Int) -> Int;
     fn plum_tree_dir_name(dir: Int) -> CStr;
     fn plum_tree_dir_link(dir: Int) -> CStr;
@@ -59,9 +60,17 @@ pub let file_hash (entry: TreeEntry) (relative: String) (version: Int): Result[S
 
 // The raw entry transfers into the native iterator even if creation fails.
 // Do not first wrap it in TreeEntry: that would give the descriptor two owners.
-pub let entries (root: TreeRoot) (relative: String) (reject_links: Bool): Result[Array[EntryInfo], String] = unsafe {
+pub let entries (root: TreeRoot) (relative: String) (reject_links: Bool): Result[Array[EntryInfo], String] =
+    directory_entries(root, relative, reject_links, true)
+
+// Discovery decides exclusions before resolving links. Integrity inventory
+// instead requests link text for every included record.
+pub let children (root: TreeRoot) (relative: String) (reject_links: Bool): Result[Array[EntryInfo], String] =
+    directory_entries(root, relative, reject_links, false)
+
+let directory_entries (root: TreeRoot) (relative: String) (reject_links: Bool) (read_links: Bool): Result[Array[EntryInfo], String] = unsafe {
     let entry = plum_tree_entry_open(TreeRoot.raw(root), relative.as_cstr(), if reject_links { 1 } else { 0 });
-    let raw = plum_tree_dir_open(entry);
+    let raw = plum_tree_dir_open_mode(entry, if read_links { 1 } else { 0 });
     if raw == 0 { Err("cannot enumerate ${relative} inside filesystem root") }
     else { read_entries(TreeDirectory.from_raw(raw), relative, ref([])) }
 }

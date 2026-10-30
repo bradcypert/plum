@@ -2547,33 +2547,69 @@ let test_dispatch_arms (names: Array[String]) (i: Int) (acc: String): String =
 // `posix` earns its place: the case that prompted this is a terminal
 // shim that is POSIX-only, and writing it twice under `linux/` and
 // `macos/` would be two copies of one file.
-let native_c_files (dir: String) (os: String): Array[String] =
-    match Os.list_dir(dir) {
-        Err(_) => [],
-        Ok(entries) => native_c_acc(dir, os, entries, 0, []),
+struct NativeFrame { relative: String, entries: Array[treefs.EntryInfo], index: Int }
+
+let native_c_files (project: String) (os: String) (builder: SourceBuilder): Array[String] =
+    if !Result.unwrap_or(Os.is_directory(project), false) { [] }
+    else {
+        let scope = source_scope(project, "", "");
+        let children = match treefs.children(scope.root, ".", scope.reject_links) {
+            Ok(xs) => xs, Err(e) => { panic_raw(e); [] },
+        };
+        let mut present = false;
+        for info in children { if info.name == "native" { present = true; () }; };
+        if !present { [] }
+        else {
+            let entry = source_entry(scope, "native");
+            if treefs.kind(entry) != 2 { panic_raw("native source path is not a directory: ${project}/native") };
+            source_record(builder, entry, "${project}/native");
+            native_c_walk(scope, os, builder, [native_frame(scope, "native")], ref([]))
+        }
     }
 
-let native_c_acc (dir: String) (os: String) (entries: Array[String]) (i: Int) (acc: Array[String]): Array[String] =
-    if i >= entries.len() { acc }
-    else if entries[i] == "." || entries[i] == ".." { native_c_acc(dir, os, entries, i + 1, acc) }
+let native_frame (scope: SourceScope) (relative: String): NativeFrame = {
+    let entries = match treefs.children(scope.root, relative, scope.reject_links) {
+        Ok(xs) => xs, Err(e) => { panic_raw(e); [] },
+    };
+    NativeFrame { relative: relative, entries: entries, index: 0 }
+}
+
+// Discovery is confined; invoking the user's native compiler remains a
+// trusted operation, including its own header/include and assembly behavior.
+let native_c_walk (scope: SourceScope) (os: String) (builder: SourceBuilder) (stack: Array[NativeFrame]) (found: Ref[Array[String]]): Array[String] =
+    if stack.len() == 0 { found.get() }
     else {
-        let full = Path.join(dir, entries[i]);
-        if Result.unwrap_or(Os.is_directory(full), false) {
-            // An unrecognized subdirectory is an ERROR, not something
-            // skipped. `native/win32/` or `native/darwin/` would
-            // otherwise compile on no target at all, and the symptom
-            // would be a linker error naming a symbol whose source is
-            // sitting right there.
-            if !native_known_dir(entries[i]) {
-                panic_raw("native/${entries[i]}: not a target directory.\n  Plum understands linux, macos, windows and posix. A `.c` file directly under `native/` is compiled for every target.")
-            };
-            let picked = if native_applies(entries[i], os) { native_c_files(full, os) } else { [] };
-            native_c_acc(dir, os, entries, i + 1, Array.concat(acc, picked))
+        let frame = stack[stack.len() - 1];
+        let rest = Array.slice(stack, 0, stack.len() - 1);
+        if frame.index >= frame.entries.len() { native_c_walk(scope, os, builder, rest, found) }
+        else {
+            let info = frame.entries[frame.index];
+            let relative = Path.join(frame.relative, info.name);
+            let full = Path.join(scope.path, relative);
+            let pending = rest.push(NativeFrame { relative: frame.relative, entries: frame.entries, index: frame.index + 1 });
+            // Named target exclusions apply before resolving a directory link.
+            if native_known_dir(info.name) && !native_applies(info.name, os) && info.kind != 1 {
+                native_c_walk(scope, os, builder, pending, found)
+            } else {
+                let entry = source_entry(scope, relative);
+                let kind = treefs.kind(entry);
+                if kind == 2 {
+                    if !native_known_dir(info.name) {
+                        panic_raw("native/${info.name}: not a target directory.\n  Plum understands linux, macos, windows and posix. A `.c` file directly under `native/` is compiled for every target.")
+                    };
+                    if stack.len() >= 127 { panic_raw("native source directory depth exceeds 128 at ${full}") };
+                    source_record(builder, entry, full);
+                    native_c_walk(scope, os, builder, pending.push(native_frame(scope, relative)), found)
+                } else if kind == 1 {
+                    if info.name.ends_with(".c") {
+                        source_record(builder, entry, full);
+                        let mut files = found.get(); found.set([]);
+                        files = files.push(full); found.set(files);
+                    };
+                    native_c_walk(scope, os, builder, pending, found)
+                } else { panic_raw("unsupported native source entry: ${full}"); [] }
+            }
         }
-        // Headers and anything else are left alone: they are included
-        // BY the sources rather than compiled alongside them.
-        else if entries[i].ends_with(".c") { native_c_acc(dir, os, entries, i + 1, acc.push(full)) }
-        else { native_c_acc(dir, os, entries, i + 1, acc) }
     }
 
 // A dependency's module, as the rest of the program sees it.
@@ -3054,14 +3090,15 @@ let link_args_resolved (argv: Array[String]) (dir: String) (target: String) (dep
     // 0.0.34 there was nowhere to say so, which meant every consumer had
     // to know an implementation detail of every dependency. See #42.
     let own = pkg.read(dir);
-    let own_cs = native_c_files(Path.join(dir, "native"), os);
+    let native_builder = source_builder();
+    let own_cs = native_c_files(dir, os, native_builder);
     let own_libs = pkg.manifest_link_for(own, os);
     let mut cs = Array.concat(collect_flag(argv, "--link-c", 0, []), own_cs);
     let mut libs = Array.concat(collect_flag(argv, "--link-lib", 0, []), own_libs);
     let mut tls = command_native_tls(argv) || pkg.native_needs_tls(own, own_cs.len() > 0 || own_libs.len() > 0);
     for dep in deps {
         let m = pkg.read(dep.path);
-        let dep_cs = native_c_files(Path.join(dep.path, "native"), os);
+        let dep_cs = native_c_files(dep.path, os, native_builder);
         let dep_libs = pkg.manifest_link_for(m, os);
         cs = Array.concat(cs, dep_cs);
         libs = Array.concat(libs, dep_libs);
@@ -3622,7 +3659,7 @@ let source_scope (dir: String) (owner: String) (dep_name: String): SourceScope =
         Ok(r) => r,
         Err(e) => treefs.fail_root(e),
     };
-    SourceScope { root: root, path: dir, owner: owner, dep_name: dep_name, reject_links: pkg.read(dir).symlinks == "reject", include_hidden: false }
+    SourceScope { root: root, path: dir, owner: owner, dep_name: dep_name, reject_links: pkg.read_held(dir, root).symlinks == "reject", include_hidden: false }
 }
 
 let source_entry (scope: SourceScope) (relative: String): treefs.TreeEntry =
@@ -3637,7 +3674,7 @@ let source_record (builder: SourceBuilder) (entry: treefs.TreeEntry) (path: Stri
     }
 
 let source_frame (scope: SourceScope) (relative: String) (module_name: String) (assign_modules: Bool): SourceFrame = {
-    let entries = match treefs.entries(scope.root, relative, scope.reject_links) {
+    let entries = match treefs.children(scope.root, relative, scope.reject_links) {
         Ok(xs) => xs,
         Err(e) => { panic_raw("cannot discover sources at ${scope.path}/${relative}: ${e}"); [] },
     };

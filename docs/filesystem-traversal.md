@@ -28,7 +28,7 @@ Package hashing and validation now consume these primitives, including
 versioned manifests, legacy compatibility, typed version 2 records, and
 validation before fetch/vendor publication. Independent Python integration
 tests compare both formats with actual fetch output and exercise link errors.
-Native-source discovery and overlay integrations remain pending.
+Overlay integration remains pending.
 This intermediate implementation is not ready for release: preserved links
 must not be consumed by the old unrestricted compiler walks and overlays.
 
@@ -53,6 +53,15 @@ the held parent, preserving traversed symlinks and unrelated hardlinks.
 POSIX target permission bits are retained. Native tests cover a target swap
 before publication, stale identities, and Windows publication allocation
 failure; the formatter integration harness runs in platform-smoke.
+Native C discovery now uses a bounded stack and an identity index, preserves
+platform selection/order, and reports enumeration failures. It passes paths
+to a trusted native compiler: that compiler's includes, assembly and file
+access are not sandboxed. Names-only discovery defers link inspection until
+a consumer has applied exclusions, while package integrity inventory still
+reads link records. Manifests are read through held roots too: dangling or
+escaping manifest links are errors, and `reject` also rejects a linked
+manifest. The writer supports exclusive creation of missing confined targets
+for unsaved buffers; a racing creator is never overwritten.
 
 ## User-visible contract
 
@@ -194,7 +203,7 @@ buffer containing framing and contents.
 Use an explicit traversal stack and a documented depth ceiling (initially
 128 directory levels). Bound link expansion and directory alias work too.
 Active directory handles and traversal state grow with depth. Source identity
-tracking grows with discovered source count. Deterministic hashing needs
+tracking grows with discovered source and directory count. Deterministic hashing needs
 sorted entry metadata: account explicitly for its path/name storage, rather
 than claiming the entire operation has constant memory. Stream record
 digests into the final hash instead of retaining an Array[Int] of all hashes.

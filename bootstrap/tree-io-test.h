@@ -74,7 +74,7 @@ static void tree_io_tests(void) {
     assert(fputs("before", writer) >= 0 && !fclose(writer));
 #if defined(_WIN32)
     assert(CreateHardLinkA("outside/writer-hardlink", "src/nested/writer", NULL));
-    int linked = CreateSymbolicLinkA("src/writer-link", "nested/writer", 2) != 0;
+    int linked = CreateSymbolicLinkA("src/writer-link", "nested\\writer", 2) != 0;
 #else
     assert(link("src/nested/writer", "outside/writer-hardlink") == 0);
     assert(symlink("nested/writer", "src/writer-link") == 0);
@@ -106,6 +106,24 @@ static void tree_io_tests(void) {
     }
     assert(!remove("src/nested/writer"));
     assert(!remove("outside/writer-hardlink"));
+    assert(!plum_tree_write(root, "nested/new-buffer.plum", 0, "", "new", 3));
+    assert(plum_tree_write(root, "nested/new-buffer.plum", 0, "", "clobber", 7) == -1);
+    contents("src/nested/new-buffer.plum", "new");
+    assert(plum_tree_write(root, "absent/new-buffer.plum", 0, "", "new", 3) == -1);
+    assert(plum_tree_write(root, "../outside/new-buffer.plum", 0, "", "new", 3) == -1);
+    assert(!remove("src/nested/new-buffer.plum"));
+#if defined(_WIN32)
+    int new_link = CreateSymbolicLinkA("src/new-link", "nested\\new-target", 2) != 0;
+#else
+    assert(!symlink("nested/new-target", "src/new-link"));
+    int new_link = 1;
+#endif
+    if (new_link) {
+        assert(plum_tree_write(root, "new-link", 1, "", "new", 3) == -1);
+        assert(!plum_tree_write(root, "new-link", 0, "", "new", 3));
+        contents("src/nested/new-target", "new");
+        assert(!remove("src/new-link") && !remove("src/nested/new-target"));
+    }
     plum_tree_entry_close(root);
     assert(remove("src/nested/big") == 0);
 }
