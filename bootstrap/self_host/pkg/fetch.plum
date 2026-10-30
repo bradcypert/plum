@@ -486,19 +486,23 @@ let git_staging (d: Dep) (scratch: String) (args: Array[String]) (what: String):
 
 let ensure_parent (dir: String): Unit = ensure_dir(Path.dirname(dir))
 
-// Every prefix in turn: `Os.make_dir` makes one level, and a cache path
-// is six deep on a first fetch.
-let ensure_dir (path: String): Unit =
-    ensure_acc(String.split(Path.clean(path), Path.separator()), 0, "")
+// Work backwards with Path.dirname so drive and UNC roots stay intact.
+// Splitting/rejoining components turns `C:\cache` into drive-relative
+// `C:cache`; suppressing mkdir errors then hides the missing staging parent.
+let ensure_dir (path: String): Unit = ensure_directory(Path.clean(path), 0)
 
-let ensure_acc (parts: Array[String]) (i: Int) (acc: String): Unit =
-    if i >= parts.len() { () }
+let ensure_directory (path: String) (depth: Int): Unit =
+    if Result.unwrap_or(Os.is_directory(path), false) { () }
+    else if depth >= 128 { panic_raw("package directory creation exceeds 128 levels at ${path}") }
     else {
-        let here = if String.is_empty(acc) && String.is_empty(parts[i]) { Path.separator() }
-            else if String.is_empty(acc) { parts[i] }
-            else { Path.join(acc, parts[i]) };
-        match Os.make_dir(here) { Ok(_) => (), Err(_) => () };
-        ensure_acc(parts, i + 1, here)
+        let parent = Path.dirname(path);
+        if parent == path { panic_raw("package directory root is unavailable: ${path}") };
+        ensure_directory(parent, depth + 1);
+        match Os.make_dir(path) {
+            Ok(_) => (),
+            Err(e) => if Result.unwrap_or(Os.is_directory(path), false) { () }
+                else { panic_raw("cannot create package directory ${path}: ${e}") },
+        }
     }
 
 // These pairs all lost identity in the old display-path encoding. Test

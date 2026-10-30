@@ -39,12 +39,44 @@ with tempfile.TemporaryDirectory(prefix="plum-package-stage-") as temporary:
     env = {**os.environ, "PLUM_CACHE": native_path(cache)}
     def command(action):
         return [compiler, action, native_path(project)]
-    def concurrent(action):
-        jobs = [subprocess.Popen(command(action), env=env, stdout=subprocess.PIPE,
-                                 stderr=subprocess.PIPE) for _ in range(4)]
-        for job in jobs:
-            out, err = job.communicate(timeout=90)
-            assert job.returncode == 0, (action, out, err)
+    def concurrent(action, environment=env, target=project):
+        jobs = [subprocess.Popen([compiler, action, native_path(target)], env=environment,
+                                 stdout=subprocess.PIPE, stderr=subprocess.PIPE) for _ in range(4)]
+        results = []
+        try:
+            for job in jobs:
+                out, err = job.communicate(timeout=90)
+                results.append((job.returncode, out, err))
+        finally:
+            for job in jobs:
+                if job.poll() is None:
+                    job.kill()
+                    job.communicate()
+        for code, out, err in results:
+            assert code == 0, (action, code, out, err)
+    # Start with no package parents at all. Predictable-scratch preservation
+    # below intentionally precreates them and cannot test root-aware mkdir.
+    cold_cache = root / "cold" / "cache"
+    cold_env = {**os.environ, "PLUM_CACHE": native_path(cold_cache)}
+    concurrent("fetch", cold_env)
+    cold_payload = cold_cache / "pkg" / "v2" / identity(rev) / rev
+    assert (cold_payload / "hello" / "main.plum").is_file()
+    assert not list(cold_cache.rglob(".partial-*"))
+    cold_project = root / "cold-project"
+    cold_project.mkdir()
+    (cold_project / "plum.pkg").write_text((project / "plum.pkg").read_text())
+    concurrent("vendor", cold_env, cold_project)
+    assert (cold_project / "vendor" / "v2" / identity(rev) / rev / "hello" / "main.plum").is_file()
+    assert not list(cold_project.rglob(".partial-*"))
+
+    blocked = root / "blocked-cache"
+    blocked.write_text("preserve this file")
+    failed = subprocess.run(command("fetch"), env={**env, "PLUM_CACHE": native_path(blocked)},
+                            capture_output=True, timeout=90)
+    assert failed.returncode != 0 and b"cannot create package directory" in failed.stdout + failed.stderr, (
+        "blocked cache parent", failed.returncode, failed.stdout, failed.stderr)
+    assert blocked.read_text() == "preserve this file"
+
     destinations = [cache / "pkg" / "v2" / identity(rev) / rev,
                     project / "vendor" / "v2" / identity(rev) / rev]
     markers = []
@@ -75,4 +107,4 @@ with tempfile.TemporaryDirectory(prefix="plum-package-stage-") as temporary:
     for marker in markers:
         assert marker.read_text() == "leave this alone"
 
-print("package-staging: concurrent fetch/vendor and owned cleanup passed")
+print("package-staging: cold parents, concurrent fetch/vendor and owned cleanup passed")
