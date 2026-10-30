@@ -1167,11 +1167,11 @@ static int plum_cache_oldest(const void *a, const void *b) {
 
 long long plum_cache_prune(const char *root, long long limit) {
     if (limit < 0) return 0;
-    const char *kinds[]={"ir","obj","shims"};
+    const char *kinds[]={"ir","obj","shims","staging"};
     plum_cache_entry *entries=NULL; size_t count=0, capacity=0;
     uint64_t total=0; long long removed=0; time_t now=time(NULL);
     char parent[PLUM_PATH_MAX], path[PLUM_PATH_MAX]; struct stat st;
-    for (size_t k=0;k<3;k++) {
+    for (size_t k=0;k<sizeof(kinds)/sizeof(kinds[0]);k++) {
         if (plum_join(parent,sizeof(parent),root,kinds[k]) != 0
             || plum_cache_stat_private(parent,&st) != 0 || !S_ISDIR(st.st_mode)) continue;
         DIR *d=opendir(parent); if (!d) continue;

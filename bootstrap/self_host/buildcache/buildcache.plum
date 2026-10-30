@@ -123,32 +123,37 @@ pub let load_object (key: String) (out: String): Bool =
         Some(rows) => copy(Path.join(entry("obj", key), "data"), out, rows[1]),
     }
 
-// A unique directory on the destination filesystem; rename publishes all
-// files together. A losing concurrent writer removes only its own staging
-// directory. Readers copy/verify objects before the linker uses them.
+// Prepare and retire entries in a separate staging namespace on the same
+// filesystem. Cleanup never traverses a live key: stale validation must not
+// let one writer partially delete another writer's newly published entry.
+// Windows cleanup also briefly locks the staging parent against writes, so
+// that parent must not be the ir/obj directory receiving publications.
 pub let store (kind: String) (key: String) (file: String) (reads: String): Unit = {
     let parent = Path.join(root(()), kind);
-    if !make_dirs(parent) { diagnostic("store unavailable") }
+    let staging = Path.join(root(()), "staging");
+    if !make_dirs(parent) || !make_dirs(staging) { diagnostic("store unavailable") }
     else {
-        let stage = temp(parent);
+        let stage = temp(staging);
         if stage == "" { diagnostic("staging unavailable") }
         else {
+            let prepared = Path.join(stage, "new");
             let digest = file_hash(file);
             let meta = key.concat("\n").concat(digest).concat(if reads == "" { "" } else { "\n".concat(reads) });
-            let ok = digest != "" && copy(file, Path.join(stage, "data"), digest)
-                && Result.is_ok(Os.write_file(Path.join(stage, "meta"), meta))
-                && Result.is_ok(Os.write_file(Path.join(stage, "seal"), hash(meta)));
+            let ok = make_dirs(prepared) && digest != "" && copy(file, Path.join(prepared, "data"), digest)
+                && Result.is_ok(Os.write_file(Path.join(prepared, "meta"), meta))
+                && Result.is_ok(Os.write_file(Path.join(prepared, "seal"), hash(meta)));
             if ok {
                 let dest = entry(kind, key);
-                // Remove an invalid old entry to allow recovery. A valid
-                // reader has already captured IR or copied its object.
+                // Atomically detach an invalid entry before any deletion.
+                // A concurrent publication may have replaced it since the
+                // check; either way only our privately owned copy is cleaned.
                 let valid = match metadata(kind, key) {
                     Some(rows) => file_hash(Path.join(dest, "data")) == rows[1]
                         && (kind != "ir" || unchanged(Array.join(Array.slice(rows, 2, rows.len()), "\n"))),
                     None => false,
                 };
-                if !valid { let removed = Os.remove_tree(dest); () } else { () };
-                let published = Os.rename_file(stage, dest);
+                if !valid { let retired = Os.rename_file(dest, Path.join(stage, "old")); () } else { () };
+                let published = Os.rename_file(prepared, dest);
                 if Result.is_err(published) { diagnostic("store raced or unavailable") } else { () }
             } else { diagnostic("store failed") };
             let cleaned = Os.remove_tree(stage);
