@@ -24,7 +24,18 @@ let main (): Unit = {
         for path in native_c_files_policy(argv[1], argv[2], builder, argv[0] == "native") { println(path); }
     } else {
     let inputs = prepare_inputs(argv[1]);
-    if argv[0] == "replace" {
+    if argv[0] == "readback" {
+        let parsed = parse_source_files(inputs.files, 0, []);
+        let file = inputs.files[0];
+        assert(Result.is_ok(treefs.read_source(file.path)));
+        assert(Result.is_ok(Os.rename_file(file.path, "${file.path}.saved")));
+        assert(Result.is_ok(Os.write_file(file.path, "untrusted replacement")));
+        assert(Result.is_err(treefs.read_source(file.path)));
+        treefs.clear_source_locations(());
+        assert(Result.is_err(treefs.read_source(file.path)));
+        println("confined diagnostic reads");
+    }
+    else if argv[0] == "replace" {
         let file = inputs.files[0];
         assert(Result.is_ok(Os.rename_file(file.path, "${file.path}.saved")));
         assert(Result.is_ok(Os.write_file(file.path, "let changed (): Int = 2")));
@@ -148,10 +159,13 @@ with tempfile.TemporaryDirectory(prefix="plum-discovery-") as tmp:
         assert "duplicate filesystem identity" in result.stdout + result.stderr
         (links / "alias.plum").unlink()
         (links / "main.plum").unlink()
-        for target in ["../app/z.plum", str(app / "z.plum"), "missing.plum"]:
+        for target, cause in [("../app/z.plum", "escapes filesystem root"),
+                              (str(app / "z.plum"), "absolute"),
+                              ("missing.plum", "errno 2")]:
             (links / "main.plum").symlink_to(target)
             result = discover(links, ok=False)
             assert "cannot discover sources" in result.stdout + result.stderr
+            assert cause in result.stdout + result.stderr, result.stdout + result.stderr
             (links / "main.plum").unlink()
         (links / "loop").symlink_to(".", target_is_directory=True)
         result = discover(links, ok=False)
@@ -231,6 +245,10 @@ with tempfile.TemporaryDirectory(prefix="plum-discovery-") as tmp:
     for selection in [entry.parent, entry]:
         assert run([COMPILER, "run", selection]).stdout.strip() == "nested selection"
     print("source-discovery: selected subtrees preserve root policy, dependencies and logical paths")
+
+    diagnostic = work / "diagnostic"
+    write(diagnostic / "main.plum", "let original (): Int = 1")
+    assert "confined diagnostic reads" in discover(diagnostic, "readback").stdout
 
     replaced = work / "replaced"
     write(replaced / "main.plum", "let original (): Int = 1")

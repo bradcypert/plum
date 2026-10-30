@@ -69,6 +69,7 @@ Regular destination files are replaced, so other hardlinks are unchanged.
 Traversal uses held directories, at most 128 levels, and a 64 KiB transfer
 buffer independent of file size. Errors can leave partial output; the
 caller owns cleanup. File modes are not preserved.
+Errors include both requested roots and the recorded refusal or native failure.
 
 ## `let exit_with (code: Int): Unit`
 

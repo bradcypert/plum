@@ -1,35 +1,12 @@
 # Filesystem traversal design
 
-Status: accepted direction; implementation and verification pending.
+Status: implemented; final platform verification in progress.
 
-Implementation progress: the POSIX copy walker now uses held descriptors,
-an explicit stack capped at 128 directories, and a single 64 KiB transfer
-buffer. `bootstrap/copy-tree-smoke` exercises link preservation, destination
-link rejection, hard-link-safe replacement, overlap rejection, a deterministic
-source swap, enumeration errors, depth exhaustion, and descriptor cleanup
-under address/undefined-behavior sanitizers. The POSIX root-relative entry
-resolver also follows relative links through held descriptors, rejects
-absolute/escaping targets, bounds link expansion at 40, supports rejecting
-links, and returns owned entry descriptors. Its tests cover internal links,
-cycles, dangling targets, strict policy, and repeated-failure cleanup.
-The Windows adapters now use native handle-relative opens, reparse inspection,
-relative-link resolution, and temporary-file replacement. Native Windows tests
-cover junction rejection, hard-link-safe replacement, allocation failures,
-Unicode entries, and supported symlink handling; they are wired into Windows
-CI and platform-smoke. The Windows platform job passed the copy and resolver
-tests for commit `15d1665`.
-The `treefs` compiler module now owns roots, entries, directory iterators,
-and incremental hash states through Plum handles. Native file hashing streams
-through a 64 KiB buffer and has fixed vectors for the legacy framing and
-plain content hashes. Owned read buffers and independent directory iterators
-have binary-data and repeated-enumeration tests on both platform adapters.
-The compiler self-tests exercise the handle wrappers and hash results.
-Package hashing and validation now consume these primitives, including
-versioned manifests, legacy compatibility, typed version 2 records, and
-validation before fetch/vendor publication. Independent Python integration
-tests compare both formats with actual fetch output and exercise link errors.
-LSP snapshot integration now uses the same confined writer and source inventory.
-Final diagnostics and platform verification remain pending.
+The native adapters, compiler consumers and integration tests implement the
+contract below. `bootstrap/copy-tree-smoke` covers ownership, link handling,
+replacement races, resource limits and injected failures; platform-smoke runs
+the Windows adapter on Windows. `bootstrap/tree-memory-check` measures native
+allocation bounds separately from compiler allocation counters.
 
 This design coordinates issues #186 (copying source links), #283 (copying
 through destination links), #184 (copy enumeration failures), #176 (package
@@ -42,8 +19,7 @@ and dependency roots. Source parsing and cache hashing reopen relative to
 that root and verify the discovered identity before reading the held entry.
 The native identity index grows geometrically and retains identities and
 first logical paths, not one descriptor per source. Parser reads still need
-whole-source storage; streaming hashes do not. Native directory reopening
-on Windows passed the native tests and compiler bootstrap in run 41112005098.
+whole-source storage; streaming hashes do not. Windows directory iterators use independent handle-relative opens.
 Formatting now shares the bounded source inventory, including its existing
 hidden/vendor inclusions. Explicit files and selected project subdirectories inherit
 the nearest declared project policy and dependencies, while preserving the
@@ -112,6 +88,19 @@ Manifest cache hashes also read through confined entries and include the
 actual inherited manifest for a selected subtree. Shared path utilities
 preserve native filename bytes and compare Windows path components without
 using offsets into case-folded Unicode strings.
+
+Diagnostic excerpts and debug line tables read through registered source
+capabilities and recheck discovered identity. Their registry retains shared
+roots and path/policy/identity metadata until the next parse or process exit;
+it does not cache source contents or hold one file descriptor per source.
+Explicit `@embed_file` declarations retain their existing ability to read
+outside the project. Generated native intermediates and build-cache records
+also remain outside source traversal policy. These are separate trusted inputs,
+not discovered Plum source paths.
+
+Filesystem errors carry consumer path context and a captured refusal reason,
+POSIX errno, Win32 error or native NTSTATUS. The native reason uses a bounded
+512-byte thread-local buffer and is captured before cleanup can overwrite it.
 
 ## User-visible contract
 

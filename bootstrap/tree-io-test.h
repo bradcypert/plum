@@ -5,6 +5,14 @@ static void tree_io_tests(void) {
     assert(plum_tree_child_kind(root, "absent-probe") == 0);
     assert(plum_tree_child_kind(root, "nested/data") == -1);
     assert(plum_tree_child_kind(root, "..") == -1);
+    assert(!plum_tree_entry_open(root, "absent-probe", 0));
+#if defined(_WIN32)
+    assert(strstr(plum_tree_last_error(), "NTSTATUS 0xc0000034"));
+#else
+    assert(strstr(plum_tree_last_error(), "errno 2"));
+#endif
+    assert(!plum_tree_entry_open(root, "../escape", 0));
+    assert(strstr(plum_tree_last_error(), "escapes filesystem root"));
     long long file_entry = plum_tree_entry_open(root, "nested/data", 0); assert(file_entry);
     assert(plum_tree_entry_kind(file_entry) == 1);
     assert(*plum_tree_entry_identity(file_entry));

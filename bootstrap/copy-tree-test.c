@@ -117,9 +117,12 @@ int main(void) {
     assert(memcmp(bytes, "copied", sizeof(bytes)) == 0);
     plum_tree_entry_close(resolved);
     assert(plum_tree_entry_open(held, "file-link", 1) == 0);
+    assert(strstr(plum_tree_last_error(), "refused link by project policy"));
     assert(plum_tree_entry_open(held, "external/keep", 0) == 0);
     assert(plum_tree_entry_open(held, "../outside/keep", 0) == 0);
+    assert(strstr(plum_tree_last_error(), "escapes filesystem root"));
     assert(plum_tree_entry_open(held, "dangling", 0) == 0);
+    assert(strstr(plum_tree_last_error(), "errno 2"));
     assert(plum_tree_validate_link(held, "dangling") == 0);
     assert(plum_tree_validate_link(held, "external") == -1);
     assert(symlink("missing/../../outside", "src/missing-escape") == 0);
@@ -127,6 +130,7 @@ int main(void) {
     assert(plum_tree_entry_open(held, "nested/data/", 0) == 0);
     assert(symlink("loop", "src/loop") == 0);
     assert(plum_tree_entry_open(held, "loop", 0) == 0);
+    assert(strstr(plum_tree_last_error(), "expansion exceeds 40"));
     assert(plum_tree_validate_link(held, "loop") == -1);
     assert(symlink("/etc/passwd", "src/absolute") == 0);
     assert(plum_tree_entry_open(held, "absolute", 0) == 0);
@@ -137,6 +141,7 @@ int main(void) {
     int resolver_baseline = descriptor_count();
     for (int i = 0; i < 100; i++) {
         assert(plum_tree_entry_open(held, "loop", 0) == 0);
+    assert(strstr(plum_tree_last_error(), "expansion exceeds 40"));
         assert(plum_tree_entry_open(held, "external/keep", 0) == 0);
         assert(descriptor_count() == resolver_baseline);
     }
@@ -159,6 +164,7 @@ int main(void) {
     assert(descriptor_count() == resolver_baseline);
     plum_tree_entry_close(held);
     assert(os_copy_tree("src", "src") == -1);
+    assert(strstr(plum_tree_last_error(), "roots overlap"));
     assert(os_copy_tree("src", "src/nested") == -1);
     assert(os_copy_tree("src/nested", "src") == -1);
     assert(symlink("src", "root-link") == 0);
@@ -192,6 +198,7 @@ int main(void) {
     for (int i = 0; i < 100; i++) {
         fail_enumeration = 1;
         assert(os_copy_tree("one", "output") == -1);
+        assert(strstr(plum_tree_last_error(), "errno 5"));
         assert(descriptor_count() == before);
     }
     contents("output/keep", "replacement");
@@ -206,6 +213,7 @@ int main(void) {
     }
     close(fd);
     assert(os_copy_tree("deep", "deep-output") == -1);
+    assert(strstr(plum_tree_last_error(), "depth exceeds 128"));
     assert(descriptor_count() == before);
     // Remove the extra deepest level before using the bounded removal API.
     char path[1024] = "deep";

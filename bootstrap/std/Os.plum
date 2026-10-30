@@ -14,6 +14,7 @@ let os_rename_file_raw (from: String) (to: String): Int = 0
 let os_remove_tree_raw (path: String): Int = 0
 let os_copy_tree_raw (src: String) (dst: String): Int = 0
 let os_platform_raw (ignored: Bool): String = ""
+extern "C" { fn plum_tree_last_error() -> CStr; }
 
 /// Which platform this program is running on: "linux", "macos" or
 /// "windows". Compiled in, not detected at runtime; a binary
@@ -84,9 +85,10 @@ pub let remove_tree (path: String): Result[Unit, String] =
 /// Traversal uses held directories, at most 128 levels, and a 64 KiB transfer
 /// buffer independent of file size. Errors can leave partial output; the
 /// caller owns cleanup. File modes are not preserved.
+/// Errors include both requested roots and the recorded refusal or native failure.
 pub let copy_tree (src: String) (dst: String): Result[Unit, String] =
     if os_copy_tree_raw(src, dst) == 0 { Ok(()) }
-    else { Err("Os.copy_tree: could not copy ".concat(src).concat(" to ").concat(dst)) }
+    else { Err("Os.copy_tree: could not copy ".concat(src).concat(" to ").concat(dst).concat(": ").concat(unsafe { plum_tree_last_error().as_string() })) }
 
 // --- Environment and process ---
 //
