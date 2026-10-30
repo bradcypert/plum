@@ -54,7 +54,9 @@ starting directory is acquired; traversal then uses held directories.
 Concurrent changes or resource exhaustion can return `Err` after partial
 removal. Traversal is limited to 128 directory levels to bound native
 stack, enumeration storage, and open handles. Empty paths and final
-`.` or `..` components are rejected.
+`.` or `..` components are rejected. Read-only Windows files are removed
+without changing attributes on other hardlinks; this requires Windows 10
+1809 or newer and filesystem support, otherwise removal returns `Err`.
 
 ## `let copy_tree (src: String) (dst: String): Result[Unit, String]`
 

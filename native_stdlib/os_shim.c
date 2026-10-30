@@ -950,6 +950,17 @@ static int plum_remove_handle(PlumRemoveOpen open_child, HANDLE handle, unsigned
         free(buffer);
         if (rc != 0) return -1;
     }
+    if ((attrs.FileAttributes & FILE_ATTRIBUTE_READONLY) && !(attrs.FileAttributes & FILE_ATTRIBUTE_DIRECTORY)) {
+        // Git objects can be read-only hardlinks into another checkout. Do
+        // not clear their attributes: that would mutate the other names too.
+        // Windows 10 1809+ can unlink through this held handle while leaving
+        // the inode's attributes alone. Unsupported filesystems fail closed.
+        FILE_DISPOSITION_INFO_EX disposition = {
+            FILE_DISPOSITION_FLAG_DELETE | FILE_DISPOSITION_FLAG_IGNORE_READONLY_ATTRIBUTE
+        };
+        if (SetFileInformationByHandle(handle, FileDispositionInfoEx, &disposition, sizeof(disposition))) return 0;
+        plum_tree_os_error("mark read-only entry for deletion"); return -1;
+    }
     FILE_DISPOSITION_INFO disposition = {TRUE};
     if (SetFileInformationByHandle(handle, FileDispositionInfo, &disposition, sizeof(disposition))) return 0;
     plum_tree_os_error("mark entry for deletion"); return -1;

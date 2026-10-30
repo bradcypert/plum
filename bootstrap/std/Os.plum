@@ -69,7 +69,9 @@ pub let remove_file (path: String): Result[Unit, String] =
 /// Concurrent changes or resource exhaustion can return `Err` after partial
 /// removal. Traversal is limited to 128 directory levels to bound native
 /// stack, enumeration storage, and open handles. Empty paths and final
-/// `.` or `..` components are rejected.
+/// `.` or `..` components are rejected. Read-only Windows files are removed
+/// without changing attributes on other hardlinks; this requires Windows 10
+/// 1809 or newer and filesystem support, otherwise removal returns `Err`.
 pub let remove_tree (path: String): Result[Unit, String] =
     if os_remove_tree_raw(path) == 0 { Ok(()) }
     else { Err("Os.remove_tree: could not remove ".concat(path).concat(": ").concat(unsafe { plum_tree_last_error().as_string() })) }

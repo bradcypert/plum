@@ -72,6 +72,9 @@ Fetch and vendor reserve exclusive staging containers and publish only the
 validated payload. Ownership markers remain outside that payload; cleanup
 never removes a predictable sibling owned by another operation. Concurrent
 publication accepts an existing destination only after integrity validation.
+Windows removal uses handle-based read-only deletion for Git objects without
+changing attributes on other hardlinks (Windows 10 1809+ and filesystem
+support required). Unsupported removal returns an error.
 Tests cover concurrent fetch/vendor, preservation of pre-existing `.partial`
 directories, failed-checkout cleanup, cache cycles and excessive depth.
 

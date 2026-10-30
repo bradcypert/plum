@@ -532,6 +532,11 @@ jobs:
           clang -O1 -g -Wall -Wextra -Werror bootstrap/generated-output-test.c -o generated-output-test.exe
           ./generated-output-test.exe
 
+      - name: tree removal preserves external hardlink attributes
+        run: |
+          clang -O1 -g -Wall -Wextra -Werror bootstrap/remove-tree-test.c -o remove-tree-test.exe
+          ./remove-tree-test.exe
+
       - name: tree copying and resolution respect Windows reparse boundaries
         run: |
           clang -O1 -g -Wall -Wextra -Werror bootstrap/copy-tree-test.c -o copy-tree-test.exe
@@ -597,6 +602,8 @@ jobs:
           name: plum-windows-compiler
       - name: restore freshly built compiler
         run: tar -xzf plum-windows-compiler.tar.gz
+      - name: concurrent package staging cleans cloned Git metadata
+        run: python3 ./bootstrap/package-staging-test.py ./sh.real
       - name: real programs work on Windows
         env:
           PLUM_CI_TIMINGS: "1"

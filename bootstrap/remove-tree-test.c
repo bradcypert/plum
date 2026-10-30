@@ -211,6 +211,20 @@ static void basics(void) {
     assert(strstr(plum_tree_last_error(), "mark entry for deletion: Windows error 5")); clean();
 #endif
     removed("tree");
+#if defined(_WIN32)
+    directory("tree"); put("readonly-source");
+    assert(SetFileAttributesA("readonly-source", FILE_ATTRIBUTE_READONLY));
+    assert(CreateHardLinkA("tree/readonly", "readonly-source", NULL));
+    fail_delete = 1;
+    assert(os_remove_tree("tree") == -1); clean();
+    assert(GetFileAttributesA("readonly-source") & FILE_ATTRIBUTE_READONLY);
+    removed("tree");
+    assert(exists("readonly-source"));
+    assert(GetFileAttributesA("readonly-source") & FILE_ATTRIBUTE_READONLY);
+    assert(SetFileAttributesA("readonly-source", FILE_ATTRIBUTE_NORMAL));
+    removed("readonly-source");
+#endif
+
 
     // Width must not accumulate buffers or handles. Repeat BEFORE process exit.
     size_t narrow_peak = 0;
