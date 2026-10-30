@@ -29,7 +29,7 @@ versioned manifests, legacy compatibility, typed version 2 records, and
 validation before fetch/vendor publication. Independent Python integration
 tests compare both formats with actual fetch output and exercise link errors.
 LSP snapshot integration now uses the same confined writer and source inventory.
-Final cache-usage traversal and policy-consistency audits remain pending.
+Final policy-consistency and diagnostics audits remain pending.
 
 This design coordinates issues #186 (copying source links), #283 (copying
 through destination links), #184 (copy enumeration failures), #176 (package
@@ -85,6 +85,22 @@ text, including buffers later excluded by root selection. Conflict indexes
 retain identities, SHA-256 digests and first paths, rather than additional
 copies of source text. Analysis still retains its usual whole-source and AST
 storage. There is no persistent snapshot or semantic cache in this change.
+
+Cache layout discovery and usage scans now use bounded, non-following
+inventories. Each package is scanned once for both row and summary totals.
+Regular files contribute their metadata size; links contribute stored target
+text bytes, including dangling or external links. No target is opened or read.
+Fetch and vendor reserve exclusive staging containers and publish only the
+validated payload. Ownership markers remain outside that payload; cleanup
+never removes a predictable sibling owned by another operation. Concurrent
+publication accepts an existing destination only after integrity validation.
+Tests cover concurrent fetch/vendor, preservation of pre-existing `.partial`
+directories, failed-checkout cleanup, cache cycles and excessive depth.
+
+Cache usage retains directory metadata for its bounded active stack and the
+list of package roots. It reads file-size metadata without allocating source
+contents. Unique staging adds small per-operation directories and ownership
+markers; concurrent writers can temporarily duplicate a full package on disk.
 
 ## User-visible contract
 

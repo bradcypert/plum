@@ -5,6 +5,7 @@ from pathlib import Path
 import subprocess
 import sys
 import tempfile
+from lsp_test_support import make_symlink
 
 compiler = Path(sys.argv[1]).resolve()
 original = "let main (): Unit = {\nprintln(\"hello\")\n}\n"
@@ -57,7 +58,7 @@ with tempfile.TemporaryDirectory(prefix="plum-format-tree-") as temp:
     target.write_text(original)
     alias = project / "alias.plum"
     try:
-        alias.symlink_to("payload")
+        make_symlink(alias, "payload")
     except OSError:
         print("formatter-tree: symlinks unavailable on this runner")
     else:
@@ -72,7 +73,7 @@ with tempfile.TemporaryDirectory(prefix="plum-format-tree-") as temp:
         subdir = project / "module"
         subdir.mkdir()
         nested_alias = subdir / "nested.plum"
-        nested_alias.symlink_to("../payload")
+        make_symlink(nested_alias, "../payload")
         run(nested_alias, "--write", ok=False)
         run(subdir, "--write", ok=False)
         assert target.read_text() == original
@@ -86,12 +87,12 @@ with tempfile.TemporaryDirectory(prefix="plum-format-tree-") as temp:
         outside = root / "outside"
         outside.write_text(original)
         for link_target in ["../outside", str(outside), "missing"]:
-            alias.symlink_to(link_target)
+            make_symlink(alias, link_target)
             run(alias, "--write", ok=False)
             assert outside.read_text() == original and alias.is_symlink()
             alias.unlink()
         loop = project / "loop"
-        loop.symlink_to(".", target_is_directory=True)
+        make_symlink(loop, ".", is_directory=True)
         assert "duplicate filesystem identity" in run(project, "--write", ok=False)
         assert source.read_text() == original
         loop.unlink()

@@ -20,3 +20,24 @@ def file_uri(path):
         return "file:///" + native
     # Keep the current server's URI contract; percent encoding is #160.
     return "file://" + native
+
+
+def make_symlink(path, target, is_directory=False):
+    """Create native Windows links, including from MSYS Python fixtures."""
+    import os
+    if os.name == "nt":
+        path.symlink_to(str(target).replace("/", "\\"), target_is_directory=is_directory)
+    elif shutil.which("cygpath"):
+        # MSYS may encode links using its own reparse representation. Exercise
+        # the native relative symlink contract used by ordinary Windows tools.
+        args = ["cmd.exe", "/d", "/c", "mklink"]
+        if is_directory:
+            args.append("/D")
+        target_text = native_path(target) if Path(target).is_absolute() else str(target)
+        args.extend([native_path(path).replace("/", "\\"), target_text.replace("/", "\\")])
+        result = subprocess.run(args, capture_output=True,
+                                env={**os.environ, "MSYS2_ARG_CONV_EXCL": "*"})
+        if result.returncode:
+            raise OSError(result.stdout + result.stderr)
+    else:
+        path.symlink_to(target, target_is_directory=is_directory)

@@ -1760,7 +1760,7 @@ posix_done:
 #endif
     return rc;
 }
-static long long plum_tree_entry_size(long long entry) {
+long long plum_tree_entry_size(long long entry) {
     if (plum_tree_entry_kind(entry) != 1) return -1;
 #if defined(_WIN32)
     LARGE_INTEGER size;

@@ -245,7 +245,6 @@ let snapshot_restore (snapshot: LspSnapshot) (path: String): String = {
     result
 }
 
-
 let source_is_directory (path: String): Bool = match treefs.open_root(path) {
     Ok(_) => true, Err(_) => Result.unwrap_or(Os.is_directory(path), false),
 }

@@ -9,7 +9,7 @@ import tempfile
 import threading
 from pathlib import Path
 
-from lsp_test_support import file_uri as uri, native_path
+from lsp_test_support import file_uri as uri, native_path, make_symlink
 
 
 def frame(message):
@@ -279,14 +279,25 @@ def check_roots(compiler):
             physical.write_text('let disk (): Int = 1\n')
             alias = project / "visible.plum"
             try:
-                alias.symlink_to(".hidden/target.plum")
+                make_symlink(alias, ".hidden/target.plum")
             except (OSError, NotImplementedError):
                 print("lsp alias cases: symlinks unavailable")
             else:
                 live = 'let consume (): String = { let value = "live"; value }\n'
                 client.notify("didOpen", physical, live)
                 hover = client.query("hover", physical, live, "value", 1)
-                assert hover and "String" in hover["contents"]["value"], hover
+                if hover is None:
+                    # Keep a failed Windows snapshot reviewable: the worker's
+                    # refusal is deliberately hidden from normal LSP replies.
+                    with tempfile.TemporaryDirectory(dir=scratch) as debug:
+                        payload = {"path": uri(physical), "container": uri(Path(debug)),
+                                   "buffers": [{"uri": uri(physical), "text": live}]}
+                        body = json.dumps(payload).encode()
+                        result = subprocess.run([compiler, "__lsp_snapshot"],
+                            input=b"Content-Length: %d\r\n\r\n" % len(body) + body,
+                            capture_output=True, timeout=30)
+                        raise AssertionError(("snapshot worker", result.returncode, result.stdout, result.stderr))
+                assert "String" in hover["contents"]["value"], hover
                 target = client.query("definition", physical, live, "value", 1)
                 assert target and target["uri"] == uri(physical), target
                 client.notify("didOpen", alias, live)

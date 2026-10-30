@@ -3883,44 +3883,31 @@ let vendor_deps (root: String) (deps: Array[pkg.Dep]) (i: Int): Unit =
 let cmd_cache_list (): Unit = {
     let entries = pkg.cached_packages(());
     println("cache: ${pkg.cache_root(())}");
-    report_cached_packages(entries, 0);
-    println("cache: ${entries.len().to_string()} package(s), ${cached_file_count(entries, 0, 0).to_string()} file(s), ${cached_byte_count(entries, 0, 0).to_string()} bytes")
+    let usage = cached_usage(entries, true);
+    println("cache: ${entries.len().to_string()} package(s), ${usage.files.to_string()} file(s), ${usage.bytes.to_string()} bytes")
 }
 
-let report_cached_packages (entries: Array[String]) (i: Int): Unit =
-    if i >= entries.len() { () }
-    else {
-        println("  ${entries[i]}  ${pkg.cached_package_size(entries[i]).to_string()} bytes");
-        report_cached_packages(entries, i + 1)
-    }
-
-let cached_byte_count (entries: Array[String]) (i: Int) (acc: Int): Int =
-    if i >= entries.len() { acc }
-    else { cached_byte_count(entries, i + 1, acc + pkg.cached_package_size(entries[i])) }
-
-let cached_file_count (entries: Array[String]) (i: Int) (acc: Int): Int =
-    if i >= entries.len() { acc }
-    else { cached_file_count(entries, i + 1, acc + cached_files_under(entries[i])) }
-
-let cached_files_under (dir: String): Int =
-    cached_files_in(dir, Result.unwrap_or(Os.list_dir(dir), []), 0, 0)
-
-let cached_files_in (dir: String) (names: Array[String]) (i: Int) (acc: Int): Int =
-    if i >= names.len() { acc }
-    else {
-        let path = Path.join(dir, names[i]);
-        let next = if source_is_directory(path) {
-            acc + cached_files_under(path)
-        } else { acc + 1 };
-        cached_files_in(dir, names, i + 1, next)
-    }
+// Read each package once so its displayed row and the total use the same
+// inventory. Counts describe logical entries, not allocated disk blocks.
+let cached_usage (entries: Array[String]) (report: Bool): pkg.CacheUsage = {
+    let mut files = 0;
+    let mut bytes = 0;
+    for path in entries {
+        let usage = pkg.cached_package_usage(path);
+        if report { println("  ${path}  ${usage.bytes.to_string()} bytes") };
+        if usage.files > 9223372036854775807 - files || usage.bytes > 9223372036854775807 - bytes { panic_raw("total cache usage exceeds integer range") };
+        files = files + usage.files;
+        bytes = bytes + usage.bytes;
+        ()
+    };
+    pkg.CacheUsage { files: files, bytes: bytes }
+}
 
 let cmd_cache_clean (): Unit = {
     let entries = pkg.cached_packages(());
-    let files = cached_file_count(entries, 0, 0);
-    let bytes = cached_byte_count(entries, 0, 0);
+    let usage = cached_usage(entries, false);
     match pkg.clear_package_cache(()) {
-        Ok(_) => println("cache: removed ${entries.len().to_string()} package(s), ${files.to_string()} file(s), ${bytes.to_string()} bytes"),
+        Ok(_) => println("cache: removed ${entries.len().to_string()} package(s), ${usage.files.to_string()} file(s), ${usage.bytes.to_string()} bytes"),
         Err(e) => panic_raw("could not clean package cache: ${e}"),
     }
 }

@@ -3,6 +3,8 @@ use Os;
 // Owned compiler filesystem primitives. Paths are interpreted beneath a held
 // root; consumers retain logical names for diagnostics, never for reopening.
 extern "C" {
+    fn plum_cache_temp(root: CStr) -> CStr;
+    fn plum_tree_entry_size(entry: Int) -> Int;
     fn plum_tree_text_open(entry: Int) -> Int;
     fn plum_tree_text_size(text: Int) -> Int;
     fn plum_tree_text_data(text: Int) -> CStr;
@@ -206,4 +208,16 @@ pub let recalled (seen: TreeSeen) (identity: String): Option[String] = unsafe {
     if plum_tree_seen_find(TreeSeen.raw(seen), identity.as_cstr()) == 1 {
         Some(plum_tree_seen_previous(TreeSeen.raw(seen)).as_string())
     } else { None }
+}
+
+pub let entry_size (entry: TreeEntry): Result[Int, String] = unsafe {
+    let size = plum_tree_entry_size(TreeEntry.raw(entry));
+    if size < 0 { Err("cannot read regular file size") } else { Ok(size) }
+}
+
+// Reserve an exclusive container beside the eventual destination. Its payload
+// is separate from the ownership marker used by native staging maintenance.
+pub let staging (parent: String): Result[String, String] = unsafe {
+    let path = plum_cache_temp(parent.as_cstr()).as_string();
+    if path == "" { Err("cannot reserve staging directory under ${parent}") } else { Ok(path) }
 }

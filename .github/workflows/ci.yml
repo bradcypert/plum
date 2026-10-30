@@ -164,6 +164,10 @@ jobs:
         run: ./bootstrap/tree-memory-check
       - name: Formatter linked tree behavior
         run: python3 ./bootstrap/formatter-tree-test.py ./sh.real
+      - name: Cache tree inventory
+        run: python3 ./bootstrap/cache-tree-test.py ./sh.real
+      - name: Concurrent package staging
+        run: python3 ./bootstrap/package-staging-test.py ./sh.real
       - name: the language server answers a real session
         run: ./bootstrap/lsp-smoke
       - name: TCP and HTTP work in a compiled binary

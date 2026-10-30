@@ -429,11 +429,25 @@ list` and removable with `plum cache clean`; remove obsolete vendor trees
 when no longer needed.
 
 `plum cache list` uses that same root and reports each cached commit plus
-the file count and exact byte total. `plum cache clean` removes only
+the logical entry count and byte total. Each regular file contributes its
+size, and each symbolic link contributes the byte length of its stored target
+text. Links are never followed for this inventory; empty directories contribute
+no bytes, and hardlinks count once per directory entry. These totals describe
+stored contents, not allocated disk blocks. Cache layout and package scans
+are bounded at 128 directory levels and report enumeration failures.
+In-progress staging directories are excluded from the package list.
+
+`plum cache clean` removes only
 `<cache>/pkg`, not the cache root itself: `PLUM_CACHE` is user-controlled
 and future Plum cache kinds must not be erased as a side effect. Cleaning
 is safe; a removed dependency is simply fetched again on the next explicit
 `plum fetch`.
+
+Fetch and vendor reserve a unique staging container beside the destination,
+validate its complete payload, then rename that payload into place. Failed
+operations remove only their own container. Concurrent writers never delete a
+shared `.partial` pathname; if another writer publishes first, the existing
+destination must pass integrity validation before the operation succeeds.
 
 `plum vendor` copies every resolved Git dependency, including transitive
 ones, into `vendor/` below the project. It keeps `git`, `rev` and `sha256`
