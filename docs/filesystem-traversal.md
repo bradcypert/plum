@@ -1,6 +1,6 @@
 # Filesystem traversal design
 
-Status: implemented; final platform verification in progress.
+Status: implemented. Platform verification is recorded in [PR #403](https://github.com/bradcypert/plum/pull/403).
 
 The native adapters, compiler consumers and integration tests implement the
 contract below. `bootstrap/copy-tree-smoke` covers ownership, link handling,

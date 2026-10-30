@@ -68,7 +68,8 @@ with tempfile.TemporaryDirectory(prefix="plum-package-stage-") as temporary:
     missing = "f" * 40
     manifest(missing)
     failed = subprocess.run(command("fetch"), env=env, capture_output=True, timeout=90)
-    assert failed.returncode != 0 and b"could not check out" in failed.stdout + failed.stderr
+    assert failed.returncode != 0 and b"could not check out" in failed.stdout + failed.stderr, (
+        "missing commit fetch", failed.returncode, failed.stdout, failed.stderr)
     assert not (cache / "pkg" / "v2" / identity(missing) / missing).exists()
     assert not list(cache.rglob(".partial-*"))
     for marker in markers:
