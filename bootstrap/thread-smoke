@@ -31,6 +31,53 @@ with tempfile.TemporaryDirectory(prefix="plum-thread-") as directory:
     run(["clang", *flags, "-Wall", "-Wextra", "-Werror", "-DTHREAD_NATIVE_TEST",
          "bootstrap/thread-test.c", "-o", native])
     run([native])
+    trace_native = str(work / "trace.exe")
+    run(["clang", *flags, "-Wall", "-Wextra", "-Werror",
+         "bootstrap/trace-test.c", "-o", trace_native])
+    result = run([trace_native], capture_output=True, text=True)
+    assert result.stderr == ("stack trace:\n  at worker inner\n"
+                             "  at worker outer\nstack trace:\n  at main\n"), result
+    print(result.stdout, end="", flush=True)
+
+    # The bystander holds a live traced frame until after the failure.
+    # Channels establish the ordering without sleeps or shared Ref cells.
+    trace_project = work / "trace"
+    trace_project.mkdir()
+    (trace_project / "main.plum").write_text('''let bystander (ready: Sender[Int]) (stop: Receiver[Int]): Unit = {
+    ready.send(1);
+    stop.recv();
+    ()
+}
+let deepest (xs: Array[Int]): Int = xs[99]
+let middle (xs: Array[Int]): Int = deepest(xs)
+let main (): Unit = {
+    let (ready_tx, ready_rx) = channel[Int]();
+    let (stop_tx, stop_rx) = channel[Int]();
+    let parked = spawn { bystander(ready_tx, stop_rx) };
+    ready_rx.recv();
+    let failing = spawn { middle([1, 2, 3]) };
+    println(failing.join());
+    stop_tx.send(1);
+    parked.join()
+}
+''')
+    for traced in (False, True):
+        binary = str(work / "trace-program.exe")
+        run([PLUM, "build", str(trace_project), "-o", binary,
+             *(["--trace"] if traced else [])], capture_output=True, text=True)
+        result = subprocess.run([binary], capture_output=True, text=True, timeout=30)
+        assert result.returncode == 1, result
+        assert result.stdout == "array index out of bounds\n", result
+        if traced:
+            frames = result.stderr.splitlines()
+            assert frames[0] == "stack trace:", result
+            assert "  at deepest" in frames, result
+            assert "  at middle" in frames, result
+            assert "  at bystander" not in frames, result
+            assert "  at main" not in frames, result
+        else:
+            assert not result.stderr, result
+        print(f"thread generated panic: trace={traced}: ok", flush=True)
     objects = []
     for source in sorted((ROOT / "native_stdlib").glob("*.c")):
         if source.name in ("thread_shim.c", "tls_shim.c"):
