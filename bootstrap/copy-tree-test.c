@@ -1,3 +1,6 @@
+#if defined(_WIN32)
+#include "copy-tree-windows-test.c"
+#else
 // POSIX regression coverage for descriptor-relative copying.
 #include <assert.h>
 #include <dirent.h>
@@ -176,3 +179,5 @@ int main(void) {
     puts("copy-tree POSIX tests: ok");
     return 0;
 }
+
+#endif

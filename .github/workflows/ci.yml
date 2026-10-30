@@ -522,6 +522,11 @@ jobs:
           clang -O1 -g -Wall -Wextra -Werror bootstrap/generated-output-test.c -o generated-output-test.exe
           ./generated-output-test.exe
 
+      - name: tree copying and resolution respect Windows reparse boundaries
+        run: |
+          clang -O1 -g -Wall -Wextra -Werror bootstrap/copy-tree-test.c -o copy-tree-test.exe
+          ./copy-tree-test.exe
+
       - name: seed -> compiler
         run: |
           ./bootstrap/from-seed -o sh.seed

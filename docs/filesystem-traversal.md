@@ -12,8 +12,13 @@ resolver also follows relative links through held descriptors, rejects
 absolute/escaping targets, bounds link expansion at 40, supports rejecting
 links, and returns owned entry descriptors. Its tests cover internal links,
 cycles, dangling targets, strict policy, and repeated-failure cleanup.
-Windows support, hash migration, discovery, and overlay integrations remain
-pending; the compiler does not yet consume the resolver.
+The Windows adapters now use native handle-relative opens, reparse inspection,
+relative-link resolution, and temporary-file replacement. Native Windows tests
+cover junction rejection, hard-link-safe replacement, allocation failures,
+Unicode entries, and supported symlink handling; they are wired into Windows
+CI and platform-smoke. Their execution on Windows remains to be verified.
+Hash migration, discovery, and overlay integrations remain pending; the
+compiler does not yet consume the resolver.
 This intermediate implementation is not ready for release: preserved links
 must not be consumed by the old unrestricted compiler walks and overlays.
 

@@ -42,6 +42,7 @@
 #if defined(_WIN32)
 #include <windows.h>
 #include <winternl.h>
+#include <winioctl.h>
 #include <direct.h>
 #include <io.h>
 #define PLUM_MKDIR(p) _mkdir(p)
@@ -759,15 +760,6 @@ long long os_rename_file(const char *from, const char *to) {
 #endif
 }
 
-#if defined(_WIN32)
-static int plum_is_dir(const char *path) {
-    struct stat st;
-    if (stat(path, &st) != 0) return 0;
-    return S_ISDIR(st.st_mode) ? 1 : 0;
-}
-
-#endif
-
 static int plum_join(char *out, size_t cap, const char *a, const char *b) {
     int n = snprintf(out, cap, "%s/%s", a, b);
     return (n > 0 && (size_t)n < cap) ? 0 : -1;
@@ -959,124 +951,321 @@ long long os_remove_tree(const char *path) {
     return plum_remove_tree(path) == 0 ? 0 : -1;
 }
 
+#define PLUM_COPY_DEPTH 128
+#define PLUM_COPY_BUFFER 65536
 #if defined(_WIN32)
-static int plum_copy_file(const char *src, const char *dst) {
-    FILE *in, *out;
-    char buf[65536];
-    size_t n;
-    int rc = 0;
-
-    in = fopen(src, "rb");
-    if (in == NULL) return -1;
-    out = fopen(dst, "wb");
-    if (out == NULL) { fclose(in); return -1; }
-    while ((n = fread(buf, 1, sizeof(buf), in)) > 0) {
-        if (fwrite(buf, 1, n, out) != n) { rc = -1; break; }
+// Windows adapters use native relative opens. Share-read-only handles pin
+// directories and reject writers/reparse changes while an operation owns them.
+static PlumRemoveOpen plum_tree_win_open_api(void) {
+    HMODULE module = GetModuleHandleW(L"ntdll.dll");
+    return module ? (PlumRemoveOpen)(void *)GetProcAddress(module, "NtCreateFile") : NULL;
+}
+static HANDLE plum_tree_win_child(HANDLE parent, const WCHAR *name, DWORD bytes,
+                                  ACCESS_MASK access, ULONG disposition, ULONG options,
+                                  NTSTATUS *failure) {
+    PlumRemoveOpen api = plum_tree_win_open_api();
+    if (!api || !bytes || bytes > 65534 || bytes % sizeof(WCHAR)) return INVALID_HANDLE_VALUE;
+    UNICODE_STRING text = {(USHORT)bytes, (USHORT)bytes, (WCHAR *)name};
+    OBJECT_ATTRIBUTES attrs = {0};
+    attrs.Length = sizeof(attrs); attrs.RootDirectory = parent; attrs.ObjectName = &text;
+    IO_STATUS_BLOCK status;
+    HANDLE h = INVALID_HANDLE_VALUE;
+    NTSTATUS rc = api(&h, access | FILE_READ_ATTRIBUTES | SYNCHRONIZE, &attrs, &status,
+        NULL, FILE_ATTRIBUTE_NORMAL, FILE_SHARE_READ, disposition,
+        options | FILE_OPEN_REPARSE_POINT | FILE_SYNCHRONOUS_IO_NONALERT, NULL, 0);
+    if (failure) *failure = rc;
+    return rc < 0 ? INVALID_HANDLE_VALUE : h;
+}
+static HANDLE plum_copy_root(const char *path) {
+    int n = MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, path, -1, NULL, 0);
+    if (n <= 1) return INVALID_HANDLE_VALUE;
+    WCHAR *wide = malloc((size_t)n * sizeof(WCHAR));
+    if (!wide) return INVALID_HANDLE_VALUE;
+    if (!MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, path, -1, wide, n)) {
+        free(wide); return INVALID_HANDLE_VALUE;
     }
-    if (ferror(in)) rc = -1;
-    if (fclose(out) != 0) rc = -1;
-    fclose(in);
+    // Preserve a drive root's separator, but not a trailing slash on a link.
+    while (n > 2 && (wide[n - 2] == L'/' || wide[n - 2] == L'\\') &&
+           !(n == 4 && wide[1] == L':')) wide[--n - 1] = 0;
+    HANDLE h = CreateFileW(wide, FILE_LIST_DIRECTORY | FILE_READ_ATTRIBUTES | SYNCHRONIZE,
+        FILE_SHARE_READ, NULL, OPEN_EXISTING,
+        FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT, NULL);
+    free(wide);
+    FILE_ATTRIBUTE_TAG_INFO info;
+    if (h != INVALID_HANDLE_VALUE &&
+        (!GetFileInformationByHandleEx(h, FileAttributeTagInfo, &info, sizeof(info)) ||
+         !(info.FileAttributes & FILE_ATTRIBUTE_DIRECTORY) ||
+         (info.FileAttributes & FILE_ATTRIBUTE_REPARSE_POINT))) {
+        CloseHandle(h); h = INVALID_HANDLE_VALUE;
+    }
+    return h;
+}
+static int plum_tree_win_attrs(HANDLE h, FILE_ATTRIBUTE_TAG_INFO *info) {
+    return GetFileInformationByHandleEx(h, FileAttributeTagInfo, info, sizeof(*info)) ? 0 : -1;
+}
+// Return the stored relative substitute name of an ordinary symbolic link.
+// Junctions and other reparse tags never become traversal instructions.
+static int plum_tree_win_link(HANDLE h, WCHAR *target, size_t capacity) {
+    _Alignas(max_align_t) unsigned char data[MAXIMUM_REPARSE_DATA_BUFFER_SIZE];
+    DWORD bytes;
+    if (!DeviceIoControl(h, FSCTL_GET_REPARSE_POINT, NULL, 0, data, sizeof(data), &bytes, NULL)) return -1;
+    struct LinkData {
+        DWORD tag; WORD length, reserved;
+        WORD substitute_offset, substitute_length, print_offset, print_length;
+        ULONG flags;
+        WCHAR path[1];
+    };
+    struct LinkData *link = (struct LinkData *)data;
+    size_t prefix = offsetof(struct LinkData, path);
+    if (bytes < prefix || link->tag != IO_REPARSE_TAG_SYMLINK || link->flags != 1 ||
+        (size_t)link->length + 8 > bytes || (size_t)link->length + 8 < prefix ||
+        link->substitute_offset % sizeof(WCHAR) || link->substitute_length % sizeof(WCHAR) ||
+        (size_t)link->substitute_offset + link->substitute_length > (size_t)link->length + 8 - prefix) return -1;
+    size_t count = link->substitute_length / sizeof(WCHAR);
+    if (!count || count >= capacity) return -1;
+    memcpy(target, (unsigned char *)link->path + link->substitute_offset, link->substitute_length);
+    target[count] = 0;
+    for (size_t i = 0; i < count; i++) {
+        if (!target[i] || target[i] == L':') return -1;
+        if (target[i] == L'\\') target[i] = L'/';
+    }
+    return target[0] == L'/' ? -1 : 0;
+}
+static HANDLE plum_tree_resolve(HANDLE root, const char *relative, int reject_links) {
+    WCHAR pending[PLUM_PATH_MAX], target[PLUM_PATH_MAX];
+    int n = MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, relative, -1, pending, PLUM_PATH_MAX);
+    if (n <= 1) return INVALID_HANDLE_VALUE;
+    for (int i = 0; i < n - 1; i++) {
+        if (pending[i] == L':') return INVALID_HANDLE_VALUE;
+        if (pending[i] == L'\\') pending[i] = L'/';
+    }
+    if (pending[0] == L'/') return INVALID_HANDLE_VALUE;
+    HANDLE parents[PLUM_COPY_DEPTH], result = INVALID_HANDLE_VALUE;
+    unsigned depth = 0, links = 0;
+    if (!DuplicateHandle(GetCurrentProcess(), root, GetCurrentProcess(), &parents[0], 0, FALSE, DUPLICATE_SAME_ACCESS))
+        return INVALID_HANDLE_VALUE;
+    for (;;) {
+        WCHAR *slash = wcschr(pending, L'/');
+        WCHAR *rest = slash ? slash + 1 : pending + wcslen(pending);
+        int more = slash != NULL;
+        if (slash) *slash = 0;
+        if (!*pending || !wcscmp(pending, L".")) {
+            if (!more) { result = parents[depth]; parents[depth] = INVALID_HANDLE_VALUE; break; }
+            memmove(pending, rest, (wcslen(rest) + 1) * sizeof(WCHAR)); continue;
+        }
+        if (!wcscmp(pending, L"..")) {
+            if (!depth) break;
+            CloseHandle(parents[depth--]);
+            if (!more) { result = parents[depth]; parents[depth] = INVALID_HANDLE_VALUE; break; }
+            memmove(pending, rest, (wcslen(rest) + 1) * sizeof(WCHAR)); continue;
+        }
+        HANDLE child = plum_tree_win_child(parents[depth], pending,
+            (DWORD)(wcslen(pending) * sizeof(WCHAR)), GENERIC_READ, FILE_OPEN, 0, NULL);
+        if (child == INVALID_HANDLE_VALUE) break;
+        FILE_ATTRIBUTE_TAG_INFO info;
+        if (plum_tree_win_attrs(child, &info)) { CloseHandle(child); break; }
+        if (info.FileAttributes & FILE_ATTRIBUTE_REPARSE_POINT) {
+            int failed = reject_links || ++links > 40 || plum_tree_win_link(child, target, PLUM_PATH_MAX);
+            CloseHandle(child);
+            if (failed) break;
+            size_t count = wcslen(target), suffix = wcslen(rest);
+            if (count + (more ? suffix + 1 : 0) >= PLUM_PATH_MAX) break;
+            if (more) { target[count++] = L'/'; memcpy(target + count, rest, (suffix + 1) * sizeof(WCHAR)); }
+            wcscpy(pending, target); continue;
+        }
+        if (!more) { result = child; break; }
+        if (!(info.FileAttributes & FILE_ATTRIBUTE_DIRECTORY) || depth + 1 >= PLUM_COPY_DEPTH) {
+            CloseHandle(child); break;
+        }
+        parents[++depth] = child;
+        memmove(pending, rest, (wcslen(rest) + 1) * sizeof(WCHAR));
+    }
+    for (unsigned i = 0; i <= depth; i++) if (parents[i] != INVALID_HANDLE_VALUE) CloseHandle(parents[i]);
+    return result;
+}
+long long plum_tree_root_open(const char *path) {
+    HANDLE h = plum_copy_root(path);
+    return h == INVALID_HANDLE_VALUE ? 0 : (long long)(intptr_t)h;
+}
+long long plum_tree_entry_open(long long root, const char *relative, long long reject_links) {
+    if (!root || root == -1) return 0;
+    HANDLE h = plum_tree_resolve((HANDLE)(intptr_t)root, relative, reject_links != 0);
+    return h == INVALID_HANDLE_VALUE ? 0 : (long long)(intptr_t)h;
+}
+void plum_tree_entry_close(long long entry) {
+    if (entry && entry != -1) CloseHandle((HANDLE)(intptr_t)entry);
+}
+
+static int plum_tree_win_overlap(HANDLE a, HANDLE b) {
+    WCHAR pa[PLUM_PATH_MAX], pb[PLUM_PATH_MAX];
+    DWORD na = GetFinalPathNameByHandleW(a, pa, PLUM_PATH_MAX, FILE_NAME_NORMALIZED | VOLUME_NAME_GUID);
+    DWORD nb = GetFinalPathNameByHandleW(b, pb, PLUM_PATH_MAX, FILE_NAME_NORMALIZED | VOLUME_NAME_GUID);
+    if (!na || !nb || na >= PLUM_PATH_MAX || nb >= PLUM_PATH_MAX) return -1;
+    while (na && pa[na - 1] == L'\\') pa[--na] = 0;
+    while (nb && pb[nb - 1] == L'\\') pb[--nb] = 0;
+    return (na <= nb && !_wcsnicmp(pa, pb, na) && (!pb[na] || pb[na] == L'\\')) ||
+           (nb <= na && !_wcsnicmp(pb, pa, nb) && (!pa[nb] || pa[nb] == L'\\'));
+}
+// Inspection allows absence only for the native object-not-found status.
+static int plum_tree_win_replaceable(HANDLE parent, const WCHAR *name, DWORD bytes) {
+    NTSTATUS status = 0;
+    HANDLE h = plum_tree_win_child(parent, name, bytes, FILE_READ_ATTRIBUTES, FILE_OPEN, 0, &status);
+    if (h == INVALID_HANDLE_VALUE) return status == (NTSTATUS)0xc0000034 ? 0 : -1;
+    FILE_ATTRIBUTE_TAG_INFO info;
+    int rc = plum_tree_win_attrs(h, &info);
+    if (!rc && (info.FileAttributes & (FILE_ATTRIBUTE_DIRECTORY | FILE_ATTRIBUTE_REPARSE_POINT))) rc = -1;
+    if (!CloseHandle(h)) rc = -1;
     return rc;
 }
-
-// Resolve an existing directory to its filesystem path. Resolving the
-// directory itself (rather than only normalising its spelling) catches
-// aliases such as `.` and symlinks before a copy can write through them.
-static int plum_resolve_dir(const char *path, char *out, size_t cap) {
-#if defined(_WIN32)
-    HANDLE h = CreateFileA(path, FILE_READ_ATTRIBUTES,
-                           FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
-                           NULL, OPEN_EXISTING, FILE_FLAG_BACKUP_SEMANTICS, NULL);
-    DWORD n;
-    if (h == INVALID_HANDLE_VALUE) return -1;
-    n = GetFinalPathNameByHandleA(h, out, (DWORD)cap, FILE_NAME_NORMALIZED | VOLUME_NAME_DOS);
-    CloseHandle(h);
-    if (n == 0 || n >= cap) return -1;
-    for (char *p = out; *p; p++) {
-        if (*p == '\\') *p = '/';
-        *p = (char)tolower((unsigned char)*p);
+static int plum_tree_win_publish(HANDLE temporary, const WCHAR *name, DWORD bytes) {
+    typedef NTSTATUS (NTAPI *Rename)(HANDLE, PIO_STATUS_BLOCK, PVOID, ULONG, FILE_INFORMATION_CLASS);
+    Rename api = (Rename)(void *)GetProcAddress(GetModuleHandleW(L"ntdll.dll"), "NtSetInformationFile");
+    if (!api) return -1;
+    size_t size = sizeof(FILE_RENAME_INFORMATION) + bytes;
+    FILE_RENAME_INFORMATION *info = calloc(1, size);
+    if (!info) return -1;
+    info->ReplaceIfExists = TRUE;
+    // A bare name renames within the existing handle's parent directory.
+    info->RootDirectory = NULL; info->FileNameLength = bytes;
+    memcpy(info->FileName, name, bytes);
+    IO_STATUS_BLOCK result;
+    NTSTATUS status = api(temporary, &result, info, (ULONG)size, FileRenameInformation);
+    free(info);
+    return status < 0 ? -1 : 0;
+}
+static int plum_tree_win_leaf(HANDLE input, HANDLE parent, const WCHAR *name,
+                              DWORD bytes, const FILE_ATTRIBUTE_TAG_INFO *attrs,
+                              unsigned char *buffer) {
+    int link = !!(attrs->FileAttributes & FILE_ATTRIBUTE_REPARSE_POINT);
+    DWORD link_bytes = 0;
+    if (link && (attrs->ReparseTag != IO_REPARSE_TAG_SYMLINK ||
+        !DeviceIoControl(input, FSCTL_GET_REPARSE_POINT, NULL, 0, buffer,
+                         MAXIMUM_REPARSE_DATA_BUFFER_SIZE, &link_bytes, NULL))) return -1;
+    if (plum_tree_win_replaceable(parent, name, bytes)) return -1;
+    HANDLE output = INVALID_HANDLE_VALUE;
+    for (unsigned attempt = 0; attempt < 1024; attempt++) {
+        WCHAR temp[80];
+        int chars = swprintf(temp, 80, L".plum-copy-%lu-%u", (unsigned long)GetCurrentProcessId(), attempt);
+        if (chars <= 0) return -1;
+        if ((DWORD)chars * sizeof(WCHAR) == bytes && !memcmp(temp, name, bytes)) continue;
+        NTSTATUS status = 0;
+        output = plum_tree_win_child(parent, temp, (DWORD)chars * sizeof(WCHAR),
+            GENERIC_WRITE | DELETE, FILE_CREATE,
+            (link && (attrs->FileAttributes & FILE_ATTRIBUTE_DIRECTORY)) ? FILE_DIRECTORY_FILE : FILE_NON_DIRECTORY_FILE,
+            &status);
+        if (output != INVALID_HANDLE_VALUE) break;
+        if (status != (NTSTATUS)0xc0000035) return -1; // name collision
     }
-    return 0;
-#else
-    return realpath(path, out) != NULL ? 0 : -1;
-#endif
-}
-
-// Directories overlap when either is the other or an ancestor of it.
-// The separators at the prefix boundary avoid confusing `/a/bc` with `/a/b`.
-static int plum_paths_overlap(const char *a, const char *b) {
-    char resolved_a[PLUM_PATH_MAX];
-    char resolved_b[PLUM_PATH_MAX];
-    size_t a_len, b_len;
-    if (plum_resolve_dir(a, resolved_a, sizeof(resolved_a)) != 0 ||
-        plum_resolve_dir(b, resolved_b, sizeof(resolved_b)) != 0) return -1;
-    a_len = strlen(resolved_a);
-    b_len = strlen(resolved_b);
-#if defined(_WIN32)
-    int same = _stricmp(resolved_a, resolved_b) == 0;
-    int a_prefix = _strnicmp(resolved_a, resolved_b, a_len) == 0 &&
-                   (resolved_b[a_len] == '\0' || resolved_a[a_len - 1] == '/' || resolved_b[a_len] == '/');
-    int b_prefix = _strnicmp(resolved_b, resolved_a, b_len) == 0 &&
-                   (resolved_a[b_len] == '\0' || resolved_b[b_len - 1] == '/' || resolved_a[b_len] == '/');
-#else
-    int same = strcmp(resolved_a, resolved_b) == 0;
-    int a_prefix = strncmp(resolved_a, resolved_b, a_len) == 0 &&
-                   (resolved_b[a_len] == '\0' || resolved_a[a_len - 1] == '/' || resolved_b[a_len] == '/');
-    int b_prefix = strncmp(resolved_b, resolved_a, b_len) == 0 &&
-                   (resolved_a[b_len] == '\0' || resolved_b[b_len - 1] == '/' || resolved_a[b_len] == '/');
-#endif
-    return same || a_prefix || b_prefix;
-}
-
-// Copies the CONTENTS of `src` into `dst`, which must already exist --
-// the semantics of `cp -r src/. dst`, which is what this replaced, and
-// deliberately not `cp -r src dst` (that would nest a directory).
-//
-// File MODES are not preserved. The one caller copies a project into a
-// scratch directory to type-check it, where nothing is executed; if a
-// caller ever needs the executable bit, this is the line to revisit
-// rather than a thing to assume.
-static int plum_copy_tree(const char *src, const char *dst) {
-    DIR *d;
-    struct dirent *e;
-    char *s;
-    char *t;
+    if (output == INVALID_HANDLE_VALUE) return -1;
     int rc = 0;
-
-    // Refuse self-copy and either direction of overlap before reading or
-    // creating any destination entry. Otherwise recursion can be unbounded,
-    // and a file copied onto itself is truncated by fopen("wb").
-    if (plum_paths_overlap(src, dst) != 0) return -1;
-
-    d = opendir(src);
-    if (d == NULL) return -1;
-    s = (char *)malloc(PLUM_PATH_MAX);
-    t = (char *)malloc(PLUM_PATH_MAX);
-    if (s == NULL || t == NULL) { free(s); free(t); closedir(d); return -1; }
-
-    while ((e = readdir(d)) != NULL) {
-        if (strcmp(e->d_name, ".") == 0 || strcmp(e->d_name, "..") == 0) continue;
-        if (plum_join(s, PLUM_PATH_MAX, src, e->d_name) != 0) { rc = -1; continue; }
-        if (plum_join(t, PLUM_PATH_MAX, dst, e->d_name) != 0) { rc = -1; continue; }
-        if (plum_is_dir(s)) {
-            if (PLUM_MKDIR(t) != 0 && !plum_is_dir(t)) { rc = -1; continue; }
-            if (plum_copy_tree(s, t) != 0) rc = -1;
-        } else {
-            if (plum_copy_file(s, t) != 0) rc = -1;
+    if (link) {
+        DWORD ignored;
+        if (!DeviceIoControl(output, FSCTL_SET_REPARSE_POINT, buffer, link_bytes,
+                             NULL, 0, &ignored, NULL)) rc = -1;
+    } else {
+        for (;;) {
+            DWORD n = 0;
+            if (!ReadFile(input, buffer, PLUM_COPY_BUFFER, &n, NULL)) { rc = -1; break; }
+            if (!n) break;
+            DWORD offset = 0;
+            while (offset < n) {
+                DWORD wrote = 0;
+                if (!WriteFile(output, buffer + offset, n - offset, &wrote, NULL) || !wrote) { rc = -1; break; }
+                offset += wrote;
+            }
+            if (rc) break;
         }
     }
-    free(s);
-    free(t);
-    closedir(d);
+    if (!rc && !link && !FlushFileBuffers(output)) rc = -1;
+    if (!rc && plum_tree_win_replaceable(parent, name, bytes)) rc = -1;
+    if (!rc && plum_tree_win_publish(output, name, bytes)) rc = -1;
+    if (rc) {
+        FILE_DISPOSITION_INFO remove = {TRUE};
+        SetFileInformationByHandle(output, FileDispositionInfo, &remove, sizeof(remove));
+    }
+    if (!CloseHandle(output)) rc = -1;
+    return rc;
+}
+typedef struct {
+    HANDLE source, destination;
+    unsigned char *entries;
+    DWORD offset;
+    int refill;
+} plum_copy_frame;
+
+static int plum_copy_tree(const char *src, const char *dst) {
+    HANDLE source = plum_copy_root(src);
+    if (source == INVALID_HANDLE_VALUE) return -1;
+    HANDLE destination = plum_copy_root(dst);
+    if (destination == INVALID_HANDLE_VALUE) { CloseHandle(source); return -1; }
+    int rc = -1;
+    if (plum_tree_win_overlap(source, destination) != 0) goto roots;
+    plum_copy_frame *frames = calloc(PLUM_COPY_DEPTH, sizeof(*frames));
+    unsigned char *buffer = malloc(PLUM_COPY_BUFFER);
+    unsigned char *entries = malloc(4096);
+    if (!frames || !buffer || !entries) { free(frames); free(buffer); free(entries); goto roots; }
+    frames[0] = (plum_copy_frame){source, destination, entries, 0, 1};
+    unsigned count = 1;
+    rc = 0;
+    while (count && !rc) {
+        plum_copy_frame *frame = &frames[count - 1];
+        if (frame->refill) {
+            if (!GetFileInformationByHandleEx(frame->source, FileIdBothDirectoryInfo, frame->entries, 4096)) {
+                if (GetLastError() != ERROR_NO_MORE_FILES) { rc = -1; break; }
+                if (!CloseHandle(frame->source)) rc = -1;
+                if (!CloseHandle(frame->destination)) rc = -1;
+                free(frame->entries); count--; continue;
+            }
+            frame->offset = 0; frame->refill = 0;
+        }
+        FILE_ID_BOTH_DIR_INFO *entry = (FILE_ID_BOTH_DIR_INFO *)(frame->entries + frame->offset);
+        DWORD bytes = entry->FileNameLength;
+        if (!bytes || bytes % sizeof(WCHAR) || bytes > 4096 - frame->offset - offsetof(FILE_ID_BOTH_DIR_INFO, FileName)) { rc = -1; break; }
+        WCHAR *name = entry->FileName;
+        DWORD next = entry->NextEntryOffset;
+        if (next) {
+            if (next % 8 || next < offsetof(FILE_ID_BOTH_DIR_INFO, FileName) + bytes ||
+                next > 4096 - frame->offset - sizeof(FILE_ID_BOTH_DIR_INFO)) { rc = -1; break; }
+            frame->offset += next;
+        } else frame->refill = 1;
+        if ((bytes == 2 && name[0] == L'.') || (bytes == 4 && name[0] == L'.' && name[1] == L'.')) continue;
+        HANDLE child = plum_tree_win_child(frame->source, name, bytes, GENERIC_READ, FILE_OPEN, 0, NULL);
+        if (child == INVALID_HANDLE_VALUE) { rc = -1; break; }
+        FILE_ATTRIBUTE_TAG_INFO attrs;
+        if (plum_tree_win_attrs(child, &attrs)) { CloseHandle(child); rc = -1; break; }
+        if (!(attrs.FileAttributes & FILE_ATTRIBUTE_DIRECTORY) || (attrs.FileAttributes & FILE_ATTRIBUTE_REPARSE_POINT)) {
+            rc = plum_tree_win_leaf(child, frame->destination, name, bytes, &attrs, buffer);
+            if (!CloseHandle(child)) rc = -1;
+            continue;
+        }
+        if (count >= PLUM_COPY_DEPTH) { CloseHandle(child); rc = -1; break; }
+        HANDLE output = plum_tree_win_child(frame->destination, name, bytes,
+            FILE_LIST_DIRECTORY, FILE_OPEN_IF, FILE_DIRECTORY_FILE, NULL);
+        if (output == INVALID_HANDLE_VALUE) { CloseHandle(child); rc = -1; break; }
+        FILE_ATTRIBUTE_TAG_INFO output_attrs;
+        if (plum_tree_win_attrs(output, &output_attrs) ||
+            (output_attrs.FileAttributes & FILE_ATTRIBUTE_REPARSE_POINT)) {
+            CloseHandle(output); CloseHandle(child); rc = -1; break;
+        }
+        entries = malloc(4096);
+        if (!entries) { CloseHandle(output); CloseHandle(child); rc = -1; break; }
+        frames[count++] = (plum_copy_frame){child, output, entries, 0, 1};
+    }
+    while (count) {
+        count--;
+        CloseHandle(frames[count].source); CloseHandle(frames[count].destination);
+        free(frames[count].entries);
+    }
+    free(frames); free(buffer);
+    return rc;
+roots:
+    CloseHandle(source); CloseHandle(destination);
     return rc;
 }
 
 #else
 // POSIX copy traversal owns every directory descriptor it descends through.
 // Only the caller-supplied root ancestors are resolved as ordinary paths.
-#define PLUM_COPY_DEPTH 128
-#define PLUM_COPY_BUFFER 65536
-
 static int plum_copy_same(const struct stat *a, const struct stat *b) {
     return a->st_dev == b->st_dev && a->st_ino == b->st_ino;
 }
