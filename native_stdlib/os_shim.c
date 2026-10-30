@@ -1092,6 +1092,88 @@ static int plum_copy_root(const char *path) {
     return fd;
 }
 
+// Root-relative resolver shared by compiler consumers. The returned fd owns
+// the resolved entry; callers must use that fd, never reopen the input path.
+// Links are interpreted ourselves, so absolute targets and attempts to climb
+// above the held root cannot escape through OS pathname resolution.
+static int plum_tree_resolve(int root, const char *relative, int reject_links) {
+    int parents[PLUM_COPY_DEPTH];
+    unsigned depth = 0, links = 0;
+    int result = -1;
+    char pending[PLUM_PATH_MAX], target[PLUM_PATH_MAX];
+    size_t length = strlen(relative);
+    if (!length || length >= sizeof(pending) || relative[0] == '/') return -1;
+    memcpy(pending, relative, length + 1);
+    parents[0] = openat(root, ".", O_RDONLY | O_DIRECTORY | O_CLOEXEC);
+    if (parents[0] < 0) return -1;
+    for (;;) {
+        char *slash = strchr(pending, '/');
+        char *rest = slash ? slash + 1 : pending + strlen(pending);
+        int more = slash != NULL;
+        if (slash) *slash = 0;
+        if (!*pending || !strcmp(pending, ".")) {
+            if (!more) {
+                result = parents[depth]; parents[depth] = -1; break;
+            }
+            memmove(pending, rest, strlen(rest) + 1);
+            continue;
+        }
+        if (!strcmp(pending, "..")) {
+            if (!depth) break;
+            close(parents[depth--]);
+            if (!more) { result = parents[depth]; parents[depth] = -1; break; }
+            memmove(pending, rest, strlen(rest) + 1);
+            continue;
+        }
+        struct stat before, after;
+        if (fstatat(parents[depth], pending, &before, AT_SYMLINK_NOFOLLOW)) break;
+        if (S_ISLNK(before.st_mode)) {
+            if (reject_links || ++links > 40) break;
+            ssize_t n = readlinkat(parents[depth], pending, target, sizeof(target));
+            if (n <= 0 || (size_t)n >= sizeof(target) || target[0] == '/') break;
+            if (fstatat(parents[depth], pending, &after, AT_SYMLINK_NOFOLLOW) ||
+                !plum_copy_same(&before, &after)) break;
+            size_t suffix = strlen(rest);
+            if ((size_t)n + (more ? suffix + 1 : 0) >= sizeof(target)) break;
+            if (more) {
+                target[n++] = '/';
+                memcpy(target + n, rest, suffix + 1);
+            } else target[n] = 0;
+            strcpy(pending, target);
+            continue;
+        }
+        if (!S_ISREG(before.st_mode) && !S_ISDIR(before.st_mode)) break;
+        int flags = O_RDONLY | O_NOFOLLOW | O_NONBLOCK | O_CLOEXEC;
+        if (more || S_ISDIR(before.st_mode)) flags |= O_DIRECTORY;
+        int child = openat(parents[depth], pending, flags);
+        if (child < 0) break;
+        if (fstat(child, &after) || !plum_copy_same(&before, &after)) {
+            close(child); break;
+        }
+        if (!more) { result = child; break; }
+        if (depth + 1 >= PLUM_COPY_DEPTH) { close(child); break; }
+        parents[++depth] = child;
+        memmove(pending, rest, strlen(rest) + 1);
+    }
+    for (unsigned i = 0; i <= depth; i++) if (parents[i] >= 0) close(parents[i]);
+    return result;
+}
+
+// Native owned-entry ABI. Zero is failure; successful values are fd + 1.
+// These are internal compiler primitives, not additions to the public Os API.
+long long plum_tree_root_open(const char *path) {
+    int fd = plum_copy_root(path);
+    return fd < 0 ? 0 : (long long)fd + 1;
+}
+long long plum_tree_entry_open(long long root, const char *relative, long long reject_links) {
+    if (root <= 0 || root > INT32_MAX) return 0;
+    int fd = plum_tree_resolve((int)(root - 1), relative, reject_links != 0);
+    return fd < 0 ? 0 : (long long)fd + 1;
+}
+void plum_tree_entry_close(long long entry) {
+    if (entry > 0 && entry <= INT32_MAX) close((int)(entry - 1));
+}
+
 // Compare actual opened roots and their ancestors, before writing anything.
 static int plum_copy_ancestor(int root, int child) {
     struct stat wanted, current, parent;

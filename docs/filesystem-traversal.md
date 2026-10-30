@@ -7,8 +7,13 @@ an explicit stack capped at 128 directories, and a single 64 KiB transfer
 buffer. `bootstrap/copy-tree-smoke` exercises link preservation, destination
 link rejection, hard-link-safe replacement, overlap rejection, a deterministic
 source swap, enumeration errors, depth exhaustion, and descriptor cleanup
-under address/undefined-behavior sanitizers. Windows copying and the shared
-resolver, hash migration, discovery, and overlay integrations remain pending.
+under address/undefined-behavior sanitizers. The POSIX root-relative entry
+resolver also follows relative links through held descriptors, rejects
+absolute/escaping targets, bounds link expansion at 40, supports rejecting
+links, and returns owned entry descriptors. Its tests cover internal links,
+cycles, dangling targets, strict policy, and repeated-failure cleanup.
+Windows support, hash migration, discovery, and overlay integrations remain
+pending; the compiler does not yet consume the resolver.
 This intermediate implementation is not ready for release: preserved links
 must not be consumed by the old unrestricted compiler walks and overlays.
 

@@ -88,6 +88,34 @@ int main(void) {
     link_text("dst/cycle", ".."); link_text("dst/dangling", "absent");
     link_text("dst/external", "../outside"); link_text("dst/file-link", "nested/data");
     contents("outside/keep", "untouched");
+    long long held = plum_tree_root_open("src");
+    assert(held > 0);
+    long long resolved = plum_tree_entry_open(held, "file-link", 0);
+    assert(resolved > 0);
+    char bytes[6];
+    assert(read((int)(resolved - 1), bytes, sizeof(bytes)) == sizeof(bytes));
+    assert(memcmp(bytes, "copied", sizeof(bytes)) == 0);
+    plum_tree_entry_close(resolved);
+    assert(plum_tree_entry_open(held, "file-link", 1) == 0);
+    assert(plum_tree_entry_open(held, "external/keep", 0) == 0);
+    assert(plum_tree_entry_open(held, "../outside/keep", 0) == 0);
+    assert(plum_tree_entry_open(held, "dangling", 0) == 0);
+    assert(plum_tree_entry_open(held, "nested/data/", 0) == 0);
+    assert(symlink("loop", "src/loop") == 0);
+    assert(plum_tree_entry_open(held, "loop", 0) == 0);
+    assert(symlink("/etc/passwd", "src/absolute") == 0);
+    assert(plum_tree_entry_open(held, "absolute", 0) == 0);
+    assert(symlink("../nested/data", "src/nested/internal") == 0);
+    resolved = plum_tree_entry_open(held, "nested/internal", 0);
+    assert(resolved > 0);
+    plum_tree_entry_close(resolved);
+    int resolver_baseline = descriptor_count();
+    for (int i = 0; i < 100; i++) {
+        assert(plum_tree_entry_open(held, "loop", 0) == 0);
+        assert(plum_tree_entry_open(held, "external/keep", 0) == 0);
+        assert(descriptor_count() == resolver_baseline);
+    }
+    plum_tree_entry_close(held);
     assert(os_copy_tree("src", "src") == -1);
     assert(os_copy_tree("src", "src/nested") == -1);
     assert(os_copy_tree("src/nested", "src") == -1);
