@@ -296,7 +296,11 @@ def check_roots(compiler):
                         result = subprocess.run([compiler, "__lsp_snapshot"],
                             input=b"Content-Length: %d\r\n\r\n" % len(body) + body,
                             capture_output=True, timeout=30)
-                        raise AssertionError(("snapshot worker", result.returncode, result.stdout, result.stderr))
+                        raise AssertionError(("snapshot worker", result.returncode, result.stdout, result.stderr,
+                            "original entries", sorted(os.listdir(project)),
+                            "copied entries", sorted(os.listdir(Path(debug) / "project")),
+                            "original alias", alias.is_symlink(), alias.exists(),
+                            os.readlink(alias) if alias.is_symlink() else None))
                 assert "String" in hover["contents"]["value"], hover
                 target = client.query("definition", physical, live, "value", 1)
                 assert target and target["uri"] == uri(physical), target
