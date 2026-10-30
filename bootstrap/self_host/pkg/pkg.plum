@@ -122,12 +122,9 @@ pub let manifest_path (root: String): String = Path.join(root, manifest_name(())
 // treated as a project without dependencies, because that would fail
 // much later as a pile of unbound variables.
 pub let read (root: String): Manifest =
-    if !Result.unwrap_or(Os.is_directory(root), false) { no_manifest(()) }
-    else {
-        let held = match treefs.open_root(root) {
-            Ok(r) => r, Err(e) => treefs.fail_root(e),
-        };
-        read_held(root, held)
+    match treefs.open_root(root) {
+        Ok(held) => read_held(root, held),
+        Err(e) => if Result.unwrap_or(Os.is_directory(root), false) { panic_raw(e); no_manifest(()) } else { no_manifest(()) },
     }
 
 // Consumers that already acquired a root must load policy from that same

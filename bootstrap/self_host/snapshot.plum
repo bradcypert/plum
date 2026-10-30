@@ -1,0 +1,322 @@
+use Os;
+use Encoding;
+use Process;
+use treefs;
+use pkg;
+use lsp;
+
+// Snapshot preparation is a child-process operation. Parsing a malformed
+// manifest or refusing a filesystem entry must not abort the LSP server.
+struct LspRootMap { original: String, copied: String, reject: Bool }
+struct LspPathMap { original: String, copied: String }
+struct LspSnapshot { container: String, root: String, target: String, roots: Array[LspRootMap], paths: Array[LspPathMap] }
+struct SnapshotRoot { original: String, copied: String, source: treefs.TreeRoot, destination: treefs.TreeRoot, manifest: pkg.Manifest }
+struct SnapshotBuffer { path: String, text: String }
+
+let snapshot_absolute (path: String): String =
+    if snapshot_has_nul(path.as_bytes()) { panic_raw("NUL in filesystem path"); "" }
+    else if Path.is_absolute(path) { Path.clean(path) }
+    else { Path.clean(Path.join(Result.unwrap_or(Os.cwd(()), "."), path)) }
+
+// Match components, not byte offsets in case-folded Unicode. Exact matching
+// retains native byte paths; the case-insensitive fallback is Windows-only.
+let snapshot_relative (root: String) (path: String): Option[String] = {
+    let base = Path.clean(root);
+    let name = Path.clean(path);
+    let prefix = lsp_directory_prefix(base);
+    if name == base { Some(".") }
+    else if name.starts_with(prefix) { Some(treefs.path_slice(name, prefix.len(), name.len())) }
+    else if Os.platform() == "windows" {
+        let parents = base.split("/");
+        let children = name.split("/");
+        if snapshot_prefix(parents, children, 0) {
+            Some(if parents.len() == children.len() { "." } else { Array.join(Array.slice(children, parents.len(), children.len()), "/") })
+        } else { None }
+    } else { None }
+}
+
+let snapshot_prefix (parents: Array[String]) (children: Array[String]) (i: Int): Bool =
+    if i >= parents.len() { true }
+    else if i >= children.len() || String.to_lower(parents[i]) != String.to_lower(children[i]) { false }
+    else { snapshot_prefix(parents, children, i + 1) }
+
+let snapshot_quote (text: String): String = {
+    let mut out = "\"";
+    for ch in chars_of(text) {
+        let first = Option.unwrap_or(ch.as_bytes().at(0), 0);
+        let encoded = if ch == "\\" { "\\\\" } else if ch == "\"" { "\\\"" }
+            else if ch == "$" { "\\$" }
+            else if first < 32 { "\\x".concat(String.pad_left(first.to_hex(), 2, "0")) }
+            else { ch };
+        out = out.concat(encoded);
+    };
+    out.concat("\"")
+}
+
+let snapshot_strings (values: Array[String]): String =
+    "[".concat(Array.join(Array.map(values, |value| snapshot_quote(value)), ", ")).concat("]")
+
+let snapshot_manifest (m: pkg.Manifest) (deps: Array[pkg.Dep]): String = {
+    let rendered = Array.map(deps, |d| "Dep { name: ".concat(snapshot_quote(d.name)).concat(", path: ").concat(snapshot_quote(d.path)).concat(" }"));
+    "Package { name: ".concat(snapshot_quote(m.name)).concat(", version: ").concat(snapshot_quote(m.version))
+        .concat(", symlinks: ").concat(snapshot_quote(m.symlinks)).concat(", deps: [").concat(Array.join(rendered, ", ")).concat("]")
+        .concat(", link: ").concat(snapshot_strings(m.link)).concat(", link_linux: ").concat(snapshot_strings(m.link_linux))
+        .concat(", link_macos: ").concat(snapshot_strings(m.link_macos)).concat(", link_windows: ").concat(snapshot_strings(m.link_windows))
+        .concat(", link_posix: ").concat(snapshot_strings(m.link_posix))
+        .concat(match m.native_deps { None => "", Some(values) => ", native_deps: ".concat(snapshot_strings(values)) }).concat(" }\n")
+}
+
+let snapshot_require (result: Result[Unit, String]): Unit = match result {
+    Ok(_) => (), Err(e) => panic_raw(e),
+}
+
+let snapshot_clone (original: String) (copied: String): SnapshotRoot = {
+    let source = match treefs.open_root(original) { Ok(r) => r, Err(e) => treefs.fail_root(e) };
+    snapshot_require(Os.make_dir(copied));
+    snapshot_require(Os.copy_tree(original, copied));
+    let destination = match treefs.open_root(copied) { Ok(r) => r, Err(e) => treefs.fail_root(e) };
+    let manifest = pkg.read_held(copied, destination);
+    SnapshotRoot { original: original, copied: copied, source: source, destination: destination, manifest: manifest }
+}
+
+// Return identity strings rather than handles so no read handle remains open
+// across replacement (Windows read handles deny deletion).
+let snapshot_identity (root: treefs.TreeRoot) (relative: String) (reject: Bool): String =
+    match treefs.open_entry(root, relative, reject) {
+        Err(_) => "",
+        Ok(entry) => if treefs.kind(entry) == 1 { treefs.identity(entry) } else { "" },
+    }
+
+let snapshot_digest (text: String): String = {
+    let hash = match treefs.hasher() { Ok(h) => h, Err(e) => treefs.fail_hasher(e) };
+    snapshot_require(treefs.hash_bytes(hash, text.as_bytes()));
+    treefs.hash_finish(hash)
+}
+
+let snapshot_record (seen: treefs.TreeSeen) (identity: String) (digest: String) (path: String): Bool =
+    match treefs.remember(seen, identity, digest.concat("\n").concat(path)) {
+        Err(e) => { panic_raw(e); false },
+        Ok(None) => false,
+        Ok(Some(previous)) => {
+            if !previous.starts_with(digest.concat("\n")) { panic_raw("conflicting editor buffers for ${path} and ${treefs.path_slice(previous, 65, previous.len())}") };
+            true
+        },
+    }
+
+let snapshot_root_for (roots: Array[SnapshotRoot]) (path: String): Int = {
+    let mut best = 0 - 1;
+    for i in 0..roots.len() {
+        if Option.is_some(snapshot_relative(roots[i].original, path)) && (best < 0 || roots[i].original.len() > roots[best].original.len()) { best = i; () };
+    };
+    best
+}
+
+let snapshot_overlay (roots: Array[SnapshotRoot]) (buffers: Array[SnapshotBuffer]): Unit = {
+    let originals = match treefs.seen() { Ok(s) => s, Err(e) => treefs.fail_seen(e) };
+    let copies = match treefs.seen() { Ok(s) => s, Err(e) => treefs.fail_seen(e) };
+    for buffer in buffers {
+        let index = snapshot_root_for(roots, buffer.path);
+        if index >= 0 {
+            let root = roots[index];
+            let relative = Option.unwrap_or(snapshot_relative(root.original, buffer.path), "");
+            if relative == "plum.pkg" { panic_raw("save manifest edits before requesting source analysis") };
+            let reject = root.manifest.symlinks == "reject";
+            let digest = snapshot_digest(buffer.text);
+            let original_id = snapshot_identity(root.source, relative, reject);
+            if original_id != "" { let previous = snapshot_record(originals, original_id, digest, buffer.path); () };
+            let expected = snapshot_identity(root.destination, relative, reject);
+            let already = match treefs.recalled(copies, expected) {
+                None => false,
+                Some(previous) => {
+                    if !previous.starts_with(digest.concat("\n")) { panic_raw("conflicting editor buffers for ${buffer.path}") };
+                    true
+                },
+            };
+            if !already {
+                snapshot_require(treefs.write_text(root.destination, relative, reject, expected, buffer.text));
+                let created = snapshot_identity(root.destination, relative, reject);
+                if created == "" { panic_raw("cannot identify overlaid source ${buffer.path}") };
+                let previous = snapshot_record(copies, created, digest, buffer.path);
+                ()
+            };
+        };
+    }
+}
+
+let snapshot_write_manifest (root: SnapshotRoot) (deps: Array[pkg.Dep]): Unit = {
+    let expected = snapshot_identity(root.destination, "plum.pkg", root.manifest.symlinks == "reject");
+    snapshot_require(treefs.write_text(root.destination, "plum.pkg", root.manifest.symlinks == "reject", expected, snapshot_manifest(root.manifest, deps)))
+}
+
+let snapshot_logical (files: Array[SourceFile]) (identity: String): String = {
+    let mut result = "";
+    for file in files { if identity != "" && file.identity == identity { result = file.path; () }; };
+    result
+}
+
+// Copying deliberately breaks hardlinks. Check original source identities too,
+// so a copy cannot hide ambiguous physical source aliases from discovery.
+let snapshot_original_sources (roots: Array[SnapshotRoot]) (files: Array[SourceFile]): Unit = {
+    let seen = match treefs.seen() { Ok(s) => s, Err(e) => treefs.fail_seen(e) };
+    for file in files {
+        for root in roots {
+            match snapshot_relative(root.copied, file.path) {
+                None => (),
+                Some(relative) => {
+                    let id = snapshot_identity(root.source, relative, root.manifest.symlinks == "reject");
+                    if id != "" { snapshot_require(treefs.record(seen, id, Path.join(root.original, relative))); };
+                },
+            };
+        };
+    }
+}
+
+let snapshot_buffers (value: JsonValue): Array[SnapshotBuffer] = match value {
+    JsonArray(items) => Array.map(items, |item| SnapshotBuffer { path: snapshot_absolute(lsp.uri_to_path(lsp.json_field_str(item, "uri"))), text: lsp.json_field_str(item, "text") }),
+    _ => { panic_raw("invalid editor snapshot request"); [] },
+}
+
+let lsp_snapshot_worker (unit: Unit): Unit = {
+    let request = match json_parse(lsp_read_message(())) { Ok(value) => value, Err(e) => { panic_raw(e); JsonNull } };
+    let path = snapshot_absolute(lsp.uri_to_path(lsp.json_field_str(request, "path")));
+    let container = snapshot_absolute(lsp.uri_to_path(lsp.json_field_str(request, "container")));
+    let buffers = snapshot_buffers(Option.unwrap_or(lsp.json_field(request, "buffers"), JsonNull));
+    let original = snapshot_absolute(source_declared_root(Path.dirname(path)));
+    let deps = project_deps(original);
+    let root = Path.join(container, "project");
+    let mut roots = [snapshot_clone(original, root)];
+    let mut rebound: Array[pkg.Dep] = [];
+    snapshot_require(Os.make_dir(Path.join(container, "deps")));
+    for i in 0..deps.len() {
+        let copied = Path.join(Path.join(container, "deps"), i.to_string());
+        let cloned = snapshot_clone(snapshot_absolute(deps[i].path), copied);
+        if deps[i].git != "" { pkg.verify_cached(deps[i], copied) };
+        roots = roots.push(cloned);
+        rebound = rebound.push(pkg.Dep { name: deps[i].name, path: copied, git: "", rev: "", sha256: "", hash_version: 1 });
+    };
+    snapshot_overlay(roots, buffers);
+    snapshot_write_manifest(roots[0], rebound);
+    for i in 1..roots.len() { snapshot_write_manifest(roots[i], []); };
+    let inputs = prepare_inputs(root);
+    snapshot_original_sources(roots, inputs.files);
+    let mut mappings: Array[JsonValue] = [];
+    for buffer in buffers {
+        let index = snapshot_root_for(roots, buffer.path);
+        if index >= 0 {
+            let selected = roots[index];
+            let relative = Option.unwrap_or(snapshot_relative(selected.original, buffer.path), "");
+            let logical = snapshot_logical(inputs.files, snapshot_identity(selected.destination, relative, selected.manifest.symlinks == "reject"));
+            if logical != "" {
+                mappings = mappings.push(JsonObject([JsonEntry { key: "copied", value: JsonString(lsp.path_to_uri(logical)) }, JsonEntry { key: "original", value: JsonString(lsp.path_to_uri(buffer.path)) }]));
+            };
+        };
+    };
+    let selected = roots[0];
+    let relative = Option.unwrap_or(snapshot_relative(original, path), "");
+    let target = snapshot_logical(inputs.files, snapshot_identity(selected.destination, relative, selected.manifest.symlinks == "reject"));
+    if target == "" { panic_raw("requested document is not a discovered source: ${path}") };
+    mappings = mappings.push(JsonObject([JsonEntry { key: "copied", value: JsonString(lsp.path_to_uri(target)) }, JsonEntry { key: "original", value: JsonString(lsp.path_to_uri(snapshot_absolute(path))) }]));
+    print(lsp.encode_json(JsonObject([
+        JsonEntry { key: "root", value: JsonString(lsp.path_to_uri(root)) }, JsonEntry { key: "target", value: JsonString(lsp.path_to_uri(target)) },
+        JsonEntry { key: "roots", value: JsonArray(Array.map(roots, |item| JsonObject([JsonEntry { key: "copied", value: JsonString(lsp.path_to_uri(item.copied)) }, JsonEntry { key: "original", value: JsonString(lsp.path_to_uri(item.original)) }, JsonEntry { key: "reject", value: JsonBool(item.manifest.symlinks == "reject") }]))) },
+        JsonEntry { key: "paths", value: JsonArray(mappings) },
+    ])))
+}
+
+let snapshot_decode (container: String) (value: JsonValue): Option[LspSnapshot] = {
+    let root = lsp.uri_to_path(lsp.json_field_str(value, "root"));
+    let target = lsp.uri_to_path(lsp.json_field_str(value, "target"));
+    let roots = match lsp.json_field(value, "roots") {
+        Some(JsonArray(items)) => Array.map(items, |item| LspRootMap { original: lsp.uri_to_path(lsp.json_field_str(item, "original")), copied: lsp.uri_to_path(lsp.json_field_str(item, "copied")), reject: lsp.json_field(item, "reject") == Some(JsonBool(true)) }), _ => [],
+    };
+    let paths = match lsp.json_field(value, "paths") {
+        Some(JsonArray(items)) => Array.map(items, |item| LspPathMap { original: lsp.uri_to_path(lsp.json_field_str(item, "original")), copied: lsp.uri_to_path(lsp.json_field_str(item, "copied")) }), _ => [],
+    };
+    if root == "" || target == "" || roots.len() == 0 { None }
+    else { Some(LspSnapshot { container: container, root: root, target: target, roots: roots, paths: paths }) }
+}
+
+let snapshot_restore (snapshot: LspSnapshot) (path: String): String = {
+    let mut result = path;
+    for root in snapshot.roots {
+        match snapshot_relative(root.copied, path) { Some(relative) => { result = Path.join(root.original, relative); () }, None => () };
+    };
+    for mapping in snapshot.paths { if mapping.copied == path { result = mapping.original; () }; };
+    result
+}
+
+
+let source_is_directory (path: String): Bool = match treefs.open_root(path) {
+    Ok(_) => true, Err(_) => Result.unwrap_or(Os.is_directory(path), false),
+}
+
+let source_has_manifest (path: String): Bool = match treefs.open_root(path) {
+    Err(_) => false,
+    Ok(root) => match treefs.children(root, ".", false) {
+        Err(e) => { panic_raw(e); false },
+        Ok(entries) => Array.any(entries, |entry| entry.name == "plum.pkg"),
+    },
+}
+
+let snapshot_held_text (root: treefs.TreeRoot) (relative: String) (reject: Bool): Result[String, String] = {
+    let id = snapshot_identity(root, relative, reject);
+    if id == "" { Err("cannot read source ${relative}") }
+    else { treefs.read_text(root, relative, reject, id) }
+}
+
+let source_read_path (path: String): Result[String, String] = {
+    let directory = source_declared_root(Path.dirname(path));
+    match treefs.open_root(directory) {
+        Err(e) => Err(e),
+        Ok(root) => {
+            let manifest = pkg.read_held(directory, root);
+            match snapshot_relative(snapshot_absolute(directory), snapshot_absolute(path)) {
+                None => Err("source is outside its declared root: ${path}"),
+                Some(relative) => snapshot_held_text(root, relative, manifest.symlinks == "reject"),
+            }
+        },
+    }
+}
+
+let snapshot_read (snapshot: LspSnapshot) (path: String): Result[String, String] = {
+    let mut result: Result[String, String] = Err("source is outside snapshot: ${path}");
+    for mapping in snapshot.roots {
+        match snapshot_relative(mapping.copied, path) {
+            None => (),
+            Some(relative) => { result = match treefs.open_root(mapping.copied) {
+                Err(e) => Err(e), Ok(root) => snapshot_held_text(root, relative, mapping.reject),
+            }; () },
+        };
+    };
+    result
+}
+
+// ASCII envelopes avoid narrow Windows argv conversions and retain native
+// filename bytes. Only the internal dispatcher decodes these arguments.
+let lsp_run (argv: Array[String]): Result[Process.ProcessResult, String] =
+    Process.run(Process.Options { program: self_exe(), args: ["__lsp_command"], env: [],
+        stdin: Some(lsp.frame(lsp.encode_json(JsonArray(Array.map(argv, |arg| JsonString(Encoding.hex_encode(arg.as_bytes()))))))) })
+
+let lsp_command_args (unit: Unit): Array[String] =
+    match json_parse(lsp_read_message(())) {
+        Ok(JsonArray(items)) => Array.map(items, |item| match item {
+            JsonString(encoded) => match Encoding.hex_decode(encoded) {
+                Ok(bytes) => treefs.native_text(bytes), Err(e) => { panic_raw(e); "" },
+            },
+            _ => { panic_raw("invalid internal command argument"); "" },
+        }),
+        _ => { panic_raw("invalid internal command envelope"); [] },
+    }
+
+let snapshot_disk_text (path: String): Option[String] = match lsp_run(["__lsp_read", path]) {
+    Ok(result) => if result.exit_code != 0 { None } else { match json_parse(result.stdout) {
+        Ok(JsonString(text)) => Some(text), _ => None,
+    } },
+    Err(_) => None,
+}
+
+let snapshot_has_nul (bytes: Bytes): Bool = {
+    let mut found = false;
+    for i in 0..bytes.len() { if bytes.at(i) == Some(0) { found = true; () }; };
+    found
+}

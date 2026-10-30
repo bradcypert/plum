@@ -110,6 +110,10 @@ int main(int argc, char **argv) {
             fail_after = 0;
             assert(rc == 0 || rc == -1);
             if (rc == -1) assert(!plum_tree_seen_add(seen, "new", "logical"));
+            assert(plum_tree_seen_find(seen, "absent") == 0);
+            assert(plum_tree_seen_find(seen, "new") == 1);
+            assert(!strcmp(plum_tree_seen_previous(seen), "logical"));
+            assert(plum_tree_seen_add(seen, "absent", "fresh") == 0);
             assert(plum_tree_seen_add(seen, "new", "alias") == 1);
             plum_tree_seen_close(seen);
             assert(!live_bytes && !live_blocks);

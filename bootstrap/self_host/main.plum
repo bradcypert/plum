@@ -81,7 +81,7 @@ let cmd_query (dir: String) (path: String) (line: Int) (col: Int): Unit = {
     typecheck.record_types(true);
     let items = codegen.cg_with_prelude(parser.ProgramNode { items: collect_project(dir) }).items;
     typecheck.check_program(parser.ProgramNode { items: items });
-    match Os.read_file(path) {
+    match source_read_path(path) {
         Err(_) => println("{}"),
         Ok(src) => {
             let off = lexer.offset_of(src, line, col);
@@ -169,7 +169,7 @@ let query_answer (nodes: Array[typecheck.NodeType]) (path: String) (off: Int) (i
     else { query_answer(nodes, path, off, i + 1) }
 
 let def_position_fields (path: String) (off: Int): Array[JsonEntry] =
-    match Os.read_file(path) {
+    match source_read_path(path) {
         Err(_) => [],
         Ok(src) => {
             let lc = lexer.line_col(src, off);
@@ -211,7 +211,7 @@ let cmd_members (dir: String) (path: String) (line: Int) (col: Int): Unit = {
     typecheck.record_types(true);
     let items = codegen.cg_with_prelude(parser.ProgramNode { items: collect_project(dir) }).items;
     typecheck.check_program(parser.ProgramNode { items: items });
-    match Os.read_file(path) {
+    match source_read_path(path) {
         Err(_) => println("[]"),
         Ok(src) => {
             let cs = chars_of(src);
@@ -482,7 +482,7 @@ let cmd_doc (dir: String) (out: String) (html: Bool) (home: String) (with_deps: 
 }
 
 let dep_count (dir: String): Int =
-    if Result.unwrap_or(Os.is_directory(dir), false) {
+    if source_is_directory(dir) {
         dep_closure(dir, DepScan { root: Path.clean(dir), visited: [Path.clean(dir)], found: [], fetch: false }).found.len()
     } else { 0 }
 
@@ -1420,7 +1420,7 @@ let cmd_complete (dir: String): Unit = {
 // costs the locals and nothing else; the language server merges what
 // it gets.
 let cmd_locals (dir: String) (path: String) (line: Int) (col: Int): Unit =
-    match Os.read_file(path) {
+    match source_read_path(path) {
         Err(_) => println("[]"),
         Ok(src) => {
             typecheck.record_types(true);
@@ -1548,7 +1548,7 @@ let def_entry (item: parser.ItemNode): Option[JsonValue] =
 // `plum doc` publishes -- one representation, which is what carrying
 // comments as trivia bought.
 let def_json (item: parser.ItemNode) (name: String) (kind: String) (detail: String): JsonValue = {
-    let lc = match Os.read_file(item.path) {
+    let lc = match source_read_path(item.path) {
         Ok(src) => lexer.line_col(src, name_offset(src, item.start, item.end, name)),
         Err(_) => lexer.LineCol { line: 1, col: 1 },
     };
@@ -1703,62 +1703,53 @@ let run_process (program: String) (args: Array[String]): Result[Process.ProcessR
 // `cmd_test` uses -- no path to look up, and no chance of running a
 // different build than this one.
 let lsp_check (dir: String): Option[lsp.Diagnostic] =
-    match run_process(self_exe(), ["check", dir]) {
+    match lsp_run(["check", dir]) {
         Err(_) => None,
         Ok(r) => if r.exit_code == 0 { None } else { lsp.parse_diagnostic(r.stdout.concat(r.stderr)) },
     }
 
-// A request gets one complete project copy with every open buffer under
-// the same directory overlaid. Creation owns failure cleanup; callers own
+// A request gets the declared project and dependency roots with live source
+// buffers overlaid. Creation owns failure cleanup; callers own
 // successful snapshots until all results (including paths) are consumed.
 // No source/index cache or edit history is retained between requests.
-let lsp_snapshot (path: String): Option[String] =
-    match Os.temp_dir() {
+let lsp_snapshot (path: String): Option[LspSnapshot] =
+    if path == "" { None }
+    else { match Os.temp_dir() {
         Err(_) => None,
         Ok(raw) => {
-            let scratch = Path.clean(raw);
-            let dir = Path.dirname(path);
-            let ready = match Os.copy_tree(dir, scratch) {
-                Err(_) => false,
-                Ok(_) => lsp_overlay(scratch, dir, BUFFERS.get()),
+            let container = Path.clean(raw);
+            let buffers = BUFFERS.get();
+            let payload = JsonObject([
+                JsonEntry { key: "path", value: JsonString(lsp.path_to_uri(path)) },
+                JsonEntry { key: "container", value: JsonString(lsp.path_to_uri(container)) },
+                JsonEntry { key: "buffers", value: JsonArray(Array.map(Array.sort_string(Map.keys(buffers)), |uri| JsonObject([
+                    JsonEntry { key: "uri", value: JsonString(uri) },
+                    JsonEntry { key: "text", value: JsonString(Option.unwrap_or(Map.get(buffers, uri), "")) },
+                ]))) },
+            ]);
+            let prepared = match Process.run(Process.Options { program: self_exe(), args: ["__lsp_snapshot"], env: [], stdin: Some(lsp.frame(lsp.encode_json(payload))) }) {
+                Err(_) => None,
+                Ok(result) => if result.exit_code != 0 { None }
+                    else { match json_parse(result.stdout) { Ok(value) => snapshot_decode(container, value), Err(_) => None } },
             };
-            if ready { Some(scratch) }
-            else { let c = Os.remove_tree(scratch); None }
+            match prepared {
+                None => { let removed = Os.remove_tree(container); None },
+                Some(snapshot) => Some(snapshot),
+            }
         },
-    }
+    } }
 
 let lsp_directory_prefix (dir: String): String = {
     let child = Path.join(dir, "_");
     treefs.path_slice(child, 0, child.len() - 1)
 }
 
-let lsp_overlay (scratch: String) (dir: String) (buffers: Map[String, String]): Bool = {
-    let uris = Map.keys(buffers);
-    let mut ready = true;
-    for uri in uris {
-        let path = Path.clean(lsp.uri_to_path(uri));
-        if ready && path.starts_with(lsp_directory_prefix(dir)) {
-            let relative = treefs.path_slice(path, lsp_directory_prefix(dir).len(), path.len());
-            let target = Path.join(scratch, relative);
-            match Map.get(buffers, uri) {
-                None => (),
-                Some(text) => {
-                    ready = Result.is_ok(Os.write_file(target, text));
-                },
-            }
-        };
-    };
-    ready
-}
-
-// Keep cleanup in one place for semantic requests, including null/empty
-// answers after a child fails to parse or type-check an unfinished edit.
-let lsp_with_snapshot (path: String) (unavailable: JsonValue) (answer: (String) -> JsonValue): JsonValue =
+let lsp_with_snapshot (path: String) (unavailable: JsonValue) (answer: (LspSnapshot) -> JsonValue): JsonValue =
     match lsp_snapshot(path) {
         None => unavailable,
-        Some(scratch) => {
-            let result = answer(Path.join(scratch, Path.basename(path)));
-            let c = Os.remove_tree(scratch);
+        Some(snapshot) => {
+            let result = answer(snapshot);
+            let removed = Os.remove_tree(snapshot.container);
             result
         },
     }
@@ -1776,11 +1767,11 @@ let lsp_with_snapshot (path: String) (unavailable: JsonValue) (answer: (String) 
 // Everything here degrades to the old zero-width point: a file that
 // does not parse has no spans, and an error with no construct around it
 // keeps the position it came with.
-let widen (d: lsp.Diagnostic) (scratch: String) (dir: String): lsp.Diagnostic = {
-    let real = lsp_real_path(d, scratch, dir);
+let widen (d: lsp.Diagnostic) (snapshot: LspSnapshot): lsp.Diagnostic = {
+    let real = snapshot_restore(snapshot, d.path);
     if real == "" { d }
     else {
-        match Os.read_file(if scratch == "" { real } else { d.path }) {
+        match snapshot_read(snapshot, d.path) {
             Err(_) => d,
             Ok(src) => {
                 let off = lexer.offset_of(src, d.line, d.col);
@@ -1803,17 +1794,6 @@ let line_width (src: String) (line: Int): Int = {
     if line - 1 >= ls.len() || line < 1 { 1 } else { ls[line - 1].len() }
 }
 
-// A diagnostic reported inside the scratch copy, mapped back to the
-// file the user is actually editing. Without this every error would
-// point at a temp directory that will not exist a moment later.
-// Both arguments arrive CLEANED -- `scratch` from `lsp_snapshot`
-// and `dir` from `Path.dirname` -- because this compares them against a
-// diagnostic's path as raw text, and that path was built by `Path.join`
-// and is therefore clean. A prefix test between a normalized string and
-// an un-normalized one is a silent no-match, not an error.
-let lsp_real_path (d: lsp.Diagnostic) (scratch: String) (dir: String): String =
-    if scratch == "" { d.path } else { lsp_restore_path(d.path, scratch, dir) }
-
 // Publish for the edited document AND, when the error lives in another
 // file of the same project, for that one too.
 //
@@ -1821,13 +1801,12 @@ let lsp_real_path (d: lsp.Diagnostic) (scratch: String) (dir: String): String =
 // keeps showing the last diagnostics it was given until it is told
 // otherwise, so a fixed mistake stays on screen unless the fix
 // publishes an empty list.
-let lsp_publish (uri: String) (d0: Option[lsp.Diagnostic]) (scratch: String): Unit = {
-    let dir = Path.dirname(lsp.uri_to_path(uri));
-    let d = match d0 { Some(x) => Some(widen(x, scratch, dir)), None => None };
+let lsp_publish (uri: String) (d0: Option[lsp.Diagnostic]) (snapshot: LspSnapshot): Unit = {
+    let d = match d0 { Some(x) => Some(widen(x, snapshot)), None => None };
     match d {
         None => lsp_send(lsp.publish_message(uri, [])),
         Some(diag) => {
-            let real = lsp_real_path(diag, scratch, dir);
+            let real = snapshot_restore(snapshot, diag.path);
             let target = if real == "" { uri } else { lsp.path_to_uri(real) };
             if target == uri { lsp_send(lsp.publish_message(uri, [lsp.diagnostic_json(diag)])) }
             else {
@@ -1862,7 +1841,7 @@ let lsp_handle (body: String): Bool =
                 false
             } else if req.method == "textDocument/completion" {
                 let path = lsp.uri_to_path(lsp.document_uri(req.params));
-                lsp_reply(req.id, lsp_with_snapshot(path, JsonArray([]), |target| lsp_answer_completion(target, path, req.params)));
+                lsp_reply(req.id, lsp_with_snapshot(path, JsonArray([]), |snapshot| lsp_answer_completion(snapshot, req.params)));
                 true
             } else if req.method == "textDocument/formatting" {
                 let uri = lsp.document_uri(req.params);
@@ -1892,8 +1871,8 @@ let lsp_handle (body: String): Bool =
                         // replacement for the WHOLE file, so a rule
                         // that changed the tokens would silently
                         // rewrite the user's program. Refuse instead.
-                        if lexer.token_texts(out) != lexer.token_texts(text) { lsp_reply(req.id, JsonArray([])) }
-                        else if out == text { lsp_reply(req.id, JsonArray([])) }
+                        if out == text { lsp_reply(req.id, JsonArray([])) }
+                        else if lexer.token_texts(out) != lexer.token_texts(text) { lsp_reply(req.id, JsonArray([])) }
                         else { lsp_reply(req.id, lsp.format_result(out, text)) }
                     },
                 };
@@ -1971,7 +1950,7 @@ let forget_buffer (uri: String): Unit = {
 let buffer_text (uri: String) (path: String): Option[String] =
     match Map.get(BUFFERS.get(), uri) {
         Some(text) => Some(text),
-        None => match Os.read_file(path) { Ok(t) => Some(t), Err(_) => None },
+        None => snapshot_disk_text(path),
     }
 
 // Open and save may carry text too; diagnose the same version that
@@ -1982,9 +1961,9 @@ let lsp_diagnose_document (uri: String): Unit = {
         // An incomplete project is unavailable, not a project with
         // missing imports. Do not publish invented diagnostics from it.
         None => (),
-        Some(scratch) => {
-            lsp_publish(uri, lsp_check(scratch), scratch);
-            let c = Os.remove_tree(scratch);
+        Some(snapshot) => {
+            lsp_publish(uri, lsp_check(snapshot.root), snapshot);
+            let c = Os.remove_tree(snapshot.container);
             ()
         },
     }
@@ -2003,8 +1982,8 @@ let lsp_diagnose_document (uri: String): Unit = {
 // inferred type, including for a local, which the name index cannot
 // give. Empty when the position is not on an identifier USE, or when
 // the project does not currently type-check.
-let lsp_query (path: String) (line: Int) (col: Int): String =
-    match run_process(self_exe(), ["query", Path.dirname(path), path, line.to_string(), col.to_string()]) {
+let lsp_query (root: String) (path: String) (line: Int) (col: Int): String =
+    match lsp_run(["query", root, path, line.to_string(), col.to_string()]) {
         Err(_) => "",
         Ok(r) => if r.exit_code == 0 { String.trim_end(r.stdout) } else { "" },
     }
@@ -2013,11 +1992,12 @@ let lsp_answer_query (method: String) (params: JsonValue): JsonValue = {
     let uri = lsp.document_uri(params);
     let path = lsp.uri_to_path(uri);
     if uri == "" { JsonNull }
-    else { lsp_with_snapshot(path, JsonNull, |target| lsp_answer_query_in(method, params, path, target)) }
+    else { lsp_with_snapshot(path, JsonNull, |snapshot| lsp_answer_query_in(method, params, path, snapshot)) }
 }
 
-let lsp_answer_query_in (method: String) (params: JsonValue) (real: String) (path: String): JsonValue = {
-    match Os.read_file(path) {
+let lsp_answer_query_in (method: String) (params: JsonValue) (real: String) (snapshot: LspSnapshot): JsonValue = {
+    let path = snapshot.target;
+    match snapshot_read(snapshot, path) {
         Err(_) => JsonNull,
         Ok(src) => {
             let off = lexer.offset_of(src, lsp.params_line(params), lsp.params_col(params));
@@ -2030,7 +2010,7 @@ let lsp_answer_query_in (method: String) (params: JsonValue) (real: String) (pat
                 // top-level name a local happens to shadow.
                 // Go-to-definition still uses the index -- the
                 // checker records types, not binding SITES.
-                let answer = lsp_query(path, lsp.params_line(params), lsp.params_col(params));
+                let answer = lsp_query(snapshot.root, path, lsp.params_line(params), lsp.params_col(params));
                 let inferred = lsp.query_field(answer, "type");
                 let def_line = lsp.query_int(answer, "defLine");
                 // What the answer is ABOUT: the name under the
@@ -2047,9 +2027,9 @@ let lsp_answer_query_in (method: String) (params: JsonValue) (real: String) (pat
                     lsp.location_at(real, def_line, lsp.query_int(answer, "defCol"), name.len())
                 }
                 else {
-                    match lsp.find_def(lsp_defs(path), name, 0) {
+                    match lsp.find_def(lsp_defs(snapshot.root), name, 0) {
                         None => JsonNull,
-                        Some(d) => if method == "textDocument/hover" { lsp.hover_result(d, here) } else { lsp.location_at(lsp_restore_path(d.path, Path.dirname(path), Path.dirname(real)), d.line, d.col, d.name.len()) },
+                        Some(d) => if method == "textDocument/hover" { lsp.hover_result(d, here) } else { lsp.location_at(snapshot_restore(snapshot, d.path), d.line, d.col, d.name.len()) },
                     }
                 }
             }
@@ -2057,23 +2037,16 @@ let lsp_answer_query_in (method: String) (params: JsonValue) (real: String) (pat
     }
 }
 
-// Translate only descendants of this snapshot; prelude/dependency paths
-// outside it must retain their original locations.
-let lsp_restore_path (path: String) (scratch: String) (dir: String): String =
-    if path.starts_with(lsp_directory_prefix(scratch)) {
-        Path.join(dir, treefs.path_slice(path, lsp_directory_prefix(scratch).len(), path.len()))
-    } else { path }
-
-let lsp_answer_completion (path: String) (real: String) (params: JsonValue): JsonValue = {
-    let members = lsp_members(path, lsp.params_line(params), lsp.params_col(params));
+let lsp_answer_completion (snapshot: LspSnapshot) (params: JsonValue): JsonValue = {
+    let path = snapshot.target;
+    let members = lsp_members(snapshot.root, path, lsp.params_line(params), lsp.params_col(params));
     if !Array.is_empty(members) { lsp.completion_result(members) }
     else {
-        let names = lsp_completions(path);
-        // Half-written buffers may not parse. Keep disk names/keywords useful
-        // in that case, but never fall back to stale member types or locals.
+        let names = lsp_completions(snapshot.root);
+        // Half-written buffers retain static keywords and builtin names.
         lsp.completion_result(Array.concat(
-            if Array.is_empty(names) { lsp_completions(real) } else { names },
-            lsp_locals(path, lsp.params_line(params), lsp.params_col(params))))
+            names,
+            lsp_locals(snapshot.root, path, lsp.params_line(params), lsp.params_col(params))))
     }
 }
 
@@ -2094,25 +2067,28 @@ let name_start_acc (src: String) (off: Int) (name: String) (back: Int): Int =
     else if lexer.ident_at(src, off - back) == name && (off - back == 0 || lexer.ident_at(src, off - back - 1) != name) { off - back }
     else { name_start_acc(src, off, name, back + 1) }
 
-let lsp_locals (path: String) (line: Int) (col: Int): Array[lsp.Completion] =
-    match run_process(self_exe(), ["locals", Path.dirname(path), path, line.to_string(), col.to_string()]) {
+let lsp_locals (root: String) (path: String) (line: Int) (col: Int): Array[lsp.Completion] =
+    match lsp_run(["locals", root, path, line.to_string(), col.to_string()]) {
         Err(_) => [],
         Ok(r) => if r.exit_code == 0 { lsp.parse_completions(r.stdout) } else { [] },
     }
 
 // The members of whatever sits before the cursor's `.`, or an empty
 // list when the cursor is not after a dot at all.
-let lsp_members (path: String) (line: Int) (col: Int): Array[lsp.Completion] =
-    match run_process(self_exe(), ["members", Path.dirname(path), path, line.to_string(), col.to_string()]) {
+let lsp_members (root: String) (path: String) (line: Int) (col: Int): Array[lsp.Completion] =
+    match lsp_run(["members", root, path, line.to_string(), col.to_string()]) {
         Err(_) => [],
         Ok(r) => if r.exit_code == 0 { lsp.parse_completions(r.stdout) } else { [] },
     }
 
 // Names and keywords from the supplied project view.
-let lsp_completions (path: String): Array[lsp.Completion] =
-    match run_process(self_exe(), ["complete", Path.dirname(path)]) {
-        Err(_) => [],
-        Ok(r) => if r.exit_code == 0 { lsp.parse_completions(r.stdout) } else { [] },
+let lsp_static_completions (unit: Unit): Array[lsp.Completion] =
+    lsp.parse_completions(lsp.encode_json(JsonArray(Array.concat(builtin_completions(()), keyword_completions(())))))
+
+let lsp_completions (root: String): Array[lsp.Completion] =
+    match lsp_run(["complete", root]) {
+        Err(_) => lsp_static_completions(()),
+        Ok(r) => if r.exit_code == 0 { lsp.parse_completions(r.stdout) } else { lsp_static_completions(()) },
     }
 
 // --- Construct spans, for the LSP ---
@@ -2128,7 +2104,7 @@ let lsp_completions (path: String): Array[lsp.Completion] =
 // expand-selection is a user in the middle of an edit, which is exactly
 // when the buffer does not parse.
 pub let cmd_spans (path: String): Unit =
-    match Os.read_file(path) {
+    match source_read_path(path) {
         Err(_) => (),
         Ok(src) => {
             let lexed = lexer.tokenize_spanned_at(src, path);
@@ -2159,10 +2135,10 @@ let lsp_spans (path: String) (text: String): Array[OffSpan] =
     match Os.temp_dir() {
         Err(_) => [],
         Ok(scratch) => {
-            let target = Path.join(scratch, Path.basename(path));
+            let target = Path.join(scratch, "buffer.plum");
             let out = match Os.write_file(target, text) {
                 Err(_) => [],
-                Ok(_) => match run_process(self_exe(), ["spans", target]) {
+                Ok(_) => match lsp_run(["spans", target]) {
                     Err(_) => [],
                     Ok(r) => if r.exit_code == 0 { parse_off_spans(String.lines(r.stdout), 0, []) } else { [] },
                 },
@@ -2214,10 +2190,10 @@ let lsp_fmt (path: String) (text: String): String =
     match Os.temp_dir() {
         Err(_) => text,
         Ok(scratch) => {
-            let target = Path.join(scratch, Path.basename(path));
+            let target = Path.join(scratch, "buffer.plum");
             let out = match Os.write_file(target, text) {
                 Err(_) => text,
-                Ok(_) => match run_process(self_exe(), ["fmt", target]) {
+                Ok(_) => match lsp_run(["fmt", target]) {
                     Err(_) => text,
                     // A non-zero exit is a file the formatter refused.
                     // Handing back the input unchanged makes the caller's
@@ -2271,8 +2247,8 @@ let rngs_of (text: String) (sp: Array[OffSpan]) (i: Int) (acc: Array[lsp.Rng]): 
         rngs_of(text, sp, i + 1, acc.push(lsp.Rng { sl: a.line, sc: a.col, el: b.line, ec: b.col }))
     }
 
-let lsp_defs (path: String): Array[lsp.Def] =
-    match run_process(self_exe(), ["defs", Path.dirname(path)]) {
+let lsp_defs (root: String): Array[lsp.Def] =
+    match lsp_run(["defs", root]) {
         Err(_) => [],
         Ok(r) => if r.exit_code == 0 { lsp.parse_defs(r.stdout) } else { [] },
     }
@@ -2550,7 +2526,7 @@ let test_dispatch_arms (names: Array[String]) (i: Int) (acc: String): String =
 struct NativeFrame { relative: String, entries: Array[treefs.EntryInfo], index: Int }
 
 let native_c_files (project: String) (os: String) (builder: SourceBuilder): Array[String] =
-    if !Result.unwrap_or(Os.is_directory(project), false) { [] }
+    if !source_is_directory(project) { [] }
     else {
         let scope = source_scope(project, "", "");
         let children = match treefs.children(scope.root, ".", scope.reject_links) {
@@ -3127,7 +3103,7 @@ let command_native_tls (argv: Array[String]): Bool = {
 // SOURCE to load, so the C and the Plum can never disagree about which
 // packages are in the build.
 let project_deps (dir: String): Array[pkg.Dep] =
-    if Result.unwrap_or(Os.is_directory(dir), false) {
+    if source_is_directory(dir) {
         dep_closure(dir, DepScan { root: Path.clean(dir), visited: [Path.clean(dir)], found: [], fetch: false }).found
     } else { [] }
 
@@ -3637,7 +3613,7 @@ let source_declared_root (directory: String): String = {
 
 let source_find_manifest (directory: String) (depth: Int): Option[String] =
     if depth >= 128 { None }
-    else if Result.unwrap_or(Os.exists(Path.join(directory, "plum.pkg")), false) { Some(directory) }
+    else if source_has_manifest(directory) { Some(directory) }
     else {
         let parent = Path.dirname(directory);
         if parent == directory { None } else { source_find_manifest(parent, depth + 1) }
@@ -3730,7 +3706,7 @@ let source_path_into (path: String) (module_name: String) (owner: String) (dep_n
     source_path_policy(path, module_name, owner, dep_name, builder, false)
 
 let source_path_policy (path: String) (module_name: String) (owner: String) (dep_name: String) (builder: SourceBuilder) (include_hidden: Bool): Unit = {
-    let is_dir = Result.unwrap_or(Os.is_directory(path), false);
+    let is_dir = source_is_directory(path);
     let base = source_scope(if is_dir { if include_hidden { source_declared_root(path) } else { path } } else { source_declared_root(Path.dirname(path)) }, owner, dep_name);
     let scope = SourceScope { root: base.root, path: base.path, owner: base.owner, dep_name: base.dep_name, reject_links: base.reject_links, include_hidden: include_hidden };
     let relative = source_relative(scope.path, path);
@@ -3761,7 +3737,7 @@ let prepare_inputs (dir: String): BuildInputs = {
     buildcache.finish("dependency resolution", t);
     let s = buildcache.start(());
     let builder = source_builder();
-    if Result.unwrap_or(Os.is_directory(dir), false) { source_root(dir, "", builder) }
+    if source_is_directory(dir) { source_root(dir, "", builder) }
     else { source_path_into(dir, "", "", "", builder) };
     source_deps(deps, builder);
     let files = builder.files.get();
@@ -3856,7 +3832,7 @@ let collect_project (root: String): Array[parser.ItemNode] =
 // which is the actual question, and it cannot be fooled by a project
 // that happens to contain a dot in a directory name.
 let collect_own (root: String): Array[parser.ItemNode] =
-    if Result.unwrap_or(Os.is_directory(root), false) {
+    if source_is_directory(root) {
         let builder = source_builder();
         source_root(root, "", builder);
         parse_source_files(builder.files.get(), 0, [])
@@ -3873,7 +3849,7 @@ let collect_own (root: String): Array[parser.ItemNode] =
 // the first question a global cache raises and the answer is otherwise
 // a path nobody can guess.
 let cmd_fetch (dir: String): Unit = {
-    if !Result.unwrap_or(Os.is_directory(dir), false) {
+    if !source_is_directory(dir) {
         panic_raw("`plum fetch` takes a project directory; ${dir} is not one")
     };
     let found = dep_closure(dir, DepScan { root: Path.clean(dir), visited: [Path.clean(dir)], found: [], fetch: true }).found;
@@ -3886,7 +3862,7 @@ let cmd_fetch (dir: String): Unit = {
 }
 
 let cmd_vendor (dir: String): Unit = {
-    if !Result.unwrap_or(Os.is_directory(dir), false) { panic_raw("`plum vendor` takes a project directory; ${dir} is not one") };
+    if !source_is_directory(dir) { panic_raw("`plum vendor` takes a project directory; ${dir} is not one") };
     let root = Path.clean(dir);
     let found = dep_closure(root, DepScan { root: root, visited: [root], found: [], fetch: true }).found;
     vendor_deps(root, found, 0);
@@ -3933,7 +3909,7 @@ let cached_files_in (dir: String) (names: Array[String]) (i: Int) (acc: Int): In
     if i >= names.len() { acc }
     else {
         let path = Path.join(dir, names[i]);
-        let next = if Result.unwrap_or(Os.is_directory(path), false) {
+        let next = if source_is_directory(path) {
             acc + cached_files_under(path)
         } else { acc + 1 };
         cached_files_in(dir, names, i + 1, next)
@@ -4191,7 +4167,8 @@ let mkdir_ok (name: String): Bool =
 
 let main (): Unit = {
     buildcache.configure_profile(());
-    let argv = args();
+    let native_args = args();
+    let argv = if native_args.len() == 1 && native_args[0] == "__lsp_command" { lsp_command_args(()) } else { native_args };
     // Before the `argv.len() < 2` guard below, alongside `lsp`: both
     // are complete with no second argument. Placed after it at first,
     // where it was unreachable -- `version` fell into the usage branch
@@ -4210,7 +4187,7 @@ let main (): Unit = {
         // can put it wherever it is going. `bootstrap/highlight-site`
         // is one such caller; `plum doc --html` calls the same code
         // directly.
-        match Os.read_file(argv[1]) {
+        match source_read_path(argv[1]) {
             Err(e) => { println("highlight: ${argv[1]}: ${e}"); Os.exit_with(1) },
             Ok(src) => print(highlight.hl_html(src)),
         }
@@ -4225,7 +4202,7 @@ let main (): Unit = {
         // in LANGUAGE.md and MODULES.md name packages that do not exist
         // and never will, and what they claim is that the FORM is right.
         // This checks that claim and nothing else. See issue #45.
-        match Os.read_file(argv[1]) {
+        match source_read_path(argv[1]) {
             Err(e) => { println("check-manifest: ${argv[1]}: ${e}"); Os.exit_with(1) },
             Ok(src) => { pkg.parse(argv[1], src); println("ok") },
         }
@@ -4250,6 +4227,10 @@ let main (): Unit = {
         // and reports that it could not read `typo`, which hides the
         // actual mistake.
         usage(())
+    } else if argv.len() == 1 && argv[0] == "__lsp_snapshot" {
+        lsp_snapshot_worker(())
+    } else if argv.len() == 2 && argv[0] == "__lsp_read" {
+        match source_read_path(argv[1]) { Ok(text) => print(lsp.encode_json(JsonString(text))), Err(e) => panic_raw(e) }
     } else if argv.len() >= 1 && argv[0] == "lsp" {
         // No file argument: the server talks over stdin/stdout.
         lsp_serve(())
@@ -4332,7 +4313,7 @@ let main (): Unit = {
         // opinions added. If the version WITHOUT opinions cannot
         // reproduce a file byte for byte, the version with them has
         // nothing sound to build on.
-        match Os.read_file(argv[1]) {
+        match source_read_path(argv[1]) {
             Ok(src) =>
                 if argv.len() > 2 && argv[2] == "--items" { print(relex_items(argv[1], src)) }
                 // One token's own source text per line. No token can
@@ -4351,7 +4332,7 @@ let main (): Unit = {
     } else if argv[0] == "run" {
         run_project(argv);
     } else {
-        match Os.read_file(argv[1]) {
+        match source_read_path(argv[1]) {
             Err(e) => println("failed to read file: ".concat(e)),
             Ok(src) => {
                 // Same source context the project path sets, so a parse

@@ -28,9 +28,8 @@ Package hashing and validation now consume these primitives, including
 versioned manifests, legacy compatibility, typed version 2 records, and
 validation before fetch/vendor publication. Independent Python integration
 tests compare both formats with actual fetch output and exercise link errors.
-Overlay integration remains pending.
-This intermediate implementation is not ready for release: preserved links
-must not be consumed by the old unrestricted compiler walks and overlays.
+LSP snapshot integration now uses the same confined writer and source inventory.
+Final cache-usage traversal and policy-consistency audits remain pending.
 
 This design coordinates issues #186 (copying source links), #283 (copying
 through destination links), #184 (copy enumeration failures), #176 (package
@@ -62,6 +61,30 @@ reads link records. Manifests are read through held roots too: dangling or
 escaping manifest links are errors, and `reject` also rejects a linked
 manifest. The writer supports exclusive creation of missing confined targets
 for unsaved buffers; a racing creator is never overwritten.
+
+LSP semantic requests clone the nearest declared project root and all resolved
+dependency roots into one owned temporary container. Temporary manifests rebind
+the dependency graph to those copies; original manifests and dependency files
+are untouched. Snapshot construction and manifest parsing run in a worker so
+malformed projects cannot terminate the server. Live buffers overlay resolved
+regular targets, including missing targets behind confined dangling links.
+Conflicting texts for one physical target are refused; identical aliases are
+allowed. Original source identities are checked after copying because copying
+breaks hardlinks. Diagnostics and definitions map back through both root and
+buffer-alias mappings. Manifest buffer edits must be saved before semantic
+analysis; graph resolution uses saved configuration. Request cleanup owns the
+whole container on success and failure. Internal commands transport path bytes
+through ASCII envelopes rather than Windows narrow argument conversion.
+
+Snapshots remain rebuilt per request. Streaming copy limits file-content
+working memory, but copying the whole declared project and dependency closure
+can increase disk I/O and temporary disk usage compared with copying only the
+requested directory. The server retains open buffers; serialization and the
+worker's decoded buffers add transient memory proportional to all open buffer
+text, including buffers later excluded by root selection. Conflict indexes
+retain identities, SHA-256 digests and first paths, rather than additional
+copies of source text. Analysis still retains its usual whole-source and AST
+storage. There is no persistent snapshot or semantic cache in this change.
 
 ## User-visible contract
 

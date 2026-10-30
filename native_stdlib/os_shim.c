@@ -1865,9 +1865,9 @@ static size_t plum_tree_seen_hash(const char *key) {
 long long plum_tree_seen_open(void) {
     return (long long)(intptr_t)calloc(1, sizeof(plum_tree_seen));
 }
-long long plum_tree_seen_add(long long raw, const char *identity, const char *path) {
+long long plum_tree_seen_find(long long raw, const char *identity) {
     plum_tree_seen *seen = (plum_tree_seen *)(intptr_t)raw;
-    if (!seen || !identity || !*identity || !path) return -1;
+    if (!seen || !identity || !*identity) return -1;
     seen->previous = NULL;
     if (seen->capacity) {
         size_t at = plum_tree_seen_hash(identity) & (seen->capacity - 1);
@@ -1879,6 +1879,13 @@ long long plum_tree_seen_add(long long raw, const char *identity, const char *pa
             at = (at + 1) & (seen->capacity - 1);
         }
     }
+    return 0;
+}
+long long plum_tree_seen_add(long long raw, const char *identity, const char *path) {
+    if (!path) return -1;
+    long long found = plum_tree_seen_find(raw, identity);
+    if (found != 0) return found;
+    plum_tree_seen *seen = (plum_tree_seen *)(intptr_t)raw;
     if (seen->count >= seen->capacity / 2) {
         size_t capacity = seen->capacity ? seen->capacity * 2 : 32;
         if (capacity < seen->capacity || capacity > SIZE_MAX / sizeof(plum_tree_seen_slot)) return -1;

@@ -8,6 +8,7 @@ extern "C" {
     fn plum_tree_text_data(text: Int) -> CStr;
     fn plum_tree_text_close(text: Int) -> Unit;
     fn plum_tree_seen_open() -> Int;
+    fn plum_tree_seen_find(seen: Int, identity: CStr) -> Int;
     fn plum_tree_seen_add(seen: Int, identity: CStr, path: CStr) -> Int;
     fn plum_tree_seen_previous(seen: Int) -> CStr;
     fn plum_tree_seen_close(seen: Int) -> Unit;
@@ -188,3 +189,21 @@ pub let write_text (root: TreeRoot) (relative: String) (reject_links: Bool) (exp
 let str_of_bytes_raw (bytes: Bytes): String = ""
 pub let path_slice (path: String) (start: Int) (end: Int): String =
     str_of_bytes_raw(path.as_bytes().slice(start, end))
+
+// Return the first value for a physical identity without replacing it.
+pub let remember (seen: TreeSeen) (identity: String) (value: String): Result[Option[String], String] = unsafe {
+    let status = plum_tree_seen_add(TreeSeen.raw(seen), identity.as_cstr(), value.as_cstr());
+    if status == 0 { Ok(None) }
+    else if status == 1 { Ok(Some(plum_tree_seen_previous(TreeSeen.raw(seen)).as_string())) }
+    else { Err("cannot record filesystem identity") }
+}
+pub let fail_hasher (error: String): TreeHasher = { panic_raw(error); unsafe { TreeHasher.from_raw(0) } }
+
+pub let native_text (bytes: Bytes): String = str_of_bytes_raw(bytes)
+
+// Lookup does not retain identities of entries about to be replaced.
+pub let recalled (seen: TreeSeen) (identity: String): Option[String] = unsafe {
+    if plum_tree_seen_find(TreeSeen.raw(seen), identity.as_cstr()) == 1 {
+        Some(plum_tree_seen_previous(TreeSeen.raw(seen)).as_string())
+    } else { None }
+}
