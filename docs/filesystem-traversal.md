@@ -29,7 +29,7 @@ versioned manifests, legacy compatibility, typed version 2 records, and
 validation before fetch/vendor publication. Independent Python integration
 tests compare both formats with actual fetch output and exercise link errors.
 LSP snapshot integration now uses the same confined writer and source inventory.
-Final policy-consistency and diagnostics audits remain pending.
+Final diagnostics and platform verification remain pending.
 
 This design coordinates issues #186 (copying source links), #283 (copying
 through destination links), #184 (copy enumeration failures), #176 (package
@@ -45,8 +45,10 @@ first logical paths, not one descriptor per source. Parser reads still need
 whole-source storage; streaming hashes do not. Native directory reopening
 on Windows passed the native tests and compiler bootstrap in run 41112005098.
 Formatting now shares the bounded source inventory, including its existing
-hidden/vendor inclusions. Explicit files and formatter subdirectories inherit
-the nearest declared project policy. Writes resolve the regular target,
+hidden/vendor inclusions. Explicit files and selected project subdirectories inherit
+the nearest declared project policy and dependencies, while preserving the
+selected subtree, module layout and logical path spelling. Dependency roots
+remain independent. Native C selection uses the same held-root boundary. Writes resolve the regular target,
 verify its discovered identity, and publish an exclusive temporary through
 the held parent, preserving traversed symlinks and unrelated hardlinks.
 POSIX target permission bits are retained. Native tests cover a target swap
@@ -102,10 +104,19 @@ list of package roots. It reads file-size metadata without allocating source
 contents. Unique staging adds small per-operation directories and ownership
 markers; concurrent writers can temporarily duplicate a full package on disk.
 
+Manifest discovery probes one child without following it, rather than
+allocating a complete directory inventory for every ancestor. A dangling link
+is present and subsequently fails its confined read; it is not silently
+interpreted as a missing manifest. Ancestor lookup errors at its depth bound.
+Manifest cache hashes also read through confined entries and include the
+actual inherited manifest for a selected subtree. Shared path utilities
+preserve native filename bytes and compare Windows path components without
+using offsets into case-folded Unicode strings.
+
 ## User-visible contract
 
 Project discovery supports `within-root` (default) and `reject`. Store the
-choice in a proposed `symlinks` string field on `Package` in `plum.pkg`.
+choice in the `symlinks` string field on `Package` in `plum.pkg`.
 Unknown values are errors. Every project and dependency has its own root;
 a consumer's setting cannot authorize a dependency to escape its root.
 All commands, including check, build, run, test, fmt, and LSP requests, use

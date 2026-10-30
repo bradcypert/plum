@@ -108,6 +108,8 @@ int main(void) {
     contents("outside/keep", "untouched");
     long long held = plum_tree_root_open("src");
     assert(held > 0);
+    assert(plum_tree_child_kind(held, "dangling") == 3);
+    assert(plum_tree_child_kind(held, "external") == 3);
     long long resolved = plum_tree_entry_open(held, "file-link", 0);
     assert(resolved > 0);
     char bytes[6];

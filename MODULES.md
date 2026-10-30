@@ -309,6 +309,35 @@ Package {
 }
 ```
 
+The manifest also selects how project sources use symbolic links:
+
+```plum manifest
+Package { name: "myapp", symlinks: "within-root" }
+```
+
+`within-root` is the default. Relative links may resolve within the declared
+project root; absolute links and attempts to ascend above that root are
+errors. Use `symlinks: "reject"` to reject links encountered in selected source
+traversal. Existing hidden-directory and vendor exclusions still apply.
+Cycles and multiple visible paths to one physical source are errors, including
+hardlink aliases. Unsupported Windows reparse points, such as junctions, are
+refused. An external shared tree belongs in an explicit path dependency.
+
+Selecting a nested directory or file keeps that selection's source scope and
+module layout, but inherits the nearest ancestor manifest's policy and
+dependencies. Native source selection and formatting use the same boundary.
+Each dependency has its own root and policy; it never inherits permission to
+leave its root from the consuming project or an ancestor manifest. Without a
+manifest, the selected directory (or an explicit file's containing directory)
+is the boundary. Directory traversal and ancestor-manifest lookup are bounded
+at 128 levels, and link expansion at 40.
+
+LSP semantic requests copy the declared project and resolved dependency roots,
+apply open source buffers within those copies, and map results back to editor
+URIs. Conflicting buffers for one physical target make analysis unavailable;
+identical alias buffers are allowed. Save manifest edits before requesting
+semantic analysis: dependency resolution uses saved configuration.
+
 Native sources and linked libraries can declare which embedded dependencies
 those inputs require:
 

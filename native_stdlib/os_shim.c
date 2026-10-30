@@ -1641,6 +1641,30 @@ long long plum_tree_entry_kind(long long entry) {
     return S_ISREG(info.st_mode) ? 1 : S_ISDIR(info.st_mode) ? 2 : S_ISLNK(info.st_mode) ? 3 : 4;
 #endif
 }
+// Inspect one child without following it. Missing is distinct from refusal
+// or I/O failure; notably a dangling link is present. No directory inventory
+// or source-content allocation is needed for manifest lookup.
+long long plum_tree_child_kind(long long root, const char *name) {
+    if (!root || !name || !*name || !strcmp(name, ".") || !strcmp(name, "..") || strchr(name, '/')) return -1;
+#if defined(_WIN32)
+    if (strchr(name, '\\') || strchr(name, ':')) return -1;
+    WCHAR wide[PLUM_PATH_MAX];
+    int count = plum_tree_win_path(name, wide, PLUM_PATH_MAX);
+    if (count <= 1) return -1;
+    NTSTATUS status = 0;
+    HANDLE child = plum_tree_win_child((HANDLE)(intptr_t)root, wide,
+        (DWORD)((count - 1) * sizeof(WCHAR)), FILE_READ_ATTRIBUTES, FILE_OPEN, 0, &status);
+    if (child == INVALID_HANDLE_VALUE) return status == (NTSTATUS)0xc0000034 ? 0 : -1;
+    long long kind = plum_tree_entry_kind((long long)(intptr_t)child);
+    if (!CloseHandle(child)) return -1;
+    return kind;
+#else
+    struct stat info;
+    if (fstatat((int)(root - 1), name, &info, AT_SYMLINK_NOFOLLOW)) return errno == ENOENT ? 0 : -1;
+    return S_ISREG(info.st_mode) ? 1 : S_ISDIR(info.st_mode) ? 2 : S_ISLNK(info.st_mode) ? 3 : 4;
+#endif
+}
+
 const char *plum_tree_entry_identity(long long entry) {
     static PLUM_OS_TLS char identity[80];
     identity[0] = 0;

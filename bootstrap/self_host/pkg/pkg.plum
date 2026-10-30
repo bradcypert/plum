@@ -131,11 +131,9 @@ pub let read (root: String): Manifest =
 // capability, not acquire the pathname a second time.
 pub let read_held (root: String) (held: treefs.TreeRoot): Manifest = {
     let path = manifest_path(root);
-    let entries = match treefs.children(held, ".", false) {
-        Ok(xs) => xs, Err(e) => { panic_raw(e); [] },
+    let present = match treefs.child_present(held, manifest_name(())) {
+        Ok(found) => found, Err(e) => { panic_raw("failed to inspect ${path}: ${e}"); false },
     };
-    let mut present = false;
-    for entry in entries { if entry.name == manifest_name(()) { present = true; () }; };
     if !present { no_manifest(()) }
     else {
         let entry = match treefs.open_entry(held, manifest_name(()), false) {

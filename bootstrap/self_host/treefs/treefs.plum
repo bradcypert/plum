@@ -3,6 +3,7 @@ use Os;
 // Owned compiler filesystem primitives. Paths are interpreted beneath a held
 // root; consumers retain logical names for diagnostics, never for reopening.
 extern "C" {
+    fn plum_tree_child_kind(root: Int, name: CStr) -> Int;
     fn plum_cache_temp(root: CStr) -> CStr;
     fn plum_tree_entry_size(entry: Int) -> Int;
     fn plum_tree_text_open(entry: Int) -> Int;
@@ -220,4 +221,12 @@ pub let entry_size (entry: TreeEntry): Result[Int, String] = unsafe {
 pub let staging (parent: String): Result[String, String] = unsafe {
     let path = plum_cache_temp(parent.as_cstr()).as_string();
     if path == "" { Err("cannot reserve staging directory under ${parent}") } else { Ok(path) }
+}
+
+// This probe does not resolve links. Reads still acquire and validate their
+// own entries; finding a name is never authorization to reopen a pathname.
+pub let child_present (root: TreeRoot) (name: String): Result[Bool, String] = unsafe {
+    let kind = plum_tree_child_kind(TreeRoot.raw(root), name.as_cstr());
+    if kind < 0 { Err("cannot inspect child ${name} inside filesystem root") }
+    else { Ok(kind != 0) }
 }

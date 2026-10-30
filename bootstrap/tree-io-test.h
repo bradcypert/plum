@@ -1,6 +1,10 @@
 // Shared native entry/stream/hash tests, used on POSIX and Windows.
 static void tree_io_tests(void) {
     long long root = plum_tree_root_open("src"); assert(root);
+    assert(plum_tree_child_kind(root, "nested") == 2);
+    assert(plum_tree_child_kind(root, "absent-probe") == 0);
+    assert(plum_tree_child_kind(root, "nested/data") == -1);
+    assert(plum_tree_child_kind(root, "..") == -1);
     long long file_entry = plum_tree_entry_open(root, "nested/data", 0); assert(file_entry);
     assert(plum_tree_entry_kind(file_entry) == 1);
     assert(*plum_tree_entry_identity(file_entry));

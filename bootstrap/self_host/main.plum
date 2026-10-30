@@ -2526,20 +2526,24 @@ let test_dispatch_arms (names: Array[String]) (i: Int) (acc: String): String =
 struct NativeFrame { relative: String, entries: Array[treefs.EntryInfo], index: Int }
 
 let native_c_files (project: String) (os: String) (builder: SourceBuilder): Array[String] =
+    native_c_files_policy(project, os, builder, true)
+
+let native_c_files_policy (project: String) (os: String) (builder: SourceBuilder) (inherit: Bool): Array[String] =
     if !source_is_directory(project) { [] }
     else {
-        let scope = source_scope(project, "", "");
-        let children = match treefs.children(scope.root, ".", scope.reject_links) {
+        let scope = source_selected_scope(project, "", "", inherit);
+        let children = match treefs.children(scope.root, scope.selection, scope.reject_links) {
             Ok(xs) => xs, Err(e) => { panic_raw(e); [] },
         };
         let mut present = false;
         for info in children { if info.name == "native" { present = true; () }; };
         if !present { [] }
         else {
-            let entry = source_entry(scope, "native");
+            let relative = if scope.selection == "." { "native" } else { Path.join(scope.selection, "native") };
+            let entry = source_entry(scope, relative);
             if treefs.kind(entry) != 2 { panic_raw("native source path is not a directory: ${project}/native") };
             source_record(builder, entry, "${project}/native");
-            native_c_walk(scope, os, builder, [native_frame(scope, "native")], ref([]))
+            native_c_walk(scope, os, builder, [native_frame(scope, relative)], ref([]))
         }
     }
 
@@ -2561,7 +2565,7 @@ let native_c_walk (scope: SourceScope) (os: String) (builder: SourceBuilder) (st
         else {
             let info = frame.entries[frame.index];
             let relative = Path.join(frame.relative, info.name);
-            let full = Path.join(scope.path, relative);
+            let full = source_logical(scope, relative);
             let pending = rest.push(NativeFrame { relative: frame.relative, entries: frame.entries, index: frame.index + 1 });
             // Named target exclusions apply before resolving a directory link.
             if native_known_dir(info.name) && !native_applies(info.name, os) && info.kind != 1 {
@@ -3065,7 +3069,7 @@ let link_args_resolved (argv: Array[String]) (dir: String) (target: String) (dep
     // shipping a shim over SQLite knows it needs `-lsqlite3`, and until
     // 0.0.34 there was nowhere to say so, which meant every consumer had
     // to know an implementation detail of every dependency. See #42.
-    let own = pkg.read(dir);
+    let own = pkg.read(source_project_root(dir));
     let native_builder = source_builder();
     let own_cs = native_c_files(dir, os, native_builder);
     let own_libs = pkg.manifest_link_for(own, os);
@@ -3074,7 +3078,7 @@ let link_args_resolved (argv: Array[String]) (dir: String) (target: String) (dep
     let mut tls = command_native_tls(argv) || pkg.native_needs_tls(own, own_cs.len() > 0 || own_libs.len() > 0);
     for dep in deps {
         let m = pkg.read(dep.path);
-        let dep_cs = native_c_files(dep.path, os, native_builder);
+        let dep_cs = native_c_files_policy(dep.path, os, native_builder, false);
         let dep_libs = pkg.manifest_link_for(m, os);
         cs = Array.concat(cs, dep_cs);
         libs = Array.concat(libs, dep_libs);
@@ -3102,10 +3106,12 @@ let command_native_tls (argv: Array[String]): Bool = {
 // handled -- the same scan `collect_project` uses to decide which
 // SOURCE to load, so the C and the Plum can never disagree about which
 // packages are in the build.
-let project_deps (dir: String): Array[pkg.Dep] =
-    if source_is_directory(dir) {
-        dep_closure(dir, DepScan { root: Path.clean(dir), visited: [Path.clean(dir)], found: [], fetch: false }).found
+let project_deps (dir: String): Array[pkg.Dep] = {
+    let root = source_project_root(dir);
+    if source_is_directory(root) {
+        dep_closure(root, DepScan { root: Path.clean(root), visited: [Path.clean(root)], found: [], fetch: false }).found
     } else { [] }
+}
 
 // Compiles a project to `out`. Returns an error message, or "" on
 // success -- shared by `build` and `run`, which differ only in what
@@ -3586,7 +3592,7 @@ struct SourceFile {
 struct BuildInputs { files: Array[SourceFile], deps: Array[pkg.Dep] }
 struct SourceBuilder { files: Ref[Array[SourceFile]], seen: treefs.TreeSeen }
 struct SourceFrame { entries: Array[treefs.EntryInfo], index: Int, relative: String, module_name: String, assign_modules: Bool }
-struct SourceScope { root: treefs.TreeRoot, path: String, owner: String, dep_name: String, reject_links: Bool, include_hidden: Bool }
+struct SourceScope { root: treefs.TreeRoot, path: String, selection: String, display: String, owner: String, dep_name: String, reject_links: Bool, include_hidden: Bool }
 
 let source_builder (): SourceBuilder = {
     let seen = match treefs.seen() {
@@ -3612,31 +3618,43 @@ let source_declared_root (directory: String): String = {
 }
 
 let source_find_manifest (directory: String) (depth: Int): Option[String] =
-    if depth >= 128 { None }
+    if depth >= 128 { panic_raw("manifest lookup exceeds 128 parent directories at ${directory}"); None }
     else if source_has_manifest(directory) { Some(directory) }
     else {
         let parent = Path.dirname(directory);
         if parent == directory { None } else { source_find_manifest(parent, depth + 1) }
     }
 
-let source_relative (root: String) (path: String): String = {
-    let absolute = if Path.is_absolute(path) { Path.clean(path) }
-        else { Path.clean(Path.join(Result.unwrap_or(Os.cwd(()), "."), path)) };
-    let base = if Path.is_absolute(root) { Path.clean(root) }
-        else { Path.clean(Path.join(Result.unwrap_or(Os.cwd(()), "."), root)) };
-    let prefix = lsp_directory_prefix(base);
-    if absolute == base { "." }
-    else if absolute.starts_with(prefix) { treefs.path_slice(absolute, prefix.len(), absolute.len()) }
-    else { panic_raw("path ${path} is outside project root ${root}"); "" }
-}
+let source_relative (root: String) (path: String): String =
+    match source_relative_option(source_absolute(root), source_absolute(path)) {
+        Some(relative) => relative,
+        None => { panic_raw("path ${path} is outside project root ${root}"); "" },
+    }
 
 let source_scope (dir: String) (owner: String) (dep_name: String): SourceScope = {
     let root = match treefs.open_root(dir) {
         Ok(r) => r,
         Err(e) => treefs.fail_root(e),
     };
-    SourceScope { root: root, path: dir, owner: owner, dep_name: dep_name, reject_links: pkg.read_held(dir, root).symlinks == "reject", include_hidden: false }
+    SourceScope { root: root, path: dir, selection: ".", display: dir, owner: owner, dep_name: dep_name, reject_links: pkg.read_held(dir, root).symlinks == "reject", include_hidden: false }
 }
+
+// A selected subtree keeps its logical spelling and module layout, while
+// resolution and policy remain anchored at the nearest declared project.
+// Dependencies acquire their own root and never inherit an ancestor policy.
+let source_selected_scope (dir: String) (owner: String) (dep_name: String) (inherit: Bool): SourceScope = {
+    let base = source_scope(if inherit { source_declared_root(dir) } else { dir }, owner, dep_name);
+    SourceScope { root: base.root, path: base.path, selection: source_relative(base.path, dir), display: dir,
+        owner: owner, dep_name: dep_name, reject_links: base.reject_links, include_hidden: false }
+}
+
+let source_logical (scope: SourceScope) (relative: String): String =
+    if scope.selection == "." { Path.join(scope.display, relative) }
+    else if relative == scope.selection { scope.display }
+    else { Path.join(scope.display, treefs.path_slice(relative, scope.selection.len() + 1, relative.len())) }
+
+let source_project_root (path: String): String =
+    source_declared_root(if source_is_directory(path) { path } else { Path.dirname(path) })
 
 let source_entry (scope: SourceScope) (relative: String): treefs.TreeEntry =
     match treefs.open_entry(scope.root, relative, scope.reject_links) {
@@ -3673,7 +3691,7 @@ let source_walk (scope: SourceScope) (builder: SourceBuilder) (stack: Array[Sour
                 source_walk(scope, builder, pending)
             } else {
                 let relative = if frame.relative == "." { info.name } else { Path.join(frame.relative, info.name) };
-                let full = Path.join(scope.path, relative);
+                let full = source_logical(scope, relative);
                 let entry = source_entry(scope, relative);
                 let kind = treefs.kind(entry);
                 let module_name = if !frame.assign_modules || kind != 2 { frame.module_name }
@@ -3707,8 +3725,8 @@ let source_path_into (path: String) (module_name: String) (owner: String) (dep_n
 
 let source_path_policy (path: String) (module_name: String) (owner: String) (dep_name: String) (builder: SourceBuilder) (include_hidden: Bool): Unit = {
     let is_dir = source_is_directory(path);
-    let base = source_scope(if is_dir { if include_hidden { source_declared_root(path) } else { path } } else { source_declared_root(Path.dirname(path)) }, owner, dep_name);
-    let scope = SourceScope { root: base.root, path: base.path, owner: base.owner, dep_name: base.dep_name, reject_links: base.reject_links, include_hidden: include_hidden };
+    let base = source_selected_scope(if is_dir { path } else { Path.dirname(path) }, owner, dep_name, dep_name == "");
+    let scope = SourceScope { root: base.root, path: base.path, selection: base.selection, display: base.display, owner: base.owner, dep_name: base.dep_name, reject_links: base.reject_links, include_hidden: include_hidden };
     let relative = source_relative(scope.path, path);
     let entry = source_entry(scope, relative);
     if is_dir {
@@ -3722,9 +3740,9 @@ let source_path_policy (path: String) (module_name: String) (owner: String) (dep
 }
 
 let source_root (dir: String) (dep_name: String) (builder: SourceBuilder): Unit = {
-    let scope = source_scope(dir, if dep_name == "" { "" } else { dir }, dep_name);
-    source_record(builder, source_entry(scope, "."), dir);
-    source_walk(scope, builder, [source_frame(scope, ".", "", true)])
+    let scope = source_selected_scope(dir, if dep_name == "" { "" } else { dir }, dep_name, dep_name == "");
+    source_record(builder, source_entry(scope, scope.selection), dir);
+    source_walk(scope, builder, [source_frame(scope, scope.selection, "", true)])
 }
 
 let source_deps (deps: Array[pkg.Dep]) (builder: SourceBuilder): Unit = {
@@ -3767,9 +3785,15 @@ let parse_source_group (files: Array[SourceFile]) (i: Int) (end: Int) (acc: Arra
 
 let manifest_input (dir: String): String = {
     let path = Path.join(dir, "plum.pkg");
-    match Os.exists(path) {
-        Ok(false) => buildcache.frame(path).concat("absent"),
-        _ => buildcache.frame(path).concat(buildcache.file_hash(path)),
+    let root = match treefs.open_root(dir) { Ok(r) => r, Err(e) => treefs.fail_root(e) };
+    let present = match treefs.child_present(root, "plum.pkg") {
+        Ok(found) => found, Err(e) => { panic_raw(e); false },
+    };
+    if !present { buildcache.frame(path).concat("absent") }
+    else {
+        let entry = match treefs.open_entry(root, "plum.pkg", false) { Ok(e) => e, Err(e) => treefs.fail_entry(e) };
+        let hash = match treefs.file_hash(entry, "plum.pkg", 2) { Ok(h) => h, Err(e) => { panic_raw("manifest cache input ${path}: ${e}"); "" } };
+        buildcache.frame(path).concat(hash)
     }
 }
 
@@ -3778,7 +3802,7 @@ let ir_input_key (dir: String) (inputs: BuildInputs) (release: Bool) (trace: Boo
     let cwd = Result.unwrap_or(Os.cwd(()), "");
     if compiler == "" || cwd == "" { "" }
     else {
-        let mut parts = ["plum-ir-v1", buildcache.frame(compiler), buildcache.frame(cwd), buildcache.frame(dir), release.to_string(), trace.to_string(), buildcache.frame(manifest_input(dir))];
+        let mut parts = ["plum-ir-v1", buildcache.frame(compiler), buildcache.frame(cwd), buildcache.frame(dir), release.to_string(), trace.to_string(), buildcache.frame(manifest_input(source_project_root(dir)))];
         let mut valid = true;
         for d in inputs.deps {
             parts = parts.push("D");

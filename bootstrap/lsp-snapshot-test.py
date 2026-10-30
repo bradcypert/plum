@@ -300,6 +300,14 @@ def check_roots(compiler):
                 assert "String" in hover["contents"]["value"], hover
                 target = client.query("definition", physical, live, "value", 1)
                 assert target and target["uri"] == uri(physical), target
+                if len(native_path(physical)) > 1 and native_path(physical)[1] == ":":
+                    case_uri = "file:///" + native_path(physical).upper()
+                    client.send("textDocument/didOpen", {"textDocument": {"uri": case_uri, "text": live}})
+                    assert client.query("hover", physical, live, "value", 1) is not None
+                    client.send("textDocument/didChange", {"textDocument": {"uri": case_uri},
+                        "contentChanges": [{"text": live.replace('"live"', '"conflict"')}]})
+                    assert client.query("hover", physical, live, "value", 1) is None
+                    client.send("textDocument/didClose", {"textDocument": {"uri": case_uri}})
                 client.notify("didOpen", alias, live)
                 assert client.query("hover", alias, live, "value", 1) is not None
                 client.notify("didChange", alias, live.replace('"live"', '"different"'))

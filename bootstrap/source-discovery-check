@@ -19,9 +19,9 @@ COMPILER = Path(sys.argv[1] if len(sys.argv) > 1 else ROOT / "sh.real").resolve(
 ENTRY = '''
 let main (): Unit = {
     let argv = args();
-    if argv[0] == "native" {
+    if argv[0] == "native" || argv[0] == "native-dep" {
         let builder = source_builder();
-        for path in native_c_files(argv[1], argv[2], builder) { println(path); }
+        for path in native_c_files_policy(argv[1], argv[2], builder, argv[0] == "native") { println(path); }
     } else {
     let inputs = prepare_inputs(argv[1]);
     if argv[0] == "replace" {
@@ -163,6 +163,75 @@ with tempfile.TemporaryDirectory(prefix="plum-discovery-") as tmp:
         assert "duplicate filesystem identity" in result.stdout + result.stderr
         (links / "one").unlink()
         (links / "two").unlink()
+    # Selecting a subtree changes the selected sources and module layout, not
+    # the declared root's boundary, dependencies or link policy.
+    policy = work / "policy"
+    selected = policy / "nested"
+    write(policy / "plum.pkg", 'Package { name: "policy", symlinks: "reject" }')
+    write(policy / ".storage/shared", "let selected (): Int = 1")
+    write(selected / "own.plum")
+    write(selected / "module/member.plum")
+    write(policy / "unselected.plum")
+    result = discover(selected)
+    assert result.stdout.splitlines() == expected_root(selected)
+    relative = run([binary, "list", "policy/nested"], cwd=work)
+    assert relative.stdout.splitlines() == [line.replace(str(policy), "policy") for line in expected_root(selected)]
+    try:
+        (selected / "alias.plum").symlink_to("../.storage/shared")
+    except OSError:
+        pass
+    else:
+        assert "refused link" in discover(selected, ok=False).stdout
+        write(policy / "plum.pkg", 'Package { name: "policy", symlinks: "within-root" }')
+        result = discover(selected)
+        assert f"F|{selected / 'alias.plum'}|||" in result.stdout
+        assert str(policy / "unselected.plum") not in result.stdout
+        write(selected / "native/.keep")
+        write(policy / ".storage/shim", "int selected(void) { return 1; }")
+        (selected / "native/shim.c").symlink_to("../../.storage/shim")
+        assert str(selected / "native/shim.c") in run([binary, "native", selected, "linux"]).stdout
+        write(policy / "plum.pkg", 'Package { name: "policy", symlinks: "reject" }')
+        run([binary, "native", selected, "linux"], ok=False)
+        # A declared dependency under that same ancestor has its own policy
+        # and boundary, even without a manifest of its own.
+        dependency = policy / "dependency"
+        write(dependency / ".storage/code", "pub let value (): Int = 1")
+        (dependency / "module").mkdir()
+        (dependency / "module/value.plum").symlink_to("../.storage/code")
+        consumer = work / "policy-consumer"
+        write(consumer / "plum.pkg", 'Package { name: "consumer", deps: [Dep { name: "dep", path: "../policy/dependency" }] }')
+        result = discover(consumer)
+        assert str(dependency / "module/value.plum") in result.stdout
+        write(dependency / ".storage/shim", "int dependency(void) { return 1; }")
+        (dependency / "native").mkdir()
+        (dependency / "native/shim.c").symlink_to("../.storage/shim")
+        native_dep = run([binary, "native-dep", dependency, "linux"])
+        assert str(dependency / "native/shim.c") in native_dep.stdout
+        (dependency / "module/value.plum").unlink()
+        (dependency / "module/value.plum").symlink_to("../../.storage/shared")
+        discover(consumer, ok=False)
+    # Dependencies declared at the parent remain available for a selected
+    # directory and explicit file without pulling in unselected own sources.
+    for selection in [app / "a", app / "z.plum"]:
+        result = discover(selection)
+        assert {line.split("|")[1] for line in result.stdout.splitlines() if line.startswith("D|")} == {"alpha", "beta"}
+        assert f"F|{app / 'b/three.plum'}|" not in result.stdout
+    deep = policy / "deep"
+    for _ in range(130):
+        deep = deep / "d"
+    deep.mkdir(parents=True)
+    failure = discover(deep, ok=False)
+    assert "manifest lookup exceeds 128" in failure.stdout + failure.stderr
+    executable = work / "selected-executable"
+    write(executable / "plum.pkg", 'Package { name: "selected", deps: [Dep { name: "helper", path: "../selected-helper" }] }')
+    write(work / "selected-helper/helper/main.plum", 'pub let answer (): String = "nested selection"')
+    write(executable / "unselected.plum", "this is intentionally not valid Plum")
+    entry = executable / "nested/main.plum"
+    write(entry, 'use helper;\nlet main (): Unit = println(helper.answer())')
+    for selection in [entry.parent, entry]:
+        assert run([COMPILER, "run", selection]).stdout.strip() == "nested selection"
+    print("source-discovery: selected subtrees preserve root policy, dependencies and logical paths")
+
     replaced = work / "replaced"
     write(replaced / "main.plum", "let original (): Int = 1")
     result = discover(replaced, "replace", ok=False)
