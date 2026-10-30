@@ -759,11 +759,14 @@ long long os_rename_file(const char *from, const char *to) {
 #endif
 }
 
+#if defined(_WIN32)
 static int plum_is_dir(const char *path) {
     struct stat st;
     if (stat(path, &st) != 0) return 0;
     return S_ISDIR(st.st_mode) ? 1 : 0;
 }
+
+#endif
 
 static int plum_join(char *out, size_t cap, const char *a, const char *b) {
     int n = snprintf(out, cap, "%s/%s", a, b);
@@ -956,6 +959,7 @@ long long os_remove_tree(const char *path) {
     return plum_remove_tree(path) == 0 ? 0 : -1;
 }
 
+#if defined(_WIN32)
 static int plum_copy_file(const char *src, const char *dst) {
     FILE *in, *out;
     char buf[65536];
@@ -1066,6 +1070,192 @@ static int plum_copy_tree(const char *src, const char *dst) {
     closedir(d);
     return rc;
 }
+
+#else
+// POSIX copy traversal owns every directory descriptor it descends through.
+// Only the caller-supplied root ancestors are resolved as ordinary paths.
+#define PLUM_COPY_DEPTH 128
+#define PLUM_COPY_BUFFER 65536
+
+static int plum_copy_same(const struct stat *a, const struct stat *b) {
+    return a->st_dev == b->st_dev && a->st_ino == b->st_ino;
+}
+
+static int plum_copy_root(const char *path) {
+    size_t n = strlen(path);
+    if (!n) return -1;
+    char *name = strdup(path);
+    if (!name) return -1;
+    while (n > 1 && name[n - 1] == '/') name[--n] = 0;
+    int fd = open(name, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC);
+    free(name);
+    return fd;
+}
+
+// Compare actual opened roots and their ancestors, before writing anything.
+static int plum_copy_ancestor(int root, int child) {
+    struct stat wanted, current, parent;
+    if (fstat(root, &wanted)) return -1;
+    int fd = openat(child, ".", O_RDONLY | O_DIRECTORY | O_CLOEXEC);
+    if (fd < 0) return -1;
+    int rc = -1;
+    for (unsigned depth = 0; depth < 4096; depth++) {
+        if (fstat(fd, &current)) break;
+        if (plum_copy_same(&wanted, &current)) { rc = 1; break; }
+        int next = openat(fd, "..", O_RDONLY | O_DIRECTORY | O_CLOEXEC);
+        if (next < 0) break;
+        if (fstat(next, &parent)) { close(next); break; }
+        if (plum_copy_same(&current, &parent)) { close(next); rc = 0; break; }
+        close(fd);
+        fd = next;
+    }
+    close(fd);
+    return rc;
+}
+
+// Only ordinary files can be replaced. In particular, never open an existing
+// destination for writing: it may be a hard link into an unrelated tree.
+static int plum_copy_replaceable(int dst, const char *name) {
+    struct stat st;
+    if (fstatat(dst, name, &st, AT_SYMLINK_NOFOLLOW) == 0)
+        return S_ISREG(st.st_mode) ? 0 : -1;
+    return errno == ENOENT ? 0 : -1;
+}
+
+static int plum_copy_leaf(int src, int dst, const char *name,
+                          const struct stat *expected, char *buffer) {
+    int in = -1, out = -1, rc = -1;
+    char temporary[80], target[PLUM_PATH_MAX];
+    int is_link = S_ISLNK(expected->st_mode);
+    if (!is_link && !S_ISREG(expected->st_mode)) return -1;
+    if (plum_copy_replaceable(dst, name)) return -1;
+    if (is_link) {
+        ssize_t n = readlinkat(src, name, target, sizeof(target));
+        if (n < 0 || (size_t)n >= sizeof(target)) return -1;
+        target[n] = 0;
+        struct stat after;
+        if (fstatat(src, name, &after, AT_SYMLINK_NOFOLLOW) ||
+            !plum_copy_same(expected, &after)) return -1;
+    } else {
+        in = openat(src, name, O_RDONLY | O_NOFOLLOW | O_NONBLOCK | O_CLOEXEC);
+        if (in < 0) return -1;
+        struct stat opened;
+        if (fstat(in, &opened) || !S_ISREG(opened.st_mode) ||
+            !plum_copy_same(expected, &opened)) goto done;
+    }
+    // No shared counter and no overwrite of another operation's temporary.
+    // Exclusive creation makes collisions harmless, including concurrent calls.
+    unsigned attempt;
+    for (attempt = 0; attempt < 1024; attempt++) {
+        snprintf(temporary, sizeof(temporary), ".plum-copy-%ld-%u", (long)getpid(), attempt);
+        if (strcmp(temporary, name) == 0) continue;
+        if (is_link) {
+            if (symlinkat(target, dst, temporary) == 0) break;
+        } else {
+            out = openat(dst, temporary, O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW | O_CLOEXEC, 0600);
+            if (out >= 0) break;
+        }
+        if (errno != EEXIST) goto done;
+    }
+    if (attempt == 1024) goto done;
+    rc = 0;
+    if (!is_link) {
+        for (;;) {
+            ssize_t n = read(in, buffer, PLUM_COPY_BUFFER);
+            if (n < 0 && errno == EINTR) continue;
+            if (n < 0) { rc = -1; break; }
+            if (!n) break;
+            ssize_t offset = 0;
+            while (offset < n) {
+                ssize_t wrote = write(out, buffer + offset, (size_t)(n - offset));
+                if (wrote < 0 && errno == EINTR) continue;
+                if (wrote <= 0) { rc = -1; break; }
+                offset += wrote;
+            }
+            if (rc) break;
+        }
+        if (close(out)) rc = -1;
+        out = -1;
+        if (close(in)) rc = -1;
+        in = -1;
+    }
+    if (!rc && plum_copy_replaceable(dst, name)) rc = -1;
+    if (!rc && renameat(dst, temporary, dst, name)) rc = -1;
+    if (rc) unlinkat(dst, temporary, 0);
+done:
+    if (in >= 0) close(in);
+    if (out >= 0) close(out);
+    return rc;
+}
+
+typedef struct { DIR *source; int destination; } plum_copy_frame;
+
+static int plum_copy_tree(const char *src, const char *dst) {
+    int source = plum_copy_root(src);
+    if (source < 0) return -1;
+    int destination = plum_copy_root(dst);
+    if (destination < 0) { close(source); return -1; }
+    int rc = -1;
+    if (plum_copy_ancestor(source, destination) != 0 ||
+        plum_copy_ancestor(destination, source) != 0) goto roots;
+    plum_copy_frame *frames = calloc(PLUM_COPY_DEPTH, sizeof(*frames));
+    char *buffer = malloc(PLUM_COPY_BUFFER);
+    if (!frames || !buffer) { free(frames); free(buffer); goto roots; }
+    frames[0].source = fdopendir(source);
+    if (!frames[0].source) { free(frames); free(buffer); goto roots; }
+    frames[0].destination = destination;
+    unsigned count = 1;
+    rc = 0;
+    while (count && !rc) {
+        plum_copy_frame *frame = &frames[count - 1];
+        errno = 0;
+        struct dirent *entry = readdir(frame->source);
+        if (!entry) {
+            if (errno) { rc = -1; break; }
+            if (closedir(frame->source)) rc = -1;
+            if (close(frame->destination)) rc = -1;
+            count--;
+            continue;
+        }
+        const char *name = entry->d_name;
+        if (!strcmp(name, ".") || !strcmp(name, "..")) continue;
+        int parent = dirfd(frame->source);
+        struct stat st;
+        if (fstatat(parent, name, &st, AT_SYMLINK_NOFOLLOW)) { rc = -1; break; }
+        if (!S_ISDIR(st.st_mode)) {
+            rc = plum_copy_leaf(parent, frame->destination, name, &st, buffer);
+            continue;
+        }
+        if (count >= PLUM_COPY_DEPTH) { rc = -1; break; }
+        int child = openat(parent, name, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC);
+        if (child < 0) { rc = -1; break; }
+        struct stat opened;
+        if (fstat(child, &opened) || !plum_copy_same(&st, &opened)) {
+            close(child); rc = -1; break;
+        }
+        if (mkdirat(frame->destination, name, 0700) && errno != EEXIST) {
+            close(child); rc = -1; break;
+        }
+        int output = openat(frame->destination, name, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC);
+        if (output < 0) { close(child); rc = -1; break; }
+        DIR *stream = fdopendir(child);
+        if (!stream) { close(child); close(output); rc = -1; break; }
+        frames[count++] = (plum_copy_frame){stream, output};
+    }
+    while (count) {
+        count--;
+        closedir(frames[count].source);
+        close(frames[count].destination);
+    }
+    free(buffer);
+    free(frames);
+    return rc;
+roots:
+    close(source);
+    close(destination);
+    return rc;
+}
+#endif
 
 long long os_copy_tree(const char *src, const char *dst) {
     return plum_copy_tree(src, dst) == 0 ? 0 : -1;

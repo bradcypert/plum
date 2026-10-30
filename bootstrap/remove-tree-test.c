@@ -1,6 +1,7 @@
 // Exercise the real shim, with deterministic races and resource failures.
 // All destructive fixtures live below an independently created scratch root.
 #include <assert.h>
+#include <stdarg.h>
 #include <errno.h>
 #include <stddef.h>
 #include <stdint.h>
@@ -49,7 +50,14 @@ static int tracked_open(const char *p, int flags) {
     if (fd >= 0) acquired();
     return fd;
 }
-static int tracked_openat(int parent, const char *name, int flags) {
+static int tracked_openat(int parent, const char *name, int flags, ...) {
+    mode_t mode = 0;
+    if (flags & O_CREAT) {
+        va_list args;
+        va_start(args, flags);
+        mode = (mode_t)va_arg(args, int);
+        va_end(args);
+    }
     if (fail_open) { fail_open = 0; errno = EMFILE; return -1; }
     if ((race == 1 || race == 4) && strcmp(name, "victim") == 0) {
         int replacement_directory = race == 4;
@@ -58,7 +66,7 @@ static int tracked_openat(int parent, const char *name, int flags) {
         if (replacement_directory) assert(mkdirat(parent, name, 0700) == 0);
         else assert(symlinkat(outside, parent, name) == 0);
     }
-    int fd = openat(parent, name, flags);
+    int fd = openat(parent, name, flags, mode);
     if (fd >= 0) acquired();
     return fd;
 }

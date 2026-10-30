@@ -1,0 +1,10 @@
+#!/usr/bin/env bash
+# Descriptor-relative POSIX copying, including native resource cleanup.
+set -euo pipefail
+root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+cd "$root"
+work="$(mktemp -d)"
+trap 'rm -rf "$work"' EXIT
+clang -O1 -g -Wall -Wextra -Werror -fsanitize=address,undefined \
+    -fno-sanitize-recover=all bootstrap/copy-tree-test.c -o "$work/native-test"
+ASAN_OPTIONS=detect_leaks=1 timeout 30 "$work/native-test"
