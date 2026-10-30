@@ -48,8 +48,10 @@ with tempfile.TemporaryDirectory(prefix="plum-cache-tree-") as temporary:
         assert (result.returncode == 0) == ok, result.stdout + result.stderr
         return result.stdout + result.stderr
     expected = f"1 package(s), {count} file(s), {size} bytes"
-    assert expected in run("list")
-    assert expected in run("clean")
+    listed = run("list")
+    assert expected in listed, (expected, listed)
+    cleaned = run("clean")
+    assert expected in cleaned, (expected, cleaned)
     assert not (cache / "pkg").exists()
     assert (cache / "keep").read_bytes() == b"other cache kind"
     assert (outside / "keep").read_bytes() == b"external bytes must not count"

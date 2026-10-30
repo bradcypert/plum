@@ -588,6 +588,7 @@ jobs:
           install: >-
             mingw-w64-x86_64-clang
             mingw-w64-x86_64-lld
+            git
             diffutils
             tar
             python

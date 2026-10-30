@@ -35,9 +35,21 @@ def make_symlink(path, target, is_directory=False):
             args.append("/D")
         target_text = native_path(target) if Path(target).is_absolute() else str(target)
         args.extend([native_path(path).replace("/", "\\"), target_text.replace("/", "\\")])
-        result = subprocess.run(args, capture_output=True,
-                                env={**os.environ, "MSYS2_ARG_CONV_EXCL": "*"})
+        # Conversion happens in the MSYS parent while spawning, before the
+        # child's supplied environment takes effect. Keep /c a cmd flag.
+        previous = os.environ.get("MSYS2_ARG_CONV_EXCL")
+        os.environ["MSYS2_ARG_CONV_EXCL"] = "*"
+        try:
+            result = subprocess.run(args, capture_output=True)
+        finally:
+            if previous is None:
+                os.environ.pop("MSYS2_ARG_CONV_EXCL", None)
+            else:
+                os.environ["MSYS2_ARG_CONV_EXCL"] = previous
         if result.returncode:
             raise OSError(result.stdout + result.stderr)
+        assert path.name in os.listdir(path.parent) and path.is_symlink(), (
+            "native link fixture was not created", str(path), result.stdout, result.stderr,
+            os.listdir(path.parent))
     else:
         path.symlink_to(target, target_is_directory=is_directory)

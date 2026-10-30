@@ -8,6 +8,7 @@ import tempfile
 from lsp_test_support import make_symlink
 
 compiler = Path(sys.argv[1]).resolve()
+WINDOWS_HOST = os.name == "nt" or sys.platform.startswith(("msys", "cygwin"))
 original = "let main (): Unit = {\nprintln(\"hello\")\n}\n"
 formatted = "let main (): Unit = {\n    println(\"hello\")\n}\n"
 
@@ -29,14 +30,14 @@ with tempfile.TemporaryDirectory(prefix="plum-format-tree-") as temp:
     source.write_text(original)
     hardlink = root / "hardlink"
     os.link(source, hardlink)
-    if os.name != "nt":
+    if not WINDOWS_HOST:
         source.chmod(0o640)
     assert run(source) == formatted
     run(source, "--check", ok=False)
     run(source, "--write")
     assert source.read_text() == formatted
     assert hardlink.read_text() == original
-    if os.name != "nt":
+    if not WINDOWS_HOST:
         assert source.stat().st_mode & 0o777 == 0o640
     run(source, "--check")
     for directory in [".hidden", "vendor"]:
