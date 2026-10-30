@@ -93,6 +93,9 @@ Diagnostic excerpts and debug line tables read through registered source
 capabilities and recheck discovered identity. Their registry retains shared
 roots and path/policy/identity metadata until the next parse or process exit;
 it does not cache source contents or hold one file descriptor per source.
+Cache publication rechecks observed source digests through these capabilities
+using streaming hashes. Only explicitly embedded input paths are persisted
+in the cache read manifest; ordinary sources are already in its confined key.
 Explicit `@embed_file` declarations retain their existing ability to read
 outside the project. Generated native intermediates and build-cache records
 also remain outside source traversal policy. These are separate trusted inputs,

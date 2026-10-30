@@ -268,3 +268,18 @@ pub let read_source (path: String): Result[String, String] =
             read_text(source.root, source.relative, source.reject_links, source.identity)
         },
     }
+
+// Revalidate observed source bytes for cache publication without another
+// whole-source allocation or reopening the logical pathname.
+pub let source_hash (path: String): Result[String, String] =
+    match SOURCE_INDEX.get().get(path) {
+        None => Err("no discovered source capability for ${path}"),
+        Some(i) => {
+            let source = SOURCE_LOCATIONS.get()[i];
+            match open_entry(source.root, source.relative, source.reject_links) {
+                Err(e) => Err(e),
+                Ok(entry) => if identity(entry) != source.identity { Err("source identity changed: ${path}") }
+                    else { file_hash(entry, source.relative, 2) },
+            }
+        },
+    }

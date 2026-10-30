@@ -25,12 +25,17 @@ let main (): Unit = {
     } else {
     let inputs = prepare_inputs(argv[1]);
     if argv[0] == "readback" {
+        buildcache.begin_reads(true);
         let parsed = parse_source_files(inputs.files, 0, []);
+        assert(buildcache.sources_unchanged(()));
+        assert(buildcache.read_manifest(()) == "");
         let file = inputs.files[0];
         assert(Result.is_ok(treefs.read_source(file.path)));
         assert(Result.is_ok(Os.rename_file(file.path, "${file.path}.saved")));
         assert(Result.is_ok(Os.write_file(file.path, "untrusted replacement")));
         assert(Result.is_err(treefs.read_source(file.path)));
+        assert(!buildcache.sources_unchanged(()));
+        buildcache.begin_reads(false);
         treefs.clear_source_locations(());
         assert(Result.is_err(treefs.read_source(file.path)));
         println("confined diagnostic reads");

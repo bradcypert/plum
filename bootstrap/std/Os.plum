@@ -72,7 +72,7 @@ pub let remove_file (path: String): Result[Unit, String] =
 /// `.` or `..` components are rejected.
 pub let remove_tree (path: String): Result[Unit, String] =
     if os_remove_tree_raw(path) == 0 { Ok(()) }
-    else { Err("Os.remove_tree: could not remove ".concat(path)) }
+    else { Err("Os.remove_tree: could not remove ".concat(path).concat(": ").concat(unsafe { plum_tree_last_error().as_string() })) }
 
 /// Copies the contents of `src` into the existing directory `dst`.
 /// Both roots must be ordinary directories, even with trailing separators;

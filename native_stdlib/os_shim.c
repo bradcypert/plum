@@ -765,6 +765,54 @@ static int plum_join(char *out, size_t cap, const char *a, const char *b) {
     return (n > 0 && (size_t)n < cap) ? 0 : -1;
 }
 
+// Capture failures before cleanup can change errno/GetLastError. Storage is
+// thread-local and borrowed only until the next filesystem operation.
+static PLUM_OS_TLS char plum_tree_error_text[512];
+void plum_tree_error_clear(void) {
+    plum_tree_error_text[0] = 0;
+    errno = 0;
+#if defined(_WIN32)
+    SetLastError(0);
+#endif
+}
+static void plum_tree_error(const char *reason) {
+    snprintf(plum_tree_error_text, sizeof(plum_tree_error_text), "%s", reason);
+}
+static void plum_tree_os_error(const char *operation) {
+#if defined(_WIN32)
+    DWORD code = GetLastError();
+    if (!code) { snprintf(plum_tree_error_text, sizeof(plum_tree_error_text), "%s failed (no OS error provided)", operation); return; }
+    WCHAR wide[256]; char message[384] = "";
+    DWORD count = FormatMessageW(FORMAT_MESSAGE_FROM_SYSTEM | FORMAT_MESSAGE_IGNORE_INSERTS,
+        NULL, code, 0, wide, 256, NULL);
+    if (count) WideCharToMultiByte(CP_UTF8, 0, wide, -1, message, sizeof(message), NULL, NULL);
+    size_t n = strlen(message);
+    while (n && (message[n - 1] == '\r' || message[n - 1] == '\n')) message[--n] = 0;
+    snprintf(plum_tree_error_text, sizeof(plum_tree_error_text), "%s: Windows error %lu%s%s",
+        operation, (unsigned long)code, *message ? ": " : "", message);
+#else
+    int code = errno;
+    if (!code) { snprintf(plum_tree_error_text, sizeof(plum_tree_error_text), "%s failed (no OS error provided)", operation); return; }
+    snprintf(plum_tree_error_text, sizeof(plum_tree_error_text), "%s: errno %d (%s)", operation, code, strerror(code));
+#endif
+}
+#if defined(_WIN32)
+static void plum_tree_nt_error(const char *operation, NTSTATUS status) {
+    snprintf(plum_tree_error_text, sizeof(plum_tree_error_text), "%s: NTSTATUS 0x%08lx", operation, (unsigned long)status);
+}
+#endif
+const char *plum_tree_last_error(void) {
+    if (!*plum_tree_error_text) {
+#if defined(_WIN32)
+        if (GetLastError()) plum_tree_os_error("filesystem operation failed");
+#else
+        if (errno) plum_tree_os_error("filesystem operation failed");
+#endif
+        else plum_tree_error("filesystem operation failed without OS error detail");
+    }
+    return plum_tree_error_text;
+}
+
 // Removal has a deliberately separate traversal from copying: every child
 // operation is relative to a held directory, never a reconstructed pathname.
 // A bounded depth also bounds native stack, enumeration storage and handles.
@@ -856,23 +904,24 @@ static HANDLE plum_remove_child(PlumRemoveOpen open_child, HANDLE parent,
     // opened ordinary directory into a reparse point while we enumerate it.
     NTSTATUS rc = open_child(&child, DELETE | FILE_LIST_DIRECTORY | FILE_READ_ATTRIBUTES | SYNCHRONIZE,
         &attrs, &status, NULL, 0, FILE_SHARE_READ, FILE_OPEN, FILE_OPEN_REPARSE_POINT | FILE_SYNCHRONOUS_IO_NONALERT, NULL, 0);
+    if (rc < 0) plum_tree_nt_error("open entry for removal", rc);
     return rc < 0 ? INVALID_HANDLE_VALUE : child;
 }
 
 static int plum_remove_handle(PlumRemoveOpen open_child, HANDLE handle, unsigned depth) {
     FILE_ATTRIBUTE_TAG_INFO attrs;
-    if (!GetFileInformationByHandleEx(handle, FileAttributeTagInfo, &attrs, sizeof(attrs))) return -1;
+    if (!GetFileInformationByHandleEx(handle, FileAttributeTagInfo, &attrs, sizeof(attrs))) { plum_tree_os_error("inspect entry for removal"); return -1; }
     if ((attrs.FileAttributes & FILE_ATTRIBUTE_DIRECTORY) &&
         !(attrs.FileAttributes & FILE_ATTRIBUTE_REPARSE_POINT)) {
-        if (depth >= PLUM_REMOVE_DEPTH) return -1;
+        if (depth >= PLUM_REMOVE_DEPTH) { plum_tree_error("removal depth exceeds 128"); return -1; }
         // malloc is suitably aligned for FILE_ID_BOTH_DIR_INFO. One bounded
         // buffer per active directory, not one allocation per entry.
         unsigned char *buffer = (unsigned char *)malloc(4096);
-        if (buffer == NULL) return -1;
+        if (buffer == NULL) { plum_tree_error("cannot allocate removal enumeration buffer"); return -1; }
         int rc = 0;
         for (;;) {
             if (!GetFileInformationByHandleEx(handle, FileIdBothDirectoryInfo, buffer, 4096)) {
-                if (GetLastError() != ERROR_NO_MORE_FILES) rc = -1;
+                if (GetLastError() != ERROR_NO_MORE_FILES) { plum_tree_os_error("enumerate removal directory"); rc = -1; }
                 break;
             }
             DWORD offset = 0;
@@ -887,7 +936,7 @@ static int plum_remove_handle(PlumRemoveOpen open_child, HANDLE handle, unsigned
                     HANDLE child = plum_remove_child(open_child, handle, name, bytes, 0);
                     if (child == INVALID_HANDLE_VALUE) { rc = -1; break; }
                     if (plum_remove_handle(open_child, child, depth + 1) != 0) rc = -1;
-                    if (!CloseHandle(child)) rc = -1;
+                    if (!CloseHandle(child)) { if (!*plum_tree_error_text) plum_tree_os_error("close removed child"); rc = -1; }
                     if (rc != 0) break;
                 }
                 if (entry->NextEntryOffset == 0) break;
@@ -902,7 +951,8 @@ static int plum_remove_handle(PlumRemoveOpen open_child, HANDLE handle, unsigned
         if (rc != 0) return -1;
     }
     FILE_DISPOSITION_INFO disposition = {TRUE};
-    return SetFileInformationByHandle(handle, FileDispositionInfo, &disposition, sizeof(disposition)) ? 0 : -1;
+    if (SetFileInformationByHandle(handle, FileDispositionInfo, &disposition, sizeof(disposition))) return 0;
+    plum_tree_os_error("mark entry for deletion"); return -1;
 }
 
 static int plum_remove_tree(const char *path) {
@@ -933,22 +983,26 @@ static int plum_remove_tree(const char *path) {
         FILE_LIST_DIRECTORY | FILE_READ_ATTRIBUTES | SYNCHRONIZE, FILE_SHARE_READ,
         NULL, OPEN_EXISTING, FILE_FLAG_BACKUP_SEMANTICS, NULL);
     *name = first;
-    if (parent == INVALID_HANDLE_VALUE) { free(wide); return -1; }
+    if (parent == INVALID_HANDLE_VALUE) { plum_tree_os_error("open removal parent"); free(wide); return -1; }
     // Keep Win32 root-name lookup case-insensitive. Enumeration supplies
     // exact child names, so those opens also support case-sensitive trees.
     HANDLE handle = plum_remove_child(open_child, parent, name, bytes, OBJ_CASE_INSENSITIVE);
     int parent_closed = CloseHandle(parent);
+    if (!parent_closed && !*plum_tree_error_text) plum_tree_os_error("close removal parent");
     free(wide);
     if (handle == INVALID_HANDLE_VALUE) return -1;
     if (!parent_closed) { CloseHandle(handle); return -1; }
     int rc = plum_remove_handle(open_child, handle, 0);
-    if (!CloseHandle(handle)) rc = -1;
+    if (!CloseHandle(handle)) { if (!*plum_tree_error_text) plum_tree_os_error("close removed root"); rc = -1; }
     return rc;
 }
 #endif
 
 long long os_remove_tree(const char *path) {
-    return plum_remove_tree(path) == 0 ? 0 : -1;
+    plum_tree_error_clear();
+    int result = plum_remove_tree(path);
+    if (result && !*plum_tree_error_text) plum_tree_os_error("remove tree");
+    return result == 0 ? 0 : -1;
 }
 
 #define PLUM_COPY_DEPTH 128
@@ -957,54 +1011,6 @@ long long os_remove_tree(const char *path) {
 // A dangling link may be stored and hashed, but even its missing suffix must
 // not contain a lexical ascent above the held root. Future reads resolve the
 // path again with the ordinary strict resolver, never trust this validation.
-// Capture failures before cleanup can change errno/GetLastError. Storage is
-// thread-local and borrowed only until the next filesystem operation.
-static PLUM_OS_TLS char plum_tree_error_text[512];
-void plum_tree_error_clear(void) {
-    plum_tree_error_text[0] = 0;
-    errno = 0;
-#if defined(_WIN32)
-    SetLastError(0);
-#endif
-}
-static void plum_tree_error(const char *reason) {
-    snprintf(plum_tree_error_text, sizeof(plum_tree_error_text), "%s", reason);
-}
-static void plum_tree_os_error(const char *operation) {
-#if defined(_WIN32)
-    DWORD code = GetLastError();
-    if (!code) { snprintf(plum_tree_error_text, sizeof(plum_tree_error_text), "%s failed (no OS error provided)", operation); return; }
-    WCHAR wide[256]; char message[384] = "";
-    DWORD count = FormatMessageW(FORMAT_MESSAGE_FROM_SYSTEM | FORMAT_MESSAGE_IGNORE_INSERTS,
-        NULL, code, 0, wide, 256, NULL);
-    if (count) WideCharToMultiByte(CP_UTF8, 0, wide, -1, message, sizeof(message), NULL, NULL);
-    size_t n = strlen(message);
-    while (n && (message[n - 1] == '\r' || message[n - 1] == '\n')) message[--n] = 0;
-    snprintf(plum_tree_error_text, sizeof(plum_tree_error_text), "%s: Windows error %lu%s%s",
-        operation, (unsigned long)code, *message ? ": " : "", message);
-#else
-    int code = errno;
-    if (!code) { snprintf(plum_tree_error_text, sizeof(plum_tree_error_text), "%s failed (no OS error provided)", operation); return; }
-    snprintf(plum_tree_error_text, sizeof(plum_tree_error_text), "%s: errno %d (%s)", operation, code, strerror(code));
-#endif
-}
-#if defined(_WIN32)
-static void plum_tree_nt_error(const char *operation, NTSTATUS status) {
-    snprintf(plum_tree_error_text, sizeof(plum_tree_error_text), "%s: NTSTATUS 0x%08lx", operation, (unsigned long)status);
-}
-#endif
-const char *plum_tree_last_error(void) {
-    if (!*plum_tree_error_text) {
-#if defined(_WIN32)
-        if (GetLastError()) plum_tree_os_error("filesystem operation failed");
-#else
-        if (errno) plum_tree_os_error("filesystem operation failed");
-#endif
-        else plum_tree_error("filesystem operation failed without OS error detail");
-    }
-    return plum_tree_error_text;
-}
-
 static int plum_tree_missing_tail(const char *path, unsigned depth) {
     const char *p = path;
     while (*p) {

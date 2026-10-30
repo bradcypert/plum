@@ -205,8 +205,10 @@ static void basics(void) {
     fail_stream = 1; assert(os_remove_tree("tree") == -1); clean();
 #else
     fail_alloc = 2; assert(os_remove_tree("tree") == -1); clean();
-    fail_child = 1; assert(os_remove_tree("tree") == -1); clean();
-    fail_delete = 1; assert(os_remove_tree("tree") == -1); clean();
+    fail_child = 1; assert(os_remove_tree("tree") == -1);
+    assert(strstr(plum_tree_last_error(), "NTSTATUS 0xc0000022")); clean();
+    fail_delete = 1; assert(os_remove_tree("tree") == -1);
+    assert(strstr(plum_tree_last_error(), "mark entry for deletion: Windows error 5")); clean();
 #endif
     removed("tree");
 

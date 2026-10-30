@@ -3300,7 +3300,7 @@ let compile_with_scratch (dir: String) (out: String) (native: NativeBuild) (scra
                 // Check captured bytes against the live tree and rediscover
                 // file membership before publishing. Concurrent edits yield
                 // an uncached build, never an artifact under the old key.
-                if buildcache.unchanged(reads) && ir_input_key(dir, prepare_inputs(dir), release, trace) == key {
+                if buildcache.sources_unchanged(()) && buildcache.unchanged(reads) && ir_input_key(dir, prepare_inputs(dir), release, trace) == key {
                     buildcache.store("ir", key, ll, reads)
                 } else { buildcache.diagnostic("inputs changed; IR not stored") }
             } else { () };
@@ -3446,7 +3446,7 @@ let parse_source_file (file: SourceFile): Array[parser.ItemNode] = {
         // with a caret instead of a bare message. See
         // `parser.set_source_context`.
         Ok(src) => {
-            buildcache.observe(path, src);
+            buildcache.observe_source(path, src);
             let lexed = lexer.tokenize_spanned_at(src, path);
             parser.set_source_context(path, src, lexed.starts, lexed.ends);
             parser.with_module(parser.parse_program(lexed.tokens).items, module_name)
