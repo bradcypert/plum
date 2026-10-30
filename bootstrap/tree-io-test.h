@@ -40,6 +40,28 @@ static void tree_io_tests(void) {
         total += (size_t)n;
     }
     assert(total == 131073); plum_tree_reader_close(reader);
+    file_entry = plum_tree_entry_open(root, "nested/big", 0); assert(file_entry);
+    long long text = plum_tree_text_open(file_entry); assert(text);
+    assert(plum_tree_text_size(text) == 131073);
+    const unsigned char *bytes = (const unsigned char *)plum_tree_text_data(text);
+    for (size_t i = 0; i < 131073; i++) assert(bytes[i] == (i & 255));
+    plum_tree_text_close(text);
+    assert(!plum_tree_text_open(plum_tree_entry_open(root, "nested", 0)));
+    assert(!plum_tree_text_open(0));
+    long long seen = plum_tree_seen_open(); assert(seen);
+    for (int i = 0; i < 10000; i++) {
+        char key[32], path[64]; snprintf(key, sizeof(key), "id:%d", i);
+        snprintf(path, sizeof(path), "logical/path/%d", i);
+        assert(!plum_tree_seen_add(seen, key, path));
+    }
+    for (int i = 9999; i >= 0; i--) {
+        char key[32], path[64]; snprintf(key, sizeof(key), "id:%d", i);
+        snprintf(path, sizeof(path), "logical/path/%d", i);
+        assert(plum_tree_seen_add(seen, key, "alias") == 1);
+        assert(!strcmp(plum_tree_seen_previous(seen), path));
+    }
+    assert(plum_tree_seen_add(seen, "", "invalid") == -1);
+    plum_tree_seen_close(seen);
     long long hash = plum_tree_hash_open(); assert(hash);
     const char binary[] = {0, 1, 2};
     assert(!plum_tree_hash_update(hash, binary, 1));

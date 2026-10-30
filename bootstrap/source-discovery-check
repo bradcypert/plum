@@ -20,7 +20,14 @@ ENTRY = '''
 let main (): Unit = {
     let argv = args();
     let inputs = prepare_inputs(argv[1]);
-    if argv[0] == "count" { println(inputs.files.len().to_string()) }
+    if argv[0] == "replace" {
+        let file = inputs.files[0];
+        assert(Result.is_ok(Os.rename_file(file.path, "${file.path}.saved")));
+        assert(Result.is_ok(Os.write_file(file.path, "let changed (): Int = 2")));
+        let parsed = parse_source_files(inputs.files, 0, []);
+        println(parsed.len().to_string())
+    }
+    else if argv[0] == "count" { println(inputs.files.len().to_string()) }
     else {
         for dep in inputs.deps { println("D|${dep.name}|${dep.path}"); };
         for f in inputs.files { println("F|${f.path}|${f.module_name}|${f.owner}|${f.dep_name}"); };
@@ -115,6 +122,52 @@ with tempfile.TemporaryDirectory(prefix="plum-discovery-") as tmp:
     assert "has Plum source at its root" in rejected.stdout + rejected.stderr
     (work / "alpha/bad.plum").unlink()
     print("source-discovery: order, filtering, modules, ownership and dependency rejection passed")
+
+    # A hidden target is not independently discovered, so its visible alias
+    # is valid. Visible aliases of one physical source are ambiguous.
+    links = work / "links"
+    write(links / ".storage/target.plum", "let main (): Unit = ()\n")
+    try:
+        (links / "main.plum").symlink_to(".storage/target.plum")
+    except OSError:
+        print("source-discovery: symlinks unavailable on this runner")
+    else:
+        result = discover(links)
+        assert f"F|{links / 'main.plum'}|||" in result.stdout
+        write(links / "plum.pkg", 'Package { name: "links", symlinks: "reject" }')
+        result = discover(links, ok=False)
+        assert "refused link" in result.stdout + result.stderr, result.stdout + result.stderr
+        (links / "plum.pkg").unlink()
+        (links / "alias.plum").symlink_to(".storage/target.plum")
+        result = discover(links, ok=False)
+        assert "duplicate filesystem identity" in result.stdout + result.stderr
+        (links / "alias.plum").unlink()
+        (links / "main.plum").unlink()
+        for target in ["../app/z.plum", str(app / "z.plum"), "missing.plum"]:
+            (links / "main.plum").symlink_to(target)
+            result = discover(links, ok=False)
+            assert "cannot discover sources" in result.stdout + result.stderr
+            (links / "main.plum").unlink()
+        (links / "loop").symlink_to(".", target_is_directory=True)
+        result = discover(links, ok=False)
+        assert "duplicate filesystem identity" in result.stdout + result.stderr
+        (links / "loop").unlink()
+        (links / "one").symlink_to(".storage", target_is_directory=True)
+        (links / "two").symlink_to(".storage", target_is_directory=True)
+        result = discover(links, ok=False)
+        assert "duplicate filesystem identity" in result.stdout + result.stderr
+        (links / "one").unlink()
+        (links / "two").unlink()
+    replaced = work / "replaced"
+    write(replaced / "main.plum", "let original (): Int = 1")
+    result = discover(replaced, "replace", ok=False)
+    assert "source identity changed during discovery" in result.stdout + result.stderr
+    hardlinks = work / "hardlinks"
+    write(hardlinks / "one.plum")
+    os.link(hardlinks / "one.plum", hardlinks / "two.plum")
+    result = discover(hardlinks, ok=False)
+    assert "duplicate filesystem identity" in result.stdout + result.stderr
+    print("source-discovery: confinement, link policy, cycles and physical aliases passed")
 
     # No elapsed-time thresholds: total allocated bytes must scale linearly.
     # Fixed-width names keep path-processing costs comparable at each size.

@@ -984,7 +984,7 @@ static HANDLE plum_tree_win_child(HANDLE parent, const WCHAR *name, DWORD bytes,
                                   ACCESS_MASK access, ULONG disposition, ULONG options,
                                   NTSTATUS *failure) {
     PlumRemoveOpen api = plum_tree_win_open_api();
-    if (!api || !bytes || bytes > 65534 || bytes % sizeof(WCHAR)) return INVALID_HANDLE_VALUE;
+    if (!api || bytes > 65534 || bytes % sizeof(WCHAR)) return INVALID_HANDLE_VALUE;
     UNICODE_STRING text = {(USHORT)bytes, (USHORT)bytes, (WCHAR *)name};
     OBJECT_ATTRIBUTES attrs = {0};
     attrs.Length = sizeof(attrs); attrs.RootDirectory = parent; attrs.ObjectName = &text;
@@ -1661,6 +1661,110 @@ void plum_tree_reader_close(long long handle) {
     plum_tree_reader *reader = (plum_tree_reader *)(intptr_t)handle;
     if (reader) { plum_tree_entry_close(reader->entry); free(reader); }
 }
+// Parser input owns one contiguous allocation; the descriptor is consumed on
+// every path. Unlike hashing, parsing requires the complete source text.
+typedef struct { size_t size; unsigned char bytes[]; } plum_tree_text;
+long long plum_tree_text_open(long long entry) {
+    long long size = plum_tree_entry_size(entry);
+    plum_tree_text *text = NULL;
+    if (size < 0 || (unsigned long long)size > SIZE_MAX - sizeof(*text) - 1 ||
+        plum_tree_rewind(entry)) goto done;
+    text = malloc(sizeof(*text) + (size_t)size + 1);
+    if (!text) goto done;
+    text->size = (size_t)size;
+    size_t offset = 0;
+    while (offset < text->size) {
+        size_t count = text->size - offset;
+        if (count > PLUM_COPY_BUFFER) count = PLUM_COPY_BUFFER;
+        long long got = plum_tree_read(entry, text->bytes + offset, count);
+        if (got <= 0) goto fail;
+        offset += (size_t)got;
+    }
+    unsigned char extra;
+    if (plum_tree_read(entry, &extra, 1) != 0 || plum_tree_entry_size(entry) != size) goto fail;
+    text->bytes[text->size] = 0;
+    goto done;
+fail:
+    free(text); text = NULL;
+done:
+    plum_tree_entry_close(entry);
+    return (long long)(intptr_t)text;
+}
+long long plum_tree_text_size(long long raw) {
+    plum_tree_text *text = (plum_tree_text *)(intptr_t)raw;
+    return text ? (long long)text->size : -1;
+}
+const char *plum_tree_text_data(long long raw) {
+    plum_tree_text *text = (plum_tree_text *)(intptr_t)raw;
+    return text ? (const char *)text->bytes : "";
+}
+void plum_tree_text_close(long long raw) { free((void *)(intptr_t)raw); }
+
+// Discovery's identity index grows geometrically, independently of language
+// array/map copy-on-write behavior. Values retain the first logical path for
+// duplicate diagnostics. No descriptors are retained by this index.
+typedef struct { char *identity; char *path; } plum_tree_seen_slot;
+typedef struct {
+    plum_tree_seen_slot *slots;
+    size_t capacity, count;
+    const char *previous;
+} plum_tree_seen;
+static size_t plum_tree_seen_hash(const char *key) {
+    size_t hash = 5381;
+    for (; *key; key++) hash = (hash * 33) ^ (unsigned char)*key;
+    return hash;
+}
+long long plum_tree_seen_open(void) {
+    return (long long)(intptr_t)calloc(1, sizeof(plum_tree_seen));
+}
+long long plum_tree_seen_add(long long raw, const char *identity, const char *path) {
+    plum_tree_seen *seen = (plum_tree_seen *)(intptr_t)raw;
+    if (!seen || !identity || !*identity || !path) return -1;
+    seen->previous = NULL;
+    if (seen->capacity) {
+        size_t at = plum_tree_seen_hash(identity) & (seen->capacity - 1);
+        while (seen->slots[at].identity) {
+            if (!strcmp(seen->slots[at].identity, identity)) {
+                seen->previous = seen->slots[at].path;
+                return 1;
+            }
+            at = (at + 1) & (seen->capacity - 1);
+        }
+    }
+    if (seen->count >= seen->capacity / 2) {
+        size_t capacity = seen->capacity ? seen->capacity * 2 : 32;
+        if (capacity < seen->capacity || capacity > SIZE_MAX / sizeof(plum_tree_seen_slot)) return -1;
+        plum_tree_seen_slot *slots = calloc(capacity, sizeof(*slots));
+        if (!slots) return -1;
+        for (size_t i = 0; i < seen->capacity; i++) {
+            plum_tree_seen_slot slot = seen->slots[i];
+            if (!slot.identity) continue;
+            size_t at = plum_tree_seen_hash(slot.identity) & (capacity - 1);
+            while (slots[at].identity) at = (at + 1) & (capacity - 1);
+            slots[at] = slot;
+        }
+        free(seen->slots); seen->slots = slots; seen->capacity = capacity;
+    }
+    char *key = malloc(strlen(identity) + 1), *value = malloc(strlen(path) + 1);
+    if (!key || !value) { free(key); free(value); return -1; }
+    strcpy(key, identity); strcpy(value, path);
+    size_t at = plum_tree_seen_hash(identity) & (seen->capacity - 1);
+    while (seen->slots[at].identity) at = (at + 1) & (seen->capacity - 1);
+    seen->slots[at].identity = key; seen->slots[at].path = value; seen->count++;
+    return 0;
+}
+const char *plum_tree_seen_previous(long long raw) {
+    plum_tree_seen *seen = (plum_tree_seen *)(intptr_t)raw;
+    return seen && seen->previous ? seen->previous : "";
+}
+void plum_tree_seen_close(long long raw) {
+    plum_tree_seen *seen = (plum_tree_seen *)(intptr_t)raw;
+    if (!seen) return;
+    for (size_t i = 0; i < seen->capacity; i++) {
+        free(seen->slots[i].identity); free(seen->slots[i].path);
+    }
+    free(seen->slots); free(seen);
+}
 // Hash the already-open file in bounded memory. Legacy framing remains byte
 // identical to the original Plum implementation; version 2 uses a content hash.
 const char *plum_tree_file_hash(long long entry, const char *relative, long long version) {
@@ -1731,10 +1835,11 @@ long long plum_tree_dir_open(long long entry) {
     if (plum_tree_entry_kind(entry) == 2) dir = calloc(1, sizeof(*dir));
     if (!dir) { plum_tree_entry_close(entry); return 0; }
 #if defined(_WIN32)
-    // Reopen gives this iterator its own enumeration position, including when
-    // the entry originally came from a duplicated root handle.
-    dir->entry = ReOpenFile((HANDLE)(intptr_t)entry, FILE_LIST_DIRECTORY | FILE_READ_ATTRIBUTES,
-        FILE_SHARE_READ, FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT);
+    // An empty NT relative name opens the held directory itself with a new
+    // file object (and independent enumeration position). ReOpenFile rejects
+    // directory handles on some Windows filesystems/runners.
+    dir->entry = plum_tree_win_child((HANDLE)(intptr_t)entry, L"", 0,
+        FILE_LIST_DIRECTORY | FILE_READ_ATTRIBUTES, FILE_OPEN, FILE_DIRECTORY_FILE, NULL);
     plum_tree_entry_close(entry);
     if (dir->entry == INVALID_HANDLE_VALUE) { free(dir); return 0; }
     dir->first = 1; dir->refill = 1;

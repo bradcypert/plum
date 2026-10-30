@@ -174,8 +174,8 @@ def check(compiler):
             assert client.request("textDocument/completion", {"textDocument": {"uri": uri(a)}}) == []
             assert len(client.notifications) == before
             client.notify("didClose", unwritable)
-            # POSIX dangling symlinks fail during copy, after some entries
-            # may already have been copied. Windows may not allow symlinks.
+            # Copy preserves links, but source discovery must refuse this
+            # absolute dangling link. Windows may not allow symlinks.
             link = project / "dangling"
             try:
                 link.symlink_to(project / "absent")

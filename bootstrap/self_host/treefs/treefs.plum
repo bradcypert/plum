@@ -3,6 +3,14 @@ use Os;
 // Owned compiler filesystem primitives. Paths are interpreted beneath a held
 // root; consumers retain logical names for diagnostics, never for reopening.
 extern "C" {
+    fn plum_tree_text_open(entry: Int) -> Int;
+    fn plum_tree_text_size(text: Int) -> Int;
+    fn plum_tree_text_data(text: Int) -> CStr;
+    fn plum_tree_text_close(text: Int) -> Unit;
+    fn plum_tree_seen_open() -> Int;
+    fn plum_tree_seen_add(seen: Int, identity: CStr, path: CStr) -> Int;
+    fn plum_tree_seen_previous(seen: Int) -> CStr;
+    fn plum_tree_seen_close(seen: Int) -> Unit;
     fn plum_tree_root_open(path: CStr) -> Int;
     fn plum_tree_entry_open(root: Int, relative: CStr, reject_links: Int) -> Int;
     fn plum_tree_entry_close(entry: Int) -> Unit;
@@ -98,6 +106,8 @@ pub let test_owned_tree_io (): Unit = {
             assert(found[0].kind == 2);
             let entry = match open_entry(root, "nested/data", false) { Ok(f) => f, Err(e) => { panic_raw(e); unsafe { TreeEntry.from_raw(0) } } };
             assert(kind(entry) == 1);
+            assert(read_text(root, "nested/data", false, identity(entry)) == Ok("copied"));
+            assert(Result.is_err(read_text(root, "nested/data", false, "replaced")));
             assert(!String.is_empty(identity(entry)));
             assert(file_hash(entry, "nested/data", 1) == Ok("3bf1183476811055e3cf3938f3ad661407b7ef96bf74144b235d9c52c8b05f41"));
             assert(file_hash(entry, "nested/data", 2) == Ok("fb30593ca32df57a8a0f19d551710dc880a98b208b6e180b07e6aff59102d148"));
@@ -116,3 +126,43 @@ pub let validate_link (root: TreeRoot) (relative: String): Result[Unit, String] 
     if plum_tree_validate_link(TreeRoot.raw(root), relative.as_cstr()) == 0 { Ok(()) }
     else { Err("refused package link ${relative}: absolute target, root escape, cycle, or unreadable target") }
 }
+
+handle TreeText { on_drop: plum_tree_text_close }
+pub handle TreeSeen { on_drop: plum_tree_seen_close }
+
+pub let seen (): Result[TreeSeen, String] = unsafe {
+    let raw = plum_tree_seen_open();
+    if raw == 0 { Err("cannot allocate filesystem identity index") }
+    else { Ok(TreeSeen.from_raw(raw)) }
+}
+
+pub let record (seen: TreeSeen) (identity: String) (path: String): Result[Unit, String] = unsafe {
+    let status = plum_tree_seen_add(TreeSeen.raw(seen), identity.as_cstr(), path.as_cstr());
+    if status == 0 { Ok(()) }
+    else if status == 1 {
+        let previous = plum_tree_seen_previous(TreeSeen.raw(seen)).as_string();
+        Err("duplicate filesystem identity: ${path} aliases ${previous} (directory cycle, directory alias, or duplicate source)")
+    } else { Err("cannot record filesystem identity for ${path}") }
+}
+
+pub let read_text (root: TreeRoot) (relative: String) (reject_links: Bool) (expected: String): Result[String, String] = unsafe {
+    let entry = plum_tree_entry_open(TreeRoot.raw(root), relative.as_cstr(), if reject_links { 1 } else { 0 });
+    if entry == 0 { Err("cannot open source ${relative} inside filesystem root") }
+    else if plum_tree_entry_identity(entry).as_string() != expected {
+        plum_tree_entry_close(entry);
+        Err("source identity changed during discovery: ${relative}")
+    } else {
+        let raw = plum_tree_text_open(entry);
+        if raw == 0 { Err("cannot read source ${relative}") }
+        else {
+            let text = TreeText.from_raw(raw);
+            let bytes = Bytes.from_cstr(plum_tree_text_data(TreeText.raw(text)), plum_tree_text_size(TreeText.raw(text)));
+            bytes.as_string()
+        }
+    }
+}
+
+// Typed fatal fallbacks live beside their handle declarations.
+pub let fail_root (error: String): TreeRoot = { panic_raw(error); unsafe { TreeRoot.from_raw(0) } }
+pub let fail_entry (error: String): TreeEntry = { panic_raw(error); unsafe { TreeEntry.from_raw(0) } }
+pub let fail_seen (error: String): TreeSeen = { panic_raw(error); unsafe { TreeSeen.from_raw(0) } }

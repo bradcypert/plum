@@ -28,7 +28,7 @@ Package hashing and validation now consume these primitives, including
 versioned manifests, legacy compatibility, typed version 2 records, and
 validation before fetch/vendor publication. Independent Python integration
 tests compare both formats with actual fetch output and exercise link errors.
-Source discovery, formatting, and overlay integrations remain pending.
+Native-source discovery, formatting, and overlay integrations remain pending.
 This intermediate implementation is not ready for release: preserved links
 must not be consumed by the old unrestricted compiler walks and overlays.
 
@@ -36,6 +36,15 @@ This design coordinates issues #186 (copying source links), #283 (copying
 through destination links), #184 (copy enumeration failures), #176 (package
 hashing), and #94 (source discovery). It also covers formatter discovery and
 LSP snapshot overlays, which otherwise undermine the same boundary.
+
+Source discovery now shares a held root between its source records, uses a
+bounded explicit stack, and rejects physical aliases/cycles across project
+and dependency roots. Source parsing and cache hashing reopen relative to
+that root and verify the discovered identity before reading the held entry.
+The native identity index grows geometrically and retains identities and
+first logical paths, not one descriptor per source. Parser reads still need
+whole-source storage; streaming hashes do not. Native directory reopening
+on Windows is awaiting the next runtime CI result.
 
 ## User-visible contract
 
