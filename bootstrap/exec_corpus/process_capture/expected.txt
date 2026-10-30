@@ -1,0 +1,2 @@
+run: large output, NUL, CRLF and nonzero status preserved
+child: repeated wait, poll and timeout preserve output

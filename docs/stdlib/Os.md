@@ -144,16 +144,12 @@ one that is not there, and `Read` does not.
 What a finished process left behind.
 
 `exit_code` is the child's own status: a non-zero one is an ordinary
-result, not an error. Failing to START the process is the `Err`.
-What a finished process left behind.
-
-`exit_code` is the child's own status: a non-zero one is an ordinary
-result, not an error. Failing to START the process is the `Err`.
+result, not an error. Launch or output-capture failures return `Err`.
 
 ## `let run_process (program: String) (args: Array[String]): Result[ProcessResult, String]`
 
 A non-zero exit code is an ordinary `Ok`. `Err` means the process
-could not be started at all.
+could not be started, or its output could not be captured completely.
 
 ## `let cwd (): Result[String, String]`
 

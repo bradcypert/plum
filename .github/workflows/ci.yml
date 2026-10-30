@@ -182,6 +182,8 @@ jobs:
         run: ./bootstrap/file-write-smoke
       - name: file handles preserve identity and synchronize lifetime
         run: ./bootstrap/file-handle-smoke
+      - name: process captures preserve output and report failures
+        run: PLUM=./sh.real ./bootstrap/process-capture-smoke
       - name: whole-file reads propagate failures and preserve bytes
         run: ./bootstrap/file-read-smoke
       - name: the version string is consistent
@@ -343,6 +345,8 @@ jobs:
         env:
           PLUM_CI_TIMINGS: "1"
         run: ./bootstrap/native-deps-check ./sh.real
+      - name: process captures preserve output and report failures
+        run: PLUM=./sh.real ./bootstrap/process-capture-smoke
 
   platforms-memory-and-debug:
     name: macOS memory and debug checks
@@ -624,6 +628,8 @@ jobs:
         env:
           PLUM_CI_TIMINGS: "1"
         run: ./bootstrap/native-deps-check ./sh.real
+      - name: process captures preserve output and report failures
+        run: PLUM=./sh.real ./bootstrap/process-capture-smoke
 
   windows-lsp:
     name: Windows language server smoke

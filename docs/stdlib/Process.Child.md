@@ -31,7 +31,7 @@ again.
 ## `let Child.wait (c: Child): Result[ProcessResult, String]`
 
 Blocks until the child exits. Calling it on a child that has already
-exited returns the same result again rather than failing.
+exited returns the same result again, including any capture error.
 
 ## `let Child.wait_timeout (c: Child) (d: Time.Duration): Result[Option[ProcessResult], String]`
 

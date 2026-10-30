@@ -208,7 +208,7 @@ fi
 # both spawn paths, and deterministic allocation-failure cleanup.
 case "$(uname -s)" in
     MINGW*|MSYS*|CYGWIN*)
-        if clang -O1 -g -Wall -Wextra bootstrap/windows-process-test.c -lshell32 \
+        if clang -O1 -g -Wall -Wextra bootstrap/windows-process-test.c native_stdlib/os_shim.c -lshell32 \
                 -o "$work/windows-process-test.exe" > "$work/windows-process-test.log" 2>&1 &&
                 "$work/windows-process-test.exe"; then
             printf 'OK    %-24s\n' "windows_process_unicode"

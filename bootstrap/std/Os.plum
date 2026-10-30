@@ -303,6 +303,8 @@ pub let File.close (f: File): Result[Unit, String] = unsafe {
 // `native_stdlib/process_shim.c`. The join happens here rather than in
 // the runtime, where it would have to be written in IR.
 
+extern "C" { fn process_capture_status(h: Int) -> Int; }
+
 let process_run_raw (program: String) (args_joined: String) (argc: Int): Int = 0
 let process_exit_code_raw (handle: Int): Int = 0
 let process_stdout_raw (handle: Int): String = ""
@@ -312,11 +314,7 @@ let process_free_raw (handle: Int): Bool = false
 /// What a finished process left behind.
 ///
 /// `exit_code` is the child's own status: a non-zero one is an ordinary
-/// result, not an error. Failing to START the process is the `Err`.
-/// What a finished process left behind.
-///
-/// `exit_code` is the child's own status: a non-zero one is an ordinary
-/// result, not an error. Failing to START the process is the `Err`.
+/// result, not an error. Launch or output-capture failures return `Err`.
 pub struct ProcessResult { pub exit_code: Int, pub stdout: String, pub stderr: String }
 
 /// NO leading separator: `process_run` points argv[1] at the WHOLE
@@ -329,11 +327,15 @@ let join_args_acc (args: Array[String]) (i: Int) (acc: String): String =
     else { join_args_acc(args, i + 1, acc.concat("\t").concat(args[i])) }
 
 /// A non-zero exit code is an ordinary `Ok`. `Err` means the process
-/// could not be started at all.
+/// could not be started, or its output could not be captured completely.
 pub let run_process (program: String) (args: Array[String]): Result[ProcessResult, String] = {
     let joined = join_args_acc(args, 0, "");
     let handle = process_run_raw(program, joined, args.len());
     if handle < 0 { Err("Os.run_process: could not start process: ".concat(program)) }
+    else if unsafe { process_capture_status(handle) } != 0 {
+        let freed = process_free_raw(handle);
+        Err("Os.run_process: could not read captured output")
+    }
     else {
         let result = ProcessResult {
             exit_code: process_exit_code_raw(handle),

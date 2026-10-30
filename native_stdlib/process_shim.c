@@ -64,10 +64,8 @@
 // the identical failure mode.
 //
 // The two paths are split behind ONE function, `plum_spawn_capture`.
-// Slot bookkeeping, argument splitting, reading the captured output
-// back and cleaning up are shared and were not touched, so the POSIX
-// behaviour is unchanged by the port rather than merely believed to
-// be.
+// Slot bookkeeping, argument splitting, checked capture reads and
+// cleanup are shared by both platforms.
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -120,6 +118,9 @@ typedef struct {
     long long exit_code;
     char *out_data;
     char *err_data;
+    long long out_length;
+    long long err_length;
+    int capture_failed;
     PlumChildState *child;
 } PlumProcessSlot;
 
@@ -139,27 +140,23 @@ static char *plum_strdup_or_null(const char *s) {
     return p;
 }
 
-static char *plum_read_whole_file_or_empty(const char *path) {
-    FILE *fp = fopen(path, "rb");
-    if (fp == NULL) {
-        return strdup("");
+// Shared checked reader: 64-bit positioning, checked allocation/read/close,
+// and explicit length. NULL is an error, never a successful empty capture.
+extern char *plum_read_whole_file(const char *path, long long *length);
+
+// Publish both streams atomically. On failure retain only the error state;
+// no successful prefix or sibling buffer should linger until Child is dropped.
+static void plum_process_capture(PlumProcessSlot *slot, const char *out, const char *err) {
+    slot->out_data = plum_read_whole_file(out, &slot->out_length);
+    slot->err_data = slot->out_data == NULL ? NULL :
+        plum_read_whole_file(err, &slot->err_length);
+    slot->capture_failed = slot->out_data == NULL || slot->err_data == NULL;
+    if (slot->capture_failed) {
+        free(slot->out_data);
+        free(slot->err_data);
+        slot->out_data = slot->err_data = NULL;
+        slot->out_length = slot->err_length = 0;
     }
-    fseek(fp, 0, SEEK_END);
-    long size = ftell(fp);
-    rewind(fp);
-    if (size < 0) {
-        fclose(fp);
-        return strdup("");
-    }
-    char *buf = malloc((size_t)size + 1);
-    if (buf == NULL) {
-        fclose(fp);
-        return strdup("");
-    }
-    size_t n = fread(buf, 1, (size_t)size, fp);
-    buf[n] = '\0';
-    fclose(fp);
-    return buf;
 }
 
 // A sentinel distinct from every real exit code. It cannot be -1:
@@ -783,8 +780,7 @@ long long process_run(const char *program, const char *args_joined, long long ar
 
     plum_process_slots[slot].in_use = 1;
     plum_process_slots[slot].exit_code = code;
-    plum_process_slots[slot].out_data = plum_read_whole_file_or_empty(out_path);
-    plum_process_slots[slot].err_data = plum_read_whole_file_or_empty(err_path);
+    plum_process_capture(&plum_process_slots[slot], out_path, err_path);
 
     remove(out_path);
     remove(err_path);
@@ -839,8 +835,7 @@ long long process_run_ex(const char *program, const char *args_joined, long long
 
     plum_process_slots[slot].in_use = 1;
     plum_process_slots[slot].exit_code = code;
-    plum_process_slots[slot].out_data = plum_read_whole_file_or_empty(out_path);
-    plum_process_slots[slot].err_data = plum_read_whole_file_or_empty(err_path);
+    plum_process_capture(&plum_process_slots[slot], out_path, err_path);
 
     remove(out_path);
     remove(err_path);
@@ -862,14 +857,30 @@ const char *process_stdout_data(long long handle) {
     if (handle < 0 || handle >= PLUM_PROC_MAX_SLOTS || !plum_process_slots[handle].in_use) {
         return "";
     }
-    return plum_process_slots[handle].out_data;
+    return plum_process_slots[handle].out_data != NULL ? plum_process_slots[handle].out_data : "";
 }
 
 const char *process_stderr_data(long long handle) {
     if (handle < 0 || handle >= PLUM_PROC_MAX_SLOTS || !plum_process_slots[handle].in_use) {
         return "";
     }
-    return plum_process_slots[handle].err_data;
+    return plum_process_slots[handle].err_data != NULL ? plum_process_slots[handle].err_data : "";
+}
+
+// A completed capture failure is sticky, independent of the exit status.
+long long process_capture_status(long long handle) {
+    if (handle < 0 || handle >= PLUM_PROC_MAX_SLOTS || !plum_process_slots[handle].in_use) return -1;
+    return plum_process_slots[handle].capture_failed ? -1 : 0;
+}
+
+long long process_stdout_length(long long handle) {
+    if (handle < 0 || handle >= PLUM_PROC_MAX_SLOTS || !plum_process_slots[handle].in_use) return 0;
+    return plum_process_slots[handle].out_length;
+}
+
+long long process_stderr_length(long long handle) {
+    if (handle < 0 || handle >= PLUM_PROC_MAX_SLOTS || !plum_process_slots[handle].in_use) return 0;
+    return plum_process_slots[handle].err_length;
 }
 
 void process_free(long long handle) {
@@ -911,16 +922,11 @@ void process_free(long long handle) {
 // defining what a partial read of a file somebody is still writing
 // means, and no caller has asked for it.
 
-static void plum_child_collect(long long handle, long long code) {
+static void plum_child_collect(long long handle, long long code, int capture) {
     PlumProcessSlot *slot = &plum_process_slots[handle];
     PlumChildState *c = slot->child;
     if (c == NULL || c->finished) return;
     slot->exit_code = code;
-    slot->out_data = plum_read_whole_file_or_empty(c->out_path);
-    slot->err_data = plum_read_whole_file_or_empty(c->err_path);
-    if (c->out_path != NULL) remove(c->out_path);
-    if (c->err_path != NULL) remove(c->err_path);
-    if (c->in_path != NULL) remove(c->in_path);
 #if defined(_WIN32)
     // Closed only now, so everything the child wrote is flushed before
     // the files are read back -- the same ordering the blocking path
@@ -932,6 +938,10 @@ static void plum_child_collect(long long handle, long long code) {
     if (c->pid != 0) CloseHandle((HANDLE)(intptr_t)c->pid);
     c->pid = 0;
 #endif
+    if (capture) plum_process_capture(slot, c->out_path, c->err_path);
+    if (c->out_path != NULL) remove(c->out_path);
+    if (c->err_path != NULL) remove(c->err_path);
+    if (c->in_path != NULL) remove(c->in_path);
     c->finished = 1;
 }
 
@@ -989,7 +999,17 @@ long long process_spawn(const char *program, const char *args_joined, long long 
     plum_process_slots[slot].exit_code = -1;
     plum_process_slots[slot].out_data = NULL;
     plum_process_slots[slot].err_data = NULL;
+    plum_process_slots[slot].out_length = plum_process_slots[slot].err_length = 0;
+    plum_process_slots[slot].capture_failed = 0;
     plum_process_slots[slot].child = child;
+    if (child->out_path == NULL || child->err_path == NULL) {
+        // Tracking allocation failed after launch. Reap without reading,
+        // then use the stack paths to delete even an untracked capture.
+        process_child_free(slot);
+        remove(out_path);
+        remove(err_path);
+        return -1;
+    }
     return slot;
 }
 
@@ -1006,14 +1026,14 @@ long long process_poll(long long handle) {
     if (w != WAIT_OBJECT_0) return -1;
     DWORD code = 0;
     if (!GetExitCodeProcess(h, &code)) code = (DWORD)-1;
-    plum_child_collect(handle, (long long)(int)code);
+    plum_child_collect(handle, (long long)(int)code, 1);
     return 1;
 #else
     int status = 0;
     pid_t r = waitpid((pid_t)slot->child->pid, &status, WNOHANG);
     if (r == 0) return 0;
     if (r < 0) return -1;
-    plum_child_collect(handle, WIFEXITED(status) ? (long long)WEXITSTATUS(status) : -1);
+    plum_child_collect(handle, WIFEXITED(status) ? (long long)WEXITSTATUS(status) : -1, 1);
     return 1;
 #endif
 }
@@ -1040,14 +1060,14 @@ long long process_child_wait(long long handle, long long timeout_nanos) {
         if (WaitForSingleObject(h, INFINITE) != WAIT_OBJECT_0) return -1;
         DWORD code = 0;
         if (!GetExitCodeProcess(h, &code)) code = (DWORD)-1;
-        plum_child_collect(handle, (long long)(int)code);
+        plum_child_collect(handle, (long long)(int)code, 1);
         return 1;
 #else
         int status = 0;
         pid_t r;
         do { r = waitpid((pid_t)slot->child->pid, &status, 0); } while (r < 0 && errno == EINTR);
         if (r < 0) return -1;
-        plum_child_collect(handle, WIFEXITED(status) ? (long long)WEXITSTATUS(status) : -1);
+        plum_child_collect(handle, WIFEXITED(status) ? (long long)WEXITSTATUS(status) : -1, 1);
         return 1;
 #endif
     }
@@ -1062,7 +1082,7 @@ long long process_child_wait(long long handle, long long timeout_nanos) {
         if (w != WAIT_OBJECT_0) return -1;
         DWORD code = 0;
         if (!GetExitCodeProcess(h, &code)) code = (DWORD)-1;
-        plum_child_collect(handle, (long long)(int)code);
+        plum_child_collect(handle, (long long)(int)code, 1);
         return 1;
     }
 #else
@@ -1151,12 +1171,12 @@ void process_child_free(long long handle) {
             WaitForSingleObject(h, 5000);
             DWORD code = 0;
             if (!GetExitCodeProcess(h, &code)) code = (DWORD)-1;
-            plum_child_collect(handle, (long long)(int)code);
+            plum_child_collect(handle, (long long)(int)code, 0);
 #else
             int status = 0;
             pid_t r;
             do { r = waitpid((pid_t)c->pid, &status, 0); } while (r < 0 && errno == EINTR);
-            plum_child_collect(handle, (r > 0 && WIFEXITED(status)) ? (long long)WEXITSTATUS(status) : -1);
+            plum_child_collect(handle, (r > 0 && WIFEXITED(status)) ? (long long)WEXITSTATUS(status) : -1, 0);
 #endif
         }
         free(c->out_path);

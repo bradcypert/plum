@@ -26,12 +26,19 @@ overlay entry for a name wins.
 What a finished process left behind.
 
 `exit_code` is the child's own status: a non-zero one is an ordinary
-result, not an error. Failing to START the process is the `Err`.
+result, not an error. Launch or output-capture failures return `Err`.
+
+Capture uses temporary files while the child runs, then reads both
+streams into memory. Memory use scales with total output size; copying
+a result into Plum temporarily retains both native and Plum buffers.
+A `Child` retains its native capture until dropped, and each successful
+wait or poll copies the output again. There is no configurable output limit.
 
 ## `let run (opts: Options): Result[ProcessResult, String]`
 
 A non-zero exit code is an ordinary `Ok`. `Err` means the process
-could not be started at all, including a program that was not found.
+could not be started (including a program that was not found), or
+its output could not be captured completely.
 
 ## `let start (opts: Options): Result[Child, String]`
 

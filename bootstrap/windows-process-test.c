@@ -73,6 +73,7 @@ static DWORD checked_wait(HANDLE h, DWORD ms) {
 #define strdup checked_strdup
 #define GetEnvironmentStringsW checked_snapshot
 #include "../native_stdlib/process_shim.c"
+#include "../native_stdlib/whole_file_shim.c"
 #undef WaitForSingleObject
 #undef FreeEnvironmentStringsW
 #undef malloc
@@ -250,12 +251,13 @@ static void test_spawns(void) {
         h = process_spawn(program, joined, 6, env, 3, "", 0, 0);
         assert(h >= 0 && process_child_wait(h, -1) == 1 && process_exit_code(h) == 0);
         assert(strcmp(process_stdout_data(h), "ok\n") == 0);
-        // Remove captures after freeing: #312 separately tracks their
-        // existing deletion-before-close order on the asynchronous path.
+        // Collection must delete the captures after closing Windows handles.
         char *out = _strdup(plum_process_slots[h].child->out_path);
         char *err = _strdup(plum_process_slots[h].child->err_path);
+        assert(GetFileAttributesA(out) == INVALID_FILE_ATTRIBUTES);
+        assert(GetFileAttributesA(err) == INVALID_FILE_ATTRIBUTES);
         process_child_free(h);
-        remove(out); remove(err); free(out); free(err);
+        free(out); free(err);
         no_scratch();
     }
     assert(SetEnvironmentVariableW(L"PLUM_MIXED", L"final"));
