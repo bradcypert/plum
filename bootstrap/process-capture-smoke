@@ -1,0 +1,114 @@
+#!/usr/bin/env python3
+"""Exercise checked capture I/O, native lifetimes, and public error results."""
+import os
+from pathlib import Path
+import subprocess
+import sys
+import tempfile
+
+ROOT = Path(__file__).resolve().parent.parent
+PLUM = str(Path(os.environ.get('PLUM', './sh')).resolve())
+os.chdir(ROOT)
+
+
+def run(args, **kwargs):
+    try:
+        return subprocess.run(list(map(str, args)), check=True, timeout=180, **kwargs)
+    except subprocess.CalledProcessError as error:
+        sys.exit(f"{args}:\n{error.stdout or ''}{error.stderr or ''}")
+
+
+with tempfile.TemporaryDirectory(prefix='plum-capture-') as directory:
+    work = Path(directory)
+    # Isolate capture files and verify cleanup even when stdout fails
+    # before the stderr reader is called.
+    os.environ.update(TMPDIR=str(work), TMP=str(work), TEMP=str(work))
+    flags = ['-O1', '-g', '-pthread']
+    if sys.platform.startswith('linux'):
+        flags += ['-fsanitize=address,undefined', '-fno-sanitize-recover=all']
+        os.environ['ASAN_OPTIONS'] = 'detect_leaks=1'
+    libraries = ['-lm']
+    if os.name == 'nt':
+        libraries += ['-lws2_32', '-lcrypt32', '-lbcrypt']
+    native = work / 'native.exe'
+    run(['clang', *flags, '-DPROCESS_CAPTURE_NATIVE_TEST',
+         'bootstrap/process-capture-test.c', 'native_stdlib/whole_file_shim.c',
+         'native_stdlib/os_shim.c', '-o', native])
+    run([native])
+    def clean_files():
+        captures = [p for p in work.iterdir()
+                    if p.name.lower().startswith(('plum_proc_', 'plo', 'ple', 'pli'))]
+        assert not captures, f'capture files leaked: {captures}'
+
+    clean_files()
+    objects = []
+    for source in sorted((ROOT / 'native_stdlib').glob('*.c')):
+        if source.name == 'tls_shim.c':
+            continue
+        implementation = ROOT / 'bootstrap/process-capture-test.c' if source.name == 'process_shim.c' else source
+        obj = work / (source.stem + '.o')
+        run(['clang', *flags, '-c', implementation, '-o', obj])
+        objects.append(obj)
+    source = work / 'main.plum'
+    source.write_text('''use Os;
+use Process;
+use Time;
+extern "C" { fn capture_arm(fault: Int); fn capture_clean(); }
+let options (self: String): Process.Options = Process.Options {
+    program: self, args: ["--child"], env: [], stdin: None,
+}
+let poll_error (c: Process.Child): Unit = match c.poll() {
+    Ok(None) => poll_error(c),
+    Err(e) => assert_eq(e, "Process: could not read captured output"),
+    Ok(Some(_)) => assert(false),
+}
+let check_child (self: String) (method: Int): Unit = match Process.start(options(self)) {
+    Err(e) => { println(e); assert(false) },
+    Ok(c) => {
+    if method == 0 { assert(Result.is_err(c.wait())); }
+    else if method == 1 { poll_error(c); }
+    else { assert(Result.is_err(c.wait_timeout(Time.seconds(30)))); };
+    // An error is a completed state: later calls must not wait/re-read.
+    assert(Result.is_err(c.poll()));
+    assert(Result.is_err(c.wait()));
+    assert(Result.is_err(c.wait_timeout(Time.millis(1))));
+    },
+}
+let main (): Unit = {
+    if args().len() > 0 { println("output"); }
+    else {
+        let self = Result.unwrap_or(Os.self_exe(), "");
+        assert(self != "");
+        for fault in 1..3 {
+            for iteration in 0..20 {
+                unsafe { capture_arm(fault) };
+                assert(match Process.run(options(self)) { Err(e) => e == "Process: could not read captured output", _ => false });
+                unsafe { capture_clean(); capture_arm(fault) };
+                assert(match Os.run_process(self, ["--child"]) { Err(e) => e == "Os.run_process: could not read captured output", _ => false });
+                unsafe { capture_clean() };
+                for method in 0..3 {
+                    unsafe { capture_arm(fault) };
+                    check_child(self, method);
+                    unsafe { capture_clean() };
+                };
+            };
+        };
+        println("public captures: run, legacy run, poll, wait and timeout return sticky errors without leaks");
+    }
+}
+''')
+    ir = run([PLUM, 'emit-llvm', source], capture_output=True, text=True).stdout
+    ll = work / 'main.ll'
+    ll.write_text(ir)
+    binary = work / 'public.exe'
+    run(['clang', *flags, ll, *objects, *libraries, '-o', binary])
+    run([binary])
+    clean_files()
+    # Success fixture runs through normal build and embedded production shims.
+    fixture = ROOT / 'bootstrap/exec_corpus/process_capture'
+    run([PLUM, 'check', fixture])
+    run([PLUM, 'build', fixture, '--asan', '-o', binary] if sys.platform.startswith('linux')
+        else [PLUM, 'build', fixture, '-o', binary])
+    result = run([binary], capture_output=True, text=True)
+    assert result.stdout == (fixture / 'expected.txt').read_text(), result.stdout
+print('process-capture smoke: ok')

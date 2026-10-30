@@ -1,0 +1,40 @@
+use Os;
+use Process;
+use Time;
+
+extern "C" { fn emit_capture(); }
+
+let options (self: String): Process.Options = Process.Options {
+    program: self, args: ["--child"], env: [], stdin: None,
+}
+let check (r: Result[Process.ProcessResult, String]): Unit = match r {
+    Err(e) => { println(e); assert(false) },
+    Ok(p) => {
+        assert_eq(p.exit_code, 7);
+        assert_eq(p.stdout.len(), 1048580);
+        assert(p.stdout.as_bytes().at(1048577) == Some(0));
+        assert(p.stderr.as_bytes() == Bytes.from_array([101, 0, 114, 13, 10]));
+    },
+}
+let main (): Unit = {
+    let argv = args();
+    if argv.len() > 0 {
+        unsafe { emit_capture() };
+        Os.exit_with(7);
+    } else {
+        let self = Result.unwrap_or(Os.self_exe(), "");
+        assert(self != "");
+        check(Process.run(options(self)));
+        println("run: large output, NUL, CRLF and nonzero status preserved");
+        match Process.start(options(self)) {
+            Err(e) => { println(e); assert(false) },
+            Ok(c) => {
+                check(c.wait());
+                check(c.wait());
+                assert(match c.poll() { Ok(Some(r)) => { check(Ok(r)); true }, _ => false });
+                assert(match c.wait_timeout(Time.millis(1)) { Ok(Some(r)) => { check(Ok(r)); true }, _ => false });
+                println("child: repeated wait, poll and timeout preserve output");
+            },
+        };
+    }
+}

@@ -489,15 +489,24 @@ with tempfile.TemporaryDirectory(prefix="plum-cache-check-") as tmp:
         require(not list((cache / "build").iterdir()),
                 "concurrent cleaners left detached cache staging")
 
-    # Two cold writers publish complete entries; losing a race is harmless.
-    invoke("cache", "clean", "build")
-    commands = [[str(COMPILER), "run", str(src)]] * 2
-    processes = [subprocess.Popen(command, env=env, stdout=subprocess.PIPE,
-                                  stderr=subprocess.PIPE, text=True, cwd=work) for command in commands]
-    for process in processes:
-        stdout, stderr = process.communicate(timeout=180)
-        require(process.returncode == 0 and stdout == "file\n", "concurrent build failed: " + stderr)
-    run("file\n", "hit", target=src)
+    # Cold writers must leave a complete entry even when publication and
+    # cleanup overlap. In particular, Windows cleanup must not lock the
+    # shared publication parent or partially delete a winner's entry.
+    for attempt in range(3):
+        invoke("cache", "clean", "build")
+        commands = [[str(COMPILER), "run", str(src)]] * 4
+        processes = [subprocess.Popen(command, env=env, stdout=subprocess.PIPE,
+                                      stderr=subprocess.PIPE, text=True, cwd=work) for command in commands]
+        writer_logs = []
+        for process in processes:
+            stdout, stderr = process.communicate(timeout=180)
+            require(process.returncode == 0 and stdout == "file\n", "concurrent build failed: " + stderr)
+            writer_logs.append(stderr)
+        try:
+            run("file\n", "hit", target=src)
+        except AssertionError as error:
+            raise AssertionError(f"concurrent publication attempt {attempt}: {error}\n"
+                                 + "\n".join(writer_logs)) from error
 
     if os.name == "nt":
         # Native Windows Python exposes the Win32 handle API. Hold the
@@ -638,20 +647,24 @@ raise SystemExit(subprocess.call(["clang", *sys.argv[1:]]))
         (entry / "data").write_bytes(b"x" * 4096)
     os.utime(old, (1, 1))
     os.utime(recent, (2, 2))
-    live = entries / ".partial-live"
-    dead = entries / ".partial-dead"
-    unknown = entries / ".partial-unknown"
-    fresh = entries / ".partial-fresh"
-    for entry in (live, dead, unknown, fresh):
-        entry.mkdir()
-    (live / ".owner").write_text(str(os.getpid()))
+    # Retain compatibility with old per-kind stages as well as the new
+    # namespace used to keep Windows publication independent of cleanup.
+    stage_groups = []
     # Obtain a real exited PID rather than assuming a large PID is unused.
     child = subprocess.Popen([sys.executable, "-c", "pass"])
     child.wait()
-    (dead / ".owner").write_text(str(child.pid))
-    (fresh / ".owner").write_text(str(child.pid))
-    for entry in (live, dead, unknown):
-        os.utime(entry, (1, 1))
+    for parent in (entries, retained_root / "staging"):
+        parent.mkdir(exist_ok=True)
+        live, dead, unknown, fresh = [parent / (".partial-" + name)
+                                      for name in ("live", "dead", "unknown", "fresh")]
+        for entry in (live, dead, unknown, fresh):
+            entry.mkdir()
+        (live / ".owner").write_text(str(os.getpid()))
+        (dead / ".owner").write_text(str(child.pid))
+        (fresh / ".owner").write_text(str(child.pid))
+        for entry in (live, dead, unknown):
+            os.utime(entry, (1, 1))
+        stage_groups.append((live, dead, unknown, fresh))
     # Exactly one synthetic entry fits alongside the real, newer artifacts.
     eviction = run("file\n", "hit", target=src, overlay={"PLUM_CACHE": str(retention),
         "PLUM_BUILD_CACHE_MAX_BYTES": str(existing_bytes + 4096)})
@@ -667,12 +680,13 @@ raise SystemExit(subprocess.call(["clang", *sys.argv[1:]]))
             f"retention did not evict oldest first; budget={existing_bytes + 4096}, "
             f"old={old.exists()}, recent={recent.exists()}\n"
             + retention_snapshot() + "\n" + eviction.stderr)
-    # MSYS/Cygwin Python PIDs are not native Windows process IDs.
-    if not WINDOWS_HOST or os.name == "nt":
-        require(live.exists(), "retention removed a live publisher")
-        require(not dead.exists(), "retention kept an abandoned publisher")
-    require(unknown.exists(), "retention removed a stage with unknown ownership")
-    require(fresh.exists(), "retention removed a recent stage")
+    for live, dead, unknown, fresh in stage_groups:
+        # MSYS/Cygwin Python PIDs are not native Windows process IDs.
+        if not WINDOWS_HOST or os.name == "nt":
+            require(live.exists(), "retention removed a live publisher")
+            require(not dead.exists(), "retention kept an abandoned publisher")
+        require(unknown.exists(), "retention removed a stage with unknown ownership")
+        require(fresh.exists(), "retention removed a recent stage")
     run("file\n", "hit", target=src, overlay={"PLUM_CACHE": str(retention),
         "PLUM_BUILD_CACHE_MAX_BYTES": "0"})
     for kind in ("ir", "obj", "shims"):
