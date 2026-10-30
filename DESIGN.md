@@ -21413,3 +21413,36 @@ RSS measurements. The execution fixture separately runs under ASan/LSan
 and covers empty input, UTF-8 widths, combining marks, escaping pieces,
 shared arrays, and repeated calls; the old runtime leaks 112,408 bytes
 in that fixture. Source doc comments and public split semantics are unchanged.
+
+### Thread-owned shadow call stacks (#113)
+
+Trace instrumentation now stores both the frame-name slots and the depth
+in native thread-local storage. Tasks execute on OS threads, so a panic
+reads the failing task's stack without mixing in main or another task's
+frames. Synchronizing individual pushes and pops would remove the data
+race but still interleave unrelated stacks. Compiler instrumentation and
+the existing tail-call balancing rules stay the same.
+
+Each thread has 256 borrowed pointers to static function-name strings and
+one `long long` depth: 2,056 bytes on 64-bit targets, measured by the native
+regression test. Previously this storage existed once per process. It is
+now O(live threads), with fixed capacity independent of call depth; excess
+frames are counted for truncation reporting. The declarations reserve TLS
+even in binaries built without `--trace`, although those builds do not
+call the push/pop instrumentation. Actual RSS depends on the platform's
+TLS allocation and thread-storage reuse.
+
+There are no heap allocations, copied names, reference-count operations,
+or destructor registrations. Thread storage follows the native thread's
+lifetime, so this does not introduce the lost heap-buffer ownership in
+#268. Network buffer cleanup (#268), shared stdin synchronization (#271),
+and runtime allocation-counter synchronization (#270) need separate
+solutions. This change fixes diagnostic ownership rather than reducing
+the application heap or changing the Perceus ownership model.
+
+`thread-smoke` checks isolated native stacks, bounded overflow, and 64
+thread exits under ASan/UBSan on Linux. It also builds a Plum program with
+and without `--trace`: a channel keeps a bystander task's frame live while
+another task fails. Only the failing task's frames may appear, and stdout
+must remain the original panic message. `check-build-modes` continues to
+check deep tail recursion and frame balance.

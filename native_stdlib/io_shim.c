@@ -132,8 +132,19 @@ void stdout_flush(void) { fflush(stdout); }
 
 #define PLUM_TRACE_CAP 256
 
-static const char *plum_frame_names[PLUM_TRACE_CAP];
-static long long plum_depth = 0;
+#if defined(_MSC_VER)
+#define PLUM_TRACE_TLS __declspec(thread)
+#else
+#define PLUM_TRACE_TLS _Thread_local
+#endif
+
+// Tasks run on separate OS threads. Both the slots and the depth belong
+// to that thread, including when its panic calls plum_trace. A lock on
+// individual pushes/pops would still mix unrelated call stacks.
+// Fixed TLS storage needs no heap allocation or thread-exit destructor;
+// the slots borrow compiler-emitted static function-name strings.
+static PLUM_TRACE_TLS const char *plum_frame_names[PLUM_TRACE_CAP];
+static PLUM_TRACE_TLS long long plum_depth = 0;
 
 void plum_frame_push(const char *name) {
     if (plum_depth >= 0 && plum_depth < PLUM_TRACE_CAP) {
