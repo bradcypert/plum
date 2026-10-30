@@ -28,7 +28,7 @@ Package hashing and validation now consume these primitives, including
 versioned manifests, legacy compatibility, typed version 2 records, and
 validation before fetch/vendor publication. Independent Python integration
 tests compare both formats with actual fetch output and exercise link errors.
-Native-source discovery, formatting, and overlay integrations remain pending.
+Native-source discovery and overlay integrations remain pending.
 This intermediate implementation is not ready for release: preserved links
 must not be consumed by the old unrestricted compiler walks and overlays.
 
@@ -44,7 +44,15 @@ that root and verify the discovered identity before reading the held entry.
 The native identity index grows geometrically and retains identities and
 first logical paths, not one descriptor per source. Parser reads still need
 whole-source storage; streaming hashes do not. Native directory reopening
-on Windows is awaiting the next runtime CI result.
+on Windows passed the native tests and compiler bootstrap in run 41112005098.
+Formatting now shares the bounded source inventory, including its existing
+hidden/vendor inclusions. Explicit files and formatter subdirectories inherit
+the nearest declared project policy. Writes resolve the regular target,
+verify its discovered identity, and publish an exclusive temporary through
+the held parent, preserving traversed symlinks and unrelated hardlinks.
+POSIX target permission bits are retained. Native tests cover a target swap
+before publication, stale identities, and Windows publication allocation
+failure; the formatter integration harness runs in platform-smoke.
 
 ## User-visible contract
 
@@ -194,6 +202,18 @@ digests into the final hash instead of retaining an Array[Int] of all hashes.
 Native allocations and OS handles are outside Plum's ordinary reference
 count counters. Measure them separately with allocation tracking, descriptor
 counts, sanitizers, and peak RSS. Repeated failures must return to baseline.
+The reproducible `bootstrap/tree-memory-check` fixture copies and hashes
+8 MiB and 128 MiB files. Both copies peak at 67,584 bytes of native-owned
+heap allocations on Linux; hashing allocates no heap and uses its 64 KiB
+stack buffer. The instrumented process peaks around 2.4–2.6 MiB RSS for the
+combined fixture. A synthetic index of 1,024/2,048/4,096 fixed-length
+identities and logical paths retains 73,760/147,488/294,944 native bytes.
+These totals exclude libc's directory/stdio allocations and allocator
+bookkeeping; RSS includes libc, stack and instrumentation overhead. They
+are native-operation measurements, not whole-compiler memory estimates.
+The harness checks zero live owned allocations after each operation and
+injects failures during identity-table creation/growth and string copying.
+
 This change does not solve unrelated compiler ownership or cache retention.
 
 ## Delivery and acceptance
@@ -215,3 +235,15 @@ This change does not solve unrelated compiler ownership or cache retention.
 The implementation PR must report measured memory and handle bounds,
 platform validation performed, migration behavior, and remaining limits.
 Do not close the linked issues on the strength of this design document.
+
+## Windows filename compatibility
+
+Directory enumeration and stored link targets use UTF-8 at the native
+boundary. Existing Windows runtime arguments can contain native ANSI code
+page bytes. The tree adapter first decodes strict UTF-8 and, only on invalid
+UTF-8, accepts strict native-code-page input to preserve that existing
+filename-byte contract. It does not substitute replacement characters.
+This does not redesign the runtime's narrow argv handling or remove its
+existing code-page limitations; general Windows argv normalization remains
+outside this traversal change. Relative-path slicing preserves bytes on
+both Windows and POSIX, including non-UTF-8 POSIX filenames.

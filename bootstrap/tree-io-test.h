@@ -70,6 +70,42 @@ static void tree_io_tests(void) {
         "ae4b3280e56e2faf83f414a6e3dabe9d5fbe18976544c05fed121accb85b53fc"));
     assert(plum_tree_hash_update(hash, binary, 1) == -1);
     plum_tree_hash_close(hash);
+    FILE *writer = fopen("src/nested/writer", "wb"); assert(writer);
+    assert(fputs("before", writer) >= 0 && !fclose(writer));
+#if defined(_WIN32)
+    assert(CreateHardLinkA("outside/writer-hardlink", "src/nested/writer", NULL));
+    int linked = CreateSymbolicLinkA("src/writer-link", "nested/writer", 2) != 0;
+#else
+    assert(link("src/nested/writer", "outside/writer-hardlink") == 0);
+    assert(symlink("nested/writer", "src/writer-link") == 0);
+    int linked = 1;
+    assert(chmod("src/nested/writer", 0640) == 0);
+#endif
+    file_entry = plum_tree_entry_open(root, "nested/writer", 0); assert(file_entry);
+    char original[80]; strcpy(original, plum_tree_entry_identity(file_entry));
+    plum_tree_entry_close(file_entry);
+    assert(plum_tree_write(root, "nested/writer", 0, "wrong", "after", 5) == -1);
+    contents("src/nested/writer", "before");
+    if (linked) assert(plum_tree_write(root, "writer-link", 1, original, "after", 5) == -1);
+    assert(!plum_tree_write(root, linked ? "writer-link" : "nested/writer", 0, original, "after", 5));
+    contents("src/nested/writer", "after");
+    contents("outside/writer-hardlink", "before");
+    assert(plum_tree_write(root, "nested/writer", 0, original, "stale", 5) == -1);
+#if !defined(_WIN32)
+    struct stat written; assert(!stat("src/nested/writer", &written));
+    assert((written.st_mode & 0777) == 0640);
+#endif
+    if (linked) {
+        contents("src/writer-link", "after");
+#if defined(_WIN32)
+        assert(GetFileAttributesA("src/writer-link") & FILE_ATTRIBUTE_REPARSE_POINT);
+#else
+        assert(!lstat("src/writer-link", &written) && S_ISLNK(written.st_mode));
+#endif
+        assert(!remove("src/writer-link"));
+    }
+    assert(!remove("src/nested/writer"));
+    assert(!remove("outside/writer-hardlink"));
     plum_tree_entry_close(root);
     assert(remove("src/nested/big") == 0);
 }

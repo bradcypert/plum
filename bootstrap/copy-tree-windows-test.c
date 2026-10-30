@@ -67,11 +67,47 @@ int main(void) {
     assert(GetCurrentDirectoryW(4096, cwd));
     assert(GetTempPathW(MAX_PATH, tmp) && GetTempFileNameW(tmp, L"pcp", 0, root));
     assert(DeleteFileW(root) && CreateDirectoryW(root, NULL) && SetCurrentDirectoryW(root));
+    // Native narrow argv may contain ACP filename bytes; enumerated names
+    // and LSP paths use UTF-8. Both forms resolve to the same held root.
+    WCHAR legacy_directory[] = L"native-\x00fc";
+    assert(CreateDirectoryW(legacy_directory, NULL));
+    char native_name[128], utf8_name[128];
+    BOOL substituted = FALSE;
+    assert(WideCharToMultiByte(CP_ACP, 0, legacy_directory, -1, native_name, sizeof(native_name), NULL,
+        GetACP() == CP_UTF8 ? NULL : &substituted));
+    assert(WideCharToMultiByte(CP_UTF8, 0, legacy_directory, -1, utf8_name, sizeof(utf8_name), NULL, NULL));
+    long long utf8_root = plum_tree_root_open(utf8_name); assert(utf8_root);
+    char native_identity[80]; strcpy(native_identity, plum_tree_entry_identity(utf8_root));
+    if (!substituted) {
+        long long native_root = plum_tree_root_open(native_name); assert(native_root);
+        assert(!strcmp(native_identity, plum_tree_entry_identity(native_root)));
+        plum_tree_entry_close(native_root);
+    }
+    plum_tree_entry_close(utf8_root);
+    assert(RemoveDirectoryW(legacy_directory));
     directory("src"); directory("src/nested"); directory("dst"); directory("outside");
     file("src/nested/data", "copied"); file("outside/keep", "untouched");
     assert(os_copy_tree("src/", "dst/") == 0);
     contents("dst/nested/data", "copied");
     tree_io_tests();
+    // Publication allocation failure must retain the original and release
+    // every held target/parent/temporary handle.
+    file("src/write-fault", "before");
+    long long write_root = plum_tree_root_open("src"); assert(write_root);
+    long long write_entry = plum_tree_entry_open(write_root, "write-fault", 0); assert(write_entry);
+    char write_identity[80]; strcpy(write_identity, plum_tree_entry_identity(write_entry));
+    plum_tree_entry_close(write_entry);
+    DWORD write_baseline = handle_count();
+    allocation = 0; fail_allocation = 1;
+    assert(plum_tree_write(write_root, "write-fault", 0, write_identity, "after", 5) == -1);
+    fail_allocation = 0;
+    assert(handle_count() == write_baseline);
+    contents("src/write-fault", "before");
+    assert(!plum_tree_write(write_root, "write-fault", 0, write_identity, "after", 5));
+    assert(handle_count() == write_baseline);
+    contents("src/write-fault", "after");
+    plum_tree_entry_close(write_root);
+    assert(!remove("src/write-fault"));
     assert(os_copy_tree("src", "src") == -1);
     assert(os_copy_tree("src", "src/nested") == -1);
     assert(os_copy_tree("src/nested", "src") == -1);

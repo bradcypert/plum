@@ -1,0 +1,12 @@
+#!/usr/bin/env bash
+set -euo pipefail
+cd "$(dirname "$0")/.."
+work="$(mktemp -d /tmp/plum-tree-memory.XXXXXX)"
+trap 'rm -rf "$work"' EXIT
+mkdir "$work/src" "$work/dst"
+clang -O1 -g -Wall -Wextra -Werror bootstrap/tree-memory-test.c -o "$work/tree-memory"
+if [ -x /usr/bin/time ] && [ "$(uname -s)" = Linux ]; then
+    /usr/bin/time -f 'tree-memory: process peak RSS %M KiB (includes libc and stack)' "$work/tree-memory" "$work/src" "$work/dst"
+else
+    "$work/tree-memory" "$work/src" "$work/dst"
+fi

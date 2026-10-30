@@ -58,9 +58,17 @@ stack, enumeration storage, and open handles. Empty paths and final
 
 ## `let copy_tree (src: String) (dst: String): Result[Unit, String]`
 
-Copies the CONTENTS of `src` into `dst`, which must already exist
-and must not overlap `src`. Returns `Err` for identical or nested
-directories before changing `dst`. File modes are not preserved.
+Copies the contents of `src` into the existing directory `dst`.
+Both roots must be ordinary directories, even with trailing separators;
+their ancestors resolve normally. Identical or nested roots return `Err`
+before changing `dst`. Links inside `src` are copied as links, including
+dangling links, without reading their targets. Destination links and
+unsupported Windows reparse points are rejected. Failure to recreate a
+link returns `Err` rather than substituting its target or link text.
+Regular destination files are replaced, so other hardlinks are unchanged.
+Traversal uses held directories, at most 128 levels, and a 64 KiB transfer
+buffer independent of file size. Errors can leave partial output; the
+caller owns cleanup. File modes are not preserved.
 
 ## `let exit_with (code: Int): Unit`
 

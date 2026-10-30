@@ -216,6 +216,15 @@ else
     fail=$((fail + 1))
 fi
 
+# Exercise the same root policy and target replacement on every host.
+if python3 ./bootstrap/formatter-tree-test.py "$plum"; then
+    printf 'OK    %-24s\n' "formatter_linked_tree"
+    ok=$((ok + 1))
+else
+    printf 'FAIL  %-24s\n' "formatter_linked_tree"
+    fail=$((fail + 1))
+fi
+
 # Native Windows process-boundary checks: real UTF-16 child argv/env,
 # both spawn paths, and deterministic allocation-failure cleanup.
 case "$(uname -s)" in

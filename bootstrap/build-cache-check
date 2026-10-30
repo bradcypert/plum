@@ -261,6 +261,11 @@ with tempfile.TemporaryDirectory(prefix="plum-cache-check-") as tmp:
     if not WINDOWS_HOST:
         alias = work / "source-link.plum"
         alias.symlink_to(src)
+        rejected = invoke("run", alias, ok=False)
+        require("cannot discover sources" in rejected.stdout + rejected.stderr,
+                "absolute source link was not rejected")
+        alias.unlink()
+        alias.symlink_to(os.path.relpath(src, alias.parent))
         run("file\n", "miss", target=alias)
         run("file\n", "hit", target=alias)
 

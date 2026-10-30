@@ -11,6 +11,7 @@ extern "C" {
     fn plum_tree_seen_add(seen: Int, identity: CStr, path: CStr) -> Int;
     fn plum_tree_seen_previous(seen: Int) -> CStr;
     fn plum_tree_seen_close(seen: Int) -> Unit;
+    fn plum_tree_write(root: Int, relative: CStr, reject_links: Int, expected: CStr, bytes: CStr, size: Int) -> Int;
     fn plum_tree_root_open(path: CStr) -> Int;
     fn plum_tree_entry_open(root: Int, relative: CStr, reject_links: Int) -> Int;
     fn plum_tree_entry_close(entry: Int) -> Unit;
@@ -166,3 +167,15 @@ pub let read_text (root: TreeRoot) (relative: String) (reject_links: Bool) (expe
 pub let fail_root (error: String): TreeRoot = { panic_raw(error); unsafe { TreeRoot.from_raw(0) } }
 pub let fail_entry (error: String): TreeEntry = { panic_raw(error); unsafe { TreeEntry.from_raw(0) } }
 pub let fail_seen (error: String): TreeSeen = { panic_raw(error); unsafe { TreeSeen.from_raw(0) } }
+
+pub let write_text (root: TreeRoot) (relative: String) (reject_links: Bool) (expected: String) (text: String): Result[Unit, String] = unsafe {
+    let bytes = Bytes.from_string(text);
+    if plum_tree_write(TreeRoot.raw(root), relative.as_cstr(), if reject_links { 1 } else { 0 }, expected.as_cstr(), bytes.as_cstr(), bytes.len()) == 0 { Ok(()) }
+    else { Err("cannot replace source target ${relative} (changed identity, refused link, or I/O failure)") }
+}
+
+// Filesystem paths may contain native bytes that are not UTF-8. Match Path's
+// internal retagging: offsets are byte boundaries, not character positions.
+let str_of_bytes_raw (bytes: Bytes): String = ""
+pub let path_slice (path: String) (start: Int) (end: Int): String =
+    str_of_bytes_raw(path.as_bytes().slice(start, end))

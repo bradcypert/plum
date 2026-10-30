@@ -73,9 +73,17 @@ pub let remove_tree (path: String): Result[Unit, String] =
     if os_remove_tree_raw(path) == 0 { Ok(()) }
     else { Err("Os.remove_tree: could not remove ".concat(path)) }
 
-/// Copies the CONTENTS of `src` into `dst`, which must already exist
-/// and must not overlap `src`. Returns `Err` for identical or nested
-/// directories before changing `dst`. File modes are not preserved.
+/// Copies the contents of `src` into the existing directory `dst`.
+/// Both roots must be ordinary directories, even with trailing separators;
+/// their ancestors resolve normally. Identical or nested roots return `Err`
+/// before changing `dst`. Links inside `src` are copied as links, including
+/// dangling links, without reading their targets. Destination links and
+/// unsupported Windows reparse points are rejected. Failure to recreate a
+/// link returns `Err` rather than substituting its target or link text.
+/// Regular destination files are replaced, so other hardlinks are unchanged.
+/// Traversal uses held directories, at most 128 levels, and a 64 KiB transfer
+/// buffer independent of file size. Errors can leave partial output; the
+/// caller owns cleanup. File modes are not preserved.
 pub let copy_tree (src: String) (dst: String): Result[Unit, String] =
     if os_copy_tree_raw(src, dst) == 0 { Ok(()) }
     else { Err("Os.copy_tree: could not copy ".concat(src).concat(" to ").concat(dst)) }

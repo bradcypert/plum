@@ -160,6 +160,10 @@ jobs:
         run: ./bootstrap/lossless-check
       - name: everything is already formatted
         run: ./bootstrap/fmt-check
+      - name: Native tree memory stays bounded
+        run: ./bootstrap/tree-memory-check
+      - name: Formatter linked tree behavior
+        run: python3 ./bootstrap/formatter-tree-test.py ./sh.real
       - name: the language server answers a real session
         run: ./bootstrap/lsp-smoke
       - name: TCP and HTTP work in a compiled binary

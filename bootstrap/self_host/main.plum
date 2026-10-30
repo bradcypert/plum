@@ -1729,7 +1729,7 @@ let lsp_snapshot (path: String): Option[String] =
 
 let lsp_directory_prefix (dir: String): String = {
     let child = Path.join(dir, "_");
-    String.slice(child, 0, child.len() - 1)
+    treefs.path_slice(child, 0, child.len() - 1)
 }
 
 let lsp_overlay (scratch: String) (dir: String) (buffers: Map[String, String]): Bool = {
@@ -1738,7 +1738,7 @@ let lsp_overlay (scratch: String) (dir: String) (buffers: Map[String, String]): 
     for uri in uris {
         let path = Path.clean(lsp.uri_to_path(uri));
         if ready && path.starts_with(lsp_directory_prefix(dir)) {
-            let relative = String.slice(path, lsp_directory_prefix(dir).len(), path.len());
+            let relative = treefs.path_slice(path, lsp_directory_prefix(dir).len(), path.len());
             let target = Path.join(scratch, relative);
             match Map.get(buffers, uri) {
                 None => (),
@@ -2061,7 +2061,7 @@ let lsp_answer_query_in (method: String) (params: JsonValue) (real: String) (pat
 // outside it must retain their original locations.
 let lsp_restore_path (path: String) (scratch: String) (dir: String): String =
     if path.starts_with(lsp_directory_prefix(scratch)) {
-        Path.join(dir, String.slice(path, lsp_directory_prefix(scratch).len(), path.len()))
+        Path.join(dir, treefs.path_slice(path, lsp_directory_prefix(scratch).len(), path.len()))
     } else { path }
 
 let lsp_answer_completion (path: String) (real: String) (params: JsonValue): JsonValue = {
@@ -3497,23 +3497,13 @@ let fmt_target (argv: Array[String]) (i: Int): String =
 // Every `.plum` file under a path, or the path itself when it is a
 // file. A directory argument is the difference between formatting a
 // project and formatting a file at a time.
-let fmt_files (target: String): Array[String] =
-    if Result.unwrap_or(Os.is_directory(target), false) { fmt_walk(target, Result.unwrap_or(Os.list_dir(target), []), 0, []) }
-    else if target.ends_with(".plum") { [target] }
-    else { [] }
+let fmt_files (target: String): Array[SourceFile] = {
+    let builder = source_builder();
+    source_path_policy(target, "", "", "", builder, true);
+    builder.files.get()
+}
 
-let fmt_walk (dir: String) (entries: Array[String]) (i: Int) (acc: Array[String]): Array[String] =
-    if i >= entries.len() { acc }
-    else if entries[i] == "." || entries[i] == ".." { fmt_walk(dir, entries, i + 1, acc) }
-    else {
-        let full = Path.join(dir, entries[i]);
-        if Result.unwrap_or(Os.is_directory(full), false) {
-            fmt_walk(dir, entries, i + 1, Array.concat(acc, fmt_walk(full, Result.unwrap_or(Os.list_dir(full), []), 0, [])))
-        } else if entries[i].ends_with(".plum") { fmt_walk(dir, entries, i + 1, acc.push(full)) }
-        else { fmt_walk(dir, entries, i + 1, acc) }
-    }
-
-let fmt_each (files: Array[String]) (i: Int) (write: Bool) (check: Bool) (unformatted: Int): Unit =
+let fmt_each (files: Array[SourceFile]) (i: Int) (write: Bool) (check: Bool) (unformatted: Int): Unit =
     if i >= files.len() {
         if check && unformatted > 0 {
             println(unformatted.to_string().concat(" file(s) need formatting"));
@@ -3532,8 +3522,9 @@ let fmt_each (files: Array[String]) (i: Int) (write: Bool) (check: Bool) (unform
 // costs them their source file. So the guarantee is enforced here too:
 // if formatting changed the tokens, something is wrong with a rule and
 // the file is left exactly as it was.
-let fmt_one (path: String) (write: Bool) (check: Bool): Int =
-    match Os.read_file(path) {
+let fmt_one (file: SourceFile) (write: Bool) (check: Bool): Int = {
+    let path = file.path;
+    match treefs.read_text(file.root, file.relative, file.reject_links, file.identity) {
         Err(e) => { println("fmt: ".concat(e)); Os.exit_with(1); 0 },
         Ok(src) => {
             let out = fmt.format(path, src);
@@ -3548,16 +3539,19 @@ let fmt_one (path: String) (write: Bool) (check: Bool): Int =
                 0
             }
             else if check { { println(path); 1 } }
-            else if write { { fmt_write(path, out); 1 } }
+            else if write { { fmt_write(file, out); 1 } }
             else { { print(out); 1 } }
         },
     }
 
-// Whole-file writes own the exclusive sibling temporary and replacement.
+}
+
+// Root-relative writes own the exclusive sibling temporary and replacement.
 // Keeping publication there gives formatter and library users the same
 // failure guarantees without a predictable formatter scratch path.
-let fmt_write (path: String) (out: String): Unit = {
-    match Os.write_file(path, out) {
+let fmt_write (file: SourceFile) (out: String): Unit = {
+    let path = file.path;
+    match treefs.write_text(file.root, file.relative, file.reject_links, file.identity, out) {
         Err(e) => { println("fmt: ".concat(e)); Os.exit_with(1) },
         Ok(_) => println("formatted ".concat(path)),
     }
@@ -3579,7 +3573,7 @@ struct SourceFile {
 struct BuildInputs { files: Array[SourceFile], deps: Array[pkg.Dep] }
 struct SourceBuilder { files: Ref[Array[SourceFile]], seen: treefs.TreeSeen }
 struct SourceFrame { entries: Array[treefs.EntryInfo], index: Int, relative: String, module_name: String, assign_modules: Bool }
-struct SourceScope { root: treefs.TreeRoot, path: String, owner: String, dep_name: String, reject_links: Bool }
+struct SourceScope { root: treefs.TreeRoot, path: String, owner: String, dep_name: String, reject_links: Bool, include_hidden: Bool }
 
 let source_builder (): SourceBuilder = {
     let seen = match treefs.seen() {
@@ -3596,12 +3590,39 @@ let source_push (builder: SourceBuilder) (file: SourceFile): Unit = {
     builder.files.set(files)
 }
 
+// Explicit files and editor buffers inherit their nearest declared project
+// policy. Without a manifest, their containing directory is the boundary.
+let source_declared_root (directory: String): String = {
+    let absolute = if Path.is_absolute(directory) { Path.clean(directory) }
+        else { Path.clean(Path.join(Result.unwrap_or(Os.cwd(()), "."), directory)) };
+    match source_find_manifest(absolute, 0) { Some(root) => root, None => directory }
+}
+
+let source_find_manifest (directory: String) (depth: Int): Option[String] =
+    if depth >= 128 { None }
+    else if Result.unwrap_or(Os.exists(Path.join(directory, "plum.pkg")), false) { Some(directory) }
+    else {
+        let parent = Path.dirname(directory);
+        if parent == directory { None } else { source_find_manifest(parent, depth + 1) }
+    }
+
+let source_relative (root: String) (path: String): String = {
+    let absolute = if Path.is_absolute(path) { Path.clean(path) }
+        else { Path.clean(Path.join(Result.unwrap_or(Os.cwd(()), "."), path)) };
+    let base = if Path.is_absolute(root) { Path.clean(root) }
+        else { Path.clean(Path.join(Result.unwrap_or(Os.cwd(()), "."), root)) };
+    let prefix = lsp_directory_prefix(base);
+    if absolute == base { "." }
+    else if absolute.starts_with(prefix) { treefs.path_slice(absolute, prefix.len(), absolute.len()) }
+    else { panic_raw("path ${path} is outside project root ${root}"); "" }
+}
+
 let source_scope (dir: String) (owner: String) (dep_name: String): SourceScope = {
     let root = match treefs.open_root(dir) {
         Ok(r) => r,
         Err(e) => treefs.fail_root(e),
     };
-    SourceScope { root: root, path: dir, owner: owner, dep_name: dep_name, reject_links: pkg.read(dir).symlinks == "reject" }
+    SourceScope { root: root, path: dir, owner: owner, dep_name: dep_name, reject_links: pkg.read(dir).symlinks == "reject", include_hidden: false }
 }
 
 let source_entry (scope: SourceScope) (relative: String): treefs.TreeEntry =
@@ -3635,7 +3656,7 @@ let source_walk (scope: SourceScope) (builder: SourceBuilder) (stack: Array[Sour
             let info = frame.entries[frame.index];
             let next = SourceFrame { entries: frame.entries, index: frame.index + 1, relative: frame.relative, module_name: frame.module_name, assign_modules: frame.assign_modules };
             let pending = rest.push(next);
-            if info.name.starts_with(".") || (frame.assign_modules && scope.dep_name == "" && info.name == "vendor") {
+            if (!scope.include_hidden && info.name.starts_with(".")) || (frame.assign_modules && scope.dep_name == "" && info.name == "vendor") {
                 source_walk(scope, builder, pending)
             } else {
                 let relative = if frame.relative == "." { info.name } else { Path.join(frame.relative, info.name) };
@@ -3668,14 +3689,18 @@ let source_path_files (path: String) (module_name: String): Array[SourceFile] = 
     builder.files.get()
 }
 
-let source_path_into (path: String) (module_name: String) (owner: String) (dep_name: String) (builder: SourceBuilder): Unit = {
+let source_path_into (path: String) (module_name: String) (owner: String) (dep_name: String) (builder: SourceBuilder): Unit =
+    source_path_policy(path, module_name, owner, dep_name, builder, false)
+
+let source_path_policy (path: String) (module_name: String) (owner: String) (dep_name: String) (builder: SourceBuilder) (include_hidden: Bool): Unit = {
     let is_dir = Result.unwrap_or(Os.is_directory(path), false);
-    let scope = source_scope(if is_dir { path } else { Path.dirname(path) }, owner, dep_name);
-    let relative = if is_dir { "." } else { Path.basename(path) };
+    let base = source_scope(if is_dir { if include_hidden { source_declared_root(path) } else { path } } else { source_declared_root(Path.dirname(path)) }, owner, dep_name);
+    let scope = SourceScope { root: base.root, path: base.path, owner: base.owner, dep_name: base.dep_name, reject_links: base.reject_links, include_hidden: include_hidden };
+    let relative = source_relative(scope.path, path);
     let entry = source_entry(scope, relative);
     if is_dir {
         source_record(builder, entry, path);
-        source_walk(scope, builder, [source_frame(scope, ".", module_name, false)])
+        source_walk(scope, builder, [source_frame(scope, relative, module_name, false)])
     } else if path.ends_with(".plum") {
         if treefs.kind(entry) != 1 { panic_raw("not a regular source file: ${path}") };
         source_record(builder, entry, path);

@@ -996,12 +996,22 @@ static HANDLE plum_tree_win_child(HANDLE parent, const WCHAR *name, DWORD bytes,
     if (failure) *failure = rc;
     return rc < 0 ? INVALID_HANDLE_VALUE : h;
 }
+// Enumeration and link targets use UTF-8. Existing Windows CLI arguments
+// can also carry native ACP bytes (the runtime still exposes narrow argv).
+// Preserve that established filename-byte contract at the adapter boundary
+// when strict UTF-8 decoding fails; never use replacement-character decoding.
+static int plum_tree_win_path(const char *path, WCHAR *wide, int capacity) {
+    int count = MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, path, -1, wide, capacity);
+    if (!count && GetLastError() == ERROR_NO_UNICODE_TRANSLATION)
+        count = MultiByteToWideChar(CP_ACP, MB_ERR_INVALID_CHARS, path, -1, wide, capacity);
+    return count;
+}
 static HANDLE plum_copy_root(const char *path) {
-    int n = MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, path, -1, NULL, 0);
+    int n = plum_tree_win_path(path, NULL, 0);
     if (n <= 1) return INVALID_HANDLE_VALUE;
     WCHAR *wide = malloc((size_t)n * sizeof(WCHAR));
     if (!wide) return INVALID_HANDLE_VALUE;
-    if (!MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, path, -1, wide, n)) {
+    if (!plum_tree_win_path(path, wide, n)) {
         free(wide); return INVALID_HANDLE_VALUE;
     }
     // Preserve a drive root's separator, but not a trailing slash on a link.
@@ -1051,9 +1061,11 @@ static int plum_tree_win_link(HANDLE h, WCHAR *target, size_t capacity, int allo
     }
     return !allow_absolute && target[0] == L'/' ? -1 : 0;
 }
-static HANDLE plum_tree_resolve(HANDLE root, const char *relative, int reject_links) {
+typedef struct { HANDLE parent; WCHAR name[PLUM_PATH_MAX]; } plum_tree_location;
+static HANDLE plum_tree_resolve_at(HANDLE root, const char *relative, int reject_links, plum_tree_location *location) {
+    if (location) location->parent = INVALID_HANDLE_VALUE;
     WCHAR pending[PLUM_PATH_MAX], target[PLUM_PATH_MAX];
-    int n = MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, relative, -1, pending, PLUM_PATH_MAX);
+    int n = plum_tree_win_path(relative, pending, PLUM_PATH_MAX);
     if (n <= 1) return INVALID_HANDLE_VALUE;
     for (int i = 0; i < n - 1; i++) {
         if (pending[i] == L':') return INVALID_HANDLE_VALUE;
@@ -1104,7 +1116,14 @@ static HANDLE plum_tree_resolve(HANDLE root, const char *relative, int reject_li
             if (more) { target[count++] = L'/'; memcpy(target + count, rest, (suffix + 1) * sizeof(WCHAR)); }
             wcscpy(pending, target); continue;
         }
-        if (!more) { result = child; break; }
+        if (!more) {
+            if (location) {
+                if (!DuplicateHandle(GetCurrentProcess(), parents[depth], GetCurrentProcess(),
+                    &location->parent, 0, FALSE, DUPLICATE_SAME_ACCESS)) { CloseHandle(child); break; }
+                wcscpy(location->name, pending);
+            }
+            result = child; break;
+        }
         if (!(info.FileAttributes & FILE_ATTRIBUTE_DIRECTORY) || depth + 1 >= PLUM_COPY_DEPTH) {
             CloseHandle(child); break;
         }
@@ -1113,6 +1132,9 @@ static HANDLE plum_tree_resolve(HANDLE root, const char *relative, int reject_li
     }
     for (unsigned i = 0; i <= depth; i++) if (parents[i] != INVALID_HANDLE_VALUE) CloseHandle(parents[i]);
     return result;
+}
+static HANDLE plum_tree_resolve(HANDLE root, const char *relative, int reject_links) {
+    return plum_tree_resolve_at(root, relative, reject_links, NULL);
 }
 long long plum_tree_root_open(const char *path) {
     HANDLE h = plum_copy_root(path);
@@ -1316,7 +1338,9 @@ static int plum_copy_root(const char *path) {
 // the resolved entry; callers must use that fd, never reopen the input path.
 // Links are interpreted ourselves, so absolute targets and attempts to climb
 // above the held root cannot escape through OS pathname resolution.
-static int plum_tree_resolve(int root, const char *relative, int reject_links) {
+typedef struct { int parent; char name[PLUM_PATH_MAX]; } plum_tree_location;
+static int plum_tree_resolve_at(int root, const char *relative, int reject_links, plum_tree_location *location) {
+    if (location) location->parent = -1;
     int parents[PLUM_COPY_DEPTH];
     unsigned depth = 0, links = 0;
     int result = -1;
@@ -1378,7 +1402,14 @@ static int plum_tree_resolve(int root, const char *relative, int reject_links) {
         if (fstat(child, &after) || !plum_copy_same(&before, &after)) {
             close(child); break;
         }
-        if (!more) { result = child; break; }
+        if (!more) {
+            if (location) {
+                location->parent = openat(parents[depth], ".", O_RDONLY | O_DIRECTORY | O_CLOEXEC);
+                if (location->parent < 0) { close(child); break; }
+                strcpy(location->name, pending);
+            }
+            result = child; break;
+        }
         if (depth + 1 >= PLUM_COPY_DEPTH) { close(child); break; }
         parents[++depth] = child;
         memmove(pending, rest, strlen(rest) + 1);
@@ -1389,6 +1420,9 @@ static int plum_tree_resolve(int root, const char *relative, int reject_links) {
 
 // Native owned-entry ABI. Zero is failure; successful values are fd + 1.
 // These are internal compiler primitives, not additions to the public Os API.
+static int plum_tree_resolve(int root, const char *relative, int reject_links) {
+    return plum_tree_resolve_at(root, relative, reject_links, NULL);
+}
 long long plum_tree_root_open(const char *path) {
     int fd = plum_copy_root(path);
     return fd < 0 ? 0 : (long long)fd + 1;
@@ -1611,6 +1645,99 @@ const char *plum_tree_entry_identity(long long entry) {
         snprintf(identity, sizeof(identity), "%llx:%llx", (unsigned long long)info.st_dev, (unsigned long long)info.st_ino);
 #endif
     return identity;
+}
+// Replace the resolved regular target, leaving any traversed symlink intact.
+// Both temporary creation and publication use the held target parent. The
+// expected identity prevents writing a file replaced since discovery/read.
+long long plum_tree_write(long long root, const char *relative, long long reject_links,
+                          const char *expected, const char *bytes, long long size) {
+    if (!root || !expected || !*expected || size < 0 || (unsigned long long)size > SIZE_MAX) return -1;
+    plum_tree_location location;
+    int rc = -1;
+#if defined(_WIN32)
+    HANDLE input = plum_tree_resolve_at((HANDLE)(intptr_t)root, relative, reject_links != 0, &location);
+    HANDLE output = INVALID_HANDLE_VALUE;
+    if (input == INVALID_HANDLE_VALUE) return -1;
+    if (location.parent == INVALID_HANDLE_VALUE || plum_tree_entry_kind((long long)(intptr_t)input) != 1 ||
+        strcmp(plum_tree_entry_identity((long long)(intptr_t)input), expected)) goto win_done;
+    DWORD name_bytes = (DWORD)(wcslen(location.name) * sizeof(WCHAR));
+    for (unsigned attempt = 0; attempt < 1024; attempt++) {
+        WCHAR temporary[80];
+        int count = swprintf(temporary, 80, L".plum-write-%lu-%u", (unsigned long)GetCurrentProcessId(), attempt);
+        if (count <= 0) goto win_done;
+        if (!wcscmp(temporary, location.name)) continue;
+        NTSTATUS status = 0;
+        output = plum_tree_win_child(location.parent, temporary, (DWORD)count * sizeof(WCHAR),
+            GENERIC_WRITE | DELETE, FILE_CREATE, FILE_NON_DIRECTORY_FILE, &status);
+        if (output != INVALID_HANDLE_VALUE) break;
+        if (status != (NTSTATUS)0xc0000035) goto win_done;
+    }
+    if (output == INVALID_HANDLE_VALUE) goto win_done;
+    for (size_t offset = 0; offset < (size_t)size;) {
+        size_t count = (size_t)size - offset;
+        if (count > PLUM_COPY_BUFFER) count = PLUM_COPY_BUFFER;
+        DWORD wrote;
+        if (!WriteFile(output, bytes + offset, (DWORD)count, &wrote, NULL) || !wrote) goto win_done;
+        offset += wrote;
+    }
+    if (!FlushFileBuffers(output)) goto win_done;
+    // The read handle pins the original until the complete replacement exists.
+    // Windows requires releasing its delete-denying share before publication.
+    if (!CloseHandle(input)) { input = INVALID_HANDLE_VALUE; goto win_done; }
+    input = INVALID_HANDLE_VALUE;
+    if (plum_tree_win_replaceable(location.parent, location.name, name_bytes) ||
+        plum_tree_win_publish(output, location.name, name_bytes)) goto win_done;
+    rc = 0;
+win_done:
+    if (output != INVALID_HANDLE_VALUE) {
+        if (rc) {
+            FILE_DISPOSITION_INFO remove = {TRUE};
+            SetFileInformationByHandle(output, FileDispositionInfo, &remove, sizeof(remove));
+        }
+        if (!CloseHandle(output)) rc = -1;
+    }
+    if (input != INVALID_HANDLE_VALUE) CloseHandle(input);
+    if (location.parent != INVALID_HANDLE_VALUE) CloseHandle(location.parent);
+#else
+    if (root < 1 || root > INT32_MAX) return -1;
+    int input = plum_tree_resolve_at((int)(root - 1), relative, reject_links != 0, &location);
+    if (input < 0) return -1;
+    int output = -1;
+    char temporary[80] = {0};
+    struct stat info, current;
+    if (location.parent < 0 || fstat(input, &info) || !S_ISREG(info.st_mode) ||
+        strcmp(plum_tree_entry_identity((long long)input + 1), expected)) goto posix_done;
+    for (unsigned attempt = 0; attempt < 1024; attempt++) {
+        snprintf(temporary, sizeof(temporary), ".plum-write-%ld-%u", (long)getpid(), attempt);
+        if (!strcmp(temporary, location.name)) continue;
+        output = openat(location.parent, temporary, O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW | O_CLOEXEC, 0600);
+        if (output >= 0) break;
+        if (errno != EEXIST) goto posix_done;
+    }
+    if (output < 0) goto posix_done;
+    for (size_t offset = 0; offset < (size_t)size;) {
+        size_t count = (size_t)size - offset;
+        if (count > PLUM_COPY_BUFFER) count = PLUM_COPY_BUFFER;
+        ssize_t wrote = write(output, bytes + offset, count);
+        if (wrote < 0 && errno == EINTR) continue;
+        if (wrote <= 0) goto posix_done;
+        offset += (size_t)wrote;
+    }
+    if (fchmod(output, info.st_mode & 0777) || fsync(output)) goto posix_done;
+    if (fstatat(location.parent, location.name, &current, AT_SYMLINK_NOFOLLOW) ||
+        !S_ISREG(current.st_mode) || !plum_copy_same(&info, &current)) goto posix_done;
+    if (renameat(location.parent, temporary, location.parent, location.name)) goto posix_done;
+    rc = 0;
+posix_done:
+    // Only an exclusively created temporary belongs to this operation.
+    if (output >= 0) {
+        if (rc) unlinkat(location.parent, temporary, 0);
+        if (close(output)) rc = -1;
+    }
+    close(input);
+    if (location.parent >= 0) close(location.parent);
+#endif
+    return rc;
 }
 static long long plum_tree_entry_size(long long entry) {
     if (plum_tree_entry_kind(entry) != 1) return -1;
