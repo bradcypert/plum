@@ -173,10 +173,31 @@ else
     fail=$((fail + 1))
 fi
 
-# Use the same stable order on every runner, and count only fixtures.
+# Use the same stable order on every runner without changing the locale
+# inherited by tests. In particular, MSYS cygpath must keep UTF-8 output
+# for Python helpers that pass Unicode paths to native Windows tools.
+smoke_locale_set="${LC_ALL+x}"
+smoke_locale="${LC_ALL-}"
 export LC_ALL=C
+set -- bootstrap/exec_corpus/*/
+if [ "$smoke_locale_set" = x ]; then
+    export LC_ALL="$smoke_locale"
+else
+    unset LC_ALL
+fi
+# Probe Unicode paths immediately after restoring the test environment,
+# before spending time compiling the execution corpus.
+# Exercise the same root policy and target replacement on every host.
+if python3 ./bootstrap/formatter-tree-test.py "$plum"; then
+    printf 'OK    %-24s\n' "formatter_linked_tree"
+    ok=$((ok + 1))
+else
+    printf 'FAIL  %-24s\n' "formatter_linked_tree"
+    fail=$((fail + 1))
+fi
+
 fixture_index=0
-for dir in bootstrap/exec_corpus/*/; do
+for dir do
     name="$(basename "$dir")"
     [ -f "$dir/main.plum" ] || continue
     selected=$((fixture_index % shard_count + 1))
@@ -249,15 +270,6 @@ if "$plum" fmt --write "$work/format.plum" > "$work/format.log" 2>&1 &&
 else
     printf 'FAIL  %-24s\n' "formatter_replacement"
     cat "$work/format.log"
-    fail=$((fail + 1))
-fi
-
-# Exercise the same root policy and target replacement on every host.
-if python3 ./bootstrap/formatter-tree-test.py "$plum"; then
-    printf 'OK    %-24s\n' "formatter_linked_tree"
-    ok=$((ok + 1))
-else
-    printf 'FAIL  %-24s\n' "formatter_linked_tree"
     fail=$((fail + 1))
 fi
 
