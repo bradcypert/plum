@@ -74,14 +74,25 @@ static void *worker(void *arg) {
             if (kind == 2) assert(strcmp(p, expected_cwd) == 0);
             rendezvous();
             if (kind == 0) {
+#if defined(_WIN32)
+                wchar_t wide[PLUM_PATH_MAX];
+                assert(MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, p, -1, wide, PLUM_PATH_MAX));
+                DWORD attrs = GetFileAttributesW(wide);
+                assert(attrs != INVALID_FILE_ATTRIBUTES && (attrs & FILE_ATTRIBUTE_DIRECTORY));
+#else
                 struct stat st;
                 assert(stat(p, &st) == 0 && S_ISDIR(st.st_mode));
+#endif
                 for (size_t other = 0; other < WORKERS; other++) {
                     int other_kind = phase == 3 ? (int)(other % 3) : phase;
                     if (other != id && other_kind == 0)
                         assert(strcmp(p, copies[other]) != 0);
                 }
+#if defined(_WIN32)
+                assert(RemoveDirectoryW(wide));
+#else
                 assert(PLUM_RMDIR(p) == 0);
+#endif
             }
             rendezvous();
         }

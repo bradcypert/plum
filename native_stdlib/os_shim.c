@@ -277,8 +277,13 @@ static void plum_win_temp_dir(const char *root, const char *prefix) {
         int n=snprintf(plum_os_buf,sizeof(plum_os_buf),"%s%s%s%lu-%llu-%lu",root,separator,prefix,
                        (unsigned long)GetCurrentProcessId(),(unsigned long long)GetTickCount64(),next);
         if (n<0 || n>=(int)sizeof(plum_os_buf)) break;
-        if (plum_path_mkdir(plum_os_buf) == 0) return;
-        if (errno != EEXIST) break;
+        // The candidate is already bounded by plum_os_buf. Use bounded
+        // stack conversion so system-path queries keep their allocation-free
+        // borrowed-result contract, including concurrent temp_dir calls.
+        wchar_t wide[PLUM_PATH_MAX];
+        if (!MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, plum_os_buf, -1, wide, PLUM_PATH_MAX)) break;
+        if (CreateDirectoryW(wide, NULL)) return;
+        if (GetLastError() != ERROR_ALREADY_EXISTS) break;
     }
     plum_os_buf[0]='\0';
 }

@@ -22,7 +22,7 @@ hash include it. Installed compilers therefore need no checkout headers.
 
 ## Ownership and memory
 
-Each input conversion allocates exactly the required UTF-16 storage,
+Heap input conversions allocate exactly the required UTF-16 storage,
 including its terminator, and frees it before returning from the native
 operation. A two-path replacement briefly owns two conversions. Failure to
 allocate or decode returns an error before using that path; partial
@@ -37,7 +37,8 @@ its native wide stream. Reading each entry allocates no new shim storage;
 closing the stream releases both. Public `Os.list_dir` still copies entries
 into its returned strings, so its output memory remains proportional to the
 names returned. Returned cwd/temp/executable paths continue to use bounded
-thread-local UTF-8 buffers, with bounded stack UTF-16 scratch during calls.
+thread-local UTF-8 buffers, with bounded stack UTF-16 scratch during calls. These system-path queries,
+including temporary-directory creation, add no heap scratch.
 
 This is a correctness change with a small Windows conversion cost. It does
 not reduce file payload memory, change reference counting, implement precise
