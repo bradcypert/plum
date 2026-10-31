@@ -54,6 +54,9 @@ count, say.
 
 Requires the key to be present. Its absence is a different failure
 from its value being the wrong shape, and says so.
+Error paths use dots for ASCII identifiers (`owner.login`) and
+JSON-quoted brackets for other keys (`["a.b"]`, `[""]`). Array
+indices use unquoted brackets (`items[0]`).
 
 ## `let optional_field (key: String) (inner: Decoder[T]): Decoder[Option[T]]`
 
@@ -71,10 +74,9 @@ present: `field(k, nullable(d))` says "present, may be null", and
 ## `let at (keys: Array[String]) (inner: Decoder[T]): Decoder[T]`
 
 A LIST of keys rather than a dotted string: a key containing a dot
-is ordinary JSON, and a path syntax would have to invent an escape
-for it. It is also nothing but nested `field`s, which is why the
-path in an error comes out right without this function knowing
-anything about paths.
+is ordinary JSON. Each key is taken literally, so `["a.b"]` selects
+one key and `["a", "b"]` selects two nested keys. Errors use the
+same unambiguous path notation as `Json.field`.
 
 ## `let index (i: Int) (inner: Decoder[T]): Decoder[T]`
 

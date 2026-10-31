@@ -13,8 +13,30 @@ let at_str (p: String): String = if String.is_empty(p) { "the root" } else { p }
 let expected (what: String) (p: String): String =
     "expected ".concat(what).concat(" at ").concat(at_str(p))
 
-let join_key (p: String) (k: String): String =
-    if String.is_empty(p) { k } else { p.concat(".").concat(k) }
+// Only ASCII identifiers can be bare path segments. Everything else
+// uses the JSON writer's string escaping, including empty keys and controls.
+let key_is_bare (bytes: Bytes) (i: Int): Bool =
+    if i >= bytes.len() { i > 0 }
+    else {
+        let b = Option.unwrap_or(bytes.at(i), 0);
+        if (b >= 65 && b <= 90) || (b >= 97 && b <= 122) || b == 95
+            || (i > 0 && b >= 48 && b <= 57) {
+                key_is_bare(bytes, i + 1)
+            } else { false }
+    }
+
+let key_segment (key: String): String =
+    if key_is_bare(String.as_bytes(key), 0) { key }
+    else { match json_stringify(JsonString(key)) {
+        Ok(quoted) => "[".concat(quoted).concat("]"),
+        // A JsonString cannot contain the writer's only error: a non-finite number.
+        Err(e) => { panic_raw(e); "" },
+    } }
+
+let join_key (p: String) (segment: String): String =
+    if String.is_empty(p) { segment }
+    else if String.starts_with(segment, "[") { p.concat(segment) }
+    else { p.concat(".").concat(segment) }
 
 let join_index (p: String) (i: Int): String =
     p.concat("[").concat(i.to_string()).concat("]")
@@ -91,30 +113,38 @@ let lookup (entries: Array[JsonEntry]) (key: String) (i: Int): Option[JsonValue]
 
 /// Requires the key to be present. Its absence is a different failure
 /// from its value being the wrong shape, and says so.
-pub let field [T] (key: String) (inner: Decoder[T]): Decoder[T] =
+/// Error paths use dots for ASCII identifiers (`owner.login`) and
+/// JSON-quoted brackets for other keys (`["a.b"]`, `[""]`). Array
+/// indices use unquoted brackets (`items[0]`).
+pub let field [T] (key: String) (inner: Decoder[T]): Decoder[T] = {
+    // Render once per decoder, including when it is reused for a list.
+    let segment = key_segment(key);
     Decoder { run: |v, p| match v {
         JsonObject(entries) => match lookup(entries, key, 0) {
-            Some(found) => inner.run(found, join_key(p, key)),
+            Some(found) => inner.run(found, join_key(p, segment)),
             None => Err("no field `".concat(key).concat("` at ").concat(at_str(p))),
         },
         _ => Err(expected("Object", p)),
     } }
+}
 
 /// Absent or null both give `None`, which is what an optional field in
 /// a real API means. `field(k, nullable(d))` is the other reading --
 /// the key must be there, and its value may be null, and both
 /// spellings exist because both situations do.
-pub let optional_field [T] (key: String) (inner: Decoder[T]): Decoder[Option[T]] =
+pub let optional_field [T] (key: String) (inner: Decoder[T]): Decoder[Option[T]] = {
+    let segment = key_segment(key);
     Decoder { run: |v, p| match v {
         JsonObject(entries) => match lookup(entries, key, 0) {
             None => Ok(None),
             Some(found) => match found {
                 JsonNull => Ok(None),
-                _ => Result.map(inner.run(found, join_key(p, key)), |x| Some(x)),
+                _ => Result.map(inner.run(found, join_key(p, segment)), |x| Some(x)),
             },
         },
         _ => Err(expected("Object", p)),
     } }
+}
 
 /// Allows the VALUE to be null, giving `None`. The key must still be
 /// present: `field(k, nullable(d))` says "present, may be null", and
@@ -126,10 +156,9 @@ pub let nullable [T] (inner: Decoder[T]): Decoder[Option[T]] =
     } }
 
 /// A LIST of keys rather than a dotted string: a key containing a dot
-/// is ordinary JSON, and a path syntax would have to invent an escape
-/// for it. It is also nothing but nested `field`s, which is why the
-/// path in an error comes out right without this function knowing
-/// anything about paths.
+/// is ordinary JSON. Each key is taken literally, so `["a.b"]` selects
+/// one key and `["a", "b"]` selects two nested keys. Errors use the
+/// same unambiguous path notation as `Json.field`.
 pub let at [T] (keys: Array[String]) (inner: Decoder[T]): Decoder[T] =
     at_acc(keys, keys.len() - 1, inner)
 

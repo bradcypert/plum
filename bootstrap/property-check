@@ -46,7 +46,7 @@ fi
 #
 # A FLOOR, so adding properties does not fail the harness. Raise it when
 # you add some.
-floor=43
+floor=44
 passed="$(printf '%s' "$out" | grep -oE '[0-9]+ passed' | grep -oE '[0-9]+')"
 if [ -z "$passed" ] || [ "$passed" -lt "$floor" ]; then
     printf '%s\n' "$out" >&2

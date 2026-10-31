@@ -1,0 +1,93 @@
+use Json;
+
+let text (bytes: Array[Int]): String = Result.unwrap_or(Bytes.as_string(Bytes.from_array(bytes)), "invalid UTF-8")
+
+let show [T] (result: Result[T, String]): Unit = match result {
+    Ok(_) => println("OK"),
+    Err(e) => println(e),
+}
+
+let object (key: String) (value: JsonValue): JsonValue = JsonObject([JsonEntry { key: key, value: value }])
+
+let wrong_key (key: String): Unit =
+    show(Json.decode(Json.at([key], Json.string()), object(key, JsonNull)))
+
+let main (): Unit = {
+    show(Json.decode(Json.at(["a", "b"], Json.string()), object("a", object("b", JsonNull))));
+    wrong_key("a.b");
+    wrong_key("");
+    wrong_key("items[0]");
+    wrong_key("[0]");
+    wrong_key("a\"b");
+    wrong_key("a\\b");
+    wrong_key(text([97, 10, 98]));
+    wrong_key(text([97, 13, 98]));
+    wrong_key(text([97, 9, 98]));
+    wrong_key(text([97, 0, 98]));
+    wrong_key(text([97, 8, 12, 98]));
+    wrong_key("the root");
+    wrong_key("a b");
+    wrong_key("0");
+    wrong_key("é");
+    wrong_key("雪😀");
+    wrong_key("a-b");
+    wrong_key("a`b");
+    wrong_key("_id2");
+    wrong_key("a.b[\"c\"]");
+    let dotted = object("a.b", JsonNull);
+    show(Json.decode(Json.optional_field("a.b", Json.string()), object("a.b", JsonBool(true))));
+    let bad: Json.Decoder[String] = Json.fail("bad");
+    show(Json.decode(Json.field("a.b", bad), dotted));
+    show(Json.decode(Json.field("a.b", Json.one_of([Json.string()])), dotted));
+    show(Json.decode(Json.field("outer", Json.field("a.b", Json.index(0, Json.field("", Json.string())))), object("outer", object("a.b", JsonArray([object("", JsonNull)])))));
+    show(Json.decode(Json.list(Json.field("a.b", Json.string())), JsonArray([dotted])));
+    show(Json.decode(Json.field("a.b", Json.index(3, Json.string())), object("a.b", JsonArray([]))));
+    show(Json.decode(Json.at(["a.b", "child"], Json.string()), dotted));
+    show(Json.decode(Json.string(), JsonNull));
+    show(Json.decode(Json.at([], Json.string()), JsonNull));
+    show(Json.decode(Json.field("a.b", Json.string()), object("a.b", JsonString("ok"))));
+    show(Json.decode(Json.optional_field("a.b", Json.string()), JsonObject([])));
+    show(Json.decode(Json.optional_field("a.b", Json.string()), dotted));
+    // Reuse one escaped segment across a successful element and a failure.
+    let decoder = Json.list(Json.field("a.b", Json.string()));
+    show(Json.decode(decoder, JsonArray([object("a.b", JsonString("ok")), dotted])));
+    // Every ASCII control must be escaped, with exact spellings in the golden.
+    wrong_key(text([0]));
+    wrong_key(text([1]));
+    wrong_key(text([2]));
+    wrong_key(text([3]));
+    wrong_key(text([4]));
+    wrong_key(text([5]));
+    wrong_key(text([6]));
+    wrong_key(text([7]));
+    wrong_key(text([8]));
+    wrong_key(text([9]));
+    wrong_key(text([10]));
+    wrong_key(text([11]));
+    wrong_key(text([12]));
+    wrong_key(text([13]));
+    wrong_key(text([14]));
+    wrong_key(text([15]));
+    wrong_key(text([16]));
+    wrong_key(text([17]));
+    wrong_key(text([18]));
+    wrong_key(text([19]));
+    wrong_key(text([20]));
+    wrong_key(text([21]));
+    wrong_key(text([22]));
+    wrong_key(text([23]));
+    wrong_key(text([24]));
+    wrong_key(text([25]));
+    wrong_key(text([26]));
+    wrong_key(text([27]));
+    wrong_key(text([28]));
+    wrong_key(text([29]));
+    wrong_key(text([30]));
+    wrong_key(text([31]));
+    // Long keys must use tail scanning and the linear JSON string writer.
+    let long_bare = String.repeat("a", 20000);
+    let long_quoted = String.repeat("a.\n", 10000);
+    let value = JsonString("ok");
+    show(Json.decode(Json.field(long_bare, Json.string()), object(long_bare, value)));
+    show(Json.decode(Json.field(long_quoted, Json.string()), object(long_quoted, value)));
+}

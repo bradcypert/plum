@@ -1805,3 +1805,26 @@ pub let test_path_extension_containment (): Unit = {
     assert_eq(Path.try_with_extension("project/file.txt", "md"), Ok(Path.with_extension("project/file.txt", "md")));
     assert_eq(Path.try_with_extension("project/file.txt", "../../../outside"), Err("invalid path extension"));
 }
+
+// A single literal key must survive diagnostic rendering, even when it
+// contains path punctuation, controls or multi-byte UTF-8. Recover the
+// quoted segment with the public JSON parser rather than a second renderer.
+pub let test_json_decoder_literal_paths (): Unit = {
+    for seed in 0..200 {
+        let key = ".".concat(json_string_bytes(seed, rand_between(seed, 0, 128), []));
+        let value = JsonObject([JsonEntry { key: key, value: JsonNull }]);
+        let error = match Json.decode(Json.at([key], Json.string()), value) {
+            Err(e) => e,
+            Ok(_) => "unexpected success",
+        };
+        let prefix = "expected String at [";
+        check_eq("path prefix", seed.to_string(), String.starts_with(error, prefix).to_string(), "true");
+        check_eq("path suffix", seed.to_string(), String.ends_with(error, "]").to_string(), "true");
+        let quoted = String.slice(error, prefix.char_len(), error.char_len() - 1);
+        check_eq("path key", seed.to_string(), match json_parse(quoted) { Ok(JsonString(s)) => s, _ => "invalid segment" }, key);
+        let nested = JsonObject([JsonEntry { key: "", value: JsonObject([JsonEntry { key: String.slice(key, 1, key.char_len()), value: JsonNull }]) }]);
+        let nested_error = Json.decode(Json.at(["", String.slice(key, 1, key.char_len())], Json.string()), nested);
+        let nested_path = match nested_error { Err(e) => e, Ok(_) => "unexpected success" };
+        check_eq("path distinct", seed.to_string().concat(" ").concat(error).concat(" / ").concat(nested_path), (nested_path != error).to_string(), "true");
+    }
+}
