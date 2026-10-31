@@ -608,6 +608,24 @@ done:
     return result;
 }
 
+// Write directly from the caller's buffer with constant scratch space.
+// Bound each OS request to 1 MiB before narrowing to DWORD; short writes advance
+// by their actual count, while failure or no progress aborts the launch.
+static int plum_win_write_stdin(HANDLE file, const char *data, long long length) {
+    if (length < 0 || (unsigned long long)length > SIZE_MAX ||
+        (length > 0 && data == NULL)) return -1;
+    size_t left = (size_t)length;
+    while (left > 0) {
+        DWORD request = left > 1024 * 1024 ? 1024 * 1024 : (DWORD)left;
+        DWORD written = 0;
+        if (!WriteFile(file, data, request, &written, NULL) ||
+            written == 0 || written > request) return -1;
+        data += written;
+        left -= written;
+    }
+    return 0;
+}
+
 static long long plum_spawn_capture(const char *program, char **argv, char *out_path, char *err_path,
                                     char **envp, const char *stdin_data, long long stdin_len,
                                     int stdin_mode, int fail_on_exec, PlumChildState *async) {
@@ -648,7 +666,6 @@ static long long plum_spawn_capture(const char *program, char **argv, char *out_
         hi_owned = 1;
     } else {
         HANDLE hw = plum_win_temp_handle("pli", in_path);
-        DWORD written = 0;
         SECURITY_ATTRIBUTES sa;
         if (hw == INVALID_HANDLE_VALUE) {
             CloseHandle(ho); CloseHandle(he);
@@ -657,16 +674,15 @@ static long long plum_spawn_capture(const char *program, char **argv, char *out_
             free(env_block);
             return PLUM_SPAWN_FAILED;
         }
-        if (stdin_len > 0 && stdin_data != NULL) {
-            if (!WriteFile(hw, stdin_data, (DWORD)stdin_len, &written, NULL) || written != (DWORD)stdin_len) {
-                CloseHandle(hw); CloseHandle(ho); CloseHandle(he);
-                plum_capture_remove(in_path); plum_capture_remove(out_path); plum_capture_remove(err_path);
-                free(cmdline);
-                free(env_block);
-                return PLUM_SPAWN_FAILED;
-            }
+        int input_failed = plum_win_write_stdin(hw, stdin_data, stdin_len);
+        if (!CloseHandle(hw)) input_failed = -1;
+        if (input_failed) {
+            CloseHandle(ho); CloseHandle(he);
+            plum_capture_remove(in_path); plum_capture_remove(out_path); plum_capture_remove(err_path);
+            free(cmdline);
+            free(env_block);
+            return PLUM_SPAWN_FAILED;
         }
-        CloseHandle(hw);
         sa.nLength = sizeof(sa);
         sa.lpSecurityDescriptor = NULL;
         sa.bInheritHandle = TRUE;

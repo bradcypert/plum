@@ -17,7 +17,41 @@ static int allocation_attempt, fail_allocation;
 static int fail_snapshot, live_snapshots;
 static wchar_t *snapshot_override;
 static int expect_no_wait_scratch;
+static int stdin_write_mode, stdin_write_calls, process_creations;
+static const char *stdin_base;
+static size_t stdin_offset, stdin_expected;
+static wchar_t failed_input_path[4096];
 typedef union { size_t size; max_align_t alignment; } Allocation;
+
+static BOOL checked_write(HANDLE h, LPCVOID data, DWORD count, LPDWORD written, LPOVERLAPPED overlapped) {
+    if (stdin_write_mode == 0) return WriteFile(h, data, count, written, overlapped);
+    assert(count > 0 && count <= 1024 * 1024 && overlapped == NULL);
+    stdin_write_calls++;
+    if (stdin_write_mode == 1) {
+        // A reserved, uncommitted range checks >4 GiB accounting without
+        // allocating physical memory or writing gigabytes to the CI disk.
+        assert((const char *)data == stdin_base + stdin_offset);
+        assert(count <= stdin_expected - stdin_offset);
+        *written = stdin_write_calls == 1 && count > 1 ? count / 2 : count;
+        stdin_offset += *written;
+        return TRUE;
+    }
+    if (stdin_write_calls == 2 && stdin_write_mode >= 3) {
+        assert(GetFinalPathNameByHandleW(h, failed_input_path, 4096, FILE_NAME_NORMALIZED));
+        *written = 0;
+        if (stdin_write_mode == 3) { SetLastError(ERROR_DISK_FULL); return FALSE; }
+        return TRUE;
+    }
+    // Exercise real short writes too, including embedded NUL/CR/LF/Ctrl-Z.
+    if (count > 65537) count = 65537;
+    return WriteFile(h, data, count, written, overlapped);
+}
+static BOOL checked_create_process(LPCWSTR app, LPWSTR line, LPSECURITY_ATTRIBUTES pa,
+                                  LPSECURITY_ATTRIBUTES ta, BOOL inherit, DWORD flags,
+                                  LPVOID env, LPCWSTR cwd, LPSTARTUPINFOW si, LPPROCESS_INFORMATION pi) {
+    process_creations++;
+    return CreateProcessW(app, line, pa, ta, inherit, flags, env, cwd, si, pi);
+}
 
 static void *checked_malloc(size_t n) {
     if (++allocation_attempt == fail_allocation) return NULL;
@@ -72,8 +106,12 @@ static DWORD checked_wait(HANDLE h, DWORD ms) {
 #define free checked_free
 #define strdup checked_strdup
 #define GetEnvironmentStringsW checked_snapshot
+#define WriteFile checked_write
+#define CreateProcessW checked_create_process
 #include "../native_stdlib/process_shim.c"
 #include "../native_stdlib/whole_file_shim.c"
+#undef CreateProcessW
+#undef WriteFile
 #undef WaitForSingleObject
 #undef FreeEnvironmentStringsW
 #undef malloc
@@ -83,6 +121,72 @@ static DWORD checked_wait(HANDLE h, DWORD ms) {
 #undef GetEnvironmentStringsW
 
 static void no_scratch(void) { assert(live_bytes == 0 && live_allocs == 0 && live_snapshots == 0); }
+
+static void test_stdin_accounting(void) {
+    const size_t lengths[] = {0, 1, 1024 * 1024 - 1, 1024 * 1024, 1024 * 1024 + 1,
+                             (size_t)UINT32_MAX - 1, (size_t)UINT32_MAX,
+                             (size_t)UINT32_MAX + 1, (size_t)UINT32_MAX + 18};
+    size_t largest = lengths[sizeof(lengths) / sizeof(lengths[0]) - 1];
+    char *reserved = VirtualAlloc(NULL, largest, MEM_RESERVE, PAGE_NOACCESS);
+    assert(reserved != NULL);
+    stdin_base = reserved;
+    stdin_write_mode = 1;
+    for (size_t i = 0; i < sizeof(lengths) / sizeof(lengths[0]); i++) {
+        stdin_offset = stdin_write_calls = 0;
+        stdin_expected = lengths[i];
+        int allocations_before = allocation_attempt;
+        assert(plum_win_write_stdin(INVALID_HANDLE_VALUE, reserved, (long long)lengths[i]) == 0);
+        assert(stdin_offset == lengths[i]);
+        assert((stdin_write_calls == 0) == (lengths[i] == 0));
+        assert(allocation_attempt == allocations_before);
+        no_scratch();
+    }
+    stdin_write_calls = 0;
+    assert(plum_win_write_stdin(INVALID_HANDLE_VALUE, NULL, 0) == 0);
+    assert(plum_win_write_stdin(INVALID_HANDLE_VALUE, NULL, 1) == -1);
+    assert(plum_win_write_stdin(INVALID_HANDLE_VALUE, reserved, -1) == -1);
+    assert(stdin_write_calls == 0);
+    stdin_write_mode = 0;
+    assert(VirtualFree(reserved, 0, MEM_RELEASE));
+}
+
+static void test_stdin_spawns(const char *program) {
+    const size_t length = 2 * 1024 * 1024 + 17;
+    char *input = malloc(length);
+    assert(input != NULL);
+    for (size_t i = 0; i < length; i++) input[i] = (char)(i % 256);
+    for (int async = 0; async <= 1; async++) {
+        for (int mode = 0; mode <= 4; mode++) {
+            stdin_write_mode = mode;
+            stdin_write_calls = 0;
+            // Mode 1 is reserved for synthetic accounting above.
+            if (mode == 1) continue;
+            int before = process_creations;
+            long long h = async ? process_spawn(program, "--stdin-child", 1, "", 0, input, length, 1) :
+                                 process_run_ex(program, "--stdin-child", 1, "", 0, input, length, 1);
+            if (mode >= 3) {
+                assert(h == -1 && process_creations == before && stdin_write_calls == 2);
+                assert(GetFileAttributesW(failed_input_path) == INVALID_FILE_ATTRIBUTES);
+            } else {
+                assert(h >= 0 && process_creations == before + 1);
+                if (async) assert(process_child_wait(h, -1) == 1);
+                assert(process_exit_code(h) == 0 && process_capture_status(h) == 0);
+                process_free(h);
+            }
+            no_scratch();
+            for (int i = 0; i < PLUM_PROC_MAX_SLOTS; i++) assert(!plum_process_slots[i].in_use);
+        }
+        stdin_write_mode = 0;
+        long long h = async ? process_spawn(program, "--stdin-empty", 1, "", 0, "", 0, 1) :
+                             process_run_ex(program, "--stdin-empty", 1, "", 0, "", 0, 1);
+        assert(h >= 0);
+        if (async) assert(process_child_wait(h, -1) == 1);
+        assert(process_exit_code(h) == 0);
+        process_free(h);
+        no_scratch();
+    }
+    free(input);
+}
 
 static void test_builders(void) {
     char *args[] = {"tool", "", "hello world", "\xe6\x97\xa5\xf0\x9f\x8c\x8d", "a\\\"b", "end \\", NULL};
@@ -273,6 +377,7 @@ static void test_spawns(void) {
     assert(process_run_inherit(program, "\xff", 1) == -1);
     assert(process_run_ex("plum-no-such-program-108.exe", "", 0, "KEY=value", 1, "", 0, 0) == -1);
     no_scratch();
+    test_stdin_spawns(program);
     assert(DeleteFileW(path));
 }
 
@@ -280,6 +385,22 @@ int main(void) {
     int argc;
     wchar_t **argv = CommandLineToArgvW(GetCommandLineW(), &argc);
     assert(argv != NULL);
+    if (argc == 2 && (wcscmp(argv[1], L"--stdin-child") == 0 || wcscmp(argv[1], L"--stdin-empty") == 0)) {
+        size_t expected = wcscmp(argv[1], L"--stdin-empty") == 0 ? 0 : 2 * 1024 * 1024 + 17;
+        LocalFree(argv);
+        unsigned char buffer[4096];
+        size_t offset = 0;
+        DWORD count;
+        while (1) {
+            assert(ReadFile(GetStdHandle(STD_INPUT_HANDLE), buffer, sizeof(buffer), &count, NULL));
+            if (count == 0) break;
+            assert(offset + count <= expected);
+            for (DWORD i = 0; i < count; i++) assert(buffer[i] == (offset + i) % 256);
+            offset += count;
+        }
+        assert(offset == expected);
+        return 0;
+    }
     if (argc > 1 && wcscmp(argv[1], L"--child") == 0) {
         assert(argc == 7);
         assert(wcscmp(argv[2], L"\x65e5\xd83c\xdf0d") == 0);
@@ -297,6 +418,7 @@ int main(void) {
         return 0;
     }
     LocalFree(argv);
+    test_stdin_accounting();
     test_builders();
     // Capture creation/readback/removal must work below a Unicode TEMP root.
     wchar_t temp[4096], root[4096], old_temp[4096], old_tmp[4096];
@@ -310,6 +432,6 @@ int main(void) {
     assert(SetEnvironmentVariableW(L"TEMP", nt ? old_temp : NULL));
     assert(SetEnvironmentVariableW(L"TMP", np ? old_tmp : NULL));
     assert(RemoveDirectoryW(root));
-    printf("Windows process Unicode, overlays, allocation failures: ok (peak scratch %zu bytes)\n", peak_bytes);
+    printf("Windows process Unicode, overlays, chunked stdin, failure cleanup: ok (peak scratch %zu bytes)\n", peak_bytes);
     return 0;
 }
