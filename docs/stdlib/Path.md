@@ -120,10 +120,31 @@ The last component without its extension.
 ## `let stem (p: String): String`
 
 
+## `let try_with_extension_in (windows: Bool) (p: String) (ext: String): Result[String, String]`
+
+Changes only the filename extension, returning an error for invalid
+input. `ext` is given without its separating dot; empty removes the
+extension, and compound extensions such as `tar.gz` are allowed.
+Rejects `/`, NUL, `.` and `..`, plus `\\` and `:` on Windows
+(including alternate data stream syntax). Backslashes are ordinary
+filename bytes on Unix. Roots and final `.`/`..` components have no
+filename to edit and return an error, including bare UNC shares.
+Results equal to `.`/`..`, or made only of dots/spaces on Windows,
+also return an error.
+This is a lexical operation; it does not resolve filesystem symlinks.
+
+## `let try_with_extension (p: String) (ext: String): Result[String, String]`
+
+Host-platform form of `try_with_extension_in`; returns an error for
+invalid extensions or paths without a filename.
+
 ## `let with_extension_in (windows: Bool) (p: String) (ext: String): String`
 
-`p` with a different extension, given without a dot. An empty
-`ext` removes it.
+`p` with a different extension, given without a dot. Empty removes it.
+Panics on invalid input under `try_with_extension_in`'s rules; use
+that checked form for untrusted input.
 
 ## `let with_extension (p: String) (ext: String): String`
 
+Host-platform form of `with_extension_in`, with the same validation
+and panic behavior. Use `try_with_extension` to handle invalid input.

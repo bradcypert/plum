@@ -282,12 +282,78 @@ pub let stem_in (windows: Bool) (p: String): String = {
 }
 pub let stem (p: String): String = stem_in(IS_WINDOWS, p)
 
-/// `p` with a different extension, given without a dot. An empty
-/// `ext` removes it.
-pub let with_extension_in (windows: Bool) (p: String) (ext: String): String = {
-    let dir = dirname_in(windows, p);
-    let base = if String.is_empty(ext) { stem_in(windows, p) } else { stem_in(windows, p).concat(".").concat(ext) };
-    if dir == "." && !String.starts_with(normalize_in(windows, p), ".".concat("/")) { base } else { join_in(windows, dir, base) }
+// Validate bytes directly: no split arrays, Unicode decoding, or growing
+// prefix copies. A Windows colon could select an alternate data stream.
+let valid_extension_in (windows: Bool) (ext: String): Bool = {
+    if ext == "." || ext == ".." { false }
+    else {
+        let b = ext.as_bytes();
+        let mut valid = true;
+        for i in 0..b.len() {
+            let c = byte_at(b, i);
+            if c == 0 || c == 47 || (windows && (c == 92 || c == 58)) { valid = false; };
+        };
+        valid
+    }
 }
-pub let with_extension (p: String) (ext: String): String = with_extension_in(IS_WINDOWS, p, ext)
 
+// Win32 can discard trailing dots/spaces. A name made only of those
+// bytes must not become a current/parent directory alias at the OS boundary.
+let has_filename_in (windows: Bool) (name: String): Bool = {
+    if windows {
+        let b = name.as_bytes();
+        let mut found = false;
+        for i in 0..b.len() {
+            let c = byte_at(b, i);
+            if c != 46 && c != 32 { found = true; };
+        };
+        found
+    } else { name != "" && name != "." && name != ".." }
+}
+
+/// Changes only the filename extension, returning an error for invalid
+/// input. `ext` is given without its separating dot; empty removes the
+/// extension, and compound extensions such as `tar.gz` are allowed.
+/// Rejects `/`, NUL, `.` and `..`, plus `\\` and `:` on Windows
+/// (including alternate data stream syntax). Backslashes are ordinary
+/// filename bytes on Unix. Roots and final `.`/`..` components have no
+/// filename to edit and return an error, including bare UNC shares.
+/// Results equal to `.`/`..`, or made only of dots/spaces on Windows,
+/// also return an error.
+/// This is a lexical operation; it does not resolve filesystem symlinks.
+pub let try_with_extension_in (windows: Bool) (p: String) (ext: String): Result[String, String] = {
+    if !valid_extension_in(windows, ext) { Err("invalid path extension") }
+    else {
+        let n = normalize_in(windows, p);
+        let bytes = n.as_bytes();
+        let split = bounds(windows, bytes);
+        let name = text_range(bytes, split.base, split.end);
+        if (split.rooted && split.end <= split.root) || !has_filename_in(windows, name) {
+            Err("path has no filename")
+        } else {
+            let dir = dirname_in(windows, n);
+            let dot = ext_index(name);
+            let stem = if dot < 0 { name } else { text_range(name.as_bytes(), 0, dot) };
+            let base = if String.is_empty(ext) { stem } else { stem.concat(".").concat(ext) };
+            if !has_filename_in(windows, base) { Err("extension removal would produce a parent or current directory") }
+            else { Ok(if dir == "." && !String.starts_with(n, "./") { base } else { join_in(windows, dir, base) }) }
+        }
+    }
+}
+
+/// Host-platform form of `try_with_extension_in`; returns an error for
+/// invalid extensions or paths without a filename.
+pub let try_with_extension (p: String) (ext: String): Result[String, String] = try_with_extension_in(IS_WINDOWS, p, ext)
+
+/// `p` with a different extension, given without a dot. Empty removes it.
+/// Panics on invalid input under `try_with_extension_in`'s rules; use
+/// that checked form for untrusted input.
+pub let with_extension_in (windows: Bool) (p: String) (ext: String): String =
+    match try_with_extension_in(windows, p, ext) {
+        Ok(path) => path,
+        Err(e) => { panic_raw(e); "" },
+    }
+
+/// Host-platform form of `with_extension_in`, with the same validation
+/// and panic behavior. Use `try_with_extension` to handle invalid input.
+pub let with_extension (p: String) (ext: String): String = with_extension_in(IS_WINDOWS, p, ext)

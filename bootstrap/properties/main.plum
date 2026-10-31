@@ -1758,3 +1758,50 @@ pub let test_path_long_unicode (): Unit = {
         check_eq("drive parent clamp", "C:/../../名", Path.clean_in(windows, "C:/../../名"), if windows { "C:\\名" } else { "../名" });
     }
 }
+
+// Extension text must never be interpreted as another path. Exercise both
+// conventions even on Unix, including drive-relative and UNC directories.
+pub let test_path_extension_containment (): Unit = {
+    for windows in [false, true] {
+        let paths = if windows {
+            ["project/file.txt", "./file.txt", "C:file.txt", "C:/project/file.txt", "//server/share/file.txt", "目录/名.txt", "a/../project/file.txt", "project/.hidden", "project/file.txt/"]
+        } else {
+            ["project/file.txt", "./file.txt", "/project/file.txt", "目录/名.txt", "a/../project/file.txt", "project/.hidden", "project/file.txt/"]
+        };
+        for path in paths {
+            for ext in ["", "md", "tar.gz", "扩展", String.repeat("é", 4096)] {
+                let changed = match Path.try_with_extension_in(windows, path, ext) {
+                    Ok(v) => v,
+                    Err(e) => { panic_raw(e); "" },
+                };
+                assert_eq(Path.dirname_in(windows, changed), Path.dirname_in(windows, path));
+                assert_eq(Path.with_extension_in(windows, path, ext), changed);
+            };
+            for ext in ["../../../outside", "a/b", "/outside", ".", "..", "bad\x00ext"] {
+                assert_eq(Path.try_with_extension_in(windows, path, ext), Err("invalid path extension"));
+            };
+            for ext in ["..\\..\\outside", "ads:stream", "C:outside"] {
+                assert_eq(Result.is_ok(Path.try_with_extension_in(windows, path, ext)), !windows);
+            };
+        };
+        for path in ["", ".", "..", "project/.", "project/..", "/", "////"] {
+            assert_eq(Path.try_with_extension_in(windows, path, "md"), Err("path has no filename"));
+        };
+        for path in ["project/...", "project/..txt"] {
+            assert(Result.is_err(Path.try_with_extension_in(windows, path, "")));
+        };
+        assert_eq(Path.try_with_extension_in(windows, "project/file.txt", "tar.gz"), Ok("project".concat(Path.separator_in(windows)).concat("file.tar.gz")));
+        assert_eq(Path.try_with_extension_in(windows, "project/.hidden", ""), Ok("project".concat(Path.separator_in(windows)).concat(".hidden")));
+    };
+    for path in ["C:", "C:/", "//server/share", "\\\\server\\share\\"] {
+        assert_eq(Path.try_with_extension_in(true, path, "md"), Err("path has no filename"));
+    };
+    for path in ["project/...", "project/.. ", "project/ . "] {
+        assert_eq(Path.try_with_extension_in(true, path, "md"), Err("path has no filename"));
+    };
+    for ext in ["", " ", "...", ". . "] {
+        assert(Result.is_err(Path.try_with_extension_in(true, "project/..txt", ext)));
+    };
+    assert_eq(Path.try_with_extension("project/file.txt", "md"), Ok(Path.with_extension("project/file.txt", "md")));
+    assert_eq(Path.try_with_extension("project/file.txt", "../../../outside"), Err("invalid path extension"));
+}
