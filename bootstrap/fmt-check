@@ -136,6 +136,14 @@ for dir in bootstrap/fmt_corpus/*/; do
         fail=$((fail + 1)); continue
     fi
 
+    # Rewritten inputs must reach a fixed point too, including tabs and
+    # literal whitespace that ordinary repository sources rarely contain.
+    "$plum" fmt "$dir/expected.plum" > "$work/twice" 2>"$work/err"
+    if [ $? -ne 0 ] || ! cmp -s "$work/fixed" "$work/twice"; then
+        printf 'FAIL  %-58s fmt is not idempotent\n' "$name"
+        fail=$((fail + 1)); continue
+    fi
+
     # SAME PROGRAM, asserted here rather than only in the sweep above.
     #
     # The sweep checks this too, but it cannot fail there: the token
