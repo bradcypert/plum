@@ -22,13 +22,42 @@
 # this answers the narrower question of whether the same compiler works
 # somewhere else.
 #
-# Usage:  bootstrap/platform-smoke [path-to-plum-binary]     (default: ./sh.real)
+# Usage: bootstrap/platform-smoke [path-to-plum-binary] [--shard INDEX/COUNT]
+# The default compiler is ./sh.real. Shards divide execution fixtures;
+# the smaller native, filesystem and stdin probes run in every shard.
 set -u
+
+usage() {
+    echo "usage: bootstrap/platform-smoke [path-to-plum-binary] [--shard INDEX/COUNT]" >&2
+    exit 1
+}
+
+plum=""
+shard_index=1
+shard_count=1
+while [ "$#" -gt 0 ]; do
+    case "$1" in
+        --shard)
+            [ "$#" -ge 2 ] || usage
+            case "$2" in */*) ;; *) usage ;; esac
+            shard_index="${2%%/*}"
+            shard_count="${2#*/}"
+            case "$shard_index" in ''|0*|*[!0-9]*) usage ;; esac
+            case "$shard_count" in ''|0*|*[!0-9]*) usage ;; esac
+            if ! [ "$shard_index" -le "$shard_count" ] 2>/dev/null; then usage; fi
+            shift 2 ;;
+        -*) usage ;;
+        *)
+            [ -z "$plum" ] || usage
+            plum="$1"
+            shift ;;
+    esac
+done
+plum="${plum:-./sh.real}"
 
 root="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$root" || exit 1
 
-plum="${1:-./sh.real}"
 case "$plum" in /*) ;; *) plum="$root/${plum#./}" ;; esac
 # A MinGW toolchain appends `.exe` to an output name that has no
 # extension, so the file the caller named may not be the file on disk.
@@ -46,6 +75,7 @@ echo "compiler:  $plum"
 echo "version:   $("$plum" version 2>&1)"
 echo "clang:     $(clang --version 2>&1 | head -n 1)"
 echo "platform:  $(uname -s) $(uname -m)"
+if [ "$shard_count" -gt 1 ]; then echo "shard:     $shard_index/$shard_count"; fi
 echo
 
 ok=0
@@ -143,9 +173,36 @@ else
     fail=$((fail + 1))
 fi
 
-for dir in bootstrap/exec_corpus/*/; do
+# Use the same stable order on every runner without changing the locale
+# inherited by tests. In particular, MSYS cygpath must keep UTF-8 output
+# for Python helpers that pass Unicode paths to native Windows tools.
+smoke_locale_set="${LC_ALL+x}"
+smoke_locale="${LC_ALL-}"
+export LC_ALL=C
+set -- bootstrap/exec_corpus/*/
+if [ "$smoke_locale_set" = x ]; then
+    export LC_ALL="$smoke_locale"
+else
+    unset LC_ALL
+fi
+# Probe Unicode paths immediately after restoring the test environment,
+# before spending time compiling the execution corpus.
+# Exercise the same root policy and target replacement on every host.
+if python3 ./bootstrap/formatter-tree-test.py "$plum"; then
+    printf 'OK    %-24s\n' "formatter_linked_tree"
+    ok=$((ok + 1))
+else
+    printf 'FAIL  %-24s\n' "formatter_linked_tree"
+    fail=$((fail + 1))
+fi
+
+fixture_index=0
+for dir do
     name="$(basename "$dir")"
     [ -f "$dir/main.plum" ] || continue
+    selected=$((fixture_index % shard_count + 1))
+    fixture_index=$((fixture_index + 1))
+    [ "$selected" -eq "$shard_index" ] || continue
     # A fixture with no recording is REPORTED, not skipped. `corpus-check`
     # fails one; this one walked silently past it, so a fixture that lost
     # its `expected.txt` was checked by neither on the platforms where
@@ -213,15 +270,6 @@ if "$plum" fmt --write "$work/format.plum" > "$work/format.log" 2>&1 &&
 else
     printf 'FAIL  %-24s\n' "formatter_replacement"
     cat "$work/format.log"
-    fail=$((fail + 1))
-fi
-
-# Exercise the same root policy and target replacement on every host.
-if python3 ./bootstrap/formatter-tree-test.py "$plum"; then
-    printf 'OK    %-24s\n' "formatter_linked_tree"
-    ok=$((ok + 1))
-else
-    printf 'FAIL  %-24s\n' "formatter_linked_tree"
     fail=$((fail + 1))
 fi
 
