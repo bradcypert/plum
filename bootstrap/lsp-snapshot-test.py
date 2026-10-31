@@ -163,7 +163,7 @@ def check(compiler):
                 client.notify("didClose", a)
             # A missing source directory forces copy failure. Never analyze
             # a partial snapshot containing just this buffer (#166).
-            client.request("initialize")  # Drain the final didClose notification.
+            client.request("textDocument/formatting")  # Drain the final didClose notification.
             missing = root / "missing" / "main.plum"
             before = len(client.notifications)
             client.notify("didOpen", missing, 'let broken (): Int = "bad"\n')

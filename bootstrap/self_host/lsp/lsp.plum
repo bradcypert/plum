@@ -101,14 +101,32 @@ pub let frame (body: String): String =
 
 pub struct Request { pub method: String, pub id: Option[JsonValue], pub params: JsonValue }
 
-pub let parse_request (body: String): Option[Request] =
+pub struct ProtocolError { pub id: JsonValue, pub code: Int, pub message: String }
+
+pub let valid_id (id: JsonValue): Bool =
+    match id { JsonString(_) => true, JsonNumber(_) => true, JsonNull => true, _ => false }
+
+pub let parse_request (body: String): Result[Request, ProtocolError] =
     match json_parse(body) {
-        Err(_) => None,
-        Ok(v) => Some(Request {
-            method: json_field_str(v, "method"),
-            id: json_field(v, "id"),
-            params: match json_field(v, "params") { Some(p) => p, None => JsonNull },
-        }),
+        Err(_) => Err(ProtocolError { id: JsonNull, code: 0 - 32700, message: "Parse error" }),
+        Ok(v) => {
+            let id = json_field(v, "id");
+            let id_ok = match id { None => true, Some(i) => valid_id(i) };
+            let params = json_field(v, "params");
+            let params_ok = match params { None => true, Some(JsonObject(_)) => true, Some(JsonArray(_)) => true, _ => false };
+            let method_ok = match json_field(v, "method") { Some(JsonString(_)) => true, _ => false };
+            if json_field_str(v, "jsonrpc") != "2.0" || !method_ok || !id_ok || !params_ok {
+                Err(ProtocolError {
+                    id: match id { Some(i) => if id_ok { i } else { JsonNull }, None => JsonNull },
+                    code: 0 - 32600, message: "Invalid Request",
+                })
+            } else {
+                Ok(Request {
+                    method: json_field_str(v, "method"), id: id,
+                    params: match params { Some(p) => p, None => JsonNull },
+                })
+            }
+        },
     }
 
 // --- Responses ---
@@ -118,6 +136,16 @@ pub let response (id: JsonValue) (result: JsonValue): String =
         JsonEntry { key: "jsonrpc", value: JsonString("2.0") },
         JsonEntry { key: "id", value: id },
         JsonEntry { key: "result", value: result },
+    ]))
+
+pub let error_response (id: JsonValue) (code: Int) (message: String): String =
+    encode_json(JsonObject([
+        JsonEntry { key: "jsonrpc", value: JsonString("2.0") },
+        JsonEntry { key: "id", value: id },
+        JsonEntry { key: "error", value: JsonObject([
+            JsonEntry { key: "code", value: JsonNumber(Int.to_float(code)) },
+            JsonEntry { key: "message", value: JsonString(message) },
+        ]) },
     ]))
 
 pub let notification (method: String) (params: JsonValue): String =

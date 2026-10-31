@@ -1817,117 +1817,148 @@ let lsp_publish (uri: String) (d0: Option[lsp.Diagnostic]) (snapshot: LspSnapsho
     }
 }
 
-let lsp_serve (): Unit = lsp_loop(true)
+enum LspState { LspNew, LspReady, LspShutdown, LspExited(Int) }
 
-let lsp_loop (running: Bool): Unit =
-    if !running { () }
-    else {
-        let body = lsp_read_message(());
-        if body == "" { () } else { lsp_loop(lsp_handle(body)) }
+let lsp_serve (): Unit = {
+    let status = lsp_loop(LspNew);
+    BUFFERS.set(empty_buffers(()));
+    if status == 0 { () } else { Os.exit_with(status) }
+}
+
+// Only the state crosses a tail call; bodies and parsed requests belong
+// to one iteration and must not become a session-long message history.
+let lsp_loop (state: LspState): Int =
+    match state {
+        LspExited(status) => status,
+        _ => {
+            let body = lsp_read_message(());
+            if body == "" { 0 } else { lsp_loop(lsp_handle(body, state)) }
+        },
     }
 
-// Returns whether to keep serving.
-let lsp_handle (body: String): Bool =
+let lsp_error (id: Option[JsonValue]) (code: Int) (message: String): Unit =
+    match id { Some(i) => lsp_send(lsp.error_response(i, code, message)), None => () }
+
+let lsp_handle (body: String) (state: LspState): LspState =
     match lsp.parse_request(body) {
-        None => true,
-        Some(req) =>
-            if req.method == "initialize" {
-                lsp_reply(req.id, lsp.capabilities(()));
-                true
+        Err(e) => { lsp_send(lsp.error_response(e.id, e.code, e.message)); state },
+        Ok(req) =>
+            if req.method == "exit" && req.id == None {
+                LspExited(if state == LspShutdown { 0 } else { 1 })
+            } else if state == LspShutdown {
+                lsp_error(req.id, 0 - 32600, "Server has shut down");
+                state
+            } else if state == LspNew {
+                if req.method == "initialize" && req.id != None {
+                    lsp_reply(req.id, lsp.capabilities(()));
+                    LspReady
+                } else {
+                    lsp_error(req.id, 0 - 32002, "Server not initialized");
+                    state
+                }
+            } else if req.method == "initialize" {
+                lsp_error(req.id, 0 - 32600, "Server already initialized");
+                state
             } else if req.method == "shutdown" {
-                lsp_reply(req.id, JsonNull);
-                true
-            } else if req.method == "exit" {
-                false
-            } else if req.method == "textDocument/completion" {
-                let path = lsp.uri_to_path(lsp.document_uri(req.params));
-                lsp_reply(req.id, lsp_with_snapshot(path, JsonArray([]), |snapshot| lsp_answer_completion(snapshot, req.params)));
-                true
-            } else if req.method == "textDocument/formatting" {
-                let uri = lsp.document_uri(req.params);
-                let path = lsp.uri_to_path(uri);
-                match buffer_text(uri, path) {
-                    // No text and no file: answer with no edits rather
-                    // than an error. A client that asked about a
-                    // document nobody can see gets "nothing to change",
-                    // which is true.
-                    None => lsp_reply(req.id, JsonArray([])),
-                    Some(text) => {
-                        // Formatted by a CHILD process, not here. `fmt`
-                        // parses, and a parse error is a `panic_raw`
-                        // that would take the server down -- which it
-                        // did: a format request on a buffer with a
-                        // syntax error exited the process mid-session,
-                        // after printing a compiler error onto the
-                        // JSON-RPC stream. Format-on-save runs while you
-                        // are still typing, so that is not a rare state.
-                        //
-                        // An unformattable buffer now answers "no
-                        // edits", which is what a formatter should say
-                        // about a file it cannot read.
-                        let out = lsp_fmt(path, text);
-                        // The same guarantee `plum fmt --write` gives,
-                        // for the same reason: this hands the editor a
-                        // replacement for the WHOLE file, so a rule
-                        // that changed the tokens would silently
-                        // rewrite the user's program. Refuse instead.
-                        if out == text { lsp_reply(req.id, JsonArray([])) }
-                        else if lexer.token_texts(out) != lexer.token_texts(text) { lsp_reply(req.id, JsonArray([])) }
-                        else { lsp_reply(req.id, lsp.format_result(out, text)) }
+                match req.id {
+                    None => state,
+                    Some(_) => {
+                        BUFFERS.set(empty_buffers(()));
+                        lsp_reply(req.id, JsonNull);
+                        LspShutdown
                     },
-                };
-                true
-            } else if req.method == "textDocument/selectionRange" {
-                lsp_reply(req.id, lsp_selection_ranges(req.params));
-                true
-            } else if req.method == "textDocument/hover" || req.method == "textDocument/definition" {
-                lsp_reply(req.id, lsp_answer_query(req.method, req.params));
-                true
-            } else if req.method == "textDocument/didOpen" || req.method == "textDocument/didSave" {
-                let uri = lsp.document_uri(req.params);
-                if uri == "" { () }
-                else {
-                    let text = if req.method == "textDocument/didSave" {
-                        match lsp.json_field(req.params, "text") { Some(JsonString(t)) => Some(t), _ => None }
-                    } else { lsp.open_text(req.params) };
-                    match text { Some(t) => remember_buffer(uri, t), None => () };
-                    lsp_diagnose_document(uri)
-                };
-                true
-            } else if req.method == "textDocument/didChange" {
-                // Errors AS YOU TYPE. The buffer is unsaved, so the
-                // check runs against a snapshot of the project with
-                // this file's text substituted -- see
-                // `lsp_snapshot`.
-                let uri = lsp.document_uri(req.params);
-                if uri == "" { () }
-                else {
-                    match lsp.change_text(req.params) {
-                        // No full text means the client negotiated
-                        // incremental sync despite this server asking
-                        // for full. Checking the stale file on disk
-                        // would report the wrong lines, which is worse
-                        // than reporting nothing.
-                        None => (),
-                        Some(text) => {
-                            remember_buffer(uri, text);
-                            lsp_diagnose_document(uri)
-                        },
-                    }
-                };
-                true
-            } else if req.method == "textDocument/didClose" {
-                let uri = lsp.document_uri(req.params);
-                forget_buffer(uri);
-                if uri == "" { () } else { lsp_send(lsp.publish_message(uri, [])) };
-                true
+                }
             } else {
-                // An unknown NOTIFICATION is ignored; an unknown REQUEST
-                // would hang a client waiting for a reply, so it gets an
-                // empty result instead of silence.
-                lsp_reply(req.id, JsonNull);
-                true
+                lsp_dispatch(req);
+                state
             },
+    }
+
+let lsp_dispatch (req: lsp.Request): Unit =
+    if req.method == "textDocument/completion" {
+        let path = lsp.uri_to_path(lsp.document_uri(req.params));
+        lsp_reply(req.id, lsp_with_snapshot(path, JsonArray([]), |snapshot| lsp_answer_completion(snapshot, req.params)));
+        ()
+    } else if req.method == "textDocument/formatting" {
+        let uri = lsp.document_uri(req.params);
+        let path = lsp.uri_to_path(uri);
+        match buffer_text(uri, path) {
+            // No text and no file: answer with no edits rather
+            // than an error. A client that asked about a
+            // document nobody can see gets "nothing to change",
+            // which is true.
+            None => lsp_reply(req.id, JsonArray([])),
+            Some(text) => {
+                // Formatted by a CHILD process, not here. `fmt`
+                // parses, and a parse error is a `panic_raw`
+                // that would take the server down -- which it
+                // did: a format request on a buffer with a
+                // syntax error exited the process mid-session,
+                // after printing a compiler error onto the
+                // JSON-RPC stream. Format-on-save runs while you
+                // are still typing, so that is not a rare state.
+                //
+                // An unformattable buffer now answers "no
+                // edits", which is what a formatter should say
+                // about a file it cannot read.
+                let out = lsp_fmt(path, text);
+                // The same guarantee `plum fmt --write` gives,
+                // for the same reason: this hands the editor a
+                // replacement for the WHOLE file, so a rule
+                // that changed the tokens would silently
+                // rewrite the user's program. Refuse instead.
+                if out == text { lsp_reply(req.id, JsonArray([])) }
+                else if lexer.token_texts(out) != lexer.token_texts(text) { lsp_reply(req.id, JsonArray([])) }
+                else { lsp_reply(req.id, lsp.format_result(out, text)) }
+            },
+        };
+        ()
+    } else if req.method == "textDocument/selectionRange" {
+        lsp_reply(req.id, lsp_selection_ranges(req.params));
+        ()
+    } else if req.method == "textDocument/hover" || req.method == "textDocument/definition" {
+        lsp_reply(req.id, lsp_answer_query(req.method, req.params));
+        ()
+    } else if req.method == "textDocument/didOpen" || req.method == "textDocument/didSave" {
+        let uri = lsp.document_uri(req.params);
+        if uri == "" { () }
+        else {
+            let text = if req.method == "textDocument/didSave" {
+                match lsp.json_field(req.params, "text") { Some(JsonString(t)) => Some(t), _ => None }
+            } else { lsp.open_text(req.params) };
+            match text { Some(t) => remember_buffer(uri, t), None => () };
+            lsp_diagnose_document(uri)
+        };
+        ()
+    } else if req.method == "textDocument/didChange" {
+        // Errors AS YOU TYPE. The buffer is unsaved, so the
+        // check runs against a snapshot of the project with
+        // this file's text substituted -- see
+        // `lsp_snapshot`.
+        let uri = lsp.document_uri(req.params);
+        if uri == "" { () }
+        else {
+            match lsp.change_text(req.params) {
+                // No full text means the client negotiated
+                // incremental sync despite this server asking
+                // for full. Checking the stale file on disk
+                // would report the wrong lines, which is worse
+                // than reporting nothing.
+                None => (),
+                Some(text) => {
+                    remember_buffer(uri, text);
+                    lsp_diagnose_document(uri)
+                },
+            }
+        };
+        ()
+    } else if req.method == "textDocument/didClose" {
+        let uri = lsp.document_uri(req.params);
+        forget_buffer(uri);
+        if uri == "" { () } else { lsp_send(lsp.publish_message(uri, [])) };
+        ()
+    } else {
+        lsp_error(req.id, 0 - 32601, "Method not found")
     }
 
 // One current text per open URI. Replacing or closing a buffer drops
