@@ -1,0 +1,36 @@
+let nested (n: Int): Int = {
+    // A comment follows its statement.
+    let result = match n {
+        0 => {
+            1
+        },
+        _ => 2,
+    };
+
+    result
+}
+
+let continued (): Int =
+    1
+        + 2
+
+let literal (): String = "start
+	inside
+	
+
+
+ 	end"
+
+// Off-grid alignment and contract headers retain their existing policy.
+let aligned (n: Int): Bool =
+    n > 0
+	     && n < 10
+
+let divide (a: Int) (b: Int): Int
+	require b != 0 : "nonzero"
+= a / b
+
+let main (): Unit = {
+    println(literal());
+    println(nested(0) + continued())
+}

@@ -87,12 +87,19 @@ def check(compiler):
         for original, end, formatted in [
             ('let live (): Array[Int] = [1,2]', {"line": 0, "character": 31}, 'let live (): Array[Int] = [1, 2]'),
             ('let live (): Array[Int] = [1,2]\n', {"line": 1, "character": 0}, 'let live (): Array[Int] = [1, 2]\n'),
+            ('let live (): Int = {\r\n\t\r\n\t7\r\n}', {"line": 3, "character": 1}, 'let live (): Int = {\r\n\r\n    7\r\n}'),
             ('let live (): Int = {\r\n  7\r\n}', {"line": 2, "character": 1}, 'let live (): Int = {\r\n    7\r\n}'),
             ('let live (): Array[Int] = [1,2]\r// end', {"line": 1, "character": 6}, 'let live (): Array[Int] = [1, 2]\r// end'),
             ('let word (): Array[String] = ["é😀","x"]', {"line": 0, "character": 40}, 'let word (): Array[String] = ["é😀", "x"]'),
         ]:
             change(uri_a, original)
             formatting(original, end, formatted)
+        # Indentation tabs are replaced while tabs and blank lines inside
+        # a multiline literal survive the edit returned to the editor.
+        original = 'let text (): String = {\n\t"a\n\t\n\n\nb"\n\t}'
+        change(uri_a, original)
+        formatting(original, {"line": 6, "character": 2},
+                   'let text (): String = {\n    "a\n\t\n\n\nb"\n}')
         # Close releases unsaved text: formatting must now use disk.
         notify("didClose", uri_a)
         formatting(disk)
