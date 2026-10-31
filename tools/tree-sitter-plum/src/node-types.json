@@ -208,6 +208,32 @@
     }
   },
   {
+    "type": "builtin_call",
+    "named": true,
+    "fields": {
+      "arguments": {
+        "multiple": false,
+        "required": true,
+        "types": [
+          {
+            "type": "arguments",
+            "named": true
+          }
+        ]
+      },
+      "name": {
+        "multiple": false,
+        "required": true,
+        "types": [
+          {
+            "type": "builtin_name",
+            "named": true
+          }
+        ]
+      }
+    }
+  },
+  {
     "type": "closure_expr",
     "named": true,
     "fields": {
@@ -1172,6 +1198,10 @@
           "named": true
         },
         {
+          "type": "builtin_call",
+          "named": true
+        },
+        {
           "type": "closure_expr",
           "named": true
         },
@@ -1748,6 +1778,10 @@
   {
     "type": "_",
     "named": false
+  },
+  {
+    "type": "builtin_name",
+    "named": true
   },
   {
     "type": "comment",
