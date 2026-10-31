@@ -620,7 +620,7 @@ EOF
     # and a printed hash that is rejected when pasted back would make
     # `sha256` unusable while every individual piece still passed.
     got_hash="$(grep 'sha256:' "$work/fetch.log" | head -n 1 | awk '{print $2}')"
-    git_manifest ", sha256: \"$got_hash\""
+    git_manifest ", hash_version: 2, sha256: \"$got_hash\""
     expect_c "the printed hash is accepted" "hello, world" "$plum" run "$work/consumer"
 
     # Vendoring keeps the Git provenance in the manifest, but copies the

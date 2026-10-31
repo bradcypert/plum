@@ -1,3 +1,5 @@
+use treefs;
+use Encoding;
 use Crypto;
 use Process;
 
@@ -90,39 +92,101 @@ pub let package_cache (unit: Unit): String = Path.join(cache_root(()), "pkg")
 // rediscover them with `find`. A package entry ends at a full Git commit
 // directory (40 hex characters), below the v2 identity (64 characters).
 // Stop there: package source may itself contain commit-shaped names.
-pub let cached_packages (unit: Unit): Array[String] =
-    Array.sort_string(cache_package_dirs(package_cache(()),
-        Result.unwrap_or(Os.list_dir(package_cache(())), []), 0, []))
+struct CacheFrame { relative: String, entries: Array[treefs.EntryInfo], index: Int }
+pub struct CacheUsage { pub files: Int, pub bytes: Int }
 
-let cache_package_dirs (dir: String) (names: Array[String]) (i: Int) (acc: Array[String]): Array[String] =
-    if i >= names.len() { acc }
+let cache_frame (root: treefs.TreeRoot) (relative: String) (links: Bool): CacheFrame = {
+    let result = if links { treefs.entries(root, relative, true) } else { treefs.children(root, relative, true) };
+    let entries = match result { Ok(xs) => xs, Err(e) => { panic_raw("cache inventory ${relative}: ${e}"); [] } };
+    CacheFrame { relative: relative, entries: entries, index: 0 }
+}
+
+pub let cached_packages (unit: Unit): Array[String] = {
+    let path = cache_root(());
+    if !Result.unwrap_or(Os.exists(path), false) { [] }
     else {
-        let path = Path.join(dir, names[i]);
-        let next = if Result.unwrap_or(Os.is_directory(path), false) {
-            if is_commit_dir(names[i]) { acc.push(path) }
-            else { cache_package_dirs(path, Result.unwrap_or(Os.list_dir(path), []), 0, acc) }
-        } else { acc };
-        cache_package_dirs(dir, names, i + 1, next)
+        let root = match treefs.open_root(path) { Ok(r) => r, Err(e) => treefs.fail_root(e) };
+        let top = cache_frame(root, ".", false);
+        let mut found = false;
+        for entry in top.entries {
+            if entry.name == "pkg" {
+                if entry.kind != 2 { panic_raw("package cache must be an ordinary directory: ${path}/pkg") };
+                found = true;
+                ()
+            };
+        };
+        if !found { [] }
+        else {
+            let results = ref([]);
+            cache_package_dirs(root, path, [cache_frame(root, "pkg", false)], results);
+            Array.sort_string(results.get())
+        }
+    }
+}
+
+// Layout discovery never follows links, even before a commit root is found.
+// A bounded stack also prevents corrupt cache layouts exhausting the stack.
+let cache_package_dirs (root: treefs.TreeRoot) (path: String) (stack: Array[CacheFrame]) (results: Ref[Array[String]]): Unit =
+    if stack.len() == 0 { () }
+    else {
+        let frame = stack[stack.len() - 1];
+        let rest = Array.slice(stack, 0, stack.len() - 1);
+        if frame.index >= frame.entries.len() { cache_package_dirs(root, path, rest, results) }
+        else {
+            let info = frame.entries[frame.index];
+            let relative = Path.join(frame.relative, info.name);
+            let pending = rest.push(CacheFrame { relative: frame.relative, entries: frame.entries, index: frame.index + 1 });
+            if info.kind != 2 || info.name.starts_with(".partial-") || (info.name.ends_with(".partial") && is_commit_dir(treefs.path_slice(info.name, 0, info.name.len() - 8))) { cache_package_dirs(root, path, pending, results) }
+            else if is_commit_dir(info.name) {
+                let mut values = results.get();
+                results.set([]);
+                values = values.push(Path.join(path, relative));
+                results.set(values);
+                cache_package_dirs(root, path, pending, results)
+            } else {
+                if stack.len() >= 128 { panic_raw("cache directory depth exceeds 128 at ${path}/${relative}") };
+                cache_package_dirs(root, path, pending.push(cache_frame(root, relative, false)), results)
+            }
+        }
     }
 
 let is_commit_dir (name: String): Bool =
     name.len() == 40 && Array.fold(chars_of(name), true, |ok, c|
         ok && Array.contains(chars_of("0123456789abcdef"), c))
 
-// Sum file sizes beneath one package, not the directory metadata. A
-// directory's own size is filesystem-dependent and tells a caller
-// nothing useful about how much source it holds.
-pub let cached_package_size (dir: String): Int =
-    cache_size_entries(dir, Result.unwrap_or(Os.list_dir(dir), []), 0, 0)
+// Logical usage counts each regular file and each stored link once. Links
+// contribute target-text bytes, never the size or contents of their targets.
+// Hardlinks count once per directory entry; this is not allocated disk blocks.
+pub let cached_package_usage (dir: String): CacheUsage = {
+    let root = match treefs.open_root(dir) { Ok(r) => r, Err(e) => treefs.fail_root(e) };
+    cache_usage(root, dir, [cache_frame(root, ".", true)], CacheUsage { files: 0, bytes: 0 })
+}
 
-let cache_size_entries (dir: String) (names: Array[String]) (i: Int) (acc: Int): Int =
-    if i >= names.len() { acc }
+pub let cached_package_size (dir: String): Int = cached_package_usage(dir).bytes
+
+let cache_usage (root: treefs.TreeRoot) (path: String) (stack: Array[CacheFrame]) (usage: CacheUsage): CacheUsage =
+    if stack.len() == 0 { usage }
     else {
-        let path = Path.join(dir, names[i]);
-        let next = if Result.unwrap_or(Os.is_directory(path), false) {
-            acc + cached_package_size(path)
-        } else { acc + Result.unwrap_or(Os.file_size(path), 0) };
-        cache_size_entries(dir, names, i + 1, next)
+        let frame = stack[stack.len() - 1];
+        let rest = Array.slice(stack, 0, stack.len() - 1);
+        if frame.index >= frame.entries.len() { cache_usage(root, path, rest, usage) }
+        else {
+            let info = frame.entries[frame.index];
+            let relative = Path.join(frame.relative, info.name);
+            let pending = rest.push(CacheFrame { relative: frame.relative, entries: frame.entries, index: frame.index + 1 });
+            if info.kind == 2 {
+                if stack.len() >= 128 { panic_raw("cache directory depth exceeds 128 at ${path}/${relative}") };
+                cache_usage(root, path, pending.push(cache_frame(root, relative, true)), usage)
+            } else {
+                let size = if info.kind == 3 { info.target.len() }
+                    else if info.kind == 1 {
+                        let entry = match treefs.open_entry(root, relative, true) { Ok(e) => e, Err(e) => treefs.fail_entry(e) };
+                        match treefs.entry_size(entry) { Ok(n) => n, Err(e) => { panic_raw("cache size ${path}/${relative}: ${e}"); 0 } }
+                    } else { panic_raw("unsupported cache entry: ${path}/${relative}"); 0 };
+                if size > 9223372036854775807 - usage.bytes || usage.files == 9223372036854775807 { panic_raw("cache usage exceeds integer range at ${path}/${relative}") };
+                cache_usage(root, path, pending, CacheUsage { files: usage.files + 1, bytes: usage.bytes + size })
+            }
+        }
     }
 
 // Empty only fetched packages. The cache root is controlled by an
@@ -161,21 +225,17 @@ pub let vendor_dep (root: String) (d: Dep): String = {
     let dst = vendor_dir(root, d.git, d.rev);
     if Result.unwrap_or(Os.is_directory(dst), false) { verify(d, dst) }
     else {
-        let scratch = "${dst}.partial";
-        match Os.remove_tree(scratch) { Ok(_) => (), Err(_) => () };
-        ensure_parent(dst);
+        let stage = package_stage(dst);
+        let scratch = Path.join(stage, "tree");
         match Os.make_dir(scratch) {
             Ok(_) => (),
-            Err(e) => panic_raw("could not create vendoring scratch directory ${scratch}: ${e}"),
+            Err(e) => { let cleanup = Os.remove_tree(stage); panic_raw("could not create vendoring scratch directory ${scratch}: ${e}") },
         };
         match Os.copy_tree(src, scratch) {
             Ok(_) => (),
-            Err(e) => panic_raw("could not vendor `${d.name}` into ${dst}: ${e}"),
+            Err(e) => { let cleanup = Os.remove_tree(stage); panic_raw("could not vendor `${d.name}` into ${dst}: ${e}") },
         };
-        match Os.rename_file(scratch, dst) {
-            Ok(_) => (),
-            Err(e) => panic_raw("could not move vendored `${d.name}` into ${dst}: ${e}"),
-        };
+        publish_stage(d, stage, dst);
         verify(d, dst)
     };
     dst
@@ -192,84 +252,114 @@ let sanitize_segment (s: String): String = {
 let is_safe_char (c: String): Bool =
     Array.contains(chars_of("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789._-"), c)
 
-// -------------------------------------------------------- the tree hash
-//
-// A deterministic SHA-256 over a directory's contents.
-//
-// Built as a hash OF HASHES rather than a hash of one big buffer, for
-// two reasons. The buffer would be the whole package in memory at once,
-// and building it by `acc = acc.concat(bytes)` is the shape that has
-// produced seven accidental quadratics in this project. Each file is
-// hashed alone, and only the 32-byte digests are concatenated.
-//
-// Every part is LENGTH-PREFIXED. Without that, a file named `a` holding
-// `b/c` and a file named `a/b` holding `c` serialize identically, and
-// two different trees get one hash. That is the classic mistake in this
-// exact construction and it is invisible in testing.
-//
-// What it does NOT cover, stated rather than discovered: file modes
-// (so the executable bit does not travel), empty directories, and
-// symlinks, which are followed and hashed as their targets' contents.
-// None matters for Plum source and C shims. A package whose behaviour
-// depends on any of them is not something this should silently accept,
-// and when that day comes the version of the scheme has to change.
-pub let tree_hash (dir: String): String =
-    Bytes.to_hex(Crypto.sha256(Bytes.from_array(
-        all_digests(dir, Array.sort_string(tree_files(dir, "", [])), 0, []))))
+// Package identity is independent of symlink target contents outside the
+// package. Inventory never follows links; regular files are opened through
+// the held root with links rejected, then hashed in bounded native buffers.
+struct PackageDirectory { relative: String, depth: Int }
+struct PackageEntry { relative: String, kind: Int, target: String }
 
-// Relative paths use `/` UNCONDITIONALLY, never `Path.separator()`.
-//
-// The hash has to be the same on Windows as on Linux, or a `sha256` in
-// a manifest is a claim that holds on one platform and fails the build
-// on another. The separator is a property of the local filesystem; the
-// hash is a property of the package.
-let tree_files (dir: String) (rel: String) (acc: Array[String]): Array[String] =
-    tree_entries(dir, rel, Result.unwrap_or(Os.list_dir(dir), []), 0, acc)
+let package_inventory (root: treefs.TreeRoot): Result[Array[PackageEntry], String] =
+    package_inventory_walk(root, [PackageDirectory { relative: ".", depth: 0 }], 0, [])
 
-let tree_entries (dir: String) (rel: String) (entries: Array[String]) (i: Int) (acc: Array[String]): Array[String] =
-    if i >= entries.len() { acc }
-    // `.git` is excluded because it is not the package: it is a
-    // different byte sequence on every clone of the same commit, so
-    // including it would make the tree hash unreproducible by
-    // construction. `plum fetch` deletes it anyway; this is the belt to
-    // that brace, and it is what lets the hash be checked against a
-    // directory that still has one.
-    else if entries[i] == "." || entries[i] == ".." || entries[i] == ".git" {
-        tree_entries(dir, rel, entries, i + 1, acc)
-    }
+let package_inventory_walk (root: treefs.TreeRoot) (directories: Array[PackageDirectory]) (index: Int) (found: Array[PackageEntry]): Result[Array[PackageEntry], String] =
+    if index >= directories.len() { Ok(Array.sort_by(found, |a: PackageEntry, b: PackageEntry| a.relative <= b.relative)) }
     else {
-        let full = Path.join(dir, entries[i]);
-        let child = if String.is_empty(rel) { entries[i] } else { "${rel}/${entries[i]}" };
-        let next = if Result.unwrap_or(Os.is_directory(full), false) { tree_files(full, child, acc) }
-            else { acc.push(child) };
-        tree_entries(dir, rel, entries, i + 1, next)
+        let current = directories[index];
+        if current.depth >= 128 { Err("package traversal exceeds 128 directory levels at ${current.relative}") }
+        else { match treefs.entries(root, current.relative, true) {
+            Err(e) => Err(e),
+            Ok(entries) => {
+                let mut pending = directories;
+                let mut all = found;
+                let mut failure = "";
+                for entry in entries {
+                    if entry.name != ".git" && failure == "" {
+                        let relative = if current.relative == "." { entry.name } else { "${current.relative}/${entry.name}" };
+                        if entry.kind == 2 {
+                            pending = pending.push(PackageDirectory { relative: relative, depth: current.depth + 1 });
+                        } else if entry.kind == 3 {
+                            match treefs.validate_link(root, relative) {
+                                Ok(_) => (),
+                                Err(e) => { failure = e; () },
+                            };
+                        } else if entry.kind != 1 { failure = "unsupported package entry ${relative}"; () };
+                        all = all.push(PackageEntry { relative: relative, kind: entry.kind, target: entry.target });
+                    } else { () };
+                };
+                if failure != "" { Err(failure) }
+                else { package_inventory_walk(root, pending, index + 1, all) }
+            },
+        } }
     }
 
-let all_digests (dir: String) (files: Array[String]) (i: Int) (acc: Array[Int]): Array[Int] =
-    if i >= files.len() { acc }
-    else { all_digests(dir, files, i + 1, append_bytes(acc, file_digest(dir, files[i]))) }
+pub let validate_package (dir: String): Result[Unit, String] =
+    match treefs.open_root(dir) {
+        Err(e) => Err(e),
+        Ok(root) => match package_inventory(root) { Ok(_) => Ok(()), Err(e) => Err(e) },
+    }
 
-let file_digest (dir: String) (rel: String): Bytes = {
-    let content = match Os.read_bytes(path_of(dir, rel)) {
-        Ok(b) => b,
-        Err(e) => { panic_raw("cannot hash ${rel}: ${e}"); Bytes.empty(()) },
+pub let tree_hash (dir: String): String = tree_hash_version(dir, 2)
+
+pub let tree_hash_version (dir: String) (version: Int): String =
+    match tree_hash_result(dir, version) { Ok(digest) => digest, Err(e) => { panic_raw(e); "" } }
+
+pub let tree_hash_result (dir: String) (version: Int): Result[String, String] =
+    if version != 1 && version != 2 { Err("unsupported package hash version ${version.to_string()}") }
+    else { match treefs.open_root(dir) {
+        Err(e) => Err(e),
+        Ok(root) => match package_inventory(root) {
+            Err(e) => Err(e),
+            Ok(entries) => match treefs.hasher() {
+                Err(e) => Err(e),
+                Ok(hash) => package_hash_entries(root, entries, hash, version),
+            },
+        },
+    } }
+
+let package_hash_entries (root: treefs.TreeRoot) (entries: Array[PackageEntry]) (hash: treefs.TreeHasher) (version: Int): Result[String, String] = {
+    let mut failure = "";
+    if version == 2 {
+        match treefs.hash_bytes(hash, Bytes.from_string("plum-tree-v2\n")) {
+            Ok(_) => (), Err(e) => { failure = e; () },
+        };
+    } else { () };
+    for entry in entries {
+        if failure == "" {
+            if version == 1 && entry.kind == 3 {
+                failure = "legacy package hash refuses symlink ${entry.relative}; migrate the dependency to hash_version: 2 using the hash printed by plum fetch";
+            } else if version == 1 && entry.kind == 2 { () }
+            else { match package_payload(root, entry, version) {
+                Err(e) => { failure = e; () },
+                Ok(payload) => {
+                    if version == 2 {
+                        let tag = if entry.kind == 1 { "F" } else if entry.kind == 2 { "D" } else { "L" };
+                        let frame = "${tag}${entry.relative.len().to_string()}\n${entry.relative}\n${payload.len().to_string()}\n";
+                        match treefs.hash_bytes(hash, Bytes.from_string(frame)) {
+                            Ok(_) => (), Err(e) => { failure = e; () },
+                        };
+                    } else { () };
+                    if failure == "" {
+                        match treefs.hash_bytes(hash, payload) {
+                            Ok(_) => (), Err(e) => { failure = e; () },
+                        };
+                    } else { () };
+                },
+            } }
+        } else { () };
     };
-    Crypto.sha256(Bytes.concat(
-        Bytes.from_string("${rel.len().to_string()}\n${rel}\n${content.len().to_string()}\n"),
-        content))
+    if failure != "" { Err(failure) } else { Ok(treefs.hash_finish(hash)) }
 }
 
-// `acc.push` in a self-rebinding loop, which the compiler grows in
-// place. `acc.concat` here would be the quadratic this file's header
-// warns about, on a 32-byte-per-file accumulator.
-let append_bytes (acc: Array[Int]) (b: Bytes): Array[Int] = {
-    let mut out = acc;
-    for i in 0..b.len() { out = out.push(Option.unwrap_or(Bytes.at(b, i), 0)); };
-    out
-}
-
-let path_of (dir: String) (rel: String): String =
-    Array.fold(String.split(rel, "/"), dir, |acc, seg| Path.join(acc, seg))
+let package_payload (root: treefs.TreeRoot) (entry: PackageEntry) (version: Int): Result[Bytes, String] =
+    if entry.kind == 2 { Ok(Bytes.empty(())) }
+    else if entry.kind == 3 { Ok(Bytes.from_string(entry.target)) }
+    else { match treefs.open_entry(root, entry.relative, true) {
+        Err(e) => Err(e),
+        Ok(file) => match treefs.file_hash(file, entry.relative, version) {
+            Err(e) => Err(e),
+            Ok(hex) => Encoding.hex_decode(hex),
+        },
+    } }
 
 // ------------------------------------------------------------- fetching
 
@@ -295,13 +385,45 @@ pub let fetch_dep (d: Dep): String = {
 pub let verify_cached (d: Dep) (dir: String): Unit = verify(d, dir)
 
 let verify (d: Dep) (dir: String): Unit =
-    if String.is_empty(d.sha256) { () }
-    else {
-        let got = tree_hash(dir);
-        if got != d.sha256 {
-            panic_raw("dependency `${d.name}` does not match its `sha256`.\n  manifest: ${d.sha256}\n  fetched:  ${got}\n  at ${dir}\n  Either the commit's contents changed underneath the hash, or the cache entry was modified. Delete the directory above and fetch again.")
-        } else { () }
+    match verify_result(d, dir) { Ok(_) => (), Err(e) => panic_raw(e) }
+
+let verify_result (d: Dep) (dir: String): Result[Unit, String] =
+    if String.is_empty(d.sha256) { validate_package(dir) }
+    else { match tree_hash_result(dir, d.hash_version) {
+        Err(e) => Err(e),
+        Ok(got) => if got == d.sha256 { Ok(()) }
+            else { Err("dependency `${d.name}` does not match its `sha256`.\n  manifest: ${d.sha256}\n  fetched:  ${got}\n  at ${dir}\n  Either the commit's contents changed underneath the hash, or the cache entry was modified. Delete the directory above and fetch again.") },
+    } }
+
+// Each operation owns a uniquely reserved container. Never remove a guessed
+// `.partial` sibling: another process (or the user) may own that pathname.
+let package_stage (destination: String): String = {
+    ensure_parent(destination);
+    match treefs.staging(Path.dirname(destination)) {
+        Ok(path) => path, Err(e) => { panic_raw(e); "" },
     }
+}
+
+// Validate the payload before publication and clean only our own container.
+// A concurrent winner is usable only after the usual integrity validation.
+let publish_stage (d: Dep) (stage: String) (destination: String): Unit = {
+    let payload = Path.join(stage, "tree");
+    match verify_result(d, payload) {
+        Err(e) => { let cleanup = Os.remove_tree(stage); panic_raw(e) },
+        Ok(_) => (),
+    };
+    let moved = Os.rename_file(payload, destination);
+    let cleanup = Os.remove_tree(stage);
+    match moved {
+        Ok(_) => (),
+        Err(e) => if Result.unwrap_or(Os.is_directory(destination), false) {
+            match verify_result(d, destination) {
+                Ok(_) => (),
+                Err(invalid) => panic_raw("could not publish package into ${destination}: ${e}\n${invalid}"),
+            }
+        } else { panic_raw("could not publish package into ${destination}: ${e}") },
+    }
+}
 
 let clone_into (d: Dep) (dir: String): Unit = {
     require_git(d);
@@ -310,28 +432,27 @@ let clone_into (d: Dep) (dir: String): Unit = {
     // directory that later runs would accept as a complete package.
     // Beside it rather than in `/tmp` so the move stays on one
     // filesystem and is therefore atomic.
-    let scratch = "${dir}.partial";
-    match Os.remove_tree(scratch) { Ok(_) => (), Err(_) => () };
-    ensure_parent(dir);
+    let stage = package_stage(dir);
+    let scratch = Path.join(stage, "tree");
 
     // A full clone, then a checkout. `--depth 1` cannot fetch an
     // arbitrary commit on every server -- some allow it, some do not --
     // and a fetch that works on GitHub and fails on a self-hosted remote
     // is a worse deal than a slower clone that always works.
-    git(d, ["clone", "--quiet", d.git, scratch],
+    git_staging(d, stage, ["clone", "--quiet", "--no-checkout", d.git, scratch],
         "could not clone ${d.git}");
-    git(d, ["-C", scratch, "checkout", "--quiet", d.rev],
+    git_staging(d, stage, ["-C", scratch, "config", "core.symlinks", "true"], "could not enable faithful symlink checkout");
+    git_staging(d, stage, ["-C", scratch, "checkout", "--quiet", d.rev],
         "could not check out ${d.rev} from ${d.git}\n  The repository was cloned, so the URL is right and the commit is not in it.");
 
     // The package is source, not a repository. Removing `.git` keeps the
     // cache to what is actually needed, and stops anything downstream
     // from treating a cache entry as a working tree it may update.
-    match Os.remove_tree(Path.join(scratch, ".git")) { Ok(_) => (), Err(_) => () };
-
-    match Os.rename_file(scratch, dir) {
+    match Os.remove_tree(Path.join(scratch, ".git")) {
         Ok(_) => (),
-        Err(e) => panic_raw("could not move the fetched package into ${dir}: ${e}"),
-    }
+        Err(e) => { let cleanup = Os.remove_tree(stage); panic_raw("could not remove fetched repository metadata: ${e}") },
+    };
+    publish_stage(d, stage, dir)
 }
 
 // The error a person actually gets when `git` is not installed.
@@ -353,29 +474,35 @@ pub let git_available (unit: Unit): Bool =
         Ok(r) => r.exit_code == 0,
     }
 
-let git (d: Dep) (args: Array[String]) (what: String): Unit =
-    match Process.run(Process.Options { program: "git", args: args, env: [], stdin: None }) {
-        Err(e) => panic_raw("dependency `${d.name}`: ${what}\n  git could not be started: ${e}"),
+let git_staging (d: Dep) (scratch: String) (args: Array[String]) (what: String): Unit = {
+    let failure = match Process.run(Process.Options { program: "git", args: args, env: [], stdin: None }) {
+        Err(e) => "dependency `${d.name}`: ${what}\n  git could not be started: ${e}",
         Ok(r) => if r.exit_code != 0 {
-            panic_raw("dependency `${d.name}`: ${what}\n  git exited ${r.exit_code.to_string()}: ${String.trim(r.stderr)}")
-        } else { () },
-    }
+            "dependency `${d.name}`: ${what}\n  git exited ${r.exit_code.to_string()}: ${String.trim(r.stderr)}"
+        } else { "" },
+    };
+    if failure != "" { let cleanup = Os.remove_tree(scratch); panic_raw(failure) } else { () }
+}
 
 let ensure_parent (dir: String): Unit = ensure_dir(Path.dirname(dir))
 
-// Every prefix in turn: `Os.make_dir` makes one level, and a cache path
-// is six deep on a first fetch.
-let ensure_dir (path: String): Unit =
-    ensure_acc(String.split(Path.clean(path), Path.separator()), 0, "")
+// Work backwards with Path.dirname so drive and UNC roots stay intact.
+// Splitting/rejoining components turns `C:\cache` into drive-relative
+// `C:cache`; suppressing mkdir errors then hides the missing staging parent.
+let ensure_dir (path: String): Unit = ensure_directory(Path.clean(path), 0)
 
-let ensure_acc (parts: Array[String]) (i: Int) (acc: String): Unit =
-    if i >= parts.len() { () }
+let ensure_directory (path: String) (depth: Int): Unit =
+    if Result.unwrap_or(Os.is_directory(path), false) { () }
+    else if depth >= 128 { panic_raw("package directory creation exceeds 128 levels at ${path}") }
     else {
-        let here = if String.is_empty(acc) && String.is_empty(parts[i]) { Path.separator() }
-            else if String.is_empty(acc) { parts[i] }
-            else { Path.join(acc, parts[i]) };
-        match Os.make_dir(here) { Ok(_) => (), Err(_) => () };
-        ensure_acc(parts, i + 1, here)
+        let parent = Path.dirname(path);
+        if parent == path { panic_raw("package directory root is unavailable: ${path}") };
+        ensure_directory(parent, depth + 1);
+        match Os.make_dir(path) {
+            Ok(_) => (),
+            Err(e) => if Result.unwrap_or(Os.is_directory(path), false) { () }
+                else { panic_raw("cannot create package directory ${path}: ${e}") },
+        }
     }
 
 // These pairs all lost identity in the old display-path encoding. Test

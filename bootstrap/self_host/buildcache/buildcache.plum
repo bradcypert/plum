@@ -3,6 +3,7 @@
 use Os;
 use Path;
 use Time;
+use treefs;
 
 extern "C" {
     fn plum_cache_hash_text(text: CStr, size: Int) -> CStr;
@@ -65,13 +66,32 @@ pub let enabled (): Bool = env("PLUM_NO_BUILD_CACHE") != "1" && root(()) != ""
 
 pub struct ReadInput { pub path: String, pub digest: String }
 let READS: Ref[Array[ReadInput]] = ref(no_reads(()))
+let SOURCE_READS: Ref[Array[ReadInput]] = ref(no_reads(()))
 let TRACK: Ref[Bool] = ref(false)
 let no_reads (): Array[ReadInput] = []
-pub let begin_reads (on: Bool): Unit = { TRACK.set(on); READS.set(no_reads(())) }
+pub let begin_reads (on: Bool): Unit = { TRACK.set(on); READS.set(no_reads(())); SOURCE_READS.set(no_reads(())) }
 pub let observe (path: String) (text: String): Unit =
     if TRACK.get() {
         READS.set(READS.get().push(ReadInput { path: path, digest: hash(text) }))
     } else { () }
+// Discovered sources are already part of the confined IR input key. Keep
+// their observed bytes only until publication; persist only explicit embeds,
+// whose declared external paths intentionally use the unrestricted contract.
+pub let observe_source (path: String) (text: String): Unit =
+    if TRACK.get() {
+        let reads = SOURCE_READS.get();
+        SOURCE_READS.set(no_reads(()));
+        SOURCE_READS.set(reads.push(ReadInput { path: path, digest: hash(text) }));
+    } else { () }
+
+pub let sources_unchanged (): Bool = {
+    let mut valid = true;
+    for source in SOURCE_READS.get() {
+        if treefs.source_hash(source.path) != Ok(source.digest) { valid = false; () } else { () };
+    };
+    valid
+}
+
 pub let read_manifest (): String = {
     let reads = READS.get();
     let mut lines = [];

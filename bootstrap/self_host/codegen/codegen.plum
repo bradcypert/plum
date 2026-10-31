@@ -69,6 +69,7 @@
 
 use lexer;
 use parser;
+use treefs;
 use typecheck;
 use buildcache;
 
@@ -792,7 +793,7 @@ let cg_dbg_file (path: String): DbgFile =
     match cg_dbg_find(DBG_FILES.get(), path, 0) {
         Some(f) => f,
         None => {
-            let starts = match Os.read_file(path) { Ok(src) => cg_line_starts(src), Err(e) => [0] };
+            let starts = match treefs.read_source(path) { Ok(src) => cg_line_starts(src), Err(e) => [0] };
             let id = cg_dbg_next(());
             let f = DbgFile { path: path, id: id, starts: starts };
             let bytes = path.as_bytes();

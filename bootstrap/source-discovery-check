@@ -19,11 +19,39 @@ COMPILER = Path(sys.argv[1] if len(sys.argv) > 1 else ROOT / "sh.real").resolve(
 ENTRY = '''
 let main (): Unit = {
     let argv = args();
+    if argv[0] == "native" || argv[0] == "native-dep" {
+        let builder = source_builder();
+        for path in native_c_files_policy(argv[1], argv[2], builder, argv[0] == "native") { println(path); }
+    } else {
     let inputs = prepare_inputs(argv[1]);
-    if argv[0] == "count" { println(inputs.files.len().to_string()) }
+    if argv[0] == "readback" {
+        buildcache.begin_reads(true);
+        let parsed = parse_source_files(inputs.files, 0, []);
+        assert(buildcache.sources_unchanged(()));
+        assert(buildcache.read_manifest(()) == "");
+        let file = inputs.files[0];
+        assert(Result.is_ok(treefs.read_source(file.path)));
+        assert(Result.is_ok(Os.rename_file(file.path, "${file.path}.saved")));
+        assert(Result.is_ok(Os.write_file(file.path, "untrusted replacement")));
+        assert(Result.is_err(treefs.read_source(file.path)));
+        assert(!buildcache.sources_unchanged(()));
+        buildcache.begin_reads(false);
+        treefs.clear_source_locations(());
+        assert(Result.is_err(treefs.read_source(file.path)));
+        println("confined diagnostic reads");
+    }
+    else if argv[0] == "replace" {
+        let file = inputs.files[0];
+        assert(Result.is_ok(Os.rename_file(file.path, "${file.path}.saved")));
+        assert(Result.is_ok(Os.write_file(file.path, "let changed (): Int = 2")));
+        let parsed = parse_source_files(inputs.files, 0, []);
+        println(parsed.len().to_string())
+    }
+    else if argv[0] == "count" { println(inputs.files.len().to_string()) }
     else {
         for dep in inputs.deps { println("D|${dep.name}|${dep.path}"); };
         for f in inputs.files { println("F|${f.path}|${f.module_name}|${f.owner}|${f.dep_name}"); };
+    }
     }
 }
 '''
@@ -115,6 +143,204 @@ with tempfile.TemporaryDirectory(prefix="plum-discovery-") as tmp:
     assert "has Plum source at its root" in rejected.stdout + rejected.stderr
     (work / "alpha/bad.plum").unlink()
     print("source-discovery: order, filtering, modules, ownership and dependency rejection passed")
+
+    # A hidden target is not independently discovered, so its visible alias
+    # is valid. Visible aliases of one physical source are ambiguous.
+    links = work / "links"
+    write(links / ".storage/target.plum", "let main (): Unit = ()\n")
+    try:
+        (links / "main.plum").symlink_to(".storage/target.plum")
+    except OSError:
+        print("source-discovery: symlinks unavailable on this runner")
+    else:
+        result = discover(links)
+        assert f"F|{links / 'main.plum'}|||" in result.stdout
+        write(links / "plum.pkg", 'Package { name: "links", symlinks: "reject" }')
+        result = discover(links, ok=False)
+        assert "refused link" in result.stdout + result.stderr, result.stdout + result.stderr
+        (links / "plum.pkg").unlink()
+        (links / "alias.plum").symlink_to(".storage/target.plum")
+        result = discover(links, ok=False)
+        assert "duplicate filesystem identity" in result.stdout + result.stderr
+        (links / "alias.plum").unlink()
+        (links / "main.plum").unlink()
+        for target, cause in [("../app/z.plum", "escapes filesystem root"),
+                              (str(app / "z.plum"), "absolute"),
+                              ("missing.plum", "errno 2")]:
+            (links / "main.plum").symlink_to(target)
+            result = discover(links, ok=False)
+            assert "cannot discover sources" in result.stdout + result.stderr
+            assert cause in result.stdout + result.stderr, result.stdout + result.stderr
+            (links / "main.plum").unlink()
+        (links / "loop").symlink_to(".", target_is_directory=True)
+        result = discover(links, ok=False)
+        assert "duplicate filesystem identity" in result.stdout + result.stderr
+        (links / "loop").unlink()
+        (links / "one").symlink_to(".storage", target_is_directory=True)
+        (links / "two").symlink_to(".storage", target_is_directory=True)
+        result = discover(links, ok=False)
+        assert "duplicate filesystem identity" in result.stdout + result.stderr
+        (links / "one").unlink()
+        (links / "two").unlink()
+    # Selecting a subtree changes the selected sources and module layout, not
+    # the declared root's boundary, dependencies or link policy.
+    policy = work / "policy"
+    selected = policy / "nested"
+    write(policy / "plum.pkg", 'Package { name: "policy", symlinks: "reject" }')
+    write(policy / ".storage/shared", "let selected (): Int = 1")
+    write(selected / "own.plum")
+    write(selected / "module/member.plum")
+    write(policy / "unselected.plum")
+    result = discover(selected)
+    assert result.stdout.splitlines() == expected_root(selected)
+    relative = run([binary, "list", "policy/nested"], cwd=work)
+    assert relative.stdout.splitlines() == [line.replace(str(policy), "policy") for line in expected_root(selected)]
+    try:
+        (selected / "alias.plum").symlink_to("../.storage/shared")
+    except OSError:
+        pass
+    else:
+        assert "refused link" in discover(selected, ok=False).stdout
+        write(policy / "plum.pkg", 'Package { name: "policy", symlinks: "within-root" }')
+        result = discover(selected)
+        assert f"F|{selected / 'alias.plum'}|||" in result.stdout
+        assert str(policy / "unselected.plum") not in result.stdout
+        write(selected / "native/.keep")
+        write(policy / ".storage/shim", "int selected(void) { return 1; }")
+        (selected / "native/shim.c").symlink_to("../../.storage/shim")
+        assert str(selected / "native/shim.c") in run([binary, "native", selected, "linux"]).stdout
+        write(policy / "plum.pkg", 'Package { name: "policy", symlinks: "reject" }')
+        run([binary, "native", selected, "linux"], ok=False)
+        # A declared dependency under that same ancestor has its own policy
+        # and boundary, even without a manifest of its own.
+        dependency = policy / "dependency"
+        write(dependency / ".storage/code", "pub let value (): Int = 1")
+        (dependency / "module").mkdir()
+        (dependency / "module/value.plum").symlink_to("../.storage/code")
+        consumer = work / "policy-consumer"
+        write(consumer / "plum.pkg", 'Package { name: "consumer", deps: [Dep { name: "dep", path: "../policy/dependency" }] }')
+        result = discover(consumer)
+        assert str(dependency / "module/value.plum") in result.stdout
+        write(dependency / ".storage/shim", "int dependency(void) { return 1; }")
+        (dependency / "native").mkdir()
+        (dependency / "native/shim.c").symlink_to("../.storage/shim")
+        native_dep = run([binary, "native-dep", dependency, "linux"])
+        assert str(dependency / "native/shim.c") in native_dep.stdout
+        (dependency / "module/value.plum").unlink()
+        (dependency / "module/value.plum").symlink_to("../../.storage/shared")
+        discover(consumer, ok=False)
+    # Dependencies declared at the parent remain available for a selected
+    # directory and explicit file without pulling in unselected own sources.
+    for selection in [app / "a", app / "z.plum"]:
+        result = discover(selection)
+        assert {line.split("|")[1] for line in result.stdout.splitlines() if line.startswith("D|")} == {"alpha", "beta"}
+        assert f"F|{app / 'b/three.plum'}|" not in result.stdout
+    deep = policy / "deep"
+    for _ in range(130):
+        deep = deep / "d"
+    deep.mkdir(parents=True)
+    failure = discover(deep, ok=False)
+    assert "manifest lookup exceeds 128" in failure.stdout + failure.stderr
+    executable = work / "selected-executable"
+    write(executable / "plum.pkg", 'Package { name: "selected", deps: [Dep { name: "helper", path: "../selected-helper" }] }')
+    write(work / "selected-helper/helper/main.plum", 'pub let answer (): String = "nested selection"')
+    write(executable / "unselected.plum", "this is intentionally not valid Plum")
+    entry = executable / "nested/main.plum"
+    write(entry, 'use helper;\nlet main (): Unit = println(helper.answer())')
+    for selection in [entry.parent, entry]:
+        assert run([COMPILER, "run", selection]).stdout.strip() == "nested selection"
+    print("source-discovery: selected subtrees preserve root policy, dependencies and logical paths")
+
+    diagnostic = work / "diagnostic"
+    write(diagnostic / "main.plum", "let original (): Int = 1")
+    assert "confined diagnostic reads" in discover(diagnostic, "readback").stdout
+
+    replaced = work / "replaced"
+    write(replaced / "main.plum", "let original (): Int = 1")
+    result = discover(replaced, "replace", ok=False)
+    assert "source identity changed during discovery" in result.stdout + result.stderr
+    hardlinks = work / "hardlinks"
+    write(hardlinks / "one.plum")
+    os.link(hardlinks / "one.plum", hardlinks / "two.plum")
+    result = discover(hardlinks, ok=False)
+    assert "duplicate filesystem identity" in result.stdout + result.stderr
+    print("source-discovery: confinement, link policy, cycles and physical aliases passed")
+
+    # Exercise native enumeration directly so target selection is independent
+    # of Plum module discovery. The native compiler itself is a trusted tool.
+    def native(path, target="linux", ok=True):
+        return run([binary, "native", path, target], ok=ok)
+
+    native_project = work / "native-project"
+    for name in ["native/shared.c", "native/config.h", "native/linux/linux.c",
+                 "native/posix/posix.c", "native/windows/windows.c", "native/macos/macos.c"]:
+        write(native_project / name)
+    for target in ["linux", "windows", "macos"]:
+        expected = []
+        for name in os.listdir(native_project / "native"):
+            path = native_project / "native" / name
+            if path.is_dir() and (name == target or (name == "posix" and target != "windows")):
+                expected.extend(str(path / child) for child in os.listdir(path) if child.endswith(".c"))
+            elif path.is_file() and name.endswith(".c"):
+                expected.append(str(path))
+        assert native(native_project, target).stdout.splitlines() == expected
+    write(native_project / "native/win32/wrong.c")
+    result = native(native_project, ok=False)
+    assert "not a target directory" in result.stdout + result.stderr
+    shutil.rmtree(native_project / "native/win32")
+    os.link(native_project / "native/shared.c", native_project / "native/duplicate.c")
+    result = native(native_project, ok=False)
+    assert "duplicate filesystem identity" in result.stdout + result.stderr
+    (native_project / "native/duplicate.c").unlink()
+    write(native_project / ".body", "int native_body(void) { return 1; }")
+    native_alias = native_project / "native/alias.c"
+    try:
+        native_alias.symlink_to("../.body")
+    except OSError:
+        pass
+    else:
+        assert str(native_alias) in native(native_project).stdout.splitlines()
+        write(native_project / "plum.pkg", 'Package { name: "native", symlinks: "reject" }')
+        result = native(native_project, ok=False)
+        assert "refused link" in result.stdout + result.stderr
+        (native_project / "plum.pkg").unlink()
+        native_alias.unlink()
+        native_alias.symlink_to("../../outside.c")
+        result = native(native_project, ok=False)
+        assert "cannot discover sources" in result.stdout + result.stderr
+        native_alias.unlink()
+        shutil.rmtree(native_project / "native/linux")
+        (native_project / "native/linux").symlink_to(".", target_is_directory=True)
+        result = native(native_project, ok=False)
+        assert "duplicate filesystem identity" in result.stdout + result.stderr
+        (native_project / "native/linux").unlink()
+        shutil.rmtree(native_project / "native/windows")
+        (native_project / "native/windows").symlink_to("../../outside", target_is_directory=True)
+        native(native_project, "linux")  # excluded target is not traversed
+        native(native_project, "windows", ok=False)
+    print("source-discovery: native targets, alias detection and root policy passed")
+
+    manifests = work / "manifest-links"
+    write(manifests / "main.plum")
+    write(manifests / ".config", 'Package { name: "test" }')
+    manifest_link = manifests / "plum.pkg"
+    try:
+        manifest_link.symlink_to(".config")
+    except OSError:
+        pass
+    else:
+        discover(manifests)
+        write(manifests / ".config", 'Package { name: "test", symlinks: "reject" }')
+        result = discover(manifests, ok=False)
+        assert "failed to read" in result.stdout + result.stderr
+        manifest_link.unlink()
+        write(work / "outside.pkg", 'Package { name: "outside" }')
+        for target in ["missing", "../outside.pkg", str(manifests / ".config")]:
+            manifest_link.symlink_to(target)
+            result = discover(manifests, ok=False)
+            assert "failed to read" in result.stdout + result.stderr
+            manifest_link.unlink()
+    print("source-discovery: manifest links obey root and reject policies")
 
     # No elapsed-time thresholds: total allocated bytes must scale linearly.
     # Fixed-width names keep path-processing costs comparable at each size.

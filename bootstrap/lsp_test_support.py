@@ -20,3 +20,36 @@ def file_uri(path):
         return "file:///" + native
     # Keep the current server's URI contract; percent encoding is #160.
     return "file://" + native
+
+
+def make_symlink(path, target, is_directory=False):
+    """Create native Windows links, including from MSYS Python fixtures."""
+    import os
+    if os.name == "nt":
+        path.symlink_to(str(target).replace("/", "\\"), target_is_directory=is_directory)
+    elif shutil.which("cygpath"):
+        # MSYS may encode links using its own reparse representation. Exercise
+        # the native relative symlink contract used by ordinary Windows tools.
+        args = ["cmd.exe", "/d", "/c", "mklink"]
+        if is_directory:
+            args.append("/D")
+        target_text = native_path(target) if Path(target).is_absolute() else str(target)
+        args.extend([native_path(path).replace("/", "\\"), target_text.replace("/", "\\")])
+        # Conversion happens in the MSYS parent while spawning, before the
+        # child's supplied environment takes effect. Keep /c a cmd flag.
+        previous = os.environ.get("MSYS2_ARG_CONV_EXCL")
+        os.environ["MSYS2_ARG_CONV_EXCL"] = "*"
+        try:
+            result = subprocess.run(args, capture_output=True)
+        finally:
+            if previous is None:
+                os.environ.pop("MSYS2_ARG_CONV_EXCL", None)
+            else:
+                os.environ["MSYS2_ARG_CONV_EXCL"] = previous
+        if result.returncode:
+            raise OSError(result.stdout + result.stderr)
+        assert path.name in os.listdir(path.parent) and path.is_symlink(), (
+            "native link fixture was not created", str(path), result.stdout, result.stderr,
+            os.listdir(path.parent))
+    else:
+        path.symlink_to(target, target_is_directory=is_directory)

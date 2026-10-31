@@ -152,12 +152,22 @@ jobs:
         run: python3 ./bootstrap/source-discovery-check ./sh.real
       - name: packages resolve and manifests stay data
         run: ./bootstrap/pkg-check
+      - name: package hashes preserve links and validate roots before publication
+        run: python3 ./bootstrap/package-tree-test.py ./sh.real
       - name: allocations have not risen
         run: ./bootstrap/alloc-check
       - name: the token stream loses nothing
         run: ./bootstrap/lossless-check
       - name: everything is already formatted
         run: ./bootstrap/fmt-check
+      - name: Native tree memory stays bounded
+        run: ./bootstrap/tree-memory-check
+      - name: Formatter linked tree behavior
+        run: python3 ./bootstrap/formatter-tree-test.py ./sh.real
+      - name: Cache tree inventory
+        run: python3 ./bootstrap/cache-tree-test.py ./sh.real
+      - name: Concurrent package staging
+        run: python3 ./bootstrap/package-staging-test.py ./sh.real
       - name: the language server answers a real session
         run: ./bootstrap/lsp-smoke
       - name: TCP and HTTP work in a compiled binary
@@ -168,6 +178,8 @@ jobs:
         run: ./bootstrap/handle-registry-smoke
       - name: tree removal stays inside held directories and releases resources
         run: ./bootstrap/remove-tree-smoke
+      - name: tree copying preserves links and releases native resources
+        run: ./bootstrap/copy-tree-smoke
       - name: directory listings release storage and reject partial or invalid names
         run: ./bootstrap/directory-smoke
       - name: OS path results survive concurrent native calls
@@ -520,6 +532,16 @@ jobs:
           clang -O1 -g -Wall -Wextra -Werror bootstrap/generated-output-test.c -o generated-output-test.exe
           ./generated-output-test.exe
 
+      - name: tree removal preserves external hardlink attributes
+        run: |
+          clang -O1 -g -Wall -Wextra -Werror bootstrap/remove-tree-test.c -o remove-tree-test.exe
+          ./remove-tree-test.exe
+
+      - name: tree copying and resolution respect Windows reparse boundaries
+        run: |
+          clang -O1 -g -Wall -Wextra -Werror bootstrap/copy-tree-test.c -o copy-tree-test.exe
+          ./copy-tree-test.exe
+
       - name: seed -> compiler
         run: |
           ./bootstrap/from-seed -o sh.seed
@@ -571,6 +593,7 @@ jobs:
           install: >-
             mingw-w64-x86_64-clang
             mingw-w64-x86_64-lld
+            git
             diffutils
             tar
             python
@@ -579,6 +602,8 @@ jobs:
           name: plum-windows-compiler
       - name: restore freshly built compiler
         run: tar -xzf plum-windows-compiler.tar.gz
+      - name: concurrent package staging cleans cloned Git metadata
+        run: python3 ./bootstrap/package-staging-test.py ./sh.real
       - name: real programs work on Windows
         env:
           PLUM_CI_TIMINGS: "1"

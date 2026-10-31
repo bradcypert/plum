@@ -1,6 +1,7 @@
 // Exercise the real shim, with deterministic races and resource failures.
 // All destructive fixtures live below an independently created scratch root.
 #include <assert.h>
+#include <stdarg.h>
 #include <errno.h>
 #include <stddef.h>
 #include <stdint.h>
@@ -49,7 +50,14 @@ static int tracked_open(const char *p, int flags) {
     if (fd >= 0) acquired();
     return fd;
 }
-static int tracked_openat(int parent, const char *name, int flags) {
+static int tracked_openat(int parent, const char *name, int flags, ...) {
+    mode_t mode = 0;
+    if (flags & O_CREAT) {
+        va_list args;
+        va_start(args, flags);
+        mode = (mode_t)va_arg(args, int);
+        va_end(args);
+    }
     if (fail_open) { fail_open = 0; errno = EMFILE; return -1; }
     if ((race == 1 || race == 4) && strcmp(name, "victim") == 0) {
         int replacement_directory = race == 4;
@@ -58,7 +66,7 @@ static int tracked_openat(int parent, const char *name, int flags) {
         if (replacement_directory) assert(mkdirat(parent, name, 0700) == 0);
         else assert(symlinkat(outside, parent, name) == 0);
     }
-    int fd = openat(parent, name, flags);
+    int fd = openat(parent, name, flags, mode);
     if (fd >= 0) acquired();
     return fd;
 }
@@ -197,10 +205,26 @@ static void basics(void) {
     fail_stream = 1; assert(os_remove_tree("tree") == -1); clean();
 #else
     fail_alloc = 2; assert(os_remove_tree("tree") == -1); clean();
-    fail_child = 1; assert(os_remove_tree("tree") == -1); clean();
-    fail_delete = 1; assert(os_remove_tree("tree") == -1); clean();
+    fail_child = 1; assert(os_remove_tree("tree") == -1);
+    assert(strstr(plum_tree_last_error(), "NTSTATUS 0xc0000022")); clean();
+    fail_delete = 1; assert(os_remove_tree("tree") == -1);
+    assert(strstr(plum_tree_last_error(), "mark entry for deletion: Windows error 5")); clean();
 #endif
     removed("tree");
+#if defined(_WIN32)
+    directory("tree"); put("readonly-source");
+    assert(SetFileAttributesA("readonly-source", FILE_ATTRIBUTE_READONLY));
+    assert(CreateHardLinkA("tree/readonly", "readonly-source", NULL));
+    fail_delete = 1;
+    assert(os_remove_tree("tree") == -1); clean();
+    assert(GetFileAttributesA("readonly-source") & FILE_ATTRIBUTE_READONLY);
+    removed("tree");
+    assert(exists("readonly-source"));
+    assert(GetFileAttributesA("readonly-source") & FILE_ATTRIBUTE_READONLY);
+    assert(SetFileAttributesA("readonly-source", FILE_ATTRIBUTE_NORMAL));
+    removed("readonly-source");
+#endif
+
 
     // Width must not accumulate buffers or handles. Repeat BEFORE process exit.
     size_t narrow_peak = 0;

@@ -14,6 +14,7 @@ let os_rename_file_raw (from: String) (to: String): Int = 0
 let os_remove_tree_raw (path: String): Int = 0
 let os_copy_tree_raw (src: String) (dst: String): Int = 0
 let os_platform_raw (ignored: Bool): String = ""
+extern "C" { fn plum_tree_last_error() -> CStr; }
 
 /// Which platform this program is running on: "linux", "macos" or
 /// "windows". Compiled in, not detected at runtime; a binary
@@ -68,17 +69,28 @@ pub let remove_file (path: String): Result[Unit, String] =
 /// Concurrent changes or resource exhaustion can return `Err` after partial
 /// removal. Traversal is limited to 128 directory levels to bound native
 /// stack, enumeration storage, and open handles. Empty paths and final
-/// `.` or `..` components are rejected.
+/// `.` or `..` components are rejected. Read-only Windows files are removed
+/// without changing attributes on other hardlinks; this requires Windows 10
+/// 1809 or newer and filesystem support, otherwise removal returns `Err`.
 pub let remove_tree (path: String): Result[Unit, String] =
     if os_remove_tree_raw(path) == 0 { Ok(()) }
-    else { Err("Os.remove_tree: could not remove ".concat(path)) }
+    else { Err("Os.remove_tree: could not remove ".concat(path).concat(": ").concat(unsafe { plum_tree_last_error().as_string() })) }
 
-/// Copies the CONTENTS of `src` into `dst`, which must already exist
-/// and must not overlap `src`. Returns `Err` for identical or nested
-/// directories before changing `dst`. File modes are not preserved.
+/// Copies the contents of `src` into the existing directory `dst`.
+/// Both roots must be ordinary directories, even with trailing separators;
+/// their ancestors resolve normally. Identical or nested roots return `Err`
+/// before changing `dst`. Links inside `src` are copied as links, including
+/// dangling links, without reading their targets. Destination links and
+/// unsupported Windows reparse points are rejected. Failure to recreate a
+/// link returns `Err` rather than substituting its target or link text.
+/// Regular destination files are replaced, so other hardlinks are unchanged.
+/// Traversal uses held directories, at most 128 levels, and a 64 KiB transfer
+/// buffer independent of file size. Errors can leave partial output; the
+/// caller owns cleanup. File modes are not preserved.
+/// Errors include both requested roots and the recorded refusal or native failure.
 pub let copy_tree (src: String) (dst: String): Result[Unit, String] =
     if os_copy_tree_raw(src, dst) == 0 { Ok(()) }
-    else { Err("Os.copy_tree: could not copy ".concat(src).concat(" to ").concat(dst)) }
+    else { Err("Os.copy_tree: could not copy ".concat(src).concat(" to ").concat(dst).concat(": ").concat(unsafe { plum_tree_last_error().as_string() })) }
 
 // --- Environment and process ---
 //

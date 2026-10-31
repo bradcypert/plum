@@ -95,6 +95,18 @@ else
     fail=$((fail + 1))
 fi
 
+# Copying must exercise actual Windows handle sharing and reparse semantics.
+if clang -O1 -g -Wall -Wextra -Werror bootstrap/copy-tree-test.c \
+        -o "$work/copy-tree-test.bin" > "$work/copy-tree-test.log" 2>&1 &&
+        "$work/copy-tree-test.bin"; then
+    printf 'OK    %-24s\n' "native_tree_copy"
+    ok=$((ok + 1))
+else
+    printf 'FAIL  %-24s\n' "native_tree_copy"
+    cat "$work/copy-tree-test.log"
+    fail=$((fail + 1))
+fi
+
 # Strict output traversal must work on native Windows and macOS too.
 if clang -O1 -g -Wall -Wextra bootstrap/generated-output-test.c \
         -o "$work/generated-output-test.bin" > "$work/generated-output-test.log" 2>&1 &&
@@ -201,6 +213,31 @@ if "$plum" fmt --write "$work/format.plum" > "$work/format.log" 2>&1 &&
 else
     printf 'FAIL  %-24s\n' "formatter_replacement"
     cat "$work/format.log"
+    fail=$((fail + 1))
+fi
+
+# Exercise the same root policy and target replacement on every host.
+if python3 ./bootstrap/formatter-tree-test.py "$plum"; then
+    printf 'OK    %-24s\n' "formatter_linked_tree"
+    ok=$((ok + 1))
+else
+    printf 'FAIL  %-24s\n' "formatter_linked_tree"
+    fail=$((fail + 1))
+fi
+
+if python3 ./bootstrap/cache-tree-test.py "$plum"; then
+    printf 'OK    %-24s\n' "cache_linked_tree"
+    ok=$((ok + 1))
+else
+    printf 'FAIL  %-24s\n' "cache_linked_tree"
+    fail=$((fail + 1))
+fi
+
+if python3 ./bootstrap/package-staging-test.py "$plum"; then
+    printf 'OK    %-24s\n' "package_owned_staging"
+    ok=$((ok + 1))
+else
+    printf 'FAIL  %-24s\n' "package_owned_staging"
     fail=$((fail + 1))
 fi
 

@@ -309,6 +309,35 @@ Package {
 }
 ```
 
+The manifest also selects how project sources use symbolic links:
+
+```plum manifest
+Package { name: "myapp", symlinks: "within-root" }
+```
+
+`within-root` is the default. Relative links may resolve within the declared
+project root; absolute links and attempts to ascend above that root are
+errors. Use `symlinks: "reject"` to reject links encountered in selected source
+traversal. Existing hidden-directory and vendor exclusions still apply.
+Cycles and multiple visible paths to one physical source are errors, including
+hardlink aliases. Unsupported Windows reparse points, such as junctions, are
+refused. An external shared tree belongs in an explicit path dependency.
+
+Selecting a nested directory or file keeps that selection's source scope and
+module layout, but inherits the nearest ancestor manifest's policy and
+dependencies. Native source selection and formatting use the same boundary.
+Each dependency has its own root and policy; it never inherits permission to
+leave its root from the consuming project or an ancestor manifest. Without a
+manifest, the selected directory (or an explicit file's containing directory)
+is the boundary. Directory traversal and ancestor-manifest lookup are bounded
+at 128 levels, and link expansion at 40.
+
+LSP semantic requests copy the declared project and resolved dependency roots,
+apply open source buffers within those copies, and map results back to editor
+URIs. Conflicting buffers for one physical target make analysis unavailable;
+identical alias buffers are allowed. Save manifest edits before requesting
+semantic analysis: dependency resolution uses saved configuration.
+
 Native sources and linked libraries can declare which embedded dependencies
 those inputs require:
 
@@ -366,6 +395,7 @@ Package {
             name: "parsec",
             git: "https://github.com/someone/parsec",
             rev: "9f2a1c4e8b7d3f6a0c5e2b9d4a8f1c3e7b6d0a52",
+            hash_version: 2,
             sha256: "3b8f1d0c6a24e7593f8c1b0d4a6e29f7c53b8d1a0f462e97c8b3d5a1f0e6c294",
         },
     ],
@@ -381,8 +411,21 @@ that can become ambiguous as a repository grows.
 **`sha256` is optional, and is how the manifest becomes a lockfile.**
 It is the hash of the package's contents. Declare one and every later
 fetch has to produce exactly those bytes, on any machine. `plum fetch`
-prints the hash of what it got, so adding one is a copy and a paste. It
-is checked on every build, not only when something is downloaded.
+prints both `hash_version: 2` and the hash; copy both fields into the
+dependency. It is checked on every build, not only when downloaded.
+
+Version 2 includes entry types, empty directories, and the stored target
+text of symbolic links. Files are hashed through bounded read buffers;
+link targets are not read as file contents. Relative internal links and
+dangling internal links can be stored. Absolute links, escaping link
+chains, unsupported reparse points, and special files are rejected before
+a fetched or vendored package is published, even without a declared hash.
+
+Omitting `hash_version` retains version 1 for existing manifests. Its hashes
+remain unchanged for link-free trees, but it refuses links with a migration
+diagnostic. To migrate, fetch without the old `sha256`, review the package,
+and set both fields printed by `plum fetch`. Verification never silently
+accepts a different hash version after a mismatch.
 
 **Fetching is a separate step.** `plum build` never touches the network;
 a dependency that is not in the cache is an error telling you to run
@@ -415,11 +458,25 @@ list` and removable with `plum cache clean`; remove obsolete vendor trees
 when no longer needed.
 
 `plum cache list` uses that same root and reports each cached commit plus
-the file count and exact byte total. `plum cache clean` removes only
+the logical entry count and byte total. Each regular file contributes its
+size, and each symbolic link contributes the byte length of its stored target
+text. Links are never followed for this inventory; empty directories contribute
+no bytes, and hardlinks count once per directory entry. These totals describe
+stored contents, not allocated disk blocks. Cache layout and package scans
+are bounded at 128 directory levels and report enumeration failures.
+In-progress staging directories are excluded from the package list.
+
+`plum cache clean` removes only
 `<cache>/pkg`, not the cache root itself: `PLUM_CACHE` is user-controlled
 and future Plum cache kinds must not be erased as a side effect. Cleaning
 is safe; a removed dependency is simply fetched again on the next explicit
 `plum fetch`.
+
+Fetch and vendor reserve a unique staging container beside the destination,
+validate its complete payload, then rename that payload into place. Failed
+operations remove only their own container. Concurrent writers never delete a
+shared `.partial` pathname; if another writer publishes first, the existing
+destination must pass integrity validation before the operation succeeds.
 
 `plum vendor` copies every resolved Git dependency, including transitive
 ones, into `vendor/` below the project. It keeps `git`, `rev` and `sha256`

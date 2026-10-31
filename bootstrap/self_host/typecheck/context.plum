@@ -21,6 +21,7 @@
 // zero new code.
 
 use parser;
+use treefs;
 use lexer;
 use Os;
 
@@ -95,7 +96,7 @@ pub let fail_at_err (msg: String): Unit = {
             .concat(if e.fn_name == "" { "" } else { " (checking '${e.fn_name}')" }))
     }
     else {
-        match Os.read_file(e.path) {
+        match treefs.read_source(e.path) {
             Ok(src) => panic_raw(lexer.render_at(src, e.path, e.offset, msg)),
             Err(_) => panic_raw("self-hosted type checker: ".concat(msg)),
         }

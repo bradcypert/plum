@@ -73,6 +73,26 @@ with tempfile.TemporaryDirectory(prefix="plum-cache-check-") as tmp:
             require("profile: function emission" not in result.stderr, "IR hit emitted code")
         return result
 
+    # Cleaners must detach the cache before traversing it. Otherwise two
+    # cleaners enumerate/delete each other's entries and report spurious I/O
+    # failures. A large tree makes the overlapping traversal reproducible.
+    invoke("cache", "clean", "build")
+    for attempt in range(3):
+        cleaning_root = cache / "build" / "v1"
+        cleaning_root.mkdir(parents=True)
+        for index in range(3000):
+            (cleaning_root / str(index)).write_text("entry")
+        cleaners = [subprocess.Popen([str(COMPILER), "cache", "clean", "build"],
+                                    env=env, stdout=subprocess.PIPE,
+                                    stderr=subprocess.PIPE, text=True, cwd=work)
+                    for _ in range(8)]
+        for cleaner in cleaners:
+            stdout, stderr = cleaner.communicate(timeout=180)
+            require(cleaner.returncode == 0, "concurrent cleaner failed: " + stderr)
+        require(not cleaning_root.exists(), "concurrent cleaners left the old cache")
+        require(not list((cache / "build").iterdir()),
+                "concurrent cleaners left detached cache staging")
+
     if WINDOWS_HOST:
         probe = work / "loader-probe.exe"
         subprocess.run(["clang", "-O1", "-g", str(ROOT / "bootstrap/windows-cache-probe.c"), "-o", str(probe)],
@@ -261,6 +281,11 @@ with tempfile.TemporaryDirectory(prefix="plum-cache-check-") as tmp:
     if not WINDOWS_HOST:
         alias = work / "source-link.plum"
         alias.symlink_to(src)
+        rejected = invoke("run", alias, ok=False)
+        require("cannot discover sources" in rejected.stdout + rejected.stderr,
+                "absolute source link was not rejected")
+        alias.unlink()
+        alias.symlink_to(os.path.relpath(src, alias.parent))
         run("file\n", "miss", target=alias)
         run("file\n", "hit", target=alias)
 
@@ -468,26 +493,6 @@ with tempfile.TemporaryDirectory(prefix="plum-cache-check-") as tmp:
                     "quoted native assembly label was cached: " + labeled.stderr)
         shutil.rmtree(native)
     src.write_text('let main (): Unit = println("file")\n')
-
-    # Cleaners must detach the cache before traversing it. Otherwise two
-    # cleaners enumerate/delete each other's entries and report spurious I/O
-    # failures. A large tree makes the overlapping traversal reproducible.
-    invoke("cache", "clean", "build")
-    for attempt in range(3):
-        cleaning_root = cache / "build" / "v1"
-        cleaning_root.mkdir(parents=True)
-        for index in range(3000):
-            (cleaning_root / str(index)).write_text("entry")
-        cleaners = [subprocess.Popen([str(COMPILER), "cache", "clean", "build"],
-                                    env=env, stdout=subprocess.PIPE,
-                                    stderr=subprocess.PIPE, text=True, cwd=work)
-                    for _ in range(8)]
-        for cleaner in cleaners:
-            stdout, stderr = cleaner.communicate(timeout=180)
-            require(cleaner.returncode == 0, "concurrent cleaner failed: " + stderr)
-        require(not cleaning_root.exists(), "concurrent cleaners left the old cache")
-        require(not list((cache / "build").iterdir()),
-                "concurrent cleaners left detached cache staging")
 
     # Cold writers must leave a complete entry even when publication and
     # cleanup overlap. In particular, Windows cleanup must not lock the

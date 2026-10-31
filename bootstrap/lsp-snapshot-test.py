@@ -9,7 +9,7 @@ import tempfile
 import threading
 from pathlib import Path
 
-from lsp_test_support import file_uri as uri, native_path
+from lsp_test_support import file_uri as uri, native_path, make_symlink
 
 
 def frame(message):
@@ -82,7 +82,7 @@ class Client:
 def check(compiler):
     with tempfile.TemporaryDirectory(prefix="plum-lsp-snapshot-") as directory:
         root = Path(directory)
-        project, scratch = root / "project", root / "scratch"
+        project, scratch = root / "project-üni", root / "scratch"
         project.mkdir()
         scratch.mkdir()
         a, b = project / "main.plum", project / "other.plum"
@@ -144,6 +144,10 @@ def check(compiler):
             assert any(item["label"] == "let" for item in general["items"]), general
             assert client.query("hover", a, incomplete, "receiver", 1) is None
 
+            # An unterminated token must not be lexed inside the server after
+            # the isolated formatter refuses it.
+            client.notify("didChange", a, 'let broken = "unterminated')
+            assert client.request("textDocument/formatting", {"textDocument": {"uri": uri(a)}}) == []
             # Empty buffers never silently fall back to the disk program.
             client.notify("didChange", a, "")
             assert client.query("hover", a, "disk", "disk") is None
@@ -174,8 +178,8 @@ def check(compiler):
             assert client.request("textDocument/completion", {"textDocument": {"uri": uri(a)}}) == []
             assert len(client.notifications) == before
             client.notify("didClose", unwritable)
-            # POSIX dangling symlinks fail during copy, after some entries
-            # may already have been copied. Windows may not allow symlinks.
+            # Copy preserves links, but source discovery must refuse this
+            # absolute dangling link. Windows may not allow symlinks.
             link = project / "dangling"
             try:
                 link.symlink_to(project / "absent")
@@ -186,7 +190,7 @@ def check(compiler):
                 link.unlink()
             assert client.query("hover", a, old_members, "Old") is not None
             # A URI sharing the directory's textual prefix is outside it.
-            outside = root / "project-other"
+            outside = root / "project-üni-other"
             outside.mkdir()
             unrelated = outside / "main.plum"
             unrelated.write_text('let outside (): Int = 1\n')
@@ -207,5 +211,133 @@ def check(compiler):
     print("lsp snapshot lifecycle: ok")
 
 
+def check_roots(compiler):
+    with tempfile.TemporaryDirectory(prefix="plum-lsp-roots-") as directory:
+        base = Path(directory)
+        project, dependency, scratch = (base / name for name in ("project", "dependency", "scratch"))
+        for folder in (project, dependency, scratch):
+            folder.mkdir()
+        nested = project / "nested"
+        nested.mkdir()
+        manifest = project / "plum.pkg"
+        manifest.write_text('Package { name: "app", deps: [Dep { name: "dep", path: "../dependency" }] }')
+        (dependency / "plum.pkg").write_text('Package { name: "dep" }')
+        (dependency / "dep").mkdir()
+        dep = dependency / "dep" / "main.plum"
+        dep.write_text('pub let answer (): Int = 1\n')
+        source = nested / "main-üni.plum"
+        text = 'use dep;\nlet consume (): String = { let value = dep.answer(); value }\n'
+        source.write_text(text)
+        client = Client(compiler, scratch)
+        try:
+            client.request("initialize")
+            client.notify("didOpen", source, text)
+            client.notify("didOpen", dep, 'pub let answer (): String = "live"\n')
+            hover = client.query("hover", source, text, "value", 1)
+            assert hover and hover["contents"]["value"] == "value: String", hover
+            target = client.query("definition", source, text, "answer")
+            assert target and target["uri"] == uri(dep), target
+            client.notify("didClose", dep)
+            client.notify("didClose", source)
+            # Transitive external roots are rebound inside the snapshot too.
+            transitive = base / "transitive"
+            (transitive / "leaf").mkdir(parents=True)
+            (transitive / "plum.pkg").write_text('Package { name: "leaf" }')
+            leaf = transitive / "leaf" / "main.plum"
+            leaf.write_text('pub let answer (): Int = 1\n')
+            (dependency / "plum.pkg").write_text('Package { name: "dep", deps: [Dep { name: "leaf", path: "../transitive" }] }')
+            dep.write_text('use leaf;\npub let answer (): String = leaf.answer()\n')
+            client.notify("didOpen", leaf, 'pub let answer (): String = "live"\n')
+            hover = client.query("hover", source, text, "value", 1)
+            assert hover and "String" in hover["contents"]["value"], hover
+            client.notify("didClose", leaf)
+            dep.write_text('pub let answer (): Int = 1\n')
+            # Replacing several copied inodes must not retain obsolete
+            # identities that could be recycled for another buffer's target.
+            overlays = []
+            for index in range(12):
+                extra = project / ("buffer%d.plum" % index)
+                disk = 'let buffer%d (): Int = 0\n' % index
+                live = 'let buffer%d (): Int = %d\n' % (index, index + 1)
+                extra.write_text(disk)
+                overlays.append((extra, live, disk))
+                client.notify("didOpen", extra, live)
+            extra, live, disk = overlays[-1]
+            assert client.query("hover", extra, live, "buffer11") is not None
+            for extra, live, disk in overlays:
+                assert extra.read_text() == disk
+                client.notify("didClose", extra)
+                extra.unlink()
+            # Invalid manifests are isolated in the worker, not the server.
+            manifest.write_text('Package {')
+            assert client.query("hover", source, text, "value", 1) is None
+            manifest.write_text('Package { name: "app" }')
+            source.unlink()
+            hidden = project / ".hidden"
+            hidden.mkdir()
+            physical = hidden / "target.plum"
+            physical.write_text('let disk (): Int = 1\n')
+            alias = project / "visible.plum"
+            try:
+                make_symlink(alias, ".hidden/target.plum")
+            except (OSError, NotImplementedError):
+                print("lsp alias cases: symlinks unavailable")
+            else:
+                live = 'let consume (): String = { let value = "live"; value }\n'
+                client.notify("didOpen", physical, live)
+                hover = client.query("hover", physical, live, "value", 1)
+                if hover is None:
+                    # Keep a failed Windows snapshot reviewable: the worker's
+                    # refusal is deliberately hidden from normal LSP replies.
+                    with tempfile.TemporaryDirectory(dir=scratch) as debug:
+                        payload = {"path": uri(physical), "container": uri(Path(debug)),
+                                   "buffers": [{"uri": uri(physical), "text": live}]}
+                        body = json.dumps(payload).encode()
+                        result = subprocess.run([compiler, "__lsp_snapshot"],
+                            input=b"Content-Length: %d\r\n\r\n" % len(body) + body,
+                            capture_output=True, timeout=30)
+                        raise AssertionError(("snapshot worker", result.returncode, result.stdout, result.stderr,
+                            "original entries", sorted(os.listdir(project)),
+                            "copied entries", sorted(os.listdir(Path(debug) / "project")),
+                            "original alias", alias.is_symlink(), alias.exists(),
+                            os.readlink(alias) if alias.is_symlink() else None))
+                assert "String" in hover["contents"]["value"], hover
+                target = client.query("definition", physical, live, "value", 1)
+                assert target and target["uri"] == uri(physical), target
+                if len(native_path(physical)) > 1 and native_path(physical)[1] == ":":
+                    case_uri = "file:///" + native_path(physical).upper()
+                    client.send("textDocument/didOpen", {"textDocument": {"uri": case_uri, "text": live}})
+                    assert client.query("hover", physical, live, "value", 1) is not None
+                    client.send("textDocument/didChange", {"textDocument": {"uri": case_uri},
+                        "contentChanges": [{"text": live.replace('"live"', '"conflict"')}]})
+                    assert client.query("hover", physical, live, "value", 1) is None
+                    client.send("textDocument/didClose", {"textDocument": {"uri": case_uri}})
+                client.notify("didOpen", alias, live)
+                assert client.query("hover", alias, live, "value", 1) is not None
+                client.notify("didChange", alias, live.replace('"live"', '"different"'))
+                assert client.query("hover", physical, live, "value", 1) is None
+                client.notify("didClose", alias)
+                # The policy applies to both buffer overlays and discovery.
+                manifest.write_text('Package { name: "app", symlinks: "reject" }')
+                assert client.query("hover", physical, live, "value", 1) is None
+                manifest.write_text('Package { name: "app" }')
+                physical.unlink()
+                assert client.query("hover", physical, live, "value", 1) is not None
+                assert not physical.exists(), "overlay modified original dangling target"
+                client.notify("didClose", physical)
+                alias.unlink()
+            assert dep.read_text() == 'pub let answer (): Int = 1\n'
+            assert client.request("shutdown") is None
+            client.send("exit")
+            client.proc.wait(timeout=10)
+            assert client.proc.returncode == 0, client.proc.stderr.read().decode()
+        finally:
+            if client.proc.poll() is None:
+                client.proc.kill()
+                client.proc.wait()
+    print("lsp declared roots and aliases: ok")
+
+
 if __name__ == "__main__":
     check(sys.argv[1])
+    check_roots(sys.argv[1])

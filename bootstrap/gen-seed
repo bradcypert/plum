@@ -8,7 +8,8 @@
 # be new enough to compile today's source. Refreshing on every change
 # would put 6MB of generated text into history for no benefit.
 #
-# Run from the repo root with a working `./sh`.
+# Run from the repo root with a working `./sh`, or set PLUM to a
+# current-source compiler when the local bootstrap executable is stale.
 set -euo pipefail
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$root"
@@ -30,7 +31,7 @@ cd "$root"
 # one filesystem and therefore atomic.
 scratch="bootstrap/seed/plum.ll.partial"
 trap 'rm -f "$scratch"' EXIT
-SH_MEM="${SH_MEM:-256M}" SH_TIMEOUT="${SH_TIMEOUT:-600}" ./sh emit-llvm bootstrap/self_host > "$scratch"
+SH_MEM="${SH_MEM:-256M}" SH_TIMEOUT="${SH_TIMEOUT:-600}" "${PLUM:-./sh}" emit-llvm bootstrap/self_host > "$scratch"
 
 # An empty or truncated emission must never reach the seed. `set -e`
 # catches a non-zero exit; this catches a compiler that exited 0 having
