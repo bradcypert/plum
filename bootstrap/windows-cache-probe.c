@@ -109,15 +109,14 @@ int main(int argc, char **argv) {
         CloseHandle(file); plum_win_sha_close(&provider);
         if (!equal) { fprintf(stderr,"Windows SHA providers disagree\n"); return 2; }
     }
-    int repeat=0;
+    int repeat=0, inject_hash=0, inject_wait=0;
     for (int i=2;i<argc;i++) {
         if (!strcmp(argv[i],"--repeat")) repeat=1;
-        else if (!strcmp(argv[i],"--slow-hash")) slow_hash=1;
-        else if (!strcmp(argv[i],"--wait-timeout")) wait_timeout=1;
+        else if (!strcmp(argv[i],"--slow-hash")) inject_hash=1;
+        else if (!strcmp(argv[i],"--wait-timeout")) inject_wait=1;
         else return 2;
     }
-    DWORD handles_before=0, handles_after=0;
-    if (!GetProcessHandleCount(GetCurrentProcess(),&handles_before)) return 2;
+    slow_hash=inject_hash; wait_timeout=inject_wait;
     char first[160];
     snprintf(first,sizeof(first),"%s",plum_cache_windows_fingerprint(argv[1]));
     if (!probe_child_reaped()) return 2;
@@ -125,11 +124,15 @@ int main(int argc, char **argv) {
         fprintf(stderr,"injected clock path was not reached\n"); return 2;
     }
     if (repeat) {
+        // Warm once before counting: Windows initializes process-wide
+        // debugger/crypto resources on the first probe. Repeated successful
+        // and timed-out probes must not keep growing the handle count.
         DWORD before=0, after=0;
         if (!GetProcessHandleCount(GetCurrentProcess(),&before)) return 2;
         for (int i=0;i<5;i++) {
+            slow_hash=inject_hash; wait_timeout=inject_wait;
             const char *next=plum_cache_windows_fingerprint(argv[1]);
-            if (!probe_child_reaped()) return 2;
+            if (!probe_child_reaped() || slow_hash || wait_timeout) return 2;
             if (strcmp(first,next)!=0) {
                 fprintf(stderr,"loader fingerprint was not stable: %s -> %s\n",first,next); return 2;
             }
@@ -137,9 +140,6 @@ int main(int argc, char **argv) {
         if (!GetProcessHandleCount(GetCurrentProcess(),&after) || after>before+2) {
             fprintf(stderr,"loader probe leaked handles: %lu -> %lu\n",before,after); return 2;
         }
-    }
-    if (!GetProcessHandleCount(GetCurrentProcess(),&handles_after) || handles_after>handles_before+2) {
-        fprintf(stderr,"loader probe leaked handles: %lu -> %lu\n",handles_before,handles_after); return 2;
     }
     puts(first);
     return first[0]=='!' ? 1 : 0;

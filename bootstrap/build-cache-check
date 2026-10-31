@@ -131,9 +131,9 @@ with tempfile.TemporaryDirectory(prefix="plum-cache-check-") as tmp:
             return value
 
         first = fingerprint(repeat=True)
-        require(fingerprint(mode="--slow-hash") == first,
+        require(fingerprint(repeat=True, mode="--slow-hash") == first,
                 "time spent hashing suspended loader images exhausted the execution budget")
-        timeout = fingerprint(ok=False, mode="--wait-timeout")
+        timeout = fingerprint(ok=False, repeat=True, mode="--wait-timeout")
         require("execution timed out" in timeout, "unresponsive loader did not exhaust its execution budget")
         def replace_overlay(file):
             stamp = file.stat()

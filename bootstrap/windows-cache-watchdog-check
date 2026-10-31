@@ -27,10 +27,10 @@ clang -O1 -g -Wall -Wextra -Werror bootstrap/windows-cache-probe.c -o "$work/pro
 # does with -dumpmachine. Hash every actual loaded image in all probes.
 "$bin/clang.exe" -dumpmachine
 baseline="$("$work/probe.exe" "$bin/clang.exe" --repeat)"
-slow="$("$work/probe.exe" "$bin/clang.exe" --slow-hash)"
+slow="$("$work/probe.exe" "$bin/clang.exe" --slow-hash --repeat)"
 [ "$baseline" = "$slow" ]
 set +e
-"$work/probe.exe" "$bin/clang.exe" --wait-timeout > "$work/timeout.out"
+"$work/probe.exe" "$bin/clang.exe" --wait-timeout --repeat > "$work/timeout.out"
 status=$?
 set -e
 [ "$status" -eq 1 ]
