@@ -542,6 +542,16 @@ jobs:
           clang -O1 -g -Wall -Wextra -Werror bootstrap/copy-tree-test.c -o copy-tree-test.exe
           ./copy-tree-test.exe
 
+      - name: UTF-8 filesystem paths reject invalid encoding and release scratch
+        run: |
+          clang -O1 -g -Wall -Wextra -Werror -pthread bootstrap/windows-path-test.c -o windows-path-test.exe
+          ./windows-path-test.exe
+
+      - name: process captures preserve Unicode temporary paths
+        run: |
+          clang -O1 -g -Wall -Wextra -Werror bootstrap/windows-process-test.c native_stdlib/os_shim.c -lshell32 -o windows-process-test.exe
+          ./windows-process-test.exe
+
       - name: seed -> compiler
         run: |
           ./bootstrap/from-seed -o sh.seed
