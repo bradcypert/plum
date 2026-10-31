@@ -306,6 +306,7 @@ echo "$out" | grep -q "$live/main.plum\",\"diagnostics\":\[\]" || { echo "FAIL: 
 echo "$out" | grep -q "$multi/other.plum\",\"diagnostics\":\[{" || { echo "FAIL: a cross-file error was not attributed to the file it is in"; fail=1; }
 echo "$out" | grep -q "$multi/main.plum\",\"diagnostics\":\[\]" || { echo "FAIL: the edited file should have no diagnostics of its own"; fail=1; }
 
+"$PY_BIN" bootstrap/lsp-lifecycle-test.py "$plum" || fail=1
 "$PY_BIN" bootstrap/lsp-format-test.py "$plum" || fail=1
 "$PY_BIN" bootstrap/lsp-snapshot-test.py "$plum" || fail=1
 "$PY_BIN" bootstrap/lsp-source-position-test.py "$plum" || fail=1

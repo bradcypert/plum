@@ -63,7 +63,7 @@ def check(compiler):
                 broken = text.replace("    value", "    missing")
                 before = len(client.notifications)
                 client.notify("didChange", path, broken)
-                client.request("initialize")  # Drain the diagnostic notification.
+                client.request("textDocument/formatting")  # Drain the diagnostic notification.
                 diagnostics = [m["params"]["diagnostics"] for m in client.notifications[before:]
                                if m.get("method") == "textDocument/publishDiagnostics"]
                 assert diagnostics and diagnostics[-1], (endings, diagnostics)
