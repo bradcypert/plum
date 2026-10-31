@@ -497,6 +497,11 @@ const char *plum_cache_windows_fingerprint(const char *tool) {
             if (GetLastError()==ERROR_SEM_TIMEOUT) continue;
             failed=1; break;
         }
+        // Windows suspends the target until ContinueDebugEvent. Hashing
+        // DLLs here can take longer than the execution budget on a cold
+        // disk; that is debugger work, not a hung compiler. Keep the full
+        // execution watchdog while excluding time spent handling stops.
+        ULONGLONG stopped_at=GetTickCount64();
         DWORD action=DBG_CONTINUE;
         switch (event.dwDebugEventCode) {
         case CREATE_PROCESS_DEBUG_EVENT: {
@@ -521,8 +526,10 @@ const char *plum_cache_windows_fingerprint(const char *tool) {
         case RIP_EVENT: failed=1; break;
         default: break;
         }
+        deadline += GetTickCount64()-stopped_at;
         if (!ContinueDebugEvent(event.dwProcessId,event.dwThreadId,action)) failed=1;
     }
+    int timed_out=!exited && !failed && GetTickCount64()>=deadline;
     if (!exited) {
         TerminateProcess(process.hProcess,1);
         // Drain exit events so Windows releases debugger-owned thread/process
@@ -554,6 +561,8 @@ const char *plum_cache_windows_fingerprint(const char *tool) {
             plum_cache_update(&total,(const unsigned char *)images[i].digest,64);
         }
         plum_cache_final(&total,result);
+    } else if (timed_out) {
+        strcpy(result,"!Windows loader probe execution timed out");
     } else if (!failed) {
         snprintf(result,sizeof(result),"!loader probe incomplete (exit=%lu, LLVM=%d, images=%lu)",
                  (unsigned long)exit_code,llvm,(unsigned long)count);

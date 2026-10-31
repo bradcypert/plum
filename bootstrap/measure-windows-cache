@@ -130,6 +130,7 @@ with tempfile.TemporaryDirectory(prefix='plum-win-measure-') as tmp:
         row = {'seconds': seconds, 'sampled_tree_working_set_bytes': peak or None,
                'phases_seconds': phases, 'object_hits': stderr.count('cache: object hit '),
                'object_misses': stderr.count('cache: object miss '),
+               'cache_bypasses': [line for line in stderr.splitlines() if line.startswith('cache: objects bypass')],
                'cache_bytes': sum(f.stat().st_size for f in (work / 'cache').rglob('*') if f.is_file())}
         report['results'].setdefault(label, []).append(row)
         print(label, json.dumps(row), flush=True)

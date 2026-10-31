@@ -1,7 +1,55 @@
 // Exercise the actual Windows loader adapter independently of Plum/cache keys.
 #include <stdio.h>
+#if defined(_WIN64)
+#include <windows.h>
+#include <stdlib.h>
+// Advance a virtual clock without slowing CI: an image hash may consume
+// more than the execution budget while the child is stopped. A wait timeout
+// must still exhaust that same budget and clean up the child.
+static HANDLE observed_child;
+static BOOL WINAPI probe_create(LPCWSTR app, LPWSTR command, LPSECURITY_ATTRIBUTES process_security,
+    LPSECURITY_ATTRIBUTES thread_security, BOOL inherit, DWORD flags, LPVOID env,
+    LPCWSTR cwd, LPSTARTUPINFOW startup, LPPROCESS_INFORMATION process) {
+    BOOL ok=CreateProcessW(app,command,process_security,thread_security,inherit,flags,env,cwd,startup,process);
+    if (ok && !DuplicateHandle(GetCurrentProcess(),process->hProcess,GetCurrentProcess(),
+                               &observed_child,SYNCHRONIZE,FALSE,0)) abort();
+    return ok;
+}
+static int probe_child_reaped(void) {
+    if (!observed_child) return 1;
+    int done=WaitForSingleObject(observed_child,2000)==WAIT_OBJECT_0;
+    CloseHandle(observed_child); observed_child=NULL;
+    if (!done) fprintf(stderr,"loader probe left a running child\n");
+    return done;
+}
+static ULONGLONG clock_offset;
+static int slow_hash, wait_timeout;
+static ULONGLONG WINAPI probe_tick(void) { return GetTickCount64()+clock_offset; }
+static BOOL WINAPI probe_read(HANDLE file, LPVOID data, DWORD size, LPDWORD got, LPOVERLAPPED overlap) {
+    BOOL ok=ReadFile(file,data,size,got,overlap);
+    if (slow_hash && size==32768) { clock_offset+=11000; slow_hash=0; }
+    return ok;
+}
+static BOOL WINAPI probe_wait(LPDEBUG_EVENT event, DWORD timeout) {
+    if (wait_timeout) {
+        wait_timeout=0; clock_offset+=11000;
+        SetLastError(ERROR_SEM_TIMEOUT); return FALSE;
+    }
+    return WaitForDebugEvent(event,timeout);
+}
+#define CreateProcessW probe_create
+#define GetTickCount64 probe_tick
+#define ReadFile probe_read
+#define WaitForDebugEvent probe_wait
+#endif
 #define PLUM_WIN_IMAGE_TRACE(path, digest) fprintf(stderr,"loader image: %ls %s\n",path,digest)
 #include "../native_stdlib/os_shim.c"
+#if defined(_WIN64)
+#undef CreateProcessW
+#undef GetTickCount64
+#undef ReadFile
+#undef WaitForDebugEvent
+#endif
 
 #if defined(_WIN64)
 #define PROBE_TEMP_THREADS 8
@@ -61,13 +109,27 @@ int main(int argc, char **argv) {
         CloseHandle(file); plum_win_sha_close(&provider);
         if (!equal) { fprintf(stderr,"Windows SHA providers disagree\n"); return 2; }
     }
+    int repeat=0;
+    for (int i=2;i<argc;i++) {
+        if (!strcmp(argv[i],"--repeat")) repeat=1;
+        else if (!strcmp(argv[i],"--slow-hash")) slow_hash=1;
+        else if (!strcmp(argv[i],"--wait-timeout")) wait_timeout=1;
+        else return 2;
+    }
+    DWORD handles_before=0, handles_after=0;
+    if (!GetProcessHandleCount(GetCurrentProcess(),&handles_before)) return 2;
     char first[160];
     snprintf(first,sizeof(first),"%s",plum_cache_windows_fingerprint(argv[1]));
-    if (argc>2) {
+    if (!probe_child_reaped()) return 2;
+    if (slow_hash || wait_timeout) {
+        fprintf(stderr,"injected clock path was not reached\n"); return 2;
+    }
+    if (repeat) {
         DWORD before=0, after=0;
         if (!GetProcessHandleCount(GetCurrentProcess(),&before)) return 2;
         for (int i=0;i<5;i++) {
             const char *next=plum_cache_windows_fingerprint(argv[1]);
+            if (!probe_child_reaped()) return 2;
             if (strcmp(first,next)!=0) {
                 fprintf(stderr,"loader fingerprint was not stable: %s -> %s\n",first,next); return 2;
             }
@@ -75,6 +137,9 @@ int main(int argc, char **argv) {
         if (!GetProcessHandleCount(GetCurrentProcess(),&after) || after>before+2) {
             fprintf(stderr,"loader probe leaked handles: %lu -> %lu\n",before,after); return 2;
         }
+    }
+    if (!GetProcessHandleCount(GetCurrentProcess(),&handles_after) || handles_after>handles_before+2) {
+        fprintf(stderr,"loader probe leaked handles: %lu -> %lu\n",handles_before,handles_after); return 2;
     }
     puts(first);
     return first[0]=='!' ? 1 : 0;

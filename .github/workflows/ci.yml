@@ -542,6 +542,9 @@ jobs:
           clang -O1 -g -Wall -Wextra -Werror bootstrap/copy-tree-test.c -o copy-tree-test.exe
           ./copy-tree-test.exe
 
+      - name: loader watchdog distinguishes suspended hashing from stalled execution
+        run: ./bootstrap/windows-cache-watchdog-check
+
       - name: system paths preserve thread-local lifetime without heap scratch
         run: |
           clang -O1 -g -Wall -Wextra -Werror -pthread bootstrap/os-path-test.c -o os-path-test.exe
