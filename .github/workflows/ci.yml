@@ -604,13 +604,18 @@ jobs:
           compression-level: 0
           retention-days: 7
 
-  # These suites already took about 18 + 10 minutes on main. Give each
-  # its own budget and timing output; neither suite's coverage is reduced.
+  # Native builds make the growing execution corpus exceed one 30-minute
+  # Windows job. Divide fixtures evenly; every shard keeps the smaller
+  # support probes. The aggregate gate requires both shards to pass.
   windows-smoke:
-    name: Windows platform smoke
+    name: Windows platform smoke (${{ matrix.shard }}/2)
     needs: windows-build
     runs-on: windows-latest
     timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2]
     defaults:
       run:
         shell: msys2 {0}
@@ -637,7 +642,7 @@ jobs:
       - name: real programs work on Windows
         env:
           PLUM_CI_TIMINGS: "1"
-        run: ./bootstrap/platform-smoke ./sh.real
+        run: ./bootstrap/platform-smoke ./sh.real --shard ${{ matrix.shard }}/2
 
   windows-cache:
     name: Windows build cache validation
