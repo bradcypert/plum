@@ -34,5 +34,5 @@ set +e
 status=$?
 set -e
 [ "$status" -eq 1 ]
-grep -q '^!Windows loader probe execution timed out$' "$work/timeout.out"
+tr -d '\r' < "$work/timeout.out" | grep -q '^!Windows loader probe execution timed out$'
 echo 'Windows loader watchdog: slow suspended hashing preserves identity; stalled execution fails closed'
