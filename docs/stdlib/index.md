@@ -149,6 +149,8 @@ Every declaration, linked to the page that documents it.
 - [`let extension (p: String): String`](Path.md#extension)
 - [`let stem_in (windows: Bool) (p: String): String`](Path.md#stem_in)
 - [`let stem (p: String): String`](Path.md#stem)
+- [`let try_with_extension_in (windows: Bool) (p: String) (ext: String): Result[String, String]`](Path.md#try_with_extension_in)
+- [`let try_with_extension (p: String) (ext: String): Result[String, String]`](Path.md#try_with_extension)
 - [`let with_extension_in (windows: Bool) (p: String) (ext: String): String`](Path.md#with_extension_in)
 - [`let with_extension (p: String) (ext: String): String`](Path.md#with_extension)
 

@@ -1,0 +1,7 @@
+use Path;
+
+let main (): Unit = {
+    println("before");
+    println(Path.with_extension_in(true, "C:/project/file.txt", "txt:stream"));
+    println("unreachable")
+}

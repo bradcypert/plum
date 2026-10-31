@@ -18,6 +18,7 @@ let main (): Unit = {
         assert_eq(Path.join_in(windows, dir, leaf), dir.concat(sep).concat(leaf));
         assert_eq(Path.extension_in(windows, path).as_bytes().to_hex(), "6578742dfe");
         assert_eq(Path.stem_in(windows, path).as_bytes().to_hex(), "6c6561662dfc");
+        assert_eq(Path.try_with_extension_in(windows, path, Path.extension_in(windows, path)), Ok(Path.clean_in(windows, path)));
         assert_eq(Path.with_extension_in(windows, path, "ll"), dir.concat(sep).concat(Path.stem_in(windows, path)).concat(".ll"));
     };
     // Lexical slices preserve their explicit length, even across a NUL.

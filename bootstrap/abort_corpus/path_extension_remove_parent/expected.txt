@@ -1,0 +1,2 @@
+before
+extension removal would produce a parent or current directory

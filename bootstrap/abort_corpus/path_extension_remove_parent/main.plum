@@ -1,0 +1,7 @@
+use Path;
+
+let main (): Unit = {
+    println("before");
+    println(Path.with_extension("project/...", ""));
+    println("unreachable")
+}

@@ -75,6 +75,18 @@ let main (): Unit = {
     t("with_extension /a/x.plum ll", Path.with_extension("/a/x.plum", "ll"));
     t("with_extension x.plum ''", Path.with_extension("x.plum", ""));
 
+    // Checked callers can reject untrusted extensions and keep using the
+    // original path after errors. Repeat both outcomes to exercise ownership.
+    for windows in [false, true] {
+        let path = "project/名.txt";
+        let expected = "project".concat(Path.separator_in(windows)).concat("名.tar.gz");
+        for i in 0..1000 {
+            assert_eq(Path.try_with_extension_in(windows, path, "../../../outside"), Err("invalid path extension"));
+            assert_eq(Path.try_with_extension_in(windows, path, "tar.gz"), Ok(expected));
+            assert_eq(path, "project/名.txt");
+        };
+    };
+
     // --- is_absolute ---
     println("abs /tmp: ".concat(Path.is_absolute("/tmp").to_string()));
     println("abs a/b: ".concat(Path.is_absolute("a/b").to_string()));
