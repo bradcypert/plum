@@ -453,8 +453,8 @@ const char *plum_cache_windows_fingerprint(const char *tool) {
     static PLUM_OS_TLS char result[160];
     strcpy(result,"!unsupported Windows toolchain");
 #if defined(_WIN64)
-    // Keep the certified adapter conservative: incoming runtime argv is
-    // still narrow, so non-ASCII tool spellings are not yet certified.
+    // Keep the certified adapter conservative: Unicode toolchain identities
+    // and case folding remain outside its tested configurations.
     size_t len=strlen(tool);
     if (!len || len>PLUM_PATH_MAX-32) return result;
     for (size_t i=0;i<len;i++) if ((unsigned char)tool[i]>=128 || tool[i]=='"') return result;

@@ -24,6 +24,11 @@ pub struct ShimFile { pub name: String, pub source: String, pub compile: Bool }
 
 pub let shim_files (): Array[ShimFile] = [
     ShimFile {
+        name: "argv_shim.c",
+        source: @embed_file("../../../native_stdlib/argv_shim.c"),
+        compile: true,
+    },
+    ShimFile {
         name: "compat_shim.c",
         source: @embed_file("../../../native_stdlib/compat_shim.c"),
         compile: true,

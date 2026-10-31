@@ -300,9 +300,8 @@ fail rather than selecting a different filename through the ANSI code page.
 The tree adapter follows this same rule, with no native-code-page fallback.
 POSIX filenames and relative-path slicing still preserve bytes.
 
-The runtime's incoming Windows `argv` remains narrow and can contain ANSI
-code-page bytes. This boundary needs its own Unicode normalization work;
-passing such bytes to a filesystem operation now fails when they are invalid
-UTF-8. This change does not promise general Unicode command-line support or
-extend existing path-length limits. See [the filesystem boundary](windows-paths.md)
-for ownership and memory costs.
+Incoming Windows arguments are parsed from the UTF-16 command line and
+converted to UTF-8 before becoming Plum strings, so CLI paths follow this
+same rule. POSIX arguments retain their original filename bytes. Existing
+path-length limits remain. See [the filesystem boundary](windows-paths.md)
+for argument/context ownership and memory costs.

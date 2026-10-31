@@ -49,13 +49,29 @@ between operations, including repeated work before process exit. The tests
 also assert no per-entry allocation. These are lifetime guarantees, not a
 claim about total process RSS or compiler peak memory.
 
+## Incoming command-line arguments
+
+Windows `args()` parses `GetCommandLineW()` with `CommandLineToArgvW` and
+strictly converts the returned arguments to UTF-8. Its native context owns
+the UTF-16 vector only for that `args()` call. Each temporary UTF-8 argument
+is freed immediately after copying into its Plum string; the vector/context
+are released before returning the array. Peak extra storage is O(total
+command-line UTF-16 storage + one UTF-8 argument), independent of call count.
+The returned array/strings retain their usual managed ownership.
+
+The Windows parser is resolved from the system Shell32 module; that module
+reference is released after parsing. This adds transient Windows loader work
+and can affect sampled working sets; it does not establish lower process
+RSS. There is no retained argument cache or extra linked library requirement.
+Malformed UTF-16 or native allocation failure reports a clear fatal error,
+because `args()` has no `Result` return. Native scratch is released on these
+shim failure paths too. POSIX uses its existing borrowed argv bytes without
+new native allocations, including non-UTF-8 filenames.
+
 ## Remaining boundaries
 
-The runtime still receives narrow Windows `argv`. Unicode command-line
-arguments need a separate UTF-16-to-UTF-8 entry-point change; invalid UTF-8
-from that source now fails consistently at filesystem boundaries. The
-native-object cache's conservative non-ASCII tool certification bypass
-also remains in place. This change does not expand long-path support.
+The native-object cache's conservative non-ASCII tool certification bypass
+remains in place. This change does not expand long-path support.
 
 Embedded NUL validation remains #136 (#142 is its duplicate). Native path
 parameters are already NUL-terminated, so conversion cannot recover a suffix

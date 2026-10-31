@@ -1,0 +1,22 @@
+use Os;
+use Process;
+
+let expected (): Array[String] = ["--child", "\u{fc}", "\u{65e5}\u{1f30d}", "", "a b", "a\"b", "end\\"]
+let main (): Unit = {
+    let actual = args();
+    if actual.len() > 0 {
+        assert_eq(actual, expected());
+        println("child arguments: ok")
+    } else {
+        let self = Result.unwrap_or_else(Os.self_exe(), |e| { panic_raw(e); "" });
+        let result = Process.run(Process.Options { program: self, args: expected(), env: [], stdin: None });
+        match result {
+            Err(e) => panic_raw(e),
+            Ok(r) => {
+                if r.exit_code != 0 { panic_raw(r.stdout.concat(r.stderr)); };
+                assert_eq(r.stdout, "child arguments: ok\n");
+            },
+        };
+        println("Unicode arguments round-trip: ok")
+    }
+}
