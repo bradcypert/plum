@@ -1,0 +1,44 @@
+use Os;
+use Path;
+
+let must[T] (r: Result[T, String]): T = match r {
+    Ok(value) => value,
+    Err(message) => { panic_raw(message); must(r) },
+}
+
+let main (): Unit = {
+    let root = must(Os.temp_dir());
+    let dir = root.concat("/\u{65e5}-\u{1f30d}");
+    let name = "\u{96ea}-\u{e9}.txt";
+    let file = dir.concat("/").concat(name);
+    must(Os.make_dir(dir));
+    must(Os.write_file(file, "one"));
+    assert_eq(must(Os.read_file(file)), "one");
+    must(Os.append_bytes(file, Bytes.from_array([116, 119, 111])));
+    assert_eq(must(Os.read_file(file)), "onetwo");
+    let stream = must(Os.open(file, Mode.Append));
+    assert_eq(must(stream.write(Bytes.from_array([33]))), 1);
+    must(stream.close());
+    assert_eq(must(Os.read_bytes(file)).to_hex(), "6f6e6574776f21");
+    assert_eq(must(Os.stat(file)).size, 7);
+    assert(must(Os.exists(file)));
+    assert(must(Os.is_directory(dir)));
+    assert(Array.contains(must(Os.list_dir(dir)), name));
+    let saved = must(Os.cwd());
+    must(Os.chdir(dir));
+    assert_eq(Path.basename(must(Os.cwd())), "\u{65e5}-\u{1f30d}");
+    assert_eq(must(Os.read_file(name)), "onetwo!");
+    must(Os.chdir(saved));
+    let renamed = dir.concat("/\u{1f30d}.txt");
+    must(Os.write_file(renamed, "old"));
+    must(Os.rename_file(file, renamed));
+    assert_eq(must(Os.read_file(renamed)), "onetwo!");
+    let copied = root.concat("/copy-\u{96ea}");
+    must(Os.make_dir(copied));
+    must(Os.copy_tree(dir, copied));
+    assert_eq(must(Os.read_file(copied.concat("/\u{1f30d}.txt"))), "onetwo!");
+    must(Os.remove_file(renamed));
+    assert(!must(Os.exists(renamed)));
+    must(Os.remove_tree(root));
+    println("Unicode filesystem paths round-trip: ok")
+}

@@ -72,6 +72,7 @@
 #include <stdint.h>
 #include <limits.h>
 #include <wchar.h>
+#include "path_shim.h"
 
 #if defined(_WIN32)
 #include <windows.h>
@@ -85,6 +86,18 @@
 #endif
 
 #define PLUM_PROC_PATH_MAX 4096
+
+// Cleanup must also work when allocation just failed. Stored capture paths
+// are bounded, so decode into stack storage rather than allocating again.
+static int plum_capture_remove(const char *path) {
+#if defined(_WIN32)
+    wchar_t wide[PLUM_PROC_PATH_MAX];
+    if (!MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, path, -1, wide, PLUM_PROC_PATH_MAX)) return -1;
+    return DeleteFileW(wide) ? 0 : -1;
+#else
+    return remove(path);
+#endif
+}
 
 #define PLUM_PROC_ARG_SEP '\t'
 #define PLUM_PROC_MAX_SLOTS 256
@@ -453,36 +466,28 @@ static int plum_win_append_arg(char *buf, size_t cap, size_t *len, const char *a
     return 0;
 }
 
-// `GetTempFileNameA` creates the file, which is what is wanted here --
-// the handle is opened over it immediately afterwards.
+// Keep capture paths in UTF-8 too: the shared whole-file reader and
+// cleanup routines use the same filesystem boundary as public Os APIs.
 static HANDLE plum_win_temp_handle(const char *prefix, char *path_out) {
-    char base[PLUM_PROC_PATH_MAX];
-    SECURITY_ATTRIBUTES sa;
-    DWORD n = GetTempPathA((DWORD)sizeof(base), base);
-    if (n == 0 || n >= sizeof(base)) return INVALID_HANDLE_VALUE;
-    if (GetTempFileNameA(base, prefix, 0, path_out) == 0) return INVALID_HANDLE_VALUE;
-
-    sa.nLength = sizeof(sa);
-    sa.lpSecurityDescriptor = NULL;
-    sa.bInheritHandle = TRUE; // the child must be able to write to it
-    return CreateFileA(path_out, GENERIC_WRITE, FILE_SHARE_READ | FILE_SHARE_WRITE,
-                       &sa, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
-}
-
-// Strict conversion at the OS boundary: never let the active ANSI code
-// page interpret Plum bytes, or replace malformed UTF-8 with other text.
-static wchar_t *plum_win_utf16(const char *text, int max_units) {
-    int n = MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, text, -1, NULL, 0);
-    if (n <= 0 || n > max_units || (size_t)n > SIZE_MAX / sizeof(wchar_t)) return NULL;
-    wchar_t *wide = malloc((size_t)n * sizeof(wchar_t));
-    if (wide == NULL) return NULL;
-    if (MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, text, -1, wide, n) != n) {
-        free(wide);
-        return NULL;
+    wchar_t base[PLUM_PROC_PATH_MAX], path[PLUM_PROC_PATH_MAX];
+    wchar_t wp[4] = {0};
+    for (size_t i = 0; i < 3 && prefix[i]; i++) wp[i] = (unsigned char)prefix[i];
+    DWORD n = GetTempPathW(PLUM_PROC_PATH_MAX, base);
+    if (!n || n >= PLUM_PROC_PATH_MAX || !GetTempFileNameW(base, wp, 0, path))
+        return INVALID_HANDLE_VALUE;
+    if (!plum_path_utf8(path, path_out, PLUM_PROC_PATH_MAX)) {
+        DeleteFileW(path); return INVALID_HANDLE_VALUE;
     }
-    return wide;
+    SECURITY_ATTRIBUTES sa = {sizeof(sa), NULL, TRUE};
+    HANDLE h = CreateFileW(path, GENERIC_WRITE, FILE_SHARE_READ | FILE_SHARE_WRITE,
+                          &sa, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
+    if (h == INVALID_HANDLE_VALUE) { DeleteFileW(path); path_out[0] = 0; }
+    return h;
 }
 
+static wchar_t *plum_win_utf16(const char *text, int max_units) {
+    return plum_path_wide_limit(text, max_units);
+}
 // Quoting only examines ASCII syntax, so it is safe to quote UTF-8
 // before converting. Both spawn paths use this one command-line builder.
 static wchar_t *plum_win_command_line(char **argv) {
@@ -621,7 +626,7 @@ static long long plum_spawn_capture(const char *program, char **argv, char *out_
     ho = plum_win_temp_handle("plo", out_path);
     he = (ho != INVALID_HANDLE_VALUE) ? plum_win_temp_handle("ple", err_path) : INVALID_HANDLE_VALUE;
     if (ho == INVALID_HANDLE_VALUE || he == INVALID_HANDLE_VALUE) {
-        if (ho != INVALID_HANDLE_VALUE) { CloseHandle(ho); DeleteFileA(out_path); }
+        if (ho != INVALID_HANDLE_VALUE) { CloseHandle(ho); plum_capture_remove(out_path); }
         free(cmdline);
         free(env_block);
         return PLUM_SPAWN_FAILED;
@@ -638,7 +643,7 @@ static long long plum_spawn_capture(const char *program, char **argv, char *out_
         sa.nLength = sizeof(sa);
         sa.lpSecurityDescriptor = NULL;
         sa.bInheritHandle = TRUE;
-        hi = CreateFileA("NUL", GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE,
+        hi = CreateFileW(L"NUL", GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE,
                          &sa, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
         hi_owned = 1;
     } else {
@@ -647,7 +652,7 @@ static long long plum_spawn_capture(const char *program, char **argv, char *out_
         SECURITY_ATTRIBUTES sa;
         if (hw == INVALID_HANDLE_VALUE) {
             CloseHandle(ho); CloseHandle(he);
-            DeleteFileA(out_path); DeleteFileA(err_path);
+            plum_capture_remove(out_path); plum_capture_remove(err_path);
             free(cmdline);
             free(env_block);
             return PLUM_SPAWN_FAILED;
@@ -655,7 +660,7 @@ static long long plum_spawn_capture(const char *program, char **argv, char *out_
         if (stdin_len > 0 && stdin_data != NULL) {
             if (!WriteFile(hw, stdin_data, (DWORD)stdin_len, &written, NULL) || written != (DWORD)stdin_len) {
                 CloseHandle(hw); CloseHandle(ho); CloseHandle(he);
-                DeleteFileA(in_path); DeleteFileA(out_path); DeleteFileA(err_path);
+                plum_capture_remove(in_path); plum_capture_remove(out_path); plum_capture_remove(err_path);
                 free(cmdline);
                 free(env_block);
                 return PLUM_SPAWN_FAILED;
@@ -665,15 +670,17 @@ static long long plum_spawn_capture(const char *program, char **argv, char *out_
         sa.nLength = sizeof(sa);
         sa.lpSecurityDescriptor = NULL;
         sa.bInheritHandle = TRUE;
-        hi = CreateFileA(in_path, GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE,
-                         &sa, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
+        wchar_t *wide_in = plum_path_wide(in_path);
+        hi = wide_in ? CreateFileW(wide_in, GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE,
+                                  &sa, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL) : INVALID_HANDLE_VALUE;
+        free(wide_in);
         hi_owned = 1;
     }
     if (hi == INVALID_HANDLE_VALUE) {
         if (hi_owned) { /* already invalid */ }
         CloseHandle(ho); CloseHandle(he);
-        DeleteFileA(out_path); DeleteFileA(err_path);
-        if (in_path[0] != '\0') DeleteFileA(in_path);
+        plum_capture_remove(out_path); plum_capture_remove(err_path);
+        if (in_path[0] != '\0') plum_capture_remove(in_path);
         free(cmdline);
         free(env_block);
         return PLUM_SPAWN_FAILED;
@@ -697,9 +704,9 @@ static long long plum_spawn_capture(const char *program, char **argv, char *out_
         CloseHandle(ho);
         CloseHandle(he);
         if (hi_owned) CloseHandle(hi);
-        DeleteFileA(out_path);
-        DeleteFileA(err_path);
-        if (in_path[0] != '\0') DeleteFileA(in_path);
+        plum_capture_remove(out_path);
+        plum_capture_remove(err_path);
+        if (in_path[0] != '\0') plum_capture_remove(in_path);
         free(cmdline);
         free(env_block);
         return PLUM_SPAWN_FAILED;
@@ -735,7 +742,7 @@ static long long plum_spawn_capture(const char *program, char **argv, char *out_
     CloseHandle(ho);
     CloseHandle(he);
     if (hi_owned) CloseHandle(hi);
-    if (in_path[0] != '\0') DeleteFileA(in_path);
+    if (in_path[0] != '\0') plum_capture_remove(in_path);
     (void)program;
     (void)fail_on_exec;
     return (long long)(int)code;
@@ -782,8 +789,8 @@ long long process_run(const char *program, const char *args_joined, long long ar
     plum_process_slots[slot].exit_code = code;
     plum_process_capture(&plum_process_slots[slot], out_path, err_path);
 
-    remove(out_path);
-    remove(err_path);
+    plum_capture_remove(out_path);
+    plum_capture_remove(err_path);
     free(args_copy);
     free(argv);
     return slot;
@@ -837,8 +844,8 @@ long long process_run_ex(const char *program, const char *args_joined, long long
     plum_process_slots[slot].exit_code = code;
     plum_process_capture(&plum_process_slots[slot], out_path, err_path);
 
-    remove(out_path);
-    remove(err_path);
+    plum_capture_remove(out_path);
+    plum_capture_remove(err_path);
     free(args_copy);
     free(argv);
     free(env_copy);
@@ -939,9 +946,9 @@ static void plum_child_collect(long long handle, long long code, int capture) {
     c->pid = 0;
 #endif
     if (capture) plum_process_capture(slot, c->out_path, c->err_path);
-    if (c->out_path != NULL) remove(c->out_path);
-    if (c->err_path != NULL) remove(c->err_path);
-    if (c->in_path != NULL) remove(c->in_path);
+    if (c->out_path != NULL) plum_capture_remove(c->out_path);
+    if (c->err_path != NULL) plum_capture_remove(c->err_path);
+    if (c->in_path != NULL) plum_capture_remove(c->in_path);
     c->finished = 1;
 }
 
@@ -1006,8 +1013,8 @@ long long process_spawn(const char *program, const char *args_joined, long long 
         // Tracking allocation failed after launch. Reap without reading,
         // then use the stack paths to delete even an untracked capture.
         process_child_free(slot);
-        remove(out_path);
-        remove(err_path);
+        plum_capture_remove(out_path);
+        plum_capture_remove(err_path);
         return -1;
     }
     return slot;

@@ -54,6 +54,7 @@
 #include <pthread.h>
 #include <stdint.h>
 #include <stdio.h>
+#include "path_shim.h"
 #include <stdlib.h>
 #include <string.h>
 #if !defined(_WIN32)
@@ -140,7 +141,7 @@ long long file_open(const char *path, long long mode) {
             pthread_mutex_unlock(&slot->lock);
             continue;
         }
-        FILE *f = fopen(path, m);
+        FILE *f = plum_path_fopen(path, m);
         long long h = -1;
         if (f != NULL) {
             slot->identity = slot->identity == 0 ? i + 1 : slot->identity + PLUM_MAX_FILES;

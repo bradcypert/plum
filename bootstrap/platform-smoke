@@ -245,6 +245,16 @@ fi
 # both spawn paths, and deterministic allocation-failure cleanup.
 case "$(uname -s)" in
     MINGW*|MSYS*|CYGWIN*)
+        if clang -O1 -g -Wall -Wextra -pthread bootstrap/windows-path-test.c \
+                -o "$work/windows-path-test.exe" > "$work/windows-path-test.log" 2>&1 &&
+                "$work/windows-path-test.exe"; then
+            printf 'OK    %-24s\n' "windows_filesystem_unicode"
+            ok=$((ok + 1))
+        else
+            printf 'FAIL  %-24s\n' "windows_filesystem_unicode"
+            cat "$work/windows-path-test.log"
+            fail=$((fail + 1))
+        fi
         if clang -O1 -g -Wall -Wextra bootstrap/windows-process-test.c native_stdlib/os_shim.c -lshell32 \
                 -o "$work/windows-process-test.exe" > "$work/windows-process-test.log" 2>&1 &&
                 "$work/windows-process-test.exe"; then

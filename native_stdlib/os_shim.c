@@ -28,6 +28,7 @@
 // duration, rather than pointing at separately allocated heap memory.
 
 #include <stdio.h>
+#include "path_shim.h"
 #include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
@@ -45,7 +46,7 @@
 #include <winioctl.h>
 #include <direct.h>
 #include <io.h>
-#define PLUM_MKDIR(p) _mkdir(p)
+#define PLUM_MKDIR(p) plum_path_mkdir(p)
 #define PLUM_RMDIR(p) _rmdir(p)
 #else
 #include <unistd.h>
@@ -173,7 +174,7 @@ static int plum_cache_kernel_hash(const char *path, char out[65]) {
     if (bind(parent,(struct sockaddr *)&sa,sizeof(sa)) != 0) { close(parent); return 0; }
     int fd=accept(parent,NULL,NULL); close(parent);
     if (fd < 0) return 0;
-    FILE *f=fopen(path,"rb");
+    FILE *f=plum_path_fopen(path,"rb");
     if (!f) { close(fd); return 0; }
     unsigned char buf[65536], digest[32]; size_t n; int bad=0;
     while ((n=fread(buf,1,sizeof(buf),f)) != 0) {
@@ -202,10 +203,10 @@ const char *plum_cache_hash_file(const char *path) {
     static char out[65];
     unsigned char buf[32768]; size_t n;
     out[0]='\0';
-    struct stat st;
-    if (stat(path,&st) == 0 && S_ISREG(st.st_mode) && st.st_size > 1048576
+    PlumPathStat st;
+    if (plum_path_stat(path,&st) == 0 && S_ISREG(st.st_mode) && st.st_size > 1048576
         && plum_cache_kernel_hash(path,out)) return out;
-    FILE *f=fopen(path,"rb");
+    FILE *f=plum_path_fopen(path,"rb");
     if (!f) return out;
     plum_cache_sha s; plum_cache_init(&s);
     while ((n=fread(buf,1,sizeof(buf),f)) != 0) plum_cache_update(&s,buf,n);
@@ -214,9 +215,8 @@ const char *plum_cache_hash_file(const char *path) {
     return out;
 }
 
-// Saved input paths are byte strings, just like fopen's paths. Windows
-// argv uses the active ANSI code page, and POSIX filenames need not be
-// UTF-8 either. Decode the hex envelope without treating it as Unicode.
+// Decode the manifest envelope without changing its bytes. The native
+// path boundary validates UTF-8 on Windows; POSIX filenames remain bytes.
 static int plum_cache_hex_digit(unsigned char c) {
     if (c >= '0' && c <= '9') return c - '0';
     if (c >= 'a' && c <= 'f') return c - 'a' + 10;
@@ -247,8 +247,8 @@ const char *plum_cache_hash_file_hex(const char *hex) {
 // Verify the bytes actually copied, not a prior read of the source path.
 // A concurrent cleaner can remove an entry at any point; that is a miss.
 long long plum_cache_copy(const char *src, const char *dst, const char *digest) {
-    FILE *in=fopen(src,"rb"); if (!in) return -1;
-    FILE *out=fopen(dst,"wb"); if (!out) { fclose(in); return -1; }
+    FILE *in=plum_path_fopen(src,"rb"); if (!in) return -1;
+    FILE *out=plum_path_fopen(dst,"wb"); if (!out) { fclose(in); return -1; }
     unsigned char buf[32768]; size_t n; int bad=0; char got[65];
     plum_cache_sha s; plum_cache_init(&s);
     while ((n=fread(buf,1,sizeof(buf),in)) != 0) {
@@ -260,7 +260,7 @@ long long plum_cache_copy(const char *src, const char *dst, const char *digest) 
     if (fclose(out) != 0) bad=1;
     plum_cache_final(&s,got);
     if (digest[0] && strcmp(got,digest) != 0) bad=1;
-    if (bad) remove(dst);
+    if (bad) plum_path_remove(dst);
     return bad ? -1 : 0;
 }
 
@@ -277,8 +277,8 @@ static void plum_win_temp_dir(const char *root, const char *prefix) {
         int n=snprintf(plum_os_buf,sizeof(plum_os_buf),"%s%s%s%lu-%llu-%lu",root,separator,prefix,
                        (unsigned long)GetCurrentProcessId(),(unsigned long long)GetTickCount64(),next);
         if (n<0 || n>=(int)sizeof(plum_os_buf)) break;
-        if (CreateDirectoryA(plum_os_buf,NULL)) return;
-        if (GetLastError()!=ERROR_ALREADY_EXISTS) break;
+        if (plum_path_mkdir(plum_os_buf) == 0) return;
+        if (errno != EEXIST) break;
     }
     plum_os_buf[0]='\0';
 }
@@ -294,7 +294,7 @@ const char *plum_cache_temp(const char *root) {
     if (plum_os_buf[0]) {
         char owner[PLUM_PATH_MAX];
         if (snprintf(owner,sizeof(owner),"%s/.owner",plum_os_buf) < (int)sizeof(owner)) {
-            FILE *f=fopen(owner,"w");
+            FILE *f=plum_path_fopen(owner,"w");
             if (f) {
 #if defined(_WIN32)
                 fprintf(f,"%lu",(unsigned long)GetCurrentProcessId());
@@ -448,13 +448,13 @@ const char *plum_cache_windows_fingerprint(const char *tool) {
     static PLUM_OS_TLS char result[160];
     strcpy(result,"!unsupported Windows toolchain");
 #if defined(_WIN64)
-    // The process ABI currently uses ANSI paths. Until that ABI is UTF-8
-    // end-to-end, do not certify ambiguous non-ASCII executable spellings.
+    // Keep the certified adapter conservative: incoming runtime argv is
+    // still narrow, so non-ASCII tool spellings are not yet certified.
     size_t len=strlen(tool);
     if (!len || len>PLUM_PATH_MAX-32) return result;
     for (size_t i=0;i<len;i++) if ((unsigned char)tool[i]>=128 || tool[i]=='"') return result;
     wchar_t exe[PLUM_PATH_MAX], bin[PLUM_PATH_MAX]={0}, system[PLUM_PATH_MAX];
-    if (!MultiByteToWideChar(CP_ACP,0,tool,-1,exe,PLUM_PATH_MAX)) return result;
+    if (!MultiByteToWideChar(CP_UTF8,MB_ERR_INVALID_CHARS,tool,-1,exe,PLUM_PATH_MAX)) return result;
     HANDLE original=CreateFileW(exe,GENERIC_READ,FILE_SHARE_READ|FILE_SHARE_DELETE,NULL,OPEN_EXISTING,0,NULL);
     if (original==INVALID_HANDLE_VALUE) return result;
     BY_HANDLE_FILE_INFORMATION identity;
@@ -563,8 +563,11 @@ const char *plum_cache_windows_fingerprint(const char *tool) {
 const char *plum_cache_tool(const char *name) {
     plum_os_buf[0]='\0';
 #if defined(_WIN32)
-    DWORD n=SearchPathA(NULL,name,".exe",sizeof(plum_os_buf),plum_os_buf,NULL);
-    if (n == 0 || n >= sizeof(plum_os_buf)) plum_os_buf[0]='\0';
+    wchar_t *input = plum_path_wide(name), wide[PLUM_PATH_MAX];
+    if (!input) return plum_os_buf;
+    DWORD n = SearchPathW(NULL, input, L".exe", PLUM_PATH_MAX, wide, NULL);
+    free(input);
+    if (n == 0 || n >= PLUM_PATH_MAX || !plum_path_utf8(wide, plum_os_buf, sizeof(plum_os_buf))) plum_os_buf[0] = 0;
 #else
     if (strchr(name,'/')) {
         if (!realpath(name,plum_os_buf)) plum_os_buf[0]='\0';
@@ -682,9 +685,11 @@ long long plum_cache_safe_c_ir(const char *ir) {
 // `net_shim.c`'s `tcp_recv` note, the same trade for the same reason).
 const char *os_temp_dir(void) {
 #if defined(_WIN32)
-    char base[PLUM_PATH_MAX];
-    DWORD n = GetTempPathA((DWORD)sizeof(base), base);
-    if (n == 0 || n >= sizeof(base)) { plum_os_buf[0] = '\0'; return plum_os_buf; }
+    wchar_t wide[PLUM_PATH_MAX]; char base[PLUM_PATH_MAX];
+    DWORD n = GetTempPathW(PLUM_PATH_MAX, wide);
+    if (n == 0 || n >= PLUM_PATH_MAX || !plum_path_utf8(wide, base, sizeof(base))) {
+        plum_os_buf[0] = 0; return plum_os_buf;
+    }
     plum_win_temp_dir(base,"plum-");
     return plum_os_buf;
 #else
@@ -704,8 +709,9 @@ const char *os_temp_dir(void) {
 const char *os_self_exe(void) {
     plum_os_buf[0] = '\0';
 #if defined(_WIN32)
-    DWORD n = GetModuleFileNameA(NULL, plum_os_buf, (DWORD)sizeof(plum_os_buf));
-    if (n == 0 || n >= sizeof(plum_os_buf)) plum_os_buf[0] = '\0';
+    wchar_t wide[PLUM_PATH_MAX];
+    DWORD n = GetModuleFileNameW(NULL, wide, PLUM_PATH_MAX);
+    if (n == 0 || n >= PLUM_PATH_MAX || !plum_path_utf8(wide, plum_os_buf, sizeof(plum_os_buf))) plum_os_buf[0] = 0;
 #elif defined(__APPLE__)
     uint32_t n = (uint32_t)sizeof(plum_os_buf);
     if (_NSGetExecutablePath(plum_os_buf, &n) != 0) plum_os_buf[0] = '\0';
@@ -727,7 +733,7 @@ long long os_make_dir(const char *path) {
 }
 
 long long os_remove_file(const char *path) {
-    return remove(path) == 0 ? 0 : -1;
+    return plum_path_remove(path) == 0 ? 0 : -1;
 }
 
 // `rename`, which is ATOMIC within a filesystem: the destination is
@@ -743,15 +749,10 @@ long long os_rename_file(const char *from, const char *to) {
 #if defined(_WIN32)
     // The CRT rename refuses an existing destination. Do not enable
     // MOVEFILE_COPY_ALLOWED: cross-volume copy/delete is not replacement.
-    int nf = MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, from, -1, NULL, 0);
-    int nt = MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, to, -1, NULL, 0);
-    if (nf <= 0 || nt <= 0) return -1;
-    wchar_t *wf = malloc((size_t)nf * sizeof(wchar_t));
-    wchar_t *wt = malloc((size_t)nt * sizeof(wchar_t));
-    if (wf == NULL || wt == NULL) { free(wf); free(wt); return -1; }
-    int ok = MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, from, -1, wf, nf) &&
-             MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, to, -1, wt, nt) &&
-             MoveFileExW(wf, wt, MOVEFILE_REPLACE_EXISTING);
+    wchar_t *wf = plum_path_wide(from);
+    if (!wf) return -1;
+    wchar_t *wt = plum_path_wide(to);
+    int ok = wt && MoveFileExW(wf, wt, MOVEFILE_REPLACE_EXISTING);
     free(wf);
     free(wt);
     return ok ? 0 : -1;
@@ -973,12 +974,9 @@ static int plum_remove_tree(const char *path) {
     HMODULE ntdll = GetModuleHandleW(L"ntdll.dll");
     PlumRemoveOpen open_child = ntdll ? (PlumRemoveOpen)(void *)GetProcAddress(ntdll, "NtCreateFile") : NULL;
     if (open_child == NULL) return -1;
-    int n = MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, path, -1, NULL, 0);
-    if (n <= 1) return -1;
-    WCHAR *wide = (WCHAR *)malloc((size_t)n * sizeof(WCHAR));
-    if (wide == NULL) return -1;
-    if (!MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, path, -1, wide, n)) { free(wide); return -1; }
-    --n;
+    WCHAR *wide = plum_path_wide(path);
+    if (!wide) return -1;
+    int n = (int)wcslen(wide);
     while (n > 0 && (wide[n - 1] == L'/' || wide[n - 1] == L'\\')) wide[--n] = 0;
     WCHAR *name = wide + n;
     while (name > wide && name[-1] != L'/' && name[-1] != L'\\') --name;
@@ -1065,15 +1063,9 @@ static HANDLE plum_tree_win_child(HANDLE parent, const WCHAR *name, DWORD bytes,
     if (rc < 0) plum_tree_nt_error("open path component", rc);
     return rc < 0 ? INVALID_HANDLE_VALUE : h;
 }
-// Enumeration and link targets use UTF-8. Existing Windows CLI arguments
-// can also carry native ACP bytes (the runtime still exposes narrow argv).
-// Preserve that established filename-byte contract at the adapter boundary
-// when strict UTF-8 decoding fails; never use replacement-character decoding.
+// Roots, enumeration and link targets all use strict UTF-8.
 static int plum_tree_win_path(const char *path, WCHAR *wide, int capacity) {
-    int count = MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, path, -1, wide, capacity);
-    if (!count && GetLastError() == ERROR_NO_UNICODE_TRANSLATION)
-        count = MultiByteToWideChar(CP_ACP, MB_ERR_INVALID_CHARS, path, -1, wide, capacity);
-    return count;
+    return MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, path, -1, wide, capacity);
 }
 static HANDLE plum_copy_root(const char *path) {
     if (!*path) { plum_tree_error("empty root path"); return INVALID_HANDLE_VALUE; }
@@ -2299,8 +2291,8 @@ static PLUM_OS_TLS long long stat_is_dir = 0;
 // 0 on success, -1 if the path cannot be stat'ed at all (most commonly
 // because it is not there). Follows symlinks, matching `path_is_dir`.
 long long os_stat_load(const char *path) {
-    struct stat st;
-    if (stat(path, &st) != 0) {
+    PlumPathStat st;
+    if (plum_path_stat(path, &st) != 0) {
         stat_size = 0;
         stat_mtime = 0;
         stat_is_dir = 0;
@@ -2321,34 +2313,34 @@ long long os_stat_is_dir(void) { return stat_is_dir; }
 // Cache roots must be private to this host/user (not a shared network store).
 typedef struct { char *path; uint64_t bytes; time_t age; } plum_cache_entry;
 
-static int plum_cache_stat_private(const char *path, struct stat *st) {
+static int plum_cache_stat_private(const char *path, PlumPathStat *st) {
 #if defined(_WIN32)
-    DWORD attrs=GetFileAttributesA(path);
+    DWORD attrs=plum_path_attributes(path);
     if (attrs == INVALID_FILE_ATTRIBUTES || (attrs & FILE_ATTRIBUTE_REPARSE_POINT)) return -1;
-    return stat(path,st);
+    return plum_path_stat(path,st);
 #else
     return lstat(path,st);
 #endif
 }
 
 static uint64_t plum_cache_tree_bytes(const char *path) {
-    struct stat st;
+    PlumPathStat st;
     if (plum_cache_stat_private(path,&st) != 0) return 0;
     if (S_ISREG(st.st_mode)) return st.st_size > 0 ? (uint64_t)st.st_size : 0;
     if (!S_ISDIR(st.st_mode)) return 0;
-    DIR *d=opendir(path); if (!d) return 0;
-    uint64_t bytes=0; struct dirent *e; char child[PLUM_PATH_MAX];
-    while ((e=readdir(d)) != NULL) {
-        if (!strcmp(e->d_name,".") || !strcmp(e->d_name,"..")) continue;
-        if (plum_join(child,sizeof(child),path,e->d_name) == 0) bytes+=plum_cache_tree_bytes(child);
+    PlumPathDir *d=plum_path_opendir(path); if (!d) return 0;
+    uint64_t bytes=0; const char *e; char child[PLUM_PATH_MAX];
+    while ((e=plum_path_readdir(d)) != NULL) {
+        if (!strcmp(e,".") || !strcmp(e,"..")) continue;
+        if (plum_join(child,sizeof(child),path,e) == 0) bytes+=plum_cache_tree_bytes(child);
     }
-    closedir(d); return bytes;
+    plum_path_closedir(d); return bytes;
 }
 
 static int plum_cache_owner_gone(const char *path) {
     char owner[PLUM_PATH_MAX]; long pid=0;
     if (plum_join(owner,sizeof(owner),path,".owner") != 0) return 0;
-    FILE *f=fopen(owner,"r"); if (!f) return 0;
+    FILE *f=plum_path_fopen(owner,"r"); if (!f) return 0;
     int parsed=fscanf(f,"%ld",&pid); fclose(f);
     if (parsed != 1 || pid <= 0 || pid > 2147483647L) return 0;
 #if defined(_WIN32)
@@ -2373,27 +2365,27 @@ long long plum_cache_prune(const char *root, long long limit) {
     const char *kinds[]={"ir","obj","shims","staging"};
     plum_cache_entry *entries=NULL; size_t count=0, capacity=0;
     uint64_t total=0; long long removed=0; time_t now=time(NULL);
-    char parent[PLUM_PATH_MAX], path[PLUM_PATH_MAX]; struct stat st;
+    char parent[PLUM_PATH_MAX], path[PLUM_PATH_MAX]; PlumPathStat st;
     for (size_t k=0;k<sizeof(kinds)/sizeof(kinds[0]);k++) {
         if (plum_join(parent,sizeof(parent),root,kinds[k]) != 0
             || plum_cache_stat_private(parent,&st) != 0 || !S_ISDIR(st.st_mode)) continue;
-        DIR *d=opendir(parent); if (!d) continue;
-        struct dirent *e;
-        while ((e=readdir(d)) != NULL) {
-            if (plum_join(path,sizeof(path),parent,e->d_name) != 0
+        PlumPathDir *d=plum_path_opendir(parent); if (!d) continue;
+        const char *e;
+        while ((e=plum_path_readdir(d)) != NULL) {
+            if (plum_join(path,sizeof(path),parent,e) != 0
                 || plum_cache_stat_private(path,&st) != 0 || !S_ISDIR(st.st_mode)) continue;
             // Keep recognizing legacy Windows pcb*.tmp staging entries too.
-            if (!strncmp(e->d_name,".partial-",9) || !strncmp(e->d_name,"pcb",3)) {
+            if (!strncmp(e,".partial-",9) || !strncmp(e,"pcb",3)) {
                 if (now > st.st_mtime && now-st.st_mtime > 86400 && plum_cache_owner_gone(path)) {
                     if (plum_remove_tree(path) == 0) removed++;
                 }
                 continue;
             }
-            if (strlen(e->d_name) != 64) continue;
+            if (strlen(e) != 64) continue;
             int hex=1;
             for (size_t i=0;i<64;i++) {
-                if (!((e->d_name[i]>='0' && e->d_name[i]<='9')
-                    || (e->d_name[i]>='a' && e->d_name[i]<='f'))) { hex=0; break; }
+                if (!((e[i]>='0' && e[i]<='9')
+                    || (e[i]>='a' && e[i]<='f'))) { hex=0; break; }
             }
             if (!hex) continue;
             if (count == capacity) {
@@ -2406,7 +2398,7 @@ long long plum_cache_prune(const char *root, long long limit) {
             uint64_t bytes=plum_cache_tree_bytes(path);
             entries[count++]=(plum_cache_entry){saved,bytes,st.st_mtime}; total+=bytes;
         }
-        closedir(d);
+        plum_path_closedir(d);
     }
     if (count > 1) qsort(entries,count,sizeof(*entries),plum_cache_oldest);
     for (size_t i=0;i<count;i++) {
@@ -2427,8 +2419,8 @@ long long plum_cache_prune(const char *root, long long limit) {
 // because a path under a non-directory (`a/b` where `a` is a file)
 // cannot exist either. Anything else is a real failure to report.
 long long os_path_exists(const char *path) {
-    struct stat st;
-    if (stat(path, &st) == 0) {
+    PlumPathStat st;
+    if (plum_path_stat(path, &st) == 0) {
         return 1;
     }
     if (errno == ENOENT || errno == ENOTDIR) {
@@ -2449,7 +2441,8 @@ static PLUM_OS_TLS char plum_cwd_buf[PLUM_PATH_MAX];
 // here makes.
 const char *os_cwd(void) {
 #if defined(_WIN32)
-    if (_getcwd(plum_cwd_buf, (int)sizeof(plum_cwd_buf)) == NULL) plum_cwd_buf[0] = '\0';
+    wchar_t wide[PLUM_PATH_MAX];
+    if (!_wgetcwd(wide, PLUM_PATH_MAX) || !plum_path_utf8(wide, plum_cwd_buf, sizeof(plum_cwd_buf))) plum_cwd_buf[0] = 0;
 #else
     if (getcwd(plum_cwd_buf, sizeof(plum_cwd_buf)) == NULL) plum_cwd_buf[0] = '\0';
 #endif
@@ -2458,7 +2451,11 @@ const char *os_cwd(void) {
 
 long long os_chdir(const char *path) {
 #if defined(_WIN32)
-    return _chdir(path) == 0 ? 0 : -1;
+    wchar_t *wide = plum_path_wide(path);
+    if (!wide) return -1;
+    int rc = _wchdir(wide);
+    free(wide);
+    return rc == 0 ? 0 : -1;
 #else
     return chdir(path) == 0 ? 0 : -1;
 #endif

@@ -7,18 +7,19 @@
 #include <stdlib.h>
 #include <stdint.h>
 #include <errno.h>
+#include "path_shim.h"
 
 typedef struct {
-    DIR *stream;
+    PlumPathDir *stream;
     const char *name;
 } PlumDir;
 
 long long dir_open(const char *path) {
-    DIR *stream = opendir(path);
+    PlumPathDir *stream = plum_path_opendir(path);
     if (stream == NULL) return -1;
     PlumDir *dir = malloc(sizeof(*dir));
     if (dir == NULL) {
-        closedir(stream);
+        plum_path_closedir(stream);
         return -1;
     }
     dir->stream = stream;
@@ -35,11 +36,11 @@ long long dir_next_size(long long handle) {
     dir->name = "";
     for (;;) {
         errno = 0;
-        struct dirent *entry = readdir(dir->stream);
+        const char *entry = plum_path_readdir(dir->stream);
         if (entry == NULL) return errno == 0 ? 0 : -1;
-        if (strcmp(entry->d_name, ".") == 0 || strcmp(entry->d_name, "..") == 0)
+        if (strcmp(entry, ".") == 0 || strcmp(entry, "..") == 0)
             continue;
-        dir->name = entry->d_name;
+        dir->name = entry;
         return (long long)strlen(dir->name);
     }
 }
@@ -52,7 +53,7 @@ const char *dir_entry_data(long long handle) {
 void dir_close(long long handle) {
     PlumDir *dir = (PlumDir *)(intptr_t)handle;
     if (dir != NULL) {
-        closedir(dir->stream);
+        plum_path_closedir(dir->stream);
         free(dir);
     }
 }
@@ -66,8 +67,8 @@ void dir_close(long long handle) {
 // "exists but isn't a directory" as a real `Err`, not silently
 // collapse both into `false`.
 long long path_is_dir(const char *path) {
-    struct stat st;
-    if (stat(path, &st) != 0) {
+    PlumPathStat st;
+    if (plum_path_stat(path, &st) != 0) {
         return -1;
     }
     return S_ISDIR(st.st_mode) ? 1 : 0;

@@ -38,7 +38,7 @@ ROOT = pathlib.Path(__file__).resolve().parent.parent
 #
 # Sorted so the generated file has a stable order regardless of how the
 # filesystem enumerates.
-SHIMS = [(p.name, True, p) for p in sorted((ROOT / "native_stdlib").glob("*.c"))]
+SHIMS = [(p.name, p.suffix == ".c", p) for p in sorted((ROOT / "native_stdlib").glob("*")) if p.suffix in (".c", ".h")]
 VENDOR = ROOT / "vendor" / "mbedtls"
 if VENDOR.exists():
     SHIMS += [("mbedtls/" + str(p.relative_to(VENDOR)), p.suffix == ".c", p)

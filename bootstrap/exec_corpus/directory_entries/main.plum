@@ -4,11 +4,8 @@ extern "C" { fn directory_bad_name(root: CStr) -> Int; }
 
 let require (ok: Bool): Unit = assert_eq(ok, true)
 
-// Windows directory enumeration still uses the ANSI API (#109), whereas
-// write_file uses UTF-8. Test ownership with ASCII there; POSIX also checks
-// multibyte names. The Windows encoding migration is a separate contract.
-let second_name (): String =
-    if Os.platform() == "windows" { "beta" } else { "snow-\u{2603}" }
+// Exercise multibyte entry ownership on every host, including Windows.
+let second_name (): String = "snow-\u{2603}-\u{1f30d}"
 
 let repeat_listing (root: String) (n: Int): Unit = {
     if n > 0 {

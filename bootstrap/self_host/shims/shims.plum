@@ -1389,6 +1389,11 @@ pub let shim_files (): Array[ShimFile] = [
         compile: true,
     },
     ShimFile {
+        name: "path_shim.h",
+        source: @embed_file("../../../native_stdlib/path_shim.h"),
+        compile: false,
+    },
+    ShimFile {
         name: "process_shim.c",
         source: @embed_file("../../../native_stdlib/process_shim.c"),
         compile: true,
