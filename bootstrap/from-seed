@@ -40,6 +40,7 @@ case "$(uname -s)" in
 esac
 
 clang -O2 -Wno-override-module "$seed" \
+    native_stdlib/argv_shim.c \
     native_stdlib/compat_shim.c \
     native_stdlib/dir_shim.c \
     native_stdlib/handle_shim.c \

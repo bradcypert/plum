@@ -229,7 +229,7 @@ static void test_spawns(void) {
     assert(plum_spawn_capture(program, direct_args, out_path, err_path,
                               direct_env, NULL, 0, 0, 1, NULL) == 0);
     expect_no_wait_scratch = 0;
-    remove(out_path); remove(err_path);
+    assert(plum_path_remove(out_path) == 0 && plum_path_remove(err_path) == 0);
     no_scratch();
     // Failure while unpacking a requested overlay must also fail closed.
     for (int fail = 3; fail <= 4; fail++) {
@@ -254,8 +254,8 @@ static void test_spawns(void) {
         // Collection must delete the captures after closing Windows handles.
         char *out = _strdup(plum_process_slots[h].child->out_path);
         char *err = _strdup(plum_process_slots[h].child->err_path);
-        assert(GetFileAttributesA(out) == INVALID_FILE_ATTRIBUTES);
-        assert(GetFileAttributesA(err) == INVALID_FILE_ATTRIBUTES);
+        assert(plum_path_attributes(out) == INVALID_FILE_ATTRIBUTES);
+        assert(plum_path_attributes(err) == INVALID_FILE_ATTRIBUTES);
         process_child_free(h);
         free(out); free(err);
         no_scratch();
@@ -298,7 +298,18 @@ int main(void) {
     }
     LocalFree(argv);
     test_builders();
+    // Capture creation/readback/removal must work below a Unicode TEMP root.
+    wchar_t temp[4096], root[4096], old_temp[4096], old_tmp[4096];
+    DWORD nt = GetEnvironmentVariableW(L"TEMP", old_temp, 4096);
+    DWORD np = GetEnvironmentVariableW(L"TMP", old_tmp, 4096);
+    assert(nt < 4096 && np < 4096 && GetTempPathW(4096, temp));
+    assert(swprintf(root, 4096, L"%lsplum-\x65e5\xd83c\xdf0d-%lu", temp, GetCurrentProcessId()) > 0);
+    assert(CreateDirectoryW(root, NULL));
+    assert(SetEnvironmentVariableW(L"TEMP", root) && SetEnvironmentVariableW(L"TMP", root));
     test_spawns();
+    assert(SetEnvironmentVariableW(L"TEMP", nt ? old_temp : NULL));
+    assert(SetEnvironmentVariableW(L"TMP", np ? old_tmp : NULL));
+    assert(RemoveDirectoryW(root));
     printf("Windows process Unicode, overlays, allocation failures: ok (peak scratch %zu bytes)\n", peak_bytes);
     return 0;
 }

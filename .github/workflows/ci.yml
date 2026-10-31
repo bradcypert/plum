@@ -542,10 +542,40 @@ jobs:
           clang -O1 -g -Wall -Wextra -Werror bootstrap/copy-tree-test.c -o copy-tree-test.exe
           ./copy-tree-test.exe
 
+      - name: incoming arguments preserve Unicode and release conversion scratch
+        run: |
+          clang -O1 -g -Wall -Wextra -Werror bootstrap/windows-args-test.c -o windows-args-test.exe
+          ./windows-args-test.exe
+
+      - name: loader watchdog distinguishes suspended hashing from stalled execution
+        run: ./bootstrap/windows-cache-watchdog-check
+
+      - name: system paths preserve thread-local lifetime without heap scratch
+        run: |
+          clang -O1 -g -Wall -Wextra -Werror -pthread bootstrap/os-path-test.c -o os-path-test.exe
+          ./os-path-test.exe
+
+      - name: UTF-8 filesystem paths reject invalid encoding and release scratch
+        run: |
+          clang -O1 -g -Wall -Wextra -Werror -pthread bootstrap/windows-path-test.c -o windows-path-test.exe
+          ./windows-path-test.exe
+
+      - name: process captures preserve Unicode temporary paths
+        run: |
+          clang -O1 -g -Wall -Wextra -Werror bootstrap/windows-process-test.c native_stdlib/os_shim.c -lshell32 -o windows-process-test.exe
+          ./windows-process-test.exe
+
       - name: seed -> compiler
         run: |
           ./bootstrap/from-seed -o sh.seed
           ./sh.seed build bootstrap/self_host -o sh.real
+
+      - name: Unicode arguments round-trip through generated programs
+        run: |
+          ./sh.real build bootstrap/exec_corpus/unicode_arguments -o unicode-arguments.exe
+          ./unicode-arguments.exe > unicode-arguments.out
+          diff -u bootstrap/exec_corpus/unicode_arguments/expected.txt unicode-arguments.out
+          python3 bootstrap/formatter-tree-test.py ./sh.real
 
       # Catch CRT numeric-boundary differences before the long platform suite.
       - name: float parsing preserves finite values and zero signs

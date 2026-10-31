@@ -292,12 +292,16 @@ Do not close the linked issues on the strength of this design document.
 
 ## Windows filename compatibility
 
-Directory enumeration and stored link targets use UTF-8 at the native
-boundary. Existing Windows runtime arguments can contain native ANSI code
-page bytes. The tree adapter first decodes strict UTF-8 and, only on invalid
-UTF-8, accepts strict native-code-page input to preserve that existing
-filename-byte contract. It does not substitute replacement characters.
-This does not redesign the runtime's narrow argv handling or remove its
-existing code-page limitations; general Windows argv normalization remains
-outside this traversal change. Relative-path slicing preserves bytes on
-both Windows and POSIX, including non-UTF-8 POSIX filenames.
+Windows filesystem inputs, directory entries and stored link targets use
+strict UTF-8 at the native boundary. Paths convert to UTF-16 before calling
+wide Windows/CRT APIs; returned system paths and directory entries convert
+back with strict validation. Invalid UTF-8 and unpaired UTF-16 surrogates
+fail rather than selecting a different filename through the ANSI code page.
+The tree adapter follows this same rule, with no native-code-page fallback.
+POSIX filenames and relative-path slicing still preserve bytes.
+
+Incoming Windows arguments are parsed from the UTF-16 command line and
+converted to UTF-8 before becoming Plum strings, so CLI paths follow this
+same rule. POSIX arguments retain their original filename bytes. Existing
+path-length limits remain. See [the filesystem boundary](windows-paths.md)
+for argument/context ownership and memory costs.

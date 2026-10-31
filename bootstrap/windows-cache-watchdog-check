@@ -1,0 +1,38 @@
+#!/usr/bin/env bash
+# Native Windows loader watchdog regression. The probe advances a fake clock
+# so these checks exercise >10s stopped/running intervals without sleeping.
+set -euo pipefail
+root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+cd "$root"
+work="$(mktemp -d)"
+trap 'rm -rf "$work"' EXIT
+bin="$work/toolchain/mingw64/bin"
+mkdir -p "$bin"
+cat > "$work/module.c" <<'C'
+__declspec(dllexport) int fixture(void) { return 7; }
+C
+cat > "$work/driver.c" <<'C'
+#include <windows.h>
+int main(void) {
+    HMODULE module = LoadLibraryW(L"libLLVM-probe.dll");
+    if (!module) return 1;
+    FreeLibrary(module);
+    return 0;
+}
+C
+clang -shared "$work/module.c" -o "$bin/libLLVM-probe.dll"
+clang "$work/driver.c" -o "$bin/clang.exe"
+clang -O1 -g -Wall -Wextra -Werror bootstrap/windows-cache-probe.c -o "$work/probe.exe"
+# Warm the ordinary first-launch compatibility policy, as native_fingerprint
+# does with -dumpmachine. Hash every actual loaded image in all probes.
+"$bin/clang.exe" -dumpmachine
+baseline="$("$work/probe.exe" "$bin/clang.exe" --repeat)"
+slow="$("$work/probe.exe" "$bin/clang.exe" --slow-hash --repeat)"
+[ "$baseline" = "$slow" ]
+set +e
+"$work/probe.exe" "$bin/clang.exe" --wait-timeout --repeat > "$work/timeout.out"
+status=$?
+set -e
+[ "$status" -eq 1 ]
+tr -d '\r' < "$work/timeout.out" | grep -q '^!Windows loader probe execution timed out$'
+echo 'Windows loader watchdog: slow suspended hashing preserves identity; stalled execution fails closed'

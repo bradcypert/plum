@@ -14,8 +14,8 @@ formatted = "let main (): Unit = {\n    println(\"hello\")\n}\n"
 
 
 def run(path, *flags, ok=True):
-    # Diagnostics can contain native Windows argv bytes; preserve those bytes
-    # while comparing source text and ASCII diagnostic messages.
+    # Preserve arbitrary POSIX filename bytes in diagnostics while comparing
+    # source text and ASCII diagnostic messages. Windows paths are UTF-8.
     result = subprocess.run([str(compiler), "fmt", *flags, str(path)],
                             capture_output=True, text=True, encoding="utf-8", errors="surrogateescape", timeout=30)
     assert (result.returncode == 0) == ok, result.stdout + result.stderr

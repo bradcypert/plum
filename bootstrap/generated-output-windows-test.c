@@ -76,7 +76,7 @@ static FARPROC WINAPI tracked_proc(HMODULE module, LPCSTR name) {
 #undef GetFileInformationByHandle
 #undef GetProcAddress
 long long os_rename_file(const char *from, const char *to) {
-    wchar_t *a = plum_whole_wide(from), *b = plum_whole_wide(to);
+    wchar_t *a = plum_path_wide(from), *b = plum_path_wide(to);
     long long rc = a && b && MoveFileExW(a, b, MOVEFILE_REPLACE_EXISTING) ? 0 : -1;
     if (rc && !fail_at) fprintf(stderr, "MoveFileExW(%s, %s): error %lu\n", from, to, (unsigned long)GetLastError());
     tracked_free(a); tracked_free(b);

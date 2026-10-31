@@ -121,8 +121,9 @@ with tempfile.TemporaryDirectory(prefix="plum-cache-check-") as tmp:
         # identities, even when all of the files themselves are unchanged.
         subprocess.run([str(exe), "-dumpmachine"], check=True, capture_output=True, cwd=work)
 
-        def fingerprint(ok=True, repeat=False, cwd=work):
-            result = subprocess.run([str(probe), str(exe), *(["--repeat"] if repeat else [])],
+        def fingerprint(ok=True, repeat=False, cwd=work, mode=None):
+            result = subprocess.run([str(probe), str(exe), *(["--repeat"] if repeat else []),
+                                     *([mode] if mode else [])],
                                     capture_output=True, text=True, cwd=cwd, timeout=60)
             require(result.returncode == (0 if ok else 1), result.stdout + result.stderr)
             value = result.stdout.strip()
@@ -130,6 +131,10 @@ with tempfile.TemporaryDirectory(prefix="plum-cache-check-") as tmp:
             return value
 
         first = fingerprint(repeat=True)
+        require(fingerprint(repeat=True, mode="--slow-hash") == first,
+                "time spent hashing suspended loader images exhausted the execution budget")
+        timeout = fingerprint(ok=False, repeat=True, mode="--wait-timeout")
+        require("execution timed out" in timeout, "unresponsive loader did not exhaust its execution budget")
         def replace_overlay(file):
             stamp = file.stat()
             with file.open("r+b") as stream:

@@ -69,23 +69,15 @@ int main(void) {
     assert(GetCurrentDirectoryW(4096, cwd));
     assert(GetTempPathW(MAX_PATH, tmp) && GetTempFileNameW(tmp, L"pcp", 0, root));
     assert(DeleteFileW(root) && CreateDirectoryW(root, NULL) && SetCurrentDirectoryW(root));
-    // Native narrow argv may contain ACP filename bytes; enumerated names
-    // and LSP paths use UTF-8. Both forms resolve to the same held root.
+    // Roots use the same strict UTF-8 contract as enumerated names.
     WCHAR legacy_directory[] = L"native-\x00fc";
     assert(CreateDirectoryW(legacy_directory, NULL));
-    char native_name[128], utf8_name[128];
-    BOOL substituted = FALSE;
-    assert(WideCharToMultiByte(CP_ACP, 0, legacy_directory, -1, native_name, sizeof(native_name), NULL,
-        GetACP() == CP_UTF8 ? NULL : &substituted));
-    assert(WideCharToMultiByte(CP_UTF8, 0, legacy_directory, -1, utf8_name, sizeof(utf8_name), NULL, NULL));
+    char utf8_name[128];
+    assert(WideCharToMultiByte(CP_UTF8, WC_ERR_INVALID_CHARS, legacy_directory, -1,
+        utf8_name, sizeof(utf8_name), NULL, NULL));
     long long utf8_root = plum_tree_root_open(utf8_name); assert(utf8_root);
-    char native_identity[80]; strcpy(native_identity, plum_tree_entry_identity(utf8_root));
-    if (!substituted) {
-        long long native_root = plum_tree_root_open(native_name); assert(native_root);
-        assert(!strcmp(native_identity, plum_tree_entry_identity(native_root)));
-        plum_tree_entry_close(native_root);
-    }
     plum_tree_entry_close(utf8_root);
+    assert(!plum_tree_root_open("native-\xfc"));
     assert(RemoveDirectoryW(legacy_directory));
     directory("src"); directory("src/nested"); directory("dst"); directory("outside");
     file("src/nested/data", "copied"); file("outside/keep", "untouched");

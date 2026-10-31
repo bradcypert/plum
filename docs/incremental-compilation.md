@@ -132,3 +132,20 @@ Only after this stage is correct and useful should a separate proposal add
 serialized module interfaces and cached type checking. That proposal needs
 an explicit contract for global inference dependencies, normalized schemes,
 SCC invalidation, compiler schema migration and error equivalence.
+
+### Windows loader-probe execution budget
+
+The native-object adapter's watchdog measures time while the debugged tool
+can execute. Windows suspends the target while the debugger processes an
+event, so hashing the loaded executable/DLL bytes at a stop does not consume
+that execution budget. Cold filesystem or antivirus work can make those
+hashes slow without indicating a hung tool. A probe that fails to produce
+progress within its execution budget still terminates/reaps the child and
+bypasses native-object reuse; every image is still hashed and validated.
+
+`bootstrap/windows-cache-watchdog-check` advances a virtual clock during a
+real loaded-image read and during a simulated failed event wait. It requires
+identical fingerprints in the slow-hash case and a safe timeout bypass in
+the stalled case, without wall-time thresholds or sleeps. The full cache
+gate still requires object hits on the first unchanged warm run and a fresh
+link. Measurement rows include bypass diagnostics for cold runs too.

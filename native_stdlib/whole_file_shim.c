@@ -18,6 +18,7 @@
 #include <stdint.h>
 #include <stddef.h>
 #include <stdio.h>
+#include "path_shim.h"
 #include <stdlib.h>
 #include <string.h>
 #include <errno.h>
@@ -41,9 +42,14 @@
 #define PLUM_WHOLE_TELL ftello
 #endif
 
+// Append in the generated runtime also goes through the native path boundary.
+FILE *plum_fopen(const char *path, const char *mode) {
+    return plum_path_fopen(path, mode);
+}
+
 char *plum_read_whole_file(const char *path, long long *length) {
     *length = 0;
-    FILE *f = fopen(path, "rb");
+    FILE *f = plum_path_fopen(path, "rb");
     if (f == NULL) return NULL;
     char *buf = NULL;
 
@@ -75,19 +81,6 @@ fail:
 
 // Shared with Os.rename_file. Never falls back to a cross-volume copy.
 extern long long os_rename_file(const char *from, const char *to);
-
-#if defined(_WIN32)
-static wchar_t *plum_whole_wide(const char *path) {
-    int n = MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, path, -1, NULL, 0);
-    if (n <= 0) return NULL;
-    wchar_t *w = malloc((size_t)n * sizeof(wchar_t));
-    if (w != NULL && !MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, path, -1, w, n)) {
-        free(w);
-        return NULL;
-    }
-    return w;
-}
-#endif
 
 // Complete the stream before publication. Both ordinary whole-file writes
 // and strict generated-output writes use this transaction boundary.
@@ -171,7 +164,7 @@ static long long plum_write_whole_file_impl(const char *path, const char *data, 
     int fd = -1;
     long long result = -1;
 #if defined(_WIN32)
-    wchar_t *dest = plum_whole_wide(path);
+    wchar_t *dest = plum_path_wide(path);
     wchar_t *wide_tmp = NULL;
     if (dest == NULL) goto done;
     DWORD attrs = GetFileAttributesW(dest);
@@ -188,7 +181,7 @@ static long long plum_write_whole_file_impl(const char *path, const char *data, 
                  (unsigned long)GetCurrentProcessId(),
                  (unsigned long)InterlockedIncrement(&sequence));
         free(wide_tmp);
-        wide_tmp = plum_whole_wide(tmp);
+        wide_tmp = plum_path_wide(tmp);
         if (wide_tmp == NULL) goto done;
         fd = _wopen(wide_tmp, _O_WRONLY | _O_BINARY | _O_CREAT | _O_EXCL,
                     _S_IREAD | _S_IWRITE);
@@ -280,7 +273,7 @@ fail:
 // Bound live handles (and accept an explicit error for excessive depth).
 #define PLUM_GENERATED_DEPTH 128
 static wchar_t *plum_generated_lock(const char *path, HANDLE *dirs, size_t *count) {
-    wchar_t *input = plum_whole_wide(path);
+    wchar_t *input = plum_path_wide(path);
     if (!input) return NULL;
     DWORD n = GetFullPathNameW(input, 0, NULL, NULL);
     wchar_t *full = n ? malloc((size_t)n * sizeof(wchar_t)) : NULL;
