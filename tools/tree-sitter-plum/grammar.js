@@ -56,6 +56,9 @@ module.exports = grammar({
     // Select receive patterns and timeout expressions can share a prefix
     // (including tuples). Keep both until `=` or `=>` distinguishes them.
     [$._primary_expr, $._primary_pattern],
+    // After `- Int`, a receive pattern and a unary timeout expression
+    // still overlap. Do not choose until the arm separator is known.
+    [$._literal, $._primary_pattern],
     [$.paren_or_tuple_expr, $.tuple_pattern],
     [$.field_init, $.field_pattern],
     [$.struct_literal, $.struct_pattern],
@@ -414,6 +417,9 @@ module.exports = grammar({
     _primary_pattern: ($) =>
       choice(
         $._literal,
+        // As in the compiler, minus is a separate token and may prefix
+        // only an integer in a pattern, including nested alternatives.
+        seq("-", $.int_literal),
         "_",
         $.identifier,
         $.variant_pattern,
