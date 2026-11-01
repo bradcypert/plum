@@ -280,7 +280,14 @@ module.exports = grammar({
         $.unsafe_expr,
         $.spawn_expr,
         $.struct_literal,
+        $.builtin_call,
       ),
+
+    // GRAMMAR.md BuiltinCall: keep the sigil/name atomic, reuse ordinary
+    // arguments, and leave builtin names, arity, and literal-path validation
+    // to the compiler. The call's result supports the normal postfix chain.
+    builtin_call: ($) =>
+      seq(field("name", $.builtin_name), field("arguments", $.arguments)),
 
     paren_or_tuple_expr: ($) =>
       seq("(", optional(seq(commaSep1($._expr), optional(","))), ")"),
@@ -424,6 +431,9 @@ module.exports = grammar({
 
     // ---- Lexical grammar (GRAMMAR.md "Lexical grammar") ----
     identifier: () => /[A-Za-z_][A-Za-z0-9_]*/,
+    // lex_builtin scans identifier-continuation characters after `@`,
+    // including keywords and digit-leading names, before parser validation.
+    builtin_name: () => /@[A-Za-z0-9_]+/,
 
     _literal: ($) => choice($.int_literal, $.float_literal, $.string_literal, $.bool_literal),
     int_literal: () => /[0-9][0-9_]*/,

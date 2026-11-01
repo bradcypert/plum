@@ -39,6 +39,12 @@ grammar change here to pick it up.
 
 ## Known simplifications
 
+Compile-time builtin calls follow `BuiltinCall ::= BuiltinName Arguments`.
+The sigil and name form one token (`@embed_file`); arguments and postfix
+chains use the ordinary expression rules. Unknown names, wrong arity,
+and nonliteral paths are left to compiler validation. Editor parsing
+does not read embedded files or store their contents in the syntax tree.
+
 `select` arms follow `GRAMMAR.md`: `pattern = receiver => body`,
 `else => body`, and `duration => body`. All keep the `select_arm` node
 and `body` field; receive arms have `pattern` and `channel` fields,

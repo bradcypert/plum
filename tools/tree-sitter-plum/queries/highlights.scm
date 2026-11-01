@@ -100,6 +100,7 @@
 (bound (identifier) @type)
 
 ; ---- Expressions ----
+(builtin_name) @function.builtin
 (param (identifier) @variable.parameter)
 (closure_param (identifier) @variable.parameter)
 ; `let_stmt`'s `pattern` field is a `pattern` NODE (a real named rule,

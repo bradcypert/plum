@@ -1757,6 +1757,31 @@
         {
           "type": "SYMBOL",
           "name": "struct_literal"
+        },
+        {
+          "type": "SYMBOL",
+          "name": "builtin_call"
+        }
+      ]
+    },
+    "builtin_call": {
+      "type": "SEQ",
+      "members": [
+        {
+          "type": "FIELD",
+          "name": "name",
+          "content": {
+            "type": "SYMBOL",
+            "name": "builtin_name"
+          }
+        },
+        {
+          "type": "FIELD",
+          "name": "arguments",
+          "content": {
+            "type": "SYMBOL",
+            "name": "arguments"
+          }
         }
       ]
     },
@@ -3011,6 +3036,10 @@
     "identifier": {
       "type": "PATTERN",
       "value": "[A-Za-z_][A-Za-z0-9_]*"
+    },
+    "builtin_name": {
+      "type": "PATTERN",
+      "value": "@[A-Za-z0-9_]+"
     },
     "_literal": {
       "type": "CHOICE",
