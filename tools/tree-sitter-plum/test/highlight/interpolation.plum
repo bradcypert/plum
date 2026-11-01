@@ -19,11 +19,12 @@ let escaped = "\${literal} $x $"
 //                ^ string
 //                         ^ string
 //                            ^ string
-let builtin = "${@embed_file("a.txt")}"
+// Embed this fixture so compiler item-parsing checks can resolve the path.
+let builtin = "${@embed_file("interpolation.plum")}"
 //             ^ punctuation.special
 //               ^ function.builtin
 //                            ^ string
-//                                   ^ punctuation.special
+//                                                ^ punctuation.special
 let multiline = "text
 //               ^ string
 // literal ${value +
