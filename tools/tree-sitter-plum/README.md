@@ -39,6 +39,27 @@ grammar change here to pick it up.
 
 ## Known simplifications
 
+Float literals accept decimal mantissas, integer mantissas with an
+exponent, and decimal mantissas with an exponent (`1.5`, `1e3`,
+`1.5E-3`). Exponent signs are optional; a digit is required after the
+sign, and digit runs retain the compiler's underscore conventions.
+Numeric range checking remains the compiler's responsibility.
+
+Strings expose literal `string_content`, `escape_sequence`, and
+`interpolation` nodes. Each interpolation's `expression` field reuses
+the ordinary expression grammar, so nested calls, strings, and numeric
+literals receive their normal highlights. Quotes and literal segments
+receive string captures rather than covering the entire expression
+subtree with a string capture. Escaped dollars and bare dollars remain
+literal content, and multiline text keeps its whitespace.
+
+The editor parses interpolation expressions structurally; it does not
+duplicate the compiler's restricted raw-text boundary scan described in
+`GRAMMAR.md`. Some braced or nested expressions can therefore form an
+editor syntax tree while still being rejected by the compiler. A hole
+must contain one complete expression; this also rejects trailing tokens
+that the compiler currently ignores (tracked in issue #170).
+
 Handle declarations follow `HandleDecl`, including `pub` and an optional
 trailing comma. `handle` introduces a declaration only at item start and
 remains an identifier elsewhere, as does `on_drop` outside a declaration.

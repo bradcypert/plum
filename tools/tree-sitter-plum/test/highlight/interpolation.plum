@@ -1,0 +1,36 @@
+let greeting = "hello ${name + 1e3}!"
+//              ^ string
+//                    ^ punctuation.special
+//                      ^ variable
+//                           ^ operator
+//                             ^ number.float
+//                                ^ punctuation.special
+//                                 ^ string
+let nested = "${String.concat("}", "x")} tail"
+//            ^ punctuation.special
+//              ^ type.builtin
+//                            ^ string
+//                             ^ string
+//                                  ^ string
+//                                     ^ punctuation.special
+//                                       ^ string
+let escaped = "\${literal} $x $"
+//             ^ string.escape
+//                ^ string
+//                         ^ string
+//                            ^ string
+let builtin = "${@embed_file("a.txt")}"
+//             ^ punctuation.special
+//               ^ function.builtin
+//                            ^ string
+//                                   ^ punctuation.special
+let multiline = "text
+//               ^ string
+// literal ${value +
+//^ string
+//           ^ variable
+//                 ^ operator
+    1} tail"
+//  ^ number
+//   ^ punctuation.special
+//     ^ string

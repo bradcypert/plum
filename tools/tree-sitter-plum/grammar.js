@@ -458,13 +458,20 @@ module.exports = grammar({
 
     _literal: ($) => choice($.int_literal, $.float_literal, $.string_literal, $.bool_literal),
     int_literal: () => /[0-9][0-9_]*/,
-    float_literal: () => /[0-9][0-9_]*\.[0-9][0-9_]*/,
+    // The compiler requires a digit after the decimal point and after
+    // an optional exponent sign. An exponent alone makes an Int-shaped
+    // mantissa a Float; digit runs may contain underscores.
+    float_literal: () => /[0-9][0-9_]*(\.[0-9][0-9_]*([eE][+-]?[0-9][0-9_]*)?|[eE][+-]?[0-9][0-9_]*)/,
     bool_literal: () => choice("true", "false"),
 
     string_literal: ($) =>
       // Newlines are string content. Leaving them to `extras` can make
       // a following `//` consume the closing quote as a comment.
-      seq('"', repeat(choice($.escape_sequence, /[^"\\]+/)), '"'),
+      seq('"', repeat(choice($.escape_sequence, $.string_content, $.interpolation)), '"'),
+    // `${` wins over a lone `$` by longest match. Keeping content
+    // immediate preserves whitespace and comment-looking literal text.
+    string_content: () => token.immediate(choice(/[^"\\$]+/, "$")),
+    interpolation: ($) => seq("${", field("expression", $._expr), "}"),
     escape_sequence: () => /\\./,
 
     comment: () => token(seq("//", /.*/)),

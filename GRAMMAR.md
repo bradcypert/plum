@@ -39,7 +39,9 @@ sections.
 
 ```
 IntLiteral    ::= digit { digit | "_" }
-FloatLiteral  ::= digit { digit | "_" } "." digit { digit | "_" }
+FloatLiteral  ::= DigitRun "." DigitRun [ Exponent ] | DigitRun Exponent
+DigitRun      ::= digit { digit | "_" }
+Exponent      ::= ("e" | "E") [ "+" | "-" ] DigitRun
 StringLiteral ::= '"' { StringChar | Interpolation } '"'
 StringChar    ::= any character except '"', '$', or '\', or one of the escapes below
 Interpolation ::= "${" InterpExprSource "}"

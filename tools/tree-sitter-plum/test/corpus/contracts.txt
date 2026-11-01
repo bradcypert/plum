@@ -51,7 +51,8 @@ let withdraw (account: Account) (amount: Int): Account
                             (unary_expr
                               (postfix_expr
                                 (int_literal)))))))))))))
-        (string_literal))
+        (string_literal
+          (string_content)))
       (require_clause
         (pipe_expr
           (or_expr
@@ -77,7 +78,8 @@ let withdraw (account: Account) (amount: Int): Account
                               (postfix_expr
                                 (identifier)
                                 (identifier)))))))))))))
-        (string_literal))
+        (string_literal
+          (string_content)))
       (ensure_clause
         (pipe_expr
           (or_expr
@@ -129,7 +131,8 @@ let withdraw (account: Account) (amount: Int): Account
                               (postfix_expr
                                 (identifier)
                                 (identifier)))))))))))))
-        (string_literal))
+        (string_literal
+          (string_content)))
       (pipe_expr
         (or_expr
           (and_expr
@@ -217,7 +220,8 @@ let average (total: Int) (count: Int): Int
                             (unary_expr
                               (postfix_expr
                                 (int_literal)))))))))))))
-        (string_literal))
+        (string_literal
+          (string_content)))
       (pipe_expr
         (or_expr
           (and_expr
@@ -278,7 +282,8 @@ let identity (value: Int): Int ensure result == value : "identity" = value
                             (unary_expr
                               (postfix_expr
                                 (identifier)))))))))))))
-        (string_literal))
+        (string_literal
+          (string_content)))
       (pipe_expr
         (or_expr
           (and_expr
@@ -724,7 +729,8 @@ let bounded (n: Int): Int
                             (unary_expr
                               (postfix_expr
                                 (int_literal)))))))))))))
-        (string_literal))
+        (string_literal
+          (string_content)))
       (ensure_clause
         (pipe_expr
           (or_expr
@@ -904,7 +910,8 @@ let positive (n: Int): Int
                             (unary_expr
                               (postfix_expr
                                 (int_literal)))))))))))))
-        (string_literal))
+        (string_literal
+          (string_content)))
       (pipe_expr
         (or_expr
           (and_expr
