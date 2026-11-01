@@ -1,4 +1,4 @@
-let template = @embed_file("template.md").len()
+let template = @embed_file("../../README.md").len()
 //             ^ function.builtin
 //              ^ function.builtin
 //                         ^ string
@@ -6,5 +6,5 @@ let embed_file path = path
 //  ^ variable
 let ordinary = embed_file("template.md")
 //             ^ variable
-let future = @future_builtin(value)
+let second = @embed_file("../../README.md")
 //           ^ function.builtin
