@@ -53,6 +53,12 @@ are disambiguated by `=` versus `=>`. Semantic restrictions (such as
 requiring a channel arm and forbidding `else` together with a timeout)
 remain the compiler's responsibility.
 
+Patterns accept a separate `-` token followed by an integer literal,
+including inside alternatives, tuples, variants, and struct fields.
+Whitespace and comments may separate the sign from the integer. A minus
+before a float or binding is rejected in patterns; ordinary unary minus
+expressions are unchanged.
+
 Both documented inline in `grammar.js` at the relevant rule:
 
 - **`Thing[T]` vs. `arr[i]`** (generic instantiation vs. indexing) —

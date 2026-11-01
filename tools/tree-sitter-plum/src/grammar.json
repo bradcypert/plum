@@ -2760,6 +2760,19 @@
           "name": "_literal"
         },
         {
+          "type": "SEQ",
+          "members": [
+            {
+              "type": "STRING",
+              "value": "-"
+            },
+            {
+              "type": "SYMBOL",
+              "name": "int_literal"
+            }
+          ]
+        },
+        {
           "type": "STRING",
           "value": "_"
         },
@@ -3158,6 +3171,10 @@
     ],
     [
       "_primary_expr",
+      "_primary_pattern"
+    ],
+    [
+      "_literal",
       "_primary_pattern"
     ],
     [

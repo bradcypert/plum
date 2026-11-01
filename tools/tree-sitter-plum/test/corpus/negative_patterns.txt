@@ -1,0 +1,621 @@
+====================
+Negative integer match patterns
+====================
+
+let classify n = match n { -1 => true, -0 => false, -1_000 => true, _ => false }
+
+---
+
+(source_file
+  (item
+    (let_def
+      (identifier)
+      (param
+        (identifier))
+      (pipe_expr
+        (or_expr
+          (and_expr
+            (compare_expr
+              (bit_or_expr
+                (bit_xor_expr
+                  (bit_and_expr
+                    (range_expr
+                      (add_expr
+                        (mul_expr
+                          (unary_expr
+                            (postfix_expr
+                              (match_expr
+                                (pipe_expr
+                                  (or_expr
+                                    (and_expr
+                                      (compare_expr
+                                        (bit_or_expr
+                                          (bit_xor_expr
+                                            (bit_and_expr
+                                              (range_expr
+                                                (add_expr
+                                                  (mul_expr
+                                                    (unary_expr
+                                                      (postfix_expr
+                                                        (identifier)))))))))))))
+                                (match_arm_list
+                                  (match_arm
+                                    (pattern
+                                      (int_literal))
+                                    (pipe_expr
+                                      (or_expr
+                                        (and_expr
+                                          (compare_expr
+                                            (bit_or_expr
+                                              (bit_xor_expr
+                                                (bit_and_expr
+                                                  (range_expr
+                                                    (add_expr
+                                                      (mul_expr
+                                                        (unary_expr
+                                                          (postfix_expr
+                                                            (bool_literal))))))))))))))
+                                  (match_arm
+                                    (pattern
+                                      (int_literal))
+                                    (pipe_expr
+                                      (or_expr
+                                        (and_expr
+                                          (compare_expr
+                                            (bit_or_expr
+                                              (bit_xor_expr
+                                                (bit_and_expr
+                                                  (range_expr
+                                                    (add_expr
+                                                      (mul_expr
+                                                        (unary_expr
+                                                          (postfix_expr
+                                                            (bool_literal))))))))))))))
+                                  (match_arm
+                                    (pattern
+                                      (int_literal))
+                                    (pipe_expr
+                                      (or_expr
+                                        (and_expr
+                                          (compare_expr
+                                            (bit_or_expr
+                                              (bit_xor_expr
+                                                (bit_and_expr
+                                                  (range_expr
+                                                    (add_expr
+                                                      (mul_expr
+                                                        (unary_expr
+                                                          (postfix_expr
+                                                            (bool_literal))))))))))))))
+                                  (match_arm
+                                    (pattern)
+                                    (pipe_expr
+                                      (or_expr
+                                        (and_expr
+                                          (compare_expr
+                                            (bit_or_expr
+                                              (bit_xor_expr
+                                                (bit_and_expr
+                                                  (range_expr
+                                                    (add_expr
+                                                      (mul_expr
+                                                        (unary_expr
+                                                          (postfix_expr
+                                                            (bool_literal)))))))))))))))))))))))))))))))
+
+====================
+Negative integers in alternatives and nested patterns
+====================
+
+let nested value = match value { Some((-1 | -2, Point { x: -3 })) => true, _ => false }
+
+---
+
+(source_file
+  (item
+    (let_def
+      (identifier)
+      (param
+        (identifier))
+      (pipe_expr
+        (or_expr
+          (and_expr
+            (compare_expr
+              (bit_or_expr
+                (bit_xor_expr
+                  (bit_and_expr
+                    (range_expr
+                      (add_expr
+                        (mul_expr
+                          (unary_expr
+                            (postfix_expr
+                              (match_expr
+                                (pipe_expr
+                                  (or_expr
+                                    (and_expr
+                                      (compare_expr
+                                        (bit_or_expr
+                                          (bit_xor_expr
+                                            (bit_and_expr
+                                              (range_expr
+                                                (add_expr
+                                                  (mul_expr
+                                                    (unary_expr
+                                                      (postfix_expr
+                                                        (identifier)))))))))))))
+                                (match_arm_list
+                                  (match_arm
+                                    (pattern
+                                      (variant_pattern
+                                        (path
+                                          (identifier))
+                                        (pattern
+                                          (tuple_pattern
+                                            (pattern
+                                              (int_literal)
+                                              (int_literal))
+                                            (pattern
+                                              (struct_pattern
+                                                (path
+                                                  (identifier))
+                                                (field_pattern_list
+                                                  (field_pattern
+                                                    (identifier)
+                                                    (pattern
+                                                      (int_literal))))))))))
+                                    (pipe_expr
+                                      (or_expr
+                                        (and_expr
+                                          (compare_expr
+                                            (bit_or_expr
+                                              (bit_xor_expr
+                                                (bit_and_expr
+                                                  (range_expr
+                                                    (add_expr
+                                                      (mul_expr
+                                                        (unary_expr
+                                                          (postfix_expr
+                                                            (bool_literal))))))))))))))
+                                  (match_arm
+                                    (pattern)
+                                    (pipe_expr
+                                      (or_expr
+                                        (and_expr
+                                          (compare_expr
+                                            (bit_or_expr
+                                              (bit_xor_expr
+                                                (bit_and_expr
+                                                  (range_expr
+                                                    (add_expr
+                                                      (mul_expr
+                                                        (unary_expr
+                                                          (postfix_expr
+                                                            (bool_literal)))))))))))))))))))))))))))))))
+
+====================
+Pattern minus is a separate token
+====================
+
+let spaced n = match n { - // comment between sign and integer
+ 1 => true, _ => false }
+
+---
+
+(source_file
+  (item
+    (let_def
+      (identifier)
+      (param
+        (identifier))
+      (pipe_expr
+        (or_expr
+          (and_expr
+            (compare_expr
+              (bit_or_expr
+                (bit_xor_expr
+                  (bit_and_expr
+                    (range_expr
+                      (add_expr
+                        (mul_expr
+                          (unary_expr
+                            (postfix_expr
+                              (match_expr
+                                (pipe_expr
+                                  (or_expr
+                                    (and_expr
+                                      (compare_expr
+                                        (bit_or_expr
+                                          (bit_xor_expr
+                                            (bit_and_expr
+                                              (range_expr
+                                                (add_expr
+                                                  (mul_expr
+                                                    (unary_expr
+                                                      (postfix_expr
+                                                        (identifier)))))))))))))
+                                (match_arm_list
+                                  (match_arm
+                                    (pattern
+                                      (comment)
+                                      (int_literal))
+                                    (pipe_expr
+                                      (or_expr
+                                        (and_expr
+                                          (compare_expr
+                                            (bit_or_expr
+                                              (bit_xor_expr
+                                                (bit_and_expr
+                                                  (range_expr
+                                                    (add_expr
+                                                      (mul_expr
+                                                        (unary_expr
+                                                          (postfix_expr
+                                                            (bool_literal))))))))))))))
+                                  (match_arm
+                                    (pattern)
+                                    (pipe_expr
+                                      (or_expr
+                                        (and_expr
+                                          (compare_expr
+                                            (bit_or_expr
+                                              (bit_xor_expr
+                                                (bit_and_expr
+                                                  (range_expr
+                                                    (add_expr
+                                                      (mul_expr
+                                                        (unary_expr
+                                                          (postfix_expr
+                                                            (bool_literal)))))))))))))))))))))))))))))))
+
+====================
+Negative expressions and positive float patterns remain supported
+====================
+
+let expression n = -n - -1.5
+let floats n = match n { 1.5 => true, _ => false }
+
+---
+
+(source_file
+  (item
+    (let_def
+      (identifier)
+      (param
+        (identifier))
+      (pipe_expr
+        (or_expr
+          (and_expr
+            (compare_expr
+              (bit_or_expr
+                (bit_xor_expr
+                  (bit_and_expr
+                    (range_expr
+                      (add_expr
+                        (mul_expr
+                          (unary_expr
+                            (unary_expr
+                              (postfix_expr
+                                (identifier)))))
+                        (mul_expr
+                          (unary_expr
+                            (unary_expr
+                              (postfix_expr
+                                (float_literal))))))))))))))))
+  (item
+    (let_def
+      (identifier)
+      (param
+        (identifier))
+      (pipe_expr
+        (or_expr
+          (and_expr
+            (compare_expr
+              (bit_or_expr
+                (bit_xor_expr
+                  (bit_and_expr
+                    (range_expr
+                      (add_expr
+                        (mul_expr
+                          (unary_expr
+                            (postfix_expr
+                              (match_expr
+                                (pipe_expr
+                                  (or_expr
+                                    (and_expr
+                                      (compare_expr
+                                        (bit_or_expr
+                                          (bit_xor_expr
+                                            (bit_and_expr
+                                              (range_expr
+                                                (add_expr
+                                                  (mul_expr
+                                                    (unary_expr
+                                                      (postfix_expr
+                                                        (identifier)))))))))))))
+                                (match_arm_list
+                                  (match_arm
+                                    (pattern
+                                      (float_literal))
+                                    (pipe_expr
+                                      (or_expr
+                                        (and_expr
+                                          (compare_expr
+                                            (bit_or_expr
+                                              (bit_xor_expr
+                                                (bit_and_expr
+                                                  (range_expr
+                                                    (add_expr
+                                                      (mul_expr
+                                                        (unary_expr
+                                                          (postfix_expr
+                                                            (bool_literal))))))))))))))
+                                  (match_arm
+                                    (pattern)
+                                    (pipe_expr
+                                      (or_expr
+                                        (and_expr
+                                          (compare_expr
+                                            (bit_or_expr
+                                              (bit_xor_expr
+                                                (bit_and_expr
+                                                  (range_expr
+                                                    (add_expr
+                                                      (mul_expr
+                                                        (unary_expr
+                                                          (postfix_expr
+                                                            (bool_literal)))))))))))))))))))))))))))))))
+
+====================
+Negative float patterns are rejected
+:error
+====================
+
+let bad n = match n { -1.5 => true, _ => false }
+
+---
+
+(ERROR)
+
+====================
+Double minus patterns are rejected
+:error
+====================
+
+let bad n = match n { --1 => true, _ => false }
+
+---
+
+(ERROR)
+
+====================
+Negated binding patterns are rejected
+:error
+====================
+
+let bad n = match n { -value => true, _ => false }
+
+---
+
+(ERROR)
+
+====================
+Negative select patterns and timeout expressions share a prefix
+====================
+
+let receive rx = select { -1 | -2 = rx => true, -1 | 2 => false }
+
+---
+
+(source_file
+  (item
+    (let_def
+      (identifier)
+      (param
+        (identifier))
+      (pipe_expr
+        (or_expr
+          (and_expr
+            (compare_expr
+              (bit_or_expr
+                (bit_xor_expr
+                  (bit_and_expr
+                    (range_expr
+                      (add_expr
+                        (mul_expr
+                          (unary_expr
+                            (postfix_expr
+                              (select_expr
+                                (select_arm_list
+                                  (select_arm
+                                    (pattern
+                                      (int_literal)
+                                      (int_literal))
+                                    (pipe_expr
+                                      (or_expr
+                                        (and_expr
+                                          (compare_expr
+                                            (bit_or_expr
+                                              (bit_xor_expr
+                                                (bit_and_expr
+                                                  (range_expr
+                                                    (add_expr
+                                                      (mul_expr
+                                                        (unary_expr
+                                                          (postfix_expr
+                                                            (identifier)))))))))))))
+                                    (pipe_expr
+                                      (or_expr
+                                        (and_expr
+                                          (compare_expr
+                                            (bit_or_expr
+                                              (bit_xor_expr
+                                                (bit_and_expr
+                                                  (range_expr
+                                                    (add_expr
+                                                      (mul_expr
+                                                        (unary_expr
+                                                          (postfix_expr
+                                                            (bool_literal))))))))))))))
+                                  (select_arm
+                                    (pipe_expr
+                                      (or_expr
+                                        (and_expr
+                                          (compare_expr
+                                            (bit_or_expr
+                                              (bit_xor_expr
+                                                (bit_and_expr
+                                                  (range_expr
+                                                    (add_expr
+                                                      (mul_expr
+                                                        (unary_expr
+                                                          (unary_expr
+                                                            (postfix_expr
+                                                              (int_literal)))))))))
+                                              (bit_xor_expr
+                                                (bit_and_expr
+                                                  (range_expr
+                                                    (add_expr
+                                                      (mul_expr
+                                                        (unary_expr
+                                                          (postfix_expr
+                                                            (int_literal)))))))))))))
+                                    (pipe_expr
+                                      (or_expr
+                                        (and_expr
+                                          (compare_expr
+                                            (bit_or_expr
+                                              (bit_xor_expr
+                                                (bit_and_expr
+                                                  (range_expr
+                                                    (add_expr
+                                                      (mul_expr
+                                                        (unary_expr
+                                                          (postfix_expr
+                                                            (bool_literal)))))))))))))))))))))))))))))))
+
+====================
+Negative patterns in parameters bindings and loops
+====================
+
+let parameters (-1: Int) = true
+let bindings n xs = { let (-1, x) = n; for -2 in xs { x }; x }
+
+---
+
+(source_file
+  (item
+    (let_def
+      (identifier)
+      (param
+        (pattern
+          (int_literal))
+        (path_type
+          (identifier)))
+      (pipe_expr
+        (or_expr
+          (and_expr
+            (compare_expr
+              (bit_or_expr
+                (bit_xor_expr
+                  (bit_and_expr
+                    (range_expr
+                      (add_expr
+                        (mul_expr
+                          (unary_expr
+                            (postfix_expr
+                              (bool_literal)))))))))))))))
+  (item
+    (let_def
+      (identifier)
+      (param
+        (identifier))
+      (param
+        (identifier))
+      (pipe_expr
+        (or_expr
+          (and_expr
+            (compare_expr
+              (bit_or_expr
+                (bit_xor_expr
+                  (bit_and_expr
+                    (range_expr
+                      (add_expr
+                        (mul_expr
+                          (unary_expr
+                            (postfix_expr
+                              (block
+                                (let_stmt
+                                  (pattern
+                                    (tuple_pattern
+                                      (pattern
+                                        (int_literal))
+                                      (pattern
+                                        (identifier))))
+                                  (pipe_expr
+                                    (or_expr
+                                      (and_expr
+                                        (compare_expr
+                                          (bit_or_expr
+                                            (bit_xor_expr
+                                              (bit_and_expr
+                                                (range_expr
+                                                  (add_expr
+                                                    (mul_expr
+                                                      (unary_expr
+                                                        (postfix_expr
+                                                          (identifier))))))))))))))
+                                (pipe_expr
+                                  (or_expr
+                                    (and_expr
+                                      (compare_expr
+                                        (bit_or_expr
+                                          (bit_xor_expr
+                                            (bit_and_expr
+                                              (range_expr
+                                                (add_expr
+                                                  (mul_expr
+                                                    (unary_expr
+                                                      (postfix_expr
+                                                        (for_expr
+                                                          (pattern
+                                                            (int_literal))
+                                                          (pipe_expr
+                                                            (or_expr
+                                                              (and_expr
+                                                                (compare_expr
+                                                                  (bit_or_expr
+                                                                    (bit_xor_expr
+                                                                      (bit_and_expr
+                                                                        (range_expr
+                                                                          (add_expr
+                                                                            (mul_expr
+                                                                              (unary_expr
+                                                                                (postfix_expr
+                                                                                  (identifier)))))))))))))
+                                                          (block
+                                                            (pipe_expr
+                                                              (or_expr
+                                                                (and_expr
+                                                                  (compare_expr
+                                                                    (bit_or_expr
+                                                                      (bit_xor_expr
+                                                                        (bit_and_expr
+                                                                          (range_expr
+                                                                            (add_expr
+                                                                              (mul_expr
+                                                                                (unary_expr
+                                                                                  (postfix_expr
+                                                                                    (identifier)))))))))))))))))))))))))))
+                                (pipe_expr
+                                  (or_expr
+                                    (and_expr
+                                      (compare_expr
+                                        (bit_or_expr
+                                          (bit_xor_expr
+                                            (bit_and_expr
+                                              (range_expr
+                                                (add_expr
+                                                  (mul_expr
+                                                    (unary_expr
+                                                      (postfix_expr
+                                                        (identifier)))))))))))))))))))))))))))))
