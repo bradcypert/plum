@@ -19,6 +19,7 @@
   "fn"
   "struct"
   "enum"
+  "handle"
   "match"
   "if"
   "else"
@@ -126,6 +127,12 @@
 ((identifier) @constructor
   (#match? @constructor "^[A-Z]"))
 (identifier) @variable
+
+; Handle names are types; their cleanup target is a function reference.
+; Keep these after the identifier fallback to preserve those roles.
+(handle_decl name: (identifier) @type)
+(handle_decl "on_drop" @property)
+(handle_decl on_drop: (identifier) @function)
 
 ; Each segment of a struct update path is a field name. Keep this
 ; after the identifier fallback so it also wins for shorthand fields.

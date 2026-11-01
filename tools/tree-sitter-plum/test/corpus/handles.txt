@@ -1,0 +1,447 @@
+==================
+Opaque handle declaration
+==================
+handle Res { on_drop: fake_close }
+
+---
+
+(source_file
+  (item
+    (handle_decl
+      (identifier)
+      (identifier))))
+
+==================
+Public handle with trailing comma and comments
+==================
+pub handle File {
+    // Cleanup belongs to the declaration.
+    on_drop: close_file,
+}
+
+---
+
+(source_file
+  (item
+    (handle_decl
+      (identifier)
+      (comment)
+      (identifier))))
+
+==================
+Contextual handle and on_drop identifiers
+==================
+let handle = 1
+let on_drop = handle
+let identity handle = handle
+let typed (handle: Int): Int = handle
+let local () = { let handle = on_drop; handle }
+struct Holder { handle: Int, on_drop: Int }
+let field (holder: Holder) = holder.handle
+let callback = Holder { handle: handle, on_drop: on_drop }
+handle Resource { on_drop: handle }
+handle Other { on_drop: on_drop }
+let after = handle
+
+---
+
+(source_file
+  (item
+    (let_def
+      (identifier)
+      (pipe_expr
+        (or_expr
+          (and_expr
+            (compare_expr
+              (bit_or_expr
+                (bit_xor_expr
+                  (bit_and_expr
+                    (range_expr
+                      (add_expr
+                        (mul_expr
+                          (unary_expr
+                            (postfix_expr
+                              (int_literal)))))))))))))))
+  (item
+    (let_def
+      (identifier)
+      (pipe_expr
+        (or_expr
+          (and_expr
+            (compare_expr
+              (bit_or_expr
+                (bit_xor_expr
+                  (bit_and_expr
+                    (range_expr
+                      (add_expr
+                        (mul_expr
+                          (unary_expr
+                            (postfix_expr
+                              (identifier)))))))))))))))
+  (item
+    (let_def
+      (identifier)
+      (param
+        (identifier))
+      (pipe_expr
+        (or_expr
+          (and_expr
+            (compare_expr
+              (bit_or_expr
+                (bit_xor_expr
+                  (bit_and_expr
+                    (range_expr
+                      (add_expr
+                        (mul_expr
+                          (unary_expr
+                            (postfix_expr
+                              (identifier)))))))))))))))
+  (item
+    (let_def
+      (identifier)
+      (param
+        (pattern
+          (identifier))
+        (path_type
+          (identifier)))
+      (path_type
+        (identifier))
+      (pipe_expr
+        (or_expr
+          (and_expr
+            (compare_expr
+              (bit_or_expr
+                (bit_xor_expr
+                  (bit_and_expr
+                    (range_expr
+                      (add_expr
+                        (mul_expr
+                          (unary_expr
+                            (postfix_expr
+                              (identifier)))))))))))))))
+  (item
+    (let_def
+      (identifier)
+      (param)
+      (pipe_expr
+        (or_expr
+          (and_expr
+            (compare_expr
+              (bit_or_expr
+                (bit_xor_expr
+                  (bit_and_expr
+                    (range_expr
+                      (add_expr
+                        (mul_expr
+                          (unary_expr
+                            (postfix_expr
+                              (block
+                                (let_stmt
+                                  (pattern
+                                    (identifier))
+                                  (pipe_expr
+                                    (or_expr
+                                      (and_expr
+                                        (compare_expr
+                                          (bit_or_expr
+                                            (bit_xor_expr
+                                              (bit_and_expr
+                                                (range_expr
+                                                  (add_expr
+                                                    (mul_expr
+                                                      (unary_expr
+                                                        (postfix_expr
+                                                          (identifier))))))))))))))
+                                (pipe_expr
+                                  (or_expr
+                                    (and_expr
+                                      (compare_expr
+                                        (bit_or_expr
+                                          (bit_xor_expr
+                                            (bit_and_expr
+                                              (range_expr
+                                                (add_expr
+                                                  (mul_expr
+                                                    (unary_expr
+                                                      (postfix_expr
+                                                        (identifier))))))))))))))))))))))))))))
+  (item
+    (struct_decl
+      (identifier)
+      (field_list
+        (field
+          (identifier)
+          (path_type
+            (identifier)))
+        (field
+          (identifier)
+          (path_type
+            (identifier))))))
+  (item
+    (let_def
+      (identifier)
+      (param
+        (pattern
+          (identifier))
+        (path_type
+          (identifier)))
+      (pipe_expr
+        (or_expr
+          (and_expr
+            (compare_expr
+              (bit_or_expr
+                (bit_xor_expr
+                  (bit_and_expr
+                    (range_expr
+                      (add_expr
+                        (mul_expr
+                          (unary_expr
+                            (postfix_expr
+                              (identifier)
+                              (identifier)))))))))))))))
+  (item
+    (let_def
+      (identifier)
+      (pipe_expr
+        (or_expr
+          (and_expr
+            (compare_expr
+              (bit_or_expr
+                (bit_xor_expr
+                  (bit_and_expr
+                    (range_expr
+                      (add_expr
+                        (mul_expr
+                          (unary_expr
+                            (postfix_expr
+                              (struct_literal
+                                (path
+                                  (identifier))
+                                (field_init_list
+                                  (field_init
+                                    (identifier)
+                                    (pipe_expr
+                                      (or_expr
+                                        (and_expr
+                                          (compare_expr
+                                            (bit_or_expr
+                                              (bit_xor_expr
+                                                (bit_and_expr
+                                                  (range_expr
+                                                    (add_expr
+                                                      (mul_expr
+                                                        (unary_expr
+                                                          (postfix_expr
+                                                            (identifier))))))))))))))
+                                  (field_init
+                                    (identifier)
+                                    (pipe_expr
+                                      (or_expr
+                                        (and_expr
+                                          (compare_expr
+                                            (bit_or_expr
+                                              (bit_xor_expr
+                                                (bit_and_expr
+                                                  (range_expr
+                                                    (add_expr
+                                                      (mul_expr
+                                                        (unary_expr
+                                                          (postfix_expr
+                                                            (identifier))))))))))))))))))))))))))))))
+  (item
+    (handle_decl
+      (identifier)
+      (identifier)))
+  (item
+    (handle_decl
+      (identifier)
+      (identifier)))
+  (item
+    (let_def
+      (identifier)
+      (pipe_expr
+        (or_expr
+          (and_expr
+            (compare_expr
+              (bit_or_expr
+                (bit_xor_expr
+                  (bit_and_expr
+                    (range_expr
+                      (add_expr
+                        (mul_expr
+                          (unary_expr
+                            (postfix_expr
+                              (identifier))))))))))))))))
+
+==================
+Handles interleaved with other items
+==================
+extern "C" { fn fake_close(handle: Int); }
+handle Res { on_drop: fake_close }
+struct Wrapper { resource: Res }
+let raw (handle: Res): Int = unsafe { Res.raw(handle) }
+pub handle Other { on_drop: fake_close, }
+enum Result { Empty, Open(Other) }
+
+---
+
+(source_file
+  (item
+    (extern_block
+      (string_literal)
+      (extern_fn
+        (identifier)
+        (extern_param_list
+          (extern_param
+            (identifier)
+            (path_type
+              (identifier)))))))
+  (item
+    (handle_decl
+      (identifier)
+      (identifier)))
+  (item
+    (struct_decl
+      (identifier)
+      (field_list
+        (field
+          (identifier)
+          (path_type
+            (identifier))))))
+  (item
+    (let_def
+      (identifier)
+      (param
+        (pattern
+          (identifier))
+        (path_type
+          (identifier)))
+      (path_type
+        (identifier))
+      (pipe_expr
+        (or_expr
+          (and_expr
+            (compare_expr
+              (bit_or_expr
+                (bit_xor_expr
+                  (bit_and_expr
+                    (range_expr
+                      (add_expr
+                        (mul_expr
+                          (unary_expr
+                            (postfix_expr
+                              (unsafe_expr
+                                (block
+                                  (pipe_expr
+                                    (or_expr
+                                      (and_expr
+                                        (compare_expr
+                                          (bit_or_expr
+                                            (bit_xor_expr
+                                              (bit_and_expr
+                                                (range_expr
+                                                  (add_expr
+                                                    (mul_expr
+                                                      (unary_expr
+                                                        (postfix_expr
+                                                          (identifier)
+                                                          (identifier)
+                                                          (arguments
+                                                            (argument
+                                                              (pipe_expr
+                                                                (or_expr
+                                                                  (and_expr
+                                                                    (compare_expr
+                                                                      (bit_or_expr
+                                                                        (bit_xor_expr
+                                                                          (bit_and_expr
+                                                                            (range_expr
+                                                                              (add_expr
+                                                                                (mul_expr
+                                                                                  (unary_expr
+                                                                                    (postfix_expr
+                                                                                      (identifier)))))))))))))))))))))))))))))))))))))))))))
+  (item
+    (handle_decl
+      (identifier)
+      (identifier)))
+  (item
+    (enum_decl
+      (identifier)
+      (variant_list
+        (variant
+          (identifier))
+        (variant
+          (identifier)
+          (path_type
+            (identifier)))))))
+
+==================
+Handle requires on_drop
+:error
+==================
+handle Res {}
+
+---
+
+(ERROR)
+
+==================
+Handle rejects unknown cleanup key
+:error
+==================
+handle Res { on_drpo: fake_close }
+
+---
+
+(ERROR)
+
+==================
+Handle requires cleanup identifier
+:error
+==================
+handle Res { on_drop: }
+
+---
+
+(ERROR)
+
+==================
+Handle rejects qualified cleanup path
+:error
+==================
+handle Res { on_drop: native.close }
+
+---
+
+(ERROR)
+
+==================
+Handle rejects generic parameters
+:error
+==================
+handle Res[T] { on_drop: fake_close }
+
+---
+
+(ERROR)
+
+==================
+Handle rejects extra fields
+:error
+==================
+handle Res { on_drop: fake_close, extra: other }
+
+---
+
+(ERROR)
+
+==================
+Handle rejects extra comma
+:error
+==================
+handle Res { on_drop: fake_close,, }
+
+---
+
+(ERROR)

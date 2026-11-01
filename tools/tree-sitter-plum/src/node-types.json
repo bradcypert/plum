@@ -687,6 +687,32 @@
     }
   },
   {
+    "type": "handle_decl",
+    "named": true,
+    "fields": {
+      "name": {
+        "multiple": false,
+        "required": true,
+        "types": [
+          {
+            "type": "identifier",
+            "named": true
+          }
+        ]
+      },
+      "on_drop": {
+        "multiple": false,
+        "required": true,
+        "types": [
+          {
+            "type": "identifier",
+            "named": true
+          }
+        ]
+      }
+    }
+  },
+  {
     "type": "if_expr",
     "named": true,
     "fields": {
@@ -740,6 +766,10 @@
         },
         {
           "type": "extern_block",
+          "named": true
+        },
+        {
+          "type": "handle_decl",
           "named": true
         },
         {
@@ -1825,6 +1855,10 @@
     "named": false
   },
   {
+    "type": "handle",
+    "named": false
+  },
+  {
     "type": "identifier",
     "named": true
   },
@@ -1850,6 +1884,10 @@
   },
   {
     "type": "mut",
+    "named": false
+  },
+  {
+    "type": "on_drop",
     "named": false
   },
   {

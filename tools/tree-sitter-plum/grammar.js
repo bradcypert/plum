@@ -70,7 +70,7 @@ module.exports = grammar({
 
     item: ($) => seq(optional("pub"), $._item_kind),
     _item_kind: ($) =>
-      choice($.let_def, $.struct_decl, $.enum_decl, $.extern_block, $.use_decl),
+      choice($.let_def, $.struct_decl, $.enum_decl, $.handle_decl, $.extern_block, $.use_decl),
 
     let_def: ($) =>
       seq(
@@ -163,6 +163,21 @@ module.exports = grammar({
     variant_list: ($) => seq(commaSep1($.variant), optional(",")),
     variant: ($) =>
       seq(field("name", $.identifier), optional(seq("(", commaSep1($._type), ")"))),
+
+    // GRAMMAR.md HandleDecl: `handle` introduces an item here but is
+    // still an ordinary identifier elsewhere. The compiler validates
+    // the cleanup function's extern ABI; this rule only parses its name.
+    handle_decl: ($) =>
+      seq(
+        "handle",
+        field("name", $.identifier),
+        "{",
+        "on_drop",
+        ":",
+        field("on_drop", $.identifier),
+        optional(","),
+        "}",
+      ),
 
     extern_block: ($) => seq("extern", $.string_literal, "{", repeat($.extern_fn), "}"),
     extern_fn: ($) =>

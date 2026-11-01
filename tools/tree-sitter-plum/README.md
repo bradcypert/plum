@@ -39,6 +39,12 @@ grammar change here to pick it up.
 
 ## Known simplifications
 
+Handle declarations follow `HandleDecl`, including `pub` and an optional
+trailing comma. `handle` introduces a declaration only at item start and
+remains an identifier elsewhere, as does `on_drop` outside a declaration.
+Cleanup signature and resource ownership checks remain the compiler's
+responsibility; editor parsing does not create or release native handles.
+
 Compile-time builtin calls follow `BuiltinCall ::= BuiltinName Arguments`.
 The sigil and name form one token (`@embed_file`); arguments and postfix
 chains use the ordinary expression rules. Unknown names, wrong arity,

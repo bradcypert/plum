@@ -1,0 +1,31 @@
+pub handle Res { on_drop: fake_close, }
+//  ^ keyword
+//         ^ type
+//               ^ property
+//                        ^ function
+let handle = 1
+//  ^ variable
+let on_drop = handle
+//  ^ variable
+//            ^ variable
+let identity handle = handle
+//           ^ variable
+//                    ^ variable
+let typed (handle: Int): Int = handle
+//         ^ variable
+//                             ^ variable
+let local () = { let handle = on_drop; handle }
+//                   ^ variable
+//                            ^ variable
+//                                     ^ variable
+struct Holder { handle: Int, on_drop: Int }
+//              ^ variable
+//                           ^ variable
+let field (holder: Holder) = holder.handle
+//                                  ^ variable
+handle Other { on_drop: handle }
+//^ keyword
+//                      ^ function
+handle Third { on_drop: on_drop }
+//             ^ property
+//                      ^ function
