@@ -753,6 +753,22 @@
     }
   },
   {
+    "type": "interpolation",
+    "named": true,
+    "fields": {
+      "expression": {
+        "multiple": false,
+        "required": true,
+        "types": [
+          {
+            "type": "pipe_expr",
+            "named": true
+          }
+        ]
+      }
+    }
+  },
+  {
     "type": "item",
     "named": true,
     "fields": {},
@@ -1445,6 +1461,14 @@
         {
           "type": "escape_sequence",
           "named": true
+        },
+        {
+          "type": "interpolation",
+          "named": true
+        },
+        {
+          "type": "string_content",
+          "named": true
         }
       ]
     }
@@ -1698,6 +1722,10 @@
     "named": false
   },
   {
+    "type": "${",
+    "named": false
+  },
+  {
     "type": "%",
     "named": false
   },
@@ -1905,6 +1933,10 @@
   {
     "type": "spawn",
     "named": false
+  },
+  {
+    "type": "string_content",
+    "named": true
   },
   {
     "type": "struct",

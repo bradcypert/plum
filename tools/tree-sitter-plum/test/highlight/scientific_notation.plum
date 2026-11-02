@@ -1,0 +1,20 @@
+let values = [1e3, 1.5e-3, 2E+2, 1_0.5_E-0_1]
+//            ^ number.float
+//                 ^ number.float
+//                         ^ number.float
+//                               ^ number.float
+let negative = -1e3 + 2e0
+//             ^ operator
+//              ^ number.float
+//                  ^ operator
+//                    ^ number.float
+let text = 1e3.to_string()
+//         ^ number.float
+//            ^ punctuation.delimiter
+let range = 1..3
+//          ^ number
+//           ^ operator
+//             ^ number
+let e3 = 4
+//  ^ variable
+//       ^ number

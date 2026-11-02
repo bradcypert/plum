@@ -3138,7 +3138,7 @@
     },
     "float_literal": {
       "type": "PATTERN",
-      "value": "[0-9][0-9_]*\\.[0-9][0-9_]*"
+      "value": "[0-9][0-9_]*(\\.[0-9][0-9_]*([eE][+-]?[0-9][0-9_]*)?|[eE][+-]?[0-9][0-9_]*)"
     },
     "bool_literal": {
       "type": "CHOICE",
@@ -3170,8 +3170,12 @@
                 "name": "escape_sequence"
               },
               {
-                "type": "PATTERN",
-                "value": "[^\"\\\\]+"
+                "type": "SYMBOL",
+                "name": "string_content"
+              },
+              {
+                "type": "SYMBOL",
+                "name": "interpolation"
               }
             ]
           }
@@ -3179,6 +3183,43 @@
         {
           "type": "STRING",
           "value": "\""
+        }
+      ]
+    },
+    "string_content": {
+      "type": "IMMEDIATE_TOKEN",
+      "content": {
+        "type": "CHOICE",
+        "members": [
+          {
+            "type": "PATTERN",
+            "value": "[^\"\\\\$]+"
+          },
+          {
+            "type": "STRING",
+            "value": "$"
+          }
+        ]
+      }
+    },
+    "interpolation": {
+      "type": "SEQ",
+      "members": [
+        {
+          "type": "STRING",
+          "value": "${"
+        },
+        {
+          "type": "FIELD",
+          "name": "expression",
+          "content": {
+            "type": "SYMBOL",
+            "name": "_expr"
+          }
+        },
+        {
+          "type": "STRING",
+          "value": "}"
         }
       ]
     },

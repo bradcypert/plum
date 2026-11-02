@@ -764,7 +764,8 @@ extern "C" {
                               (identifier)))))))))))))))
   (item
     (extern_block
-      (string_literal)
+      (string_literal
+        (string_content))
       (extern_fn
         (identifier)
         (extern_param_list

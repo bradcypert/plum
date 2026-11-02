@@ -41,7 +41,8 @@ let template (): String = @embed_file("template.md")
                                                       (mul_expr
                                                         (unary_expr
                                                           (postfix_expr
-                                                            (string_literal)))))))))))))))))))))))))))))))
+                                                            (string_literal
+                                                              (string_content))))))))))))))))))))))))))))))))
 
 ====================
 Builtin calls compose with expressions and postfix chains
@@ -86,7 +87,8 @@ let combined = @embed_file("a.md") + @embed_file("b.md")
                                                       (mul_expr
                                                         (unary_expr
                                                           (postfix_expr
-                                                            (string_literal))))))))))))))))
+                                                            (string_literal
+                                                              (string_content)))))))))))))))))
                               (identifier)
                               (arguments)))))))))))))))
   (item
@@ -135,7 +137,8 @@ let combined = @embed_file("a.md") + @embed_file("b.md")
                                                                                   (mul_expr
                                                                                     (unary_expr
                                                                                       (postfix_expr
-                                                                                        (string_literal))))))))))))))))))))))))))))))))))))))))))))
+                                                                                        (string_literal
+                                                                                          (string_content)))))))))))))))))))))))))))))))))))))))))))))
   (item
     (let_def
       (identifier)
@@ -184,7 +187,8 @@ let combined = @embed_file("a.md") + @embed_file("b.md")
                                                                                   (mul_expr
                                                                                     (unary_expr
                                                                                       (postfix_expr
-                                                                                        (string_literal)))))))))))))))))))))))))))))
+                                                                                        (string_literal
+                                                                                          (string_content))))))))))))))))))))))))))))))
                                 (pipe_expr
                                   (or_expr
                                     (and_expr
@@ -229,7 +233,8 @@ let combined = @embed_file("a.md") + @embed_file("b.md")
                                                       (mul_expr
                                                         (unary_expr
                                                           (postfix_expr
-                                                            (string_literal)))))))))))))))))))
+                                                            (string_literal
+                                                              (string_content))))))))))))))))))))
                         (mul_expr
                           (unary_expr
                             (postfix_expr
@@ -249,7 +254,8 @@ let combined = @embed_file("a.md") + @embed_file("b.md")
                                                       (mul_expr
                                                         (unary_expr
                                                           (postfix_expr
-                                                            (string_literal)))))))))))))))))))))))))))))))
+                                                            (string_literal
+                                                              (string_content))))))))))))))))))))))))))))))))
 
 ====================
 Builtin names and ordinary identifiers stay separate
@@ -310,7 +316,8 @@ let builtin = @embed_file("template.md")
                                                     (mul_expr
                                                       (unary_expr
                                                         (postfix_expr
-                                                          (string_literal)))))))))))))))))))))))))))))
+                                                          (string_literal
+                                                            (string_content))))))))))))))))))))))))))))))
   (item
     (let_def
       (identifier)
@@ -342,7 +349,8 @@ let builtin = @embed_file("template.md")
                                                       (mul_expr
                                                         (unary_expr
                                                           (postfix_expr
-                                                            (string_literal)))))))))))))))))))))))))))))))
+                                                            (string_literal
+                                                              (string_content))))))))))))))))))))))))))))))))
 
 ====================
 Builtin semantic validation belongs to the compiler

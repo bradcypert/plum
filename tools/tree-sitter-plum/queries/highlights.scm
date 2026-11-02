@@ -37,7 +37,8 @@
 (int_literal) @number
 (float_literal) @number.float
 (bool_literal) @boolean
-(string_literal) @string
+(string_literal "\"" @string)
+(string_content) @string
 (escape_sequence) @string.escape
 (comment) @comment
 
@@ -72,6 +73,7 @@
 
 [ "." "," ":" ";" ] @punctuation.delimiter
 [ "(" ")" "{" "}" "[" "]" ] @punctuation.bracket
+(interpolation ["${" "}"] @punctuation.special)
 "_" @variable.builtin
 
 ; ---- Items ----
