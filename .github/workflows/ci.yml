@@ -170,6 +170,30 @@ jobs:
         run: python3 ./bootstrap/package-staging-test.py ./sh.real
       - name: the language server answers a real session
         run: ./bootstrap/lsp-smoke
+      - name: the version string is consistent
+        run: ./bootstrap/check-version
+      - name: plum help is a real command
+        run: ./bootstrap/help-check
+
+  # Native integration tests compile/link many fixtures. Keep their budget
+  # separate from source checks so runner variation cannot cancel the tail.
+  native_checks:
+    name: Linux native runtime and integration checks
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v5
+      - name: install clang
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y clang
+          clang --version
+      - uses: actions/download-artifact@v4
+        with:
+          name: plum-linux-compiler
+      - name: restore freshly built compiler
+        run: tar -xzf plum-linux-compiler.tar.gz
       - name: TCP and HTTP work in a compiled binary
         run: ./bootstrap/net-smoke
       - name: stdin reads preserve buffers and bound waits
@@ -198,10 +222,6 @@ jobs:
         run: PLUM=./sh.real ./bootstrap/process-capture-smoke
       - name: whole-file reads propagate failures and preserve bytes
         run: ./bootstrap/file-read-smoke
-      - name: the version string is consistent
-        run: ./bootstrap/check-version
-      - name: plum help is a real command
-        run: ./bootstrap/help-check
 
   # The cache behavior suite takes several minutes. Give it an independent
   # budget so the CLI/docs job does not time out after otherwise passing.
@@ -252,7 +272,7 @@ jobs:
   bootstrap:
     name: build from seed and validate
     if: ${{ always() }}
-    needs: [build, bootstrap_proofs, corpus, checks, cache_behavior, cache_objects]
+    needs: [build, bootstrap_proofs, corpus, checks, native_checks, cache_behavior, cache_objects]
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
@@ -262,6 +282,7 @@ jobs:
           test "${{ needs.bootstrap_proofs.result }}" = success
           test "${{ needs.corpus.result }}" = success
           test "${{ needs.checks.result }}" = success
+          test "${{ needs.native_checks.result }}" = success
           test "${{ needs.cache_behavior.result }}" = success
           test "${{ needs.cache_objects.result }}" = success
 
