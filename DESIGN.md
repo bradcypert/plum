@@ -21446,3 +21446,65 @@ and without `--trace`: a channel keeps a bystander task's frame live while
 another task fails. Only the failing task's frames may appear, and stdout
 must remain the original panic message. `check-build-modes` continues to
 check deep tail recursion and frame balance.
+
+### Owned stdin results and bounded Windows console reads (#225, #271)
+
+Public stdin operations now share one process-owned native reader. Its
+lock covers consumption of pending bytes and creation of an independently
+owned result. Each `Os` wrapper copies that snapshot into `Bytes` and
+releases it before UTF-8 validation or returning. Holding a lock only
+around the old count-producing call would leave the following data/copy
+call exposed to another task overwriting the same buffer. The older
+count/data symbols remain as a single-consumer bootstrap ABI for seeds;
+current public wrappers do not use them.
+
+One absolute monotonic deadline covers lock contention and input waiting.
+An empty byte request bypasses both the lock and allocation. EOF, timeout
+and native failure are distinct internally; recoverable I/O/allocation
+failures now reach the public `Err` path rather than becoming EOF.
+
+Windows console readiness signals input *records*, not readable stream
+bytes. Calling `ReadFile` after readiness can still block for Enter or
+ignore mouse/key-up records indefinitely. The console adapter instead
+lazily starts one worker with one fixed 4,096-byte read slot. The caller
+waits on completion under its deadline. A timeout leaves that one request
+owned by the reader; the next call resumes it. No timeout starts a second
+worker or queues another read. Windows keeps responsibility for cooked
+editing, echo, code-page conversion, and raw/VT stream translation. The
+adapter never changes console modes. Establish the desired terminal mode
+before reading: an in-flight read continues the operation that started
+it, including its console editing state. Process shutdown cancels and
+joins the worker before releasing its events and thread handle. Pipes
+and files keep their direct adapters and create no worker.
+
+Memory ownership is now explicit across the native-to-Plum copy. The
+reader retains one geometrically grown pending buffer at its high-water
+capacity, as before; partial lines survive timeouts and remain uncapped.
+The old shared output buffer, which also retained a high-water capacity,
+is gone from the current public path. A completed native result requests
+`sizeof(size_t) + n + 1` bytes (8 + n + 1 on 64-bit targets), overlaps the
+Plum copy briefly, and is freed before the wrapper returns. Simultaneous
+callers can hold independent snapshots during their copies; native
+snapshot memory therefore follows in-progress copies rather than a
+per-thread cache or growing completion queue. Nonpositive byte requests
+allocate nothing natively, even while another reader holds the lock.
+
+On Windows the reader additionally contains one fixed 4 KiB worker slot
+and requests a 64 KiB reserved worker stack on first console use, plus
+three native handles. Actual stack commitment and RSS are OS-dependent.
+Repeated timeouts retain that fixed resource set and reuse pending input
+capacity. Native allocations and OS resources are outside `PLUM_RT_STATS`;
+this is a lifetime/concurrency correction, not a claim of lower RSS for
+every workload. It changes no Perceus ownership, cycle handling, or other
+native tables. The separate CRT stdin binary-mode issue #240 remains.
+
+`stdin-shim-test.c` checks simultaneous readers and snapshot lifetimes,
+allocation failure without consumption, zero-allocation empty reads,
+bounded lock contention, and native allocation balance. It runs under
+ASan/UBSan and is also runnable under TSan. `stdin-owned-test.py` crosses
+the public interface with large lines on four tasks, invalid UTF-8 and
+binary input. Windows CI additionally starts an isolated real console
+with a parent watchdog: unfinished input, noise records, repeated
+timeouts, resumed lines, editing, Unicode, raw VT keys, startup failures,
+I/O failures and shutdown all exercise the actual console adapter. This
+supersedes the compile-only console limitation described under #32 above.
