@@ -131,11 +131,17 @@ it. Out-of-range numbers give an empty string.
 
 ## `let iso8601 (epoch: Int): String`
 
-`2026-08-27T01:40:28Z`, in ISO 8601, which is the one to reach for
-when a machine reads it back or when it needs to sort as text.
+`2026-08-27T01:40:28Z`, in ISO 8601, for every `Int` epoch.
+Years 0000 through 9999 use four digits. Other years use an explicit
+sign and at least six magnitude digits: `-000001`, `+010000`.
+Expanded years require agreement with the reader, including the
+digit width for magnitudes above 999999. Text sorting is chronological
+only within the unsigned four-digit range.
 
 ## `let rfc7231 (epoch: Int): String`
 
 `Thu, 27 Aug 2026 01:40:28 GMT`, the HTTP date format (RFC 7231),
 which is what a `Last-Modified` header and a good many generated
-files want.
+files want. The year is exactly four digits, including leading zeros.
+Returns an empty string outside years 0000 through 9999; callers
+must omit the header or handle that result rather than send it as a date.

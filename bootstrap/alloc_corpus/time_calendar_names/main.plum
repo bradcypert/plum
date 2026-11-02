@@ -1,0 +1,9 @@
+use Time;
+
+// Static names should allocate nothing, even on invalid indices.
+let measure (n: Int) (total: Int): Int = if n == 0 { total } else {
+    let weekday = Time.weekday_name(n % 9 - 1);
+    let month = Time.month_name(n % 14);
+    measure(n - 1, total + weekday.len() + month.len())
+}
+let main (): Unit = { measure(10000, 0); () }

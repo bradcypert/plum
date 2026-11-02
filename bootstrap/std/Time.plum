@@ -199,10 +199,15 @@ pub let sleep (d: Duration): Unit = unsafe { time_sleep_nanos(d.nanos); () }
 /// floor, and dates before 1970 are real dates.
 let plum__floor_div (a: Int) (b: Int): Int = {
     let q = a / b;
-    if a - q * b != 0 && (a < 0) != (b < 0) { q - 1 } else { q }
+    if a % b != 0 && (a < 0) != (b < 0) { q - 1 } else { q }
 }
 
-let plum__floor_mod (a: Int) (b: Int): Int = a - plum__floor_div(a, b) * b
+// Avoid multiplying the floored quotient: it can fall below Int.min
+// even when both the input and the remainder are representable.
+let plum__floor_mod (a: Int) (b: Int): Int = {
+    let r = a % b;
+    if r != 0 && (a < 0) != (b < 0) { r + b } else { r }
+}
 
 /// A civil date and time, as UTC. `weekday` is 0 for Sunday.
 pub struct DateTime {
@@ -244,30 +249,60 @@ pub let utc (epoch: Int): DateTime = {
 
 /// The English name of a weekday, 0 being Sunday, as `Time.utc`
 /// reports it. Out-of-range numbers give an empty string.
-pub let weekday_name (weekday: Int): String =
-    ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"][plum__floor_mod(weekday, 7)]
+pub let weekday_name (weekday: Int): String = match weekday {
+    0 => "Sun", 1 => "Mon", 2 => "Tue", 3 => "Wed",
+    4 => "Thu", 5 => "Fri", 6 => "Sat", _ => "",
+}
 
 /// The English name of a month, 1 being January, as `Time.utc` reports
 /// it. Out-of-range numbers give an empty string.
-pub let month_name (month: Int): String =
-    ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"][plum__floor_mod(month - 1, 12)]
+pub let month_name (month: Int): String = match month {
+    1 => "Jan", 2 => "Feb", 3 => "Mar", 4 => "Apr",
+    5 => "May", 6 => "Jun", 7 => "Jul", 8 => "Aug",
+    9 => "Sep", 10 => "Oct", 11 => "Nov", 12 => "Dec", _ => "",
+}
 
 let plum__two (n: Int): String = String.pad_left(n.to_string(), 2, "0")
 
-/// `2026-08-27T01:40:28Z`, in ISO 8601, which is the one to reach for
-/// when a machine reads it back or when it needs to sort as text.
+// The caller has already constrained the year to 0000..9999. Avoid
+// codepoint-array padding work when its decimal form is already four digits.
+let plum__four_year (year: Int): String = {
+    let digits = year.to_string();
+    if year >= 1000 { digits } else { String.pad_left(digits, 4, "0") }
+}
+
+// Only receives years produced by utc(Int), whose magnitude is much
+// smaller than Int.max; negating a negative year is therefore safe.
+let plum__iso_year (year: Int): String =
+    if year >= 0 && year <= 9999 { plum__four_year(year) }
+    else {
+        let sign = if year < 0 { "-" } else { "+" };
+        let magnitude = if year < 0 { 0 - year } else { year };
+        sign.concat(String.pad_left(magnitude.to_string(), 6, "0"))
+    }
+
+/// `2026-08-27T01:40:28Z`, in ISO 8601, for every `Int` epoch.
+/// Years 0000 through 9999 use four digits. Other years use an explicit
+/// sign and at least six magnitude digits: `-000001`, `+010000`.
+/// Expanded years require agreement with the reader, including the
+/// digit width for magnitudes above 999999. Text sorting is chronological
+/// only within the unsigned four-digit range.
 pub let iso8601 (epoch: Int): String = {
     let t = utc(epoch);
-    let date = String.pad_left(t.year.to_string(), 4, "0").concat("-").concat(plum__two(t.month)).concat("-").concat(plum__two(t.day));
+    let date = plum__iso_year(t.year).concat("-").concat(plum__two(t.month)).concat("-").concat(plum__two(t.day));
     date.concat("T").concat(plum__two(t.hour)).concat(":").concat(plum__two(t.minute)).concat(":").concat(plum__two(t.second)).concat("Z")
 }
 
 /// `Thu, 27 Aug 2026 01:40:28 GMT`, the HTTP date format (RFC 7231),
 /// which is what a `Last-Modified` header and a good many generated
-/// files want.
+/// files want. The year is exactly four digits, including leading zeros.
+/// Returns an empty string outside years 0000 through 9999; callers
+/// must omit the header or handle that result rather than send it as a date.
 pub let rfc7231 (epoch: Int): String = {
     let t = utc(epoch);
-    let head = weekday_name(t.weekday).concat(", ").concat(plum__two(t.day)).concat(" ").concat(month_name(t.month));
-    let time = plum__two(t.hour).concat(":").concat(plum__two(t.minute)).concat(":").concat(plum__two(t.second));
-    head.concat(" ").concat(t.year.to_string()).concat(" ").concat(time).concat(" GMT")
+    if t.year < 0 || t.year > 9999 { "" } else {
+        let head = weekday_name(t.weekday).concat(", ").concat(plum__two(t.day)).concat(" ").concat(month_name(t.month));
+        let time = plum__two(t.hour).concat(":").concat(plum__two(t.minute)).concat(":").concat(plum__two(t.second));
+        head.concat(" ").concat(plum__four_year(t.year)).concat(" ").concat(time).concat(" GMT")
+    }
 }
