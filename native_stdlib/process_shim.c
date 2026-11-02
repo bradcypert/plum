@@ -1086,7 +1086,7 @@ long long process_poll(long long handle) {
 // Waits for the child. A negative `timeout_nanos` waits forever.
 // Returns 1 if it exited, 0 if the timeout expired first, -1 on error.
 //
-// A bounded wait POLLS with a capped backoff rather than using a timed
+// On POSIX a bounded wait POLLS with a capped backoff rather than using a timed
 // wait primitive, because POSIX has no portable one: `waitpid` cannot
 // take a deadline, and the alternatives (`sigtimedwait` on SIGCHLD,
 // `pidfd_open`) are per-platform and interact with any other signal
@@ -1119,10 +1119,18 @@ long long process_child_wait(long long handle, long long timeout_nanos) {
         HANDLE h = (HANDLE)(intptr_t)slot->child->pid;
         long long ms = timeout_nanos / 1000000LL;
         if (timeout_nanos % 1000000LL != 0) ms++;
-        DWORD w = WaitForSingleObject(h, ms > 0x7FFFFFFELL ? 0x7FFFFFFE : (DWORD)ms);
-        if (w == WAIT_TIMEOUT) return 0;
-        if (w != WAIT_OBJECT_0) return -1;
-        return plum_win_child_collect(handle);
+        // Round once, then consume the full budget in finite OS waits.
+        // A single capped wait would report an early timeout for durations
+        // above the cap. Keep the remainder in 64 bits; even Int's largest
+        // nanosecond duration fits, without constructing an absolute deadline.
+        for (;;) {
+            DWORD chunk = ms > 0x7FFFFFFELL ? 0x7FFFFFFE : (DWORD)ms;
+            DWORD w = WaitForSingleObject(h, chunk);
+            if (w == WAIT_OBJECT_0) return plum_win_child_collect(handle);
+            if (w != WAIT_TIMEOUT) return -1;
+            ms -= chunk;
+            if (ms == 0) return 0;
+        }
     }
 #else
     {

@@ -65,6 +65,7 @@ let case_poll_then_wait (self: String): Unit =
             println("pid is real:  ".concat((c.pid() > 0).to_string()));
             println("first poll:   ".concat(poll_says(c)));
             show_result("after wait:   ", c.wait());
+            assert(match c.wait_timeout(Time.nanos(0 - 1)) { Ok(Some(_)) => true, _ => false });
             // The result is captured, so asking again is not a second
             // wait on a process that is already gone.
             println("poll after:   ".concat(poll_says(c)));
@@ -77,6 +78,11 @@ let case_wait_timeout (self: String): Unit =
     match start_self(self, ["--sleep", "400"]) {
         Err(e) => println("start: ".concat(e)),
         Ok(c) => {
+            // Nonpositive durations are polls, never the native infinite sentinel.
+            for nanos in [0, 0 - 1, 0 - 9223372036854775807 - 1] {
+                assert(match c.wait_timeout(Time.nanos(nanos)) { Ok(None) => true, _ => false });
+            };
+            println("nonpositive:  running");
             println("short timeout:".concat(match c.wait_timeout(ms(20)) {
                 Ok(None) => " timed out",
                 Ok(Some(_)) => " finished (too fast to be a real test)",

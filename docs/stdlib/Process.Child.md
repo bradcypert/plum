@@ -37,7 +37,8 @@ exited returns the same result again, including any capture error.
 
 Waits, but not forever. `None` means the time ran out and the child
 is still going. It has NOT been signalled, so the caller can wait
-again, give up, or `terminate` it.
+again, give up, or `terminate` it. Zero or negative durations only poll;
+use `wait` to wait without a timeout.
 
 ## `let Child.terminate (c: Child): Result[Unit, String]`
 

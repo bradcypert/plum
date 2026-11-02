@@ -157,10 +157,12 @@ pub let Child.wait (c: Child): Result[ProcessResult, String] = unsafe {
 
 /// Waits, but not forever. `None` means the time ran out and the child
 /// is still going. It has NOT been signalled, so the caller can wait
-/// again, give up, or `terminate` it.
+/// again, give up, or `terminate` it. Zero or negative durations only poll;
+/// use `wait` to wait without a timeout.
 pub let Child.wait_timeout (c: Child) (d: Time.Duration): Result[Option[ProcessResult], String] = unsafe {
     let h = Child.raw(c);
-    let r = process_child_wait(h, d.as_nanos());
+    let nanos = d.as_nanos();
+    let r = process_child_wait(h, if nanos > 0 { nanos } else { 0 });
     if r < 0 { Err("Child.wait_timeout: could not wait for child") }
     else if r == 0 { Ok(None) }
     else { match result_of(h) { Ok(r) => Ok(Some(r)), Err(e) => Err(e) } }
