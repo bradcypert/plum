@@ -56,6 +56,7 @@
 // small accessors that make an object usable as a record.
 
 use Path;
+use Json;
 
 pub let json_field (v: JsonValue) (key: String): Option[JsonValue] =
     match v {
@@ -494,18 +495,7 @@ let parse_defs_acc (items: Array[JsonValue]) (i: Int) (acc: Array[Def]): Array[D
     }
 
 pub let json_field_int (v: JsonValue) (key: String): Int =
-    match json_field(v, key) {
-        Some(f) => match f { JsonNumber(n) => float_to_int(n), _ => 0 },
-        None => 0,
-    }
-
-// `Float.floor` then a cast would be the obvious route, but there is no
-// float-to-int conversion in either prelude; JSON numbers that came
-// from line/column integers round-trip exactly, so a subtraction loop
-// is both correct and small.
-let float_to_int (f: Float): Int = float_to_int_acc(f, 0)
-let float_to_int_acc (f: Float) (acc: Int): Int =
-    if f < 1.0 { acc } else { float_to_int_acc(f - 1.0, acc + 1) }
+    Result.unwrap_or(Json.decode(Json.field(key, Json.int()), v), 0)
 
 pub let find_def (defs: Array[Def]) (name: String) (i: Int): Option[Def] =
     if i >= defs.len() { None }
@@ -581,23 +571,70 @@ pub let hover_result (d: Def) (r: Rng): JsonValue =
 
 pub let location_result (d: Def): JsonValue = location_at(d.path, d.line, d.col, d.name.len())
 
-// `selectionRange` asks about SEVERAL positions at once and expects one
-// chain back per position, in order.
-pub let params_positions (params: JsonValue): Array[JsonValue] =
-    match json_field(params, "positions") {
-        Some(JsonArray(items)) => items,
-        _ => [],
+// Validated LSP uintegers, converted to the compiler's 1-based convention.
+// Bounds and integrality are checked before the native float-to-int cast.
+// Document clamping belongs to the source-position layer, not JSON decoding.
+pub struct Position { pub line: Int, pub col: Int }
+
+let position_uint (v: JsonValue) (key: String): Option[Int] =
+    match json_field(v, key) {
+        Some(JsonNumber(n)) =>
+            if n >= 0.0 && n <= 2147483647.0 && n == Float.floor(n) { Some(n.to_int()) }
+            else { None },
+        _ => None,
     }
 
-pub let position_line (p: JsonValue): Int = json_field_int(p, "line") + 1
-pub let position_col (p: JsonValue): Int = json_field_int(p, "character") + 1
+pub let parse_position (v: JsonValue): Option[Position] =
+    match position_uint(v, "line") {
+        None => None,
+        Some(line) => match position_uint(v, "character") {
+            None => None,
+            Some(col) => Some(Position { line: line + 1, col: col + 1 }),
+        },
+    }
 
-// LSP positions are 0-based; everything inside the compiler is 1-based.
-pub let params_line (params: JsonValue): Int =
-    match json_field(params, "position") { Some(p) => json_field_int(p, "line") + 1, None => 1 }
+pub let params_position (params: JsonValue): Option[Position] =
+    match json_field(params, "position") { Some(p) => parse_position(p), None => None }
 
-pub let params_col (params: JsonValue): Int =
-    match json_field(params, "position") { Some(p) => json_field_int(p, "character") + 1, None => 1 }
+// Reject the entire batch if any entry is invalid: selectionRange requires
+// one result per input position, in the same order.
+pub let params_positions (params: JsonValue): Option[Array[Position]] =
+    match json_field(params, "positions") {
+        Some(JsonArray(items)) => positions_acc(items, 0, []),
+        _ => None,
+    }
+
+let positions_acc (items: Array[JsonValue]) (i: Int) (acc: Array[Position]): Option[Array[Position]] =
+    if i >= items.len() { Some(acc) }
+    else { match parse_position(items[i]) {
+        None => None,
+        Some(p) => positions_acc(items, i + 1, acc.push(p)),
+    } }
+
+pub let test_lsp_position_numbers (): Unit = {
+    let at = |line, col| JsonObject([
+        JsonEntry { key: "line", value: JsonNumber(line) },
+        JsonEntry { key: "character", value: JsonNumber(col) },
+    ]);
+    assert_eq(parse_position(at(0.0, 0.0)), Some(Position { line: 1, col: 1 }));
+    assert_eq(parse_position(at(2147483647.0, 2147483647.0)), Some(Position { line: 2147483648, col: 2147483648 }));
+    assert_eq(parse_position(at(-1.0, 0.0)), None);
+    assert_eq(parse_position(at(0.0, -1.0)), None);
+    assert_eq(parse_position(at(1.5, 0.0)), None);
+    assert_eq(parse_position(at(0.0, 0.5)), None);
+    assert_eq(parse_position(at(2147483648.0, 0.0)), None);
+    assert_eq(parse_position(at(0.0, 1e100)), None);
+    assert_eq(parse_position(at(1.0 / 0.0, 0.0)), None);
+    assert_eq(parse_position(at(0.0, 0.0 / 0.0)), None);
+    assert_eq(parse_position(JsonObject([])), None);
+    assert_eq(parse_position(JsonNull), None);
+    // The generic compiler-result accessor also uses bounded conversion,
+    // with signed values and the existing zero fallback on invalid input.
+    assert_eq(json_field_int(at(2147483648.0, 0.0), "line"), 2147483648);
+    assert_eq(json_field_int(at(-2.0, 0.0), "line"), -2);
+    assert_eq(json_field_int(at(1e100, 0.0), "line"), 0);
+    assert_eq(json_field_int(at(0.5, 0.0), "line"), 0)
+}
 
 // The inverse of `uri_to_path`, including the slash a drive letter
 // needs putting back: `C:/x` is `file:///C:/x`, and `file://C:/x` would

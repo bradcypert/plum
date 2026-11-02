@@ -1875,9 +1875,16 @@ let lsp_handle (body: String) (state: LspState): LspState =
     }
 
 let lsp_dispatch (req: lsp.Request): Unit =
-    if req.method == "textDocument/completion" {
-        let path = lsp.uri_to_path(lsp.document_uri(req.params));
-        lsp_reply(req.id, lsp_with_snapshot(path, JsonArray([]), |snapshot| lsp_answer_completion(snapshot, req.params)));
+    if req.method == "textDocument/completion" || req.method == "textDocument/hover" || req.method == "textDocument/definition" {
+        match lsp.params_position(req.params) {
+            None => lsp_error(req.id, 0 - 32602, "Invalid position: expected line and character uintegers"),
+            Some(position) => {
+                if req.method == "textDocument/completion" {
+                    let path = lsp.uri_to_path(lsp.document_uri(req.params));
+                    lsp_reply(req.id, lsp_with_snapshot(path, JsonArray([]), |snapshot| lsp_answer_completion(snapshot, position)))
+                } else { lsp_reply(req.id, lsp_answer_query(req.method, req.params, position)) }
+            },
+        };
         ()
     } else if req.method == "textDocument/formatting" {
         let uri = lsp.document_uri(req.params);
@@ -1914,10 +1921,10 @@ let lsp_dispatch (req: lsp.Request): Unit =
         };
         ()
     } else if req.method == "textDocument/selectionRange" {
-        lsp_reply(req.id, lsp_selection_ranges(req.params));
-        ()
-    } else if req.method == "textDocument/hover" || req.method == "textDocument/definition" {
-        lsp_reply(req.id, lsp_answer_query(req.method, req.params));
+        match lsp.params_positions(req.params) {
+            None => lsp_error(req.id, 0 - 32602, "Invalid positions: expected an array of positions with line and character uintegers"),
+            Some(positions) => lsp_reply(req.id, lsp_selection_ranges(req.params, positions)),
+        };
         ()
     } else if req.method == "textDocument/didOpen" || req.method == "textDocument/didSave" {
         let uri = lsp.document_uri(req.params);
@@ -2019,19 +2026,20 @@ let lsp_query (root: String) (path: String) (line: Int) (col: Int): String =
         Ok(r) => if r.exit_code == 0 { String.trim_end(r.stdout) } else { "" },
     }
 
-let lsp_answer_query (method: String) (params: JsonValue): JsonValue = {
+let lsp_answer_query (method: String) (params: JsonValue) (position: lsp.Position): JsonValue = {
     let uri = lsp.document_uri(params);
     let path = lsp.uri_to_path(uri);
     if uri == "" { JsonNull }
-    else { lsp_with_snapshot(path, JsonNull, |snapshot| lsp_answer_query_in(method, params, path, snapshot)) }
+    else { lsp_with_snapshot(path, JsonNull, |snapshot| lsp_answer_query_in(method, position, path, snapshot)) }
 }
 
-let lsp_answer_query_in (method: String) (params: JsonValue) (real: String) (snapshot: LspSnapshot): JsonValue = {
+let lsp_answer_query_in (method: String) (position: lsp.Position) (real: String) (snapshot: LspSnapshot): JsonValue = {
     let path = snapshot.target;
     match snapshot_read(snapshot, path) {
         Err(_) => JsonNull,
         Ok(src) => {
-            let off = lexer.offset_of(src, lsp.params_line(params), lsp.params_col(params));
+            let off = lexer.offset_of(src, position.line, position.col);
+            let at = lexer.line_col(src, off);
             let name = lexer.ident_at(src, off);
             if name == "" { JsonNull }
             else {
@@ -2041,7 +2049,7 @@ let lsp_answer_query_in (method: String) (params: JsonValue) (real: String) (sna
                 // top-level name a local happens to shadow.
                 // Go-to-definition still uses the index -- the
                 // checker records types, not binding SITES.
-                let answer = lsp_query(snapshot.root, path, lsp.params_line(params), lsp.params_col(params));
+                let answer = lsp_query(snapshot.root, path, at.line, at.col);
                 let inferred = lsp.query_field(answer, "type");
                 let def_line = lsp.query_int(answer, "defLine");
                 // What the answer is ABOUT: the name under the
@@ -2068,16 +2076,27 @@ let lsp_answer_query_in (method: String) (params: JsonValue) (real: String) (sna
     }
 }
 
-let lsp_answer_completion (snapshot: LspSnapshot) (params: JsonValue): JsonValue = {
+// Normalize through the source layer before passing coordinates to children.
+// Work is bounded by document size even for the maximum LSP uinteger.
+let lsp_answer_completion (snapshot: LspSnapshot) (position: lsp.Position): JsonValue =
+    match snapshot_read(snapshot, snapshot.target) {
+        Err(_) => JsonArray([]),
+        Ok(src) => {
+            let at = lexer.line_col(src, lexer.offset_of(src, position.line, position.col));
+            lsp_answer_completion_at(snapshot, at)
+        },
+    }
+
+let lsp_answer_completion_at (snapshot: LspSnapshot) (at: lexer.LineCol): JsonValue = {
     let path = snapshot.target;
-    let members = lsp_members(snapshot.root, path, lsp.params_line(params), lsp.params_col(params));
+    let members = lsp_members(snapshot.root, path, at.line, at.col);
     if !Array.is_empty(members) { lsp.completion_result(members) }
     else {
         let names = lsp_completions(snapshot.root);
         // Half-written buffers retain static keywords and builtin names.
         lsp.completion_result(Array.concat(
             names,
-            lsp_locals(snapshot.root, path, lsp.params_line(params), lsp.params_col(params))))
+            lsp_locals(snapshot.root, path, at.line, at.col)))
     }
 }
 
@@ -2238,22 +2257,22 @@ let lsp_fmt (path: String) (text: String): String =
     }
 
 // One chain of enclosing constructs per requested position.
-let lsp_selection_ranges (params: JsonValue): JsonValue = {
+let lsp_selection_ranges (params: JsonValue) (positions: Array[lsp.Position]): JsonValue = {
     let uri = lsp.document_uri(params);
     let path = lsp.uri_to_path(uri);
     match buffer_text(uri, path) {
         None => JsonArray([]),
         Some(text) => {
             let spans = lsp_spans(path, text);
-            JsonArray(selection_acc(text, spans, lsp.params_positions(params), 0, []))
+            JsonArray(selection_acc(text, spans, positions, 0, []))
         },
     }
 }
 
-let selection_acc (text: String) (spans: Array[OffSpan]) (ps: Array[JsonValue]) (i: Int) (acc: Array[JsonValue]): Array[JsonValue] =
+let selection_acc (text: String) (spans: Array[OffSpan]) (ps: Array[lsp.Position]) (i: Int) (acc: Array[JsonValue]): Array[JsonValue] =
     if i >= ps.len() { acc }
     else {
-        let off = lexer.offset_of(text, lsp.position_line(ps[i]), lsp.position_col(ps[i]));
+        let off = lexer.offset_of(text, ps[i].line, ps[i].col);
         selection_acc(text, spans, ps, i + 1, acc.push(lsp.selection_range_json(chain_rngs(text, spans, off), 0)))
     }
 
