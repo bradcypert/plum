@@ -1,6 +1,5 @@
 #!/usr/bin/env python3
 """Exercise the public wrappers, including overlapping native-to-Plum copies."""
-import os
 from pathlib import Path
 import subprocess
 import sys

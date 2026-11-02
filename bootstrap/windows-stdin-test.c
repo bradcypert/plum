@@ -9,9 +9,10 @@
 #include <windows.h>
 #include <stdatomic.h>
 
-static atomic_int fail_read, fail_event, event_calls, fail_thread;
+static atomic_int fail_read, fail_event, event_calls, fail_thread, read_started;
 static BOOL WINAPI probe_read(HANDLE input, void *buffer, DWORD count,
                               DWORD *got, OVERLAPPED *overlapped) {
+    atomic_store(&read_started, 1);
     if (atomic_exchange(&fail_read, 0)) {
         SetLastError(ERROR_ACCESS_DENIED);
         return FALSE;
@@ -175,7 +176,35 @@ static void console_tests(void) {
     free(plum_stdin.bytes);
     assert(CloseHandle(input));
 }
+static DWORD WINAPI blocking_reader(void *unused) {
+    (void)unused;
+    long long result = stdin_read_owned(0, -1, 1);
+    assert(result == PLUM_STDIN_ERROR);
+    return 0;
+}
+
+static void concurrent_shutdown(void) {
+    HANDLE input = CreateFileW(L"CONIN$", GENERIC_READ | GENERIC_WRITE,
+                               FILE_SHARE_READ | FILE_SHARE_WRITE, NULL,
+                               OPEN_EXISTING, 0, NULL);
+    assert(input != INVALID_HANDLE_VALUE && SetStdHandle(STD_INPUT_HANDLE, input));
+    assert(SetConsoleMode(input, ENABLE_LINE_INPUT | ENABLE_ECHO_INPUT | ENABLE_PROCESSED_INPUT));
+    HANDLE reader = CreateThread(NULL, 0, blocking_reader, NULL, 0, NULL);
+    assert(reader);
+    while (!atomic_load(&read_started)) Sleep(1);
+    plum_stdin_console_close();
+    assert(WaitForSingleObject(reader, 2000) == WAIT_OBJECT_0);
+    assert(!plum_stdin.console.thread && !plum_stdin.console.done);
+    assert(stdin_read_owned(1, -1, 0) == PLUM_STDIN_ERROR);
+    assert(CloseHandle(reader) && CloseHandle(input));
+    free(plum_stdin.bytes);
+}
+
 int main(int argc, char **argv) {
+    if (argc > 1 && strcmp(argv[1], "--shutdown") == 0) {
+        concurrent_shutdown();
+        return 0;
+    }
     if (argc > 1 && strcmp(argv[1], "--console") == 0) {
         console_tests();
         return 0;
@@ -183,7 +212,9 @@ int main(int argc, char **argv) {
     WCHAR program[32768], command[32768];
     DWORD length = GetModuleFileNameW(NULL, program, 32768);
     assert(length && length < 32768);
-    assert(swprintf(command, 32768, L"\"%ls\" --console", program) > 0);
+    const WCHAR *modes[] = {L"--console", L"--shutdown"};
+    for (size_t i = 0; i < sizeof(modes) / sizeof(modes[0]); i++) {
+    assert(swprintf(command, 32768, L"\"%ls\" %ls", program, modes[i]) > 0);
     STARTUPINFOW startup = {0};
     startup.cb = sizeof(startup);
     startup.dwFlags = STARTF_USESTDHANDLES;
@@ -203,5 +234,6 @@ int main(int argc, char **argv) {
     CloseHandle(child.hThread);
     CloseHandle(child.hProcess);
     assert(wait == WAIT_OBJECT_0 && code == 0);
+    }
     puts("Windows console stdin: deadlines, partial lines, editing, VT keys, bounded worker, cleanup: ok");
 }

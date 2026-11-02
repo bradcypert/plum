@@ -262,6 +262,7 @@ typedef struct {
 
 typedef struct {
     atomic_flag lock;
+    atomic_int closing;
     unsigned char *bytes;
     size_t len, cap;
     int eof;
@@ -364,7 +365,24 @@ static void plum_console_close(plum_console_reader *console) {
     memset(console, 0, sizeof(*console));
 }
 
-static void plum_stdin_console_close(void) { plum_console_close(&plum_stdin.console); }
+static void plum_stdin_console_close(void) {
+    // exit() can run on a different task while a reader is waiting.
+    // Stop admission and wake that caller before taking its lock. Events
+    // and worker storage must stay alive until the caller has left them.
+    atomic_store_explicit(&plum_stdin.closing, 1, memory_order_release);
+    plum_console_reader *console = &plum_stdin.console;
+    while (atomic_flag_test_and_set_explicit(&plum_stdin.lock, memory_order_acquire)) {
+        if (console->thread) {
+            InterlockedExchange(&console->stopping, 1);
+            SetEvent(console->request);
+            CancelSynchronousIo(console->thread);
+            SetEvent(console->done);
+        }
+        Sleep(1);
+    }
+    plum_console_close(console);
+    atomic_flag_clear_explicit(&plum_stdin.lock, memory_order_release);
+}
 
 static int plum_console_start(plum_console_reader *console) {
     console->request = CreateEventW(NULL, FALSE, FALSE, NULL);
@@ -413,6 +431,7 @@ static int plum_console_fill(plum_stdin_reader *reader, HANDLE input,
         if (wait != WAIT_TIMEOUT) return PLUM_STDIN_ERROR;
         if (deadline_ns >= 0 && plum_now_ns() >= deadline_ns) return PLUM_STDIN_TIMED_OUT;
     }
+    if (atomic_load_explicit(&reader->closing, memory_order_acquire)) return PLUM_STDIN_ERROR;
     console->pending = 0;
     if (console->error != ERROR_SUCCESS) return PLUM_STDIN_ERROR;
     if (console->count == 0) { reader->eof = 1; return 0; }
@@ -580,10 +599,13 @@ static long long plum_bytes_until(plum_stdin_reader *reader, long long max, long
 // it in a private handle before copying, including UTF-8 validation errors.
 long long stdin_read_owned(long long max, long long timeout_nanos, long long line) {
     if (!line && max <= 0) return 0;
+    if (atomic_load_explicit(&plum_stdin.closing, memory_order_acquire)) return PLUM_STDIN_ERROR;
     long long deadline = plum_stdin_deadline(timeout_nanos);
     if (!plum_stdin_lock(&plum_stdin, deadline)) return PLUM_STDIN_TIMED_OUT;
-    long long result = line ? plum_line_until(&plum_stdin, deadline) :
-                              plum_bytes_until(&plum_stdin, max, deadline);
+    long long result;
+    if (atomic_load_explicit(&plum_stdin.closing, memory_order_acquire)) result = PLUM_STDIN_ERROR;
+    else result = line ? plum_line_until(&plum_stdin, deadline) :
+                         plum_bytes_until(&plum_stdin, max, deadline);
     atomic_flag_clear_explicit(&plum_stdin.lock, memory_order_release);
     return result;
 }
