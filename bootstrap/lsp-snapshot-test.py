@@ -175,7 +175,8 @@ def check(compiler):
             before = len(client.notifications)
             client.notify("didOpen", unwritable, 'let broken (): Int = "bad"\n')
             assert client.query("definition", a, old_members, "Old") is None
-            assert client.request("textDocument/completion", {"textDocument": {"uri": uri(a)}}) == []
+            assert client.request("textDocument/completion", {
+                "textDocument": {"uri": uri(a)}, "position": {"line": 0, "character": 0}}) == []
             assert len(client.notifications) == before
             client.notify("didClose", unwritable)
             # Copy preserves links, but source discovery must refuse this

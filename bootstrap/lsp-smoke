@@ -310,5 +310,6 @@ echo "$out" | grep -q "$multi/main.plum\",\"diagnostics\":\[\]" || { echo "FAIL:
 "$PY_BIN" bootstrap/lsp-format-test.py "$plum" || fail=1
 "$PY_BIN" bootstrap/lsp-snapshot-test.py "$plum" || fail=1
 "$PY_BIN" bootstrap/lsp-source-position-test.py "$plum" || fail=1
+"$PY_BIN" bootstrap/lsp-position-test.py "$plum" || fail=1
 [ $fail -eq 0 ] && echo "lsp smoke: ok"
 exit $fail
