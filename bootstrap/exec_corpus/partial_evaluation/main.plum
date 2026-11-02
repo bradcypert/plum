@@ -1,0 +1,90 @@
+let next (counter: Ref[Int]): Int = {
+    counter.set(counter.get() + 1);
+    counter.get()
+}
+let add (a: Int) (b: Int): Int = a + b
+let digits (a: Int) (b: Int) (c: Int): Int = a * 100 + b * 10 + c
+let make_adder (counter: Ref[Int]): (Int, Int) -> Int = {
+    let base = next(counter) * 100;
+    |a: Int, b: Int| base + a + b
+}
+struct Ops { apply: (Int, Int) -> Int }
+let make_ops (counter: Ref[Int]): Ops = Ops { apply: make_adder(counter) }
+struct Number { value: Int }
+let Number.plus (self: Number) (a: Int) (b: Int): Int = self.value + a + b
+let make_number (counter: Ref[Int]): Number = Number { value: next(counter) * 100 }
+let first [T] (a: T) (b: Int) (c: Int): T = a
+let escaped (): (Int) -> String = {
+    let source = ["left", "right"];
+    first(source[0].concat(source[1]), 0)
+}
+let main (): Unit = {
+    let counter = ref(0);
+    let inc = add(next(counter));
+    println(counter.get().to_string());
+    println(inc(1).to_string());
+    println(inc(2).to_string());
+    println(counter.get().to_string());
+
+    // Never invoking a residual must still evaluate its arguments.
+    let unused = add(next(counter));
+    println(counter.get().to_string());
+
+    // Supplied arguments run left-to-right before intervening effects.
+    counter.set(0);
+    let pair = digits(next(counter), next(counter));
+    println(counter.get().to_string());
+    counter.set(9);
+    println(pair(3).to_string());
+    println(pair(4).to_string());
+    println(counter.get().to_string());
+
+    // A closure-producing callee runs once, before its supplied argument.
+    counter.set(0);
+    let factory = make_adder(counter)(next(counter));
+    println(counter.get().to_string());
+    println(factory(3).to_string());
+    println(factory(4).to_string());
+    println(counter.get().to_string());
+
+    // Field calls and namespaced method sugar must obey the same order.
+    counter.set(0);
+    let field = make_ops(counter).apply(next(counter));
+    println(counter.get().to_string());
+    println(field(3).to_string());
+    println(field(4).to_string());
+    counter.set(0);
+    let method = make_number(counter).plus(next(counter));
+    println(counter.get().to_string());
+    println(method(3).to_string());
+    println(method(4).to_string());
+
+    // Each stage of a chained partial call evaluates its own arguments.
+    counter.set(0);
+    let stage1 = digits(next(counter));
+    println(counter.get().to_string());
+    let stage2 = stage1(next(counter));
+    println(counter.get().to_string());
+    println(stage2(3).to_string());
+    println(stage2(4).to_string());
+    println(counter.get().to_string());
+
+    // Nested lowering must not shadow another partial call's captures.
+    counter.set(0);
+    let nested = add(add(next(counter))(next(counter)));
+    println(counter.get().to_string());
+    println(nested(3).to_string());
+    println(nested(4).to_string());
+
+    // A generic heap result escapes its defining scope and can be reused.
+    let unused_heap = first("unused".concat("!"), 0);
+    let heap = escaped();
+    let alias = heap;
+    println(heap(1));
+    println(alias(2));
+    let value = ref("before".concat("!"));
+    let snapshot = first(value.get(), 0);
+    value.set("after".concat("!"));
+    println(snapshot(1));
+    println(snapshot(2))
+}
