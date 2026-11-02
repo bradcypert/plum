@@ -17,6 +17,7 @@ static int allocation_attempt, fail_allocation;
 static int fail_snapshot, live_snapshots;
 static wchar_t *snapshot_override;
 static int expect_no_wait_scratch;
+static int fail_exit_query, exit_queries;
 static int stdin_write_mode, stdin_write_calls, process_creations;
 static const char *stdin_base;
 static size_t stdin_offset, stdin_expected;
@@ -94,6 +95,15 @@ static BOOL checked_free_snapshot(LPWCH p) {
     live_snapshots--;
     return p == snapshot_override ? TRUE : FreeEnvironmentStringsW(p);
 }
+static BOOL checked_exit_code(HANDLE h, LPDWORD code) {
+    exit_queries++;
+    if (fail_exit_query) {
+        // Deliberately leave the output untouched on failure.
+        SetLastError(ERROR_ACCESS_DENIED);
+        return FALSE;
+    }
+    return GetExitCodeProcess(h, code);
+}
 static DWORD checked_wait(HANDLE h, DWORD ms) {
     // Check lifetime BEFORE the child wait, not merely at function exit.
     if (expect_no_wait_scratch) assert(live_bytes == 0 && live_allocs == 0 && live_snapshots == 0);
@@ -101,6 +111,7 @@ static DWORD checked_wait(HANDLE h, DWORD ms) {
 }
 #define FreeEnvironmentStringsW checked_free_snapshot
 #define WaitForSingleObject checked_wait
+#define GetExitCodeProcess checked_exit_code
 #define malloc checked_malloc
 #define calloc checked_calloc
 #define free checked_free
@@ -113,6 +124,7 @@ static DWORD checked_wait(HANDLE h, DWORD ms) {
 #undef CreateProcessW
 #undef WriteFile
 #undef WaitForSingleObject
+#undef GetExitCodeProcess
 #undef FreeEnvironmentStringsW
 #undef malloc
 #undef calloc
@@ -316,6 +328,74 @@ static void test_builders(void) {
     fail_allocation = 0;
 }
 
+static long long await_status(long long h, int method) {
+    // The caller has already observed the process handle signaled.
+    if (method == 0) return process_poll(h);
+    return process_child_wait(h, method == 1 ? -1 : 30000000000LL);
+}
+
+static void test_exit_statuses(const char *program) {
+    const unsigned long codes[] = {0x80000000UL, 0xffffffffUL, 0, 1, 259, 0x7fffffffUL};
+    for (size_t i = 0; i < sizeof(codes) / sizeof(codes[0]); i++) {
+        char args[64];
+        snprintf(args, sizeof(args), "--exit-child\t%lu", codes[i]);
+        for (int failure = 0; failure <= 1; failure++) {
+            fail_exit_query = failure;
+            long long h = process_run(program, args, 2);
+            if (failure) assert(h == -1);
+            else {
+                assert(h >= 0 && process_exit_code(h) == (long long)codes[i]);
+                process_free(h);
+            }
+            no_scratch();
+            h = process_run_ex(program, args, 2, "", 0, "", 0, 0);
+            if (failure) assert(h == -1);
+            else {
+                assert(h >= 0 && process_exit_code(h) == (long long)codes[i]);
+                process_free(h);
+            }
+            assert(process_run_inherit(program, args, 2) == (failure ? -1 : (long long)codes[i]));
+            no_scratch();
+            fail_exit_query = 0;
+            for (int method = 0; method < 3; method++) {
+                h = process_spawn(program, args, 2, "", 0, "", 0, 0);
+                assert(h >= 0);
+                HANDLE child = (HANDLE)(intptr_t)plum_process_slots[h].child->pid;
+                assert(WaitForSingleObject(child, 30000) == WAIT_OBJECT_0);
+                fail_exit_query = failure;
+                if (failure) {
+                    assert(await_status(h, method) == -1);
+                    assert(!plum_process_slots[h].child->finished);
+                    assert(plum_process_slots[h].child->pid == (long long)(intptr_t)child);
+                    assert(plum_process_slots[h].out_data == NULL);
+                    fail_exit_query = 0;
+                }
+                assert(await_status(h, method) == 1);
+                assert(process_exit_code(h) == (long long)codes[i]);
+                int queries = exit_queries;
+                assert(process_poll(h) == 1 && process_child_wait(h, -1) == 1);
+                assert(exit_queries == queries);
+                process_child_free(h);
+                no_scratch();
+            }
+        }
+    }
+    // Dropping a child discards its result, so status retrieval failure
+    // must not prevent releasing its resources or allocate capture buffers.
+    long long h = process_spawn(program, "--exit-child\t0", 2, "", 0, "", 0, 0);
+    assert(h >= 0);
+    assert(WaitForSingleObject((HANDLE)(intptr_t)plum_process_slots[h].child->pid, 30000) == WAIT_OBJECT_0);
+    fail_exit_query = 1;
+    assert(process_poll(h) == -1);
+    int attempts = allocation_attempt;
+    int queries = exit_queries;
+    process_child_free(h);
+    assert(allocation_attempt == attempts && exit_queries == queries);
+    fail_exit_query = 0;
+    no_scratch();
+    for (int i = 0; i < PLUM_PROC_MAX_SLOTS; i++) assert(!plum_process_slots[i].in_use);
+}
+
 static void test_spawns(void) {
     wchar_t original[4096], base[4096], path[4096];
     assert(GetModuleFileNameW(NULL, original, 4096));
@@ -378,6 +458,7 @@ static void test_spawns(void) {
     assert(process_run_ex("plum-no-such-program-108.exe", "", 0, "KEY=value", 1, "", 0, 0) == -1);
     no_scratch();
     test_stdin_spawns(program);
+    test_exit_statuses(program);
     assert(DeleteFileW(path));
 }
 
@@ -385,6 +466,11 @@ int main(void) {
     int argc;
     wchar_t **argv = CommandLineToArgvW(GetCommandLineW(), &argc);
     assert(argv != NULL);
+    if (argc == 3 && wcscmp(argv[1], L"--exit-child") == 0) {
+        DWORD code = (DWORD)wcstoul(argv[2], NULL, 10);
+        LocalFree(argv);
+        ExitProcess(code);
+    }
     if (argc == 2 && (wcscmp(argv[1], L"--stdin-child") == 0 || wcscmp(argv[1], L"--stdin-empty") == 0)) {
         size_t expected = wcscmp(argv[1], L"--stdin-empty") == 0 ? 0 : 2 * 1024 * 1024 + 17;
         LocalFree(argv);
@@ -432,6 +518,6 @@ int main(void) {
     assert(SetEnvironmentVariableW(L"TEMP", nt ? old_temp : NULL));
     assert(SetEnvironmentVariableW(L"TMP", np ? old_tmp : NULL));
     assert(RemoveDirectoryW(root));
-    printf("Windows process Unicode, overlays, chunked stdin, failure cleanup: ok (peak scratch %zu bytes)\n", peak_bytes);
+    printf("Windows process Unicode, overlays, chunked stdin, full exit status, failure cleanup: ok (peak scratch %zu bytes)\n", peak_bytes);
     return 0;
 }

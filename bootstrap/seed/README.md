@@ -41,13 +41,22 @@ back is to write a Plum compiler in something else first.
 
 ## Refreshing it
 
-Do not refresh on every change. The seed does not need to be CURRENT; it
-needs to be new enough to compile today's source.
+Refresh when `bootstrap/check-seed` reports drift. It checks both that the
+seed can compile today's source and that its embedded native and vendored
+TLS sources match the current content. Any change to those inputs, including
+comments, requires regenerating the seed and its fingerprint. Other changes
+require a refresh only when the bootstrap checks fail.
 
 ```
 ./bootstrap/check-seed     # fails when the seed has fallen behind
 ./bootstrap/gen-seed       # then, and only then, refresh it
 ```
+
+Set `PLUM` to a compiler built from current source when the local `./sh`
+is stale. After generation, rebuild the seed executable with
+`bootstrap/from-seed` and rerun `bootstrap/check-seed` against it. Commit
+both `plum.ll` and `shims.sha256`; changing only the fingerprint leaves the
+embedded sources stale.
 
 `check-seed` proves three things, the third being the one that matters:
 clang can build the seed; the seed compiler can build today's source;

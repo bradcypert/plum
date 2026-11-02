@@ -1,5 +1,9 @@
 # CI lessons
 
+Before pushing or opening/updating a PR, read
+[the Plum CI skill](.agents/skills/plum-ci/SKILL.md) to select checks and
+account for generated artifacts. Use it also when diagnosing CI failures.
+
 Before pushing a change that adds a property test:
 
 - Keep the test within the public API available to `bootstrap/properties`;
