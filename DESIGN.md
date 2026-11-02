@@ -11583,12 +11583,26 @@ because it is a CHOICE rather than a consequence: nothing in the
 implementation would stop `args.is_empty()` from taking the partial
 path.
 
-One inherited caveat, stated rather than discovered later: the supplied
-argument expressions end up inside the closure body, so they are
-re-evaluated per call of the residual rather than once at
-partial-application time. The real compiler's rewrite does exactly the
-same, and expressions of this kind are pure, so the two are
-observationally identical.
+**Evaluation timing corrected in #215.** The original rewrite placed
+supplied expressions inside the residual body and incorrectly assumed
+purity. Calls can mutate `Ref`s or perform I/O. Both named and
+closure-valued partial calls now bind supplied values in an outer typed
+block, left-to-right, before constructing the residual closure. A
+closure-valued callee is bound first, so a factory or field receiver also
+runs once at construction. Each stage of a chain evaluates only its own
+supplied arguments. Bare named function values still need no outer lets.
+
+The residual captures the computed values using ordinary closure ownership,
+so escaping/aliased closures retain heap captures and release them through
+the existing ownership pipeline. This avoids repeated argument allocations
+and can release large expression inputs after computing a small result.
+Conversely, a captured heap result stays live for the closure's lifetime,
+and an unused residual still evaluates/allocates its supplied arguments.
+These are eager evaluation semantics, not a general reduction in peak RSS
+or a change to the Perceus algorithm, task safety, or `Ref` synchronization.
+`exec_corpus/partial_evaluation` covers timing, chains, methods, factories,
+nested generated bindings, and escaping heap captures under sanitizers;
+`alloc_corpus/partial_evaluation` bounds allocation across repeated calls.
 
 Sweep: 7 of 9 matching. 25/25 `exec_corpus` correct and leak-free,
 self-build fixed point byte-identical, 99/99 parser goldens, 10/10

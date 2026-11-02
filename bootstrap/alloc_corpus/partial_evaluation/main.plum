@@ -1,0 +1,9 @@
+// Build the supplied heap value once and reuse it across 1000 calls.
+// Re-evaluating the concat in the residual body allocates on every call.
+let width (text: String) (n: Int): Int = text.len() + n
+let sum (f: (Int) -> Int) (n: Int) (total: Int): Int =
+    if n <= 0 { total } else { sum(f, n - 1, total + f(n)) }
+let main (): Unit = {
+    let f = width("left".concat("right"));
+    println(sum(f, 1000, 0).to_string())
+}

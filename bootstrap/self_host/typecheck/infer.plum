@@ -2307,10 +2307,12 @@ let infer_partial_closure_call (p2: Program2) (state: FreshState) (env: TyEnv) (
     let res_tys = Array.map(residual, |t| subst_apply(ar.subst, t));
     let ret_ty = subst_apply(ar.subst, ret);
     let fn_ty = ITFunction(res_tys, ret_ty);
-    let body_args = Array.concat(ar.texprs, partial_param_refs(names, res_tys, 0, []));
+    // The callee is a value too: evaluate it before the supplied arguments.
+    let captured = partial_capture_values(Array.concat([callee_texpr], ar.texprs), ar.subst, ar.state, 0, [], []);
+    let body_args = Array.concat(Array.slice(captured.refs, 1, captured.refs.len()), partial_param_refs(names, res_tys, 0, []));
     InferResult {
-        ty: fn_ty, subst: ar.subst, state: ar.state,
-        texpr: TExpr { ty: fn_ty, node: TClosure(names, TExpr { ty: ret_ty, node: TClosureCall(callee_texpr, body_args) }) },
+        ty: fn_ty, subst: ar.subst, state: captured.state,
+        texpr: partial_closure_expr(captured.stmts, names, fn_ty, TExpr { ty: ret_ty, node: TClosureCall(captured.refs[0], body_args) }),
     }
 }
 
@@ -2503,11 +2505,9 @@ let infer_println_call (p2: Program2) (state: FreshState) (env: TyEnv) (acc: Sub
 // multi-parameter `f` stays an arity error, never a vacuous "give me
 // `f` back" -- the same scope decision the real compiler made.
 //
-// The supplied argument EXPRESSIONS end up inside the closure body, so
-// they are re-evaluated per call of the residual rather than once at
-// partial-application time. That matches the real compiler's own
-// rewrite exactly, and Plum expressions of this kind are pure, so the
-// two are observationally identical.
+// Supplied expressions run once, left-to-right, at construction time.
+// Bind their values outside the closure so ordinary capture ownership and
+// liveness apply to the results rather than to the expressions' inputs.
 let infer_partial_call (p2: Program2) (state: FreshState) (env: TyEnv) (acc: Subst) (sig: FnSig) (args: Array[parser.PExpr]): InferResult = {
     // Ordinary function types cannot preserve an unsafe-call obligation.
     // Do not erase it through eta expansion or partial application, even
@@ -2525,11 +2525,33 @@ let infer_partial_call (p2: Program2) (state: FreshState) (env: TyEnv) (acc: Sub
     let res_tys = Array.map(residual, |t| subst_apply(ar.subst, t));
     let ret_ty = subst_apply(ar.subst, inst_ret);
     let fn_ty = ITFunction(res_tys, ret_ty);
-    let body_args = Array.concat(ar.texprs, partial_param_refs(names, res_tys, 0, []));
+    let captured = partial_capture_values(ar.texprs, ar.subst, ar.state, 0, [], []);
+    let body_args = Array.concat(captured.refs, partial_param_refs(names, res_tys, 0, []));
     InferResult {
-        ty: fn_ty, subst: ar.subst, state: ar.state,
-        texpr: TExpr { ty: fn_ty, node: TClosure(names, TExpr { ty: ret_ty, node: TFnCall(sig.module, sig.name, body_args, fr.tys) }) },
+        ty: fn_ty, subst: ar.subst, state: captured.state,
+        texpr: partial_closure_expr(captured.stmts, names, fn_ty, TExpr { ty: ret_ty, node: TFnCall(sig.module, sig.name, body_args, fr.tys) }),
     }
+}
+
+// Shared lowering for named and closure-valued partial calls. Existing
+// block lets establish evaluation order; existing closures own the captures.
+// Reserve each synthetic name in FreshState so nested partial applications
+// cannot shadow a value that another generated closure needs to capture.
+struct PartialCaptures { stmts: Array[TStmt], refs: Array[TExpr], state: FreshState }
+let partial_capture_values (values: Array[TExpr]) (subst: Subst) (state: FreshState) (i: Int) (stmts: Array[TStmt]) (refs: Array[TExpr]): PartialCaptures =
+    if i >= values.len() { PartialCaptures { stmts: stmts, refs: refs, state: state } }
+    else {
+        let name = "__partial_value".concat(state.next.to_string());
+        let value = values[i];
+        let value_ref = TExpr { ty: subst_apply(subst, value.ty), node: TIdent(name) };
+        partial_capture_values(values, subst, FreshState { next: state.next + 1 }, i + 1,
+            stmts.push(TSLet(TPIdent(name, 0 - 1), value)), refs.push(value_ref))
+    }
+
+let partial_closure_expr (stmts: Array[TStmt]) (names: Array[String]) (fn_ty: ITy) (body: TExpr): TExpr = {
+    let closure = TExpr { ty: fn_ty, node: TClosure(names, body) };
+    if Array.is_empty(stmts) { closure }
+    else { TExpr { ty: fn_ty, node: TBlockE(TBlock { stmts: stmts, tail: Some(closure), starts: [] }) } }
 }
 
 // `__partial_arg0`, `__partial_arg1`, ... -- double-underscored for the
