@@ -565,6 +565,13 @@ jobs:
           clang -O1 -g -Wall -Wextra -Werror bootstrap/windows-process-test.c native_stdlib/os_shim.c -lshell32 -o windows-process-test.exe
           ./windows-process-test.exe
 
+      - name: stdin owns concurrent results and bounds real console reads
+        run: |
+          clang -O1 -g -Wall -Wextra -Werror -pthread bootstrap/stdin-shim-test.c -o stdin-shim-test.exe
+          ./stdin-shim-test.exe
+          clang -O1 -g -Wall -Wextra -Werror bootstrap/windows-stdin-test.c -o windows-stdin-test.exe
+          ./windows-stdin-test.exe
+
       - name: seed -> compiler
         run: |
           ./bootstrap/from-seed -o sh.seed
@@ -576,6 +583,9 @@ jobs:
           ./unicode-arguments.exe > unicode-arguments.out
           diff -u bootstrap/exec_corpus/unicode_arguments/expected.txt unicode-arguments.out
           python3 bootstrap/formatter-tree-test.py ./sh.real
+
+      - name: public stdin results survive concurrent copies and decoding failures
+        run: python3 bootstrap/stdin-owned-test.py ./sh.real
 
       # Catch CRT numeric-boundary differences before the long platform suite.
       - name: float parsing preserves finite values and zero signs

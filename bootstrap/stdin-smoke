@@ -33,7 +33,7 @@ trap 'rm -rf "$work"' EXIT
 # Native allocations are outside PLUM_RT_STATS. Check that empty reads
 # leave buffer capacity and pending input alone, and use UBSan for the
 # signed deadline arithmetic that ordinary output tests cannot observe.
-clang -O1 -g -fsanitize=address,undefined -fno-sanitize-recover=all \
+clang -O1 -g -pthread -fsanitize=address,undefined -fno-sanitize-recover=all \
     bootstrap/stdin-shim-test.c -o "$work/shim-test" || exit 1
 timeout 10 "$work/shim-test" </dev/null || exit 1
 
@@ -94,4 +94,5 @@ if [ $fail -eq 0 ]; then
 else
     echo "stdin smoke: FAILED"
 fi
+python3 bootstrap/stdin-owned-test.py "${PLUM:-./sh}" || exit 1
 exit $fail

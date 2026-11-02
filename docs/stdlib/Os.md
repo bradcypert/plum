@@ -203,9 +203,9 @@ over what it has rather than waiting to fill a buffer.
 A nonpositive `max_len` returns empty bytes immediately, without
 consuming input or checking for end of stream.
 
-The bytes are copied into a Plum value before this returns, so the
-result stays valid across later reads; the shim's own buffer is
-reused and would not.
+Calls consume a shared stream in serialized order. The bytes are
+copied from an independently owned native result into a Plum value,
+so another task's reads cannot overwrite them during or after the copy.
 
 ## `let write_stderr (s: String): Unit`
 
@@ -231,6 +231,11 @@ The timeout bounds the WHOLE CALL, not just the wait for the first
 byte, so a slow writer cannot leave a caller blocked mid-line past
 its deadline. Bytes already read are kept, so `TimedOut` is never
 data loss: calling again resumes where this stopped.
+
+Concurrent calls consume one shared stream in serialized order; each
+result owns its bytes. Waiting for another reader spends this same
+timeout. On Windows consoles a timed-out read can remain in flight,
+preserving the console's editing and echo for the next call to resume.
 
 ## `let read_stdin_timeout (max_len: Int) (d: Time.Duration): Result[Input[Bytes], String]`
 

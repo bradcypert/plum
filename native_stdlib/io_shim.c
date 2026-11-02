@@ -25,6 +25,8 @@
 #include <stdlib.h>
 #include <string.h>
 #include <limits.h>
+#include <stdint.h>
+#include <stdatomic.h>
 
 static char *line_buf = NULL;
 static size_t line_cap = 0;
@@ -189,15 +191,15 @@ void plum_trace(void) {
 // `stdin_read_n` has the mirror problem: it returns "" on a short read,
 // discarding however many bytes it did get.
 //
-// Both new functions return a COUNT and leave the bytes in a buffer the
-// caller reads separately, the same split `tcp_recv_n`/`tcp_recv_data`
-// and `file_read_n`/`file_read_data` use, and for the same reason: a
-// `CStr` return cannot carry a length.
+// The public wrappers use an owned native result, carrying a byte count
+// and data until explicitly released after the copy into Plum. CStr alone
+// cannot express a length or ownership. The old count/data symbols below
+// remain only to link older compiler seeds.
 //
 // --- ONE reader, and why stdio could not stay ---
 //
-// These four functions and their timed counterparts share a single
-// buffer, filled by raw `read`/`ReadFile`. They used to use `fgetc` and
+// All public reads share one serialized reader and its pending buffer,
+// filled by raw `read`/`ReadFile`. They used to use `fgetc` and
 // `fread`, and that had to go the moment a TIMED read existed:
 //
 // `poll` asks the KERNEL whether bytes are available. It knows nothing
@@ -240,19 +242,46 @@ void plum_trace(void) {
 
 #define PLUM_STDIN_TIMED_OUT (-2)
 
-static unsigned char *plum_in_buf = NULL;   // unconsumed bytes
-static size_t plum_in_cap = 0;
-static size_t plum_in_len = 0;
-static int plum_in_eof = 0;
+// One process-owned reader serializes consumption, including pending bytes.
+// Results have independent ownership: unlocking the reader never exposes a
+// buffer that another task can realloc, shift, or overwrite (#271).
+typedef struct {
+    size_t len;
+    unsigned char bytes[];
+} plum_stdin_result;
 
-static char *plum_out_buf = NULL;           // the line/bytes just handed out
-static size_t plum_out_cap = 0;
-static long long plum_out_len = 0;
+#if defined(_WIN32)
+typedef struct {
+    HANDLE request, done, thread, input;
+    volatile LONG stopping;
+    DWORD count, error;
+    int pending;
+    unsigned char bytes[4096];
+} plum_console_reader;
+#endif
+
+typedef struct {
+    atomic_flag lock;
+    unsigned char *bytes;
+    size_t len, cap;
+    int eof;
+#if defined(_WIN32)
+    plum_console_reader console;
+#endif
+} plum_stdin_reader;
+
+static plum_stdin_reader plum_stdin = { .lock = ATOMIC_FLAG_INIT };
+
+#define PLUM_STDIN_EOF (-1)
+#define PLUM_STDIN_ERROR (-3)
 
 static int plum_grow(unsigned char **buf, size_t *cap, size_t need) {
     if (*cap >= need) return 1;
     size_t next = *cap ? *cap : 1024;
-    while (next < need) next *= 2;
+    while (next < need) {
+        if (next > SIZE_MAX / 2) { next = need; break; }
+        next *= 2;
+    }
     unsigned char *bigger = (unsigned char *)realloc(*buf, next);
     if (!bigger) return 0;
     *buf = bigger;
@@ -260,21 +289,21 @@ static int plum_grow(unsigned char **buf, size_t *cap, size_t need) {
     return 1;
 }
 
-// Hands `n` bytes from the front of the buffer to the caller, and drops
-// them from it. The copy is what lets the returned pointer stay valid
-// while the buffer keeps being refilled.
-static long long plum_in_take(size_t n, size_t drop) {
-    if (!plum_grow((unsigned char **)&plum_out_buf, &plum_out_cap, n + 1)) return -1;
-    memcpy(plum_out_buf, plum_in_buf, n);
-    plum_out_buf[n] = '\0';
-    memmove(plum_in_buf, plum_in_buf + drop, plum_in_len - drop);
-    plum_in_len -= drop;
-    plum_out_len = (long long)n;
-    return (long long)n;
+// Snapshot `n` bytes before consuming them. Allocation failure leaves the
+// pending bytes untouched; a successful result outlives the reader lock.
+static long long plum_in_take(plum_stdin_reader *reader, size_t n, size_t drop) {
+    if (n > SIZE_MAX - sizeof(plum_stdin_result) - 1) return PLUM_STDIN_ERROR;
+    plum_stdin_result *result = malloc(sizeof(*result) + n + 1);
+    if (!result) return PLUM_STDIN_ERROR;
+    result->len = n;
+    memcpy(result->bytes, reader->bytes, n);
+    result->bytes[n] = '\0';
+    memmove(reader->bytes, reader->bytes + drop, reader->len - drop);
+    reader->len -= drop;
+    return (long long)(intptr_t)result;
 }
 
-// Milliseconds left until `deadline_ns`, or -1 for "no deadline".
-// `now_ns` is only read when there is a deadline to compare against.
+// Monotonic time for both lock acquisition and adapter waits.
 #if !defined(_WIN32)
 static long long plum_now_ns(void) {
     struct timespec ts;
@@ -300,18 +329,134 @@ static long long plum_stdin_deadline(long long timeout_nanos) {
     return timeout_nanos > LLONG_MAX - now ? LLONG_MAX : now + timeout_nanos;
 }
 
+#if defined(_WIN32)
+// Keep the OS's stream semantics (line editing, echo, code page, VT input).
+// Console readiness only promises an INPUT_RECORD, so neither ReadFile nor
+// ReadConsole is safe on the calling thread after a wait (#225).
+// One lazily started worker owns at most ONE outstanding read, even across
+// thousands of timeouts. It never touches the reader's resizable buffer.
+static DWORD WINAPI plum_console_worker(void *raw) {
+    plum_console_reader *console = raw;
+    for (;;) {
+        if (WaitForSingleObject(console->request, INFINITE) != WAIT_OBJECT_0) return 1;
+        if (InterlockedCompareExchange(&console->stopping, 0, 0)) return 0;
+        console->count = 0;
+        console->error = ReadFile(console->input, console->bytes,
+                                  sizeof(console->bytes), &console->count, NULL)
+                             ? ERROR_SUCCESS : GetLastError();
+        SetEvent(console->done);
+    }
+}
+
+static void plum_console_close(plum_console_reader *console) {
+    if (console->thread) {
+        InterlockedExchange(&console->stopping, 1);
+        // Cancellation can race the start of ReadFile. Keep cancelling
+        // until the worker observes stop; never free live worker storage.
+        do {
+            SetEvent(console->request);
+            CancelSynchronousIo(console->thread);
+        } while (WaitForSingleObject(console->thread, 1) == WAIT_TIMEOUT);
+        CloseHandle(console->thread);
+    }
+    if (console->request) CloseHandle(console->request);
+    if (console->done) CloseHandle(console->done);
+    memset(console, 0, sizeof(*console));
+}
+
+static void plum_stdin_console_close(void) { plum_console_close(&plum_stdin.console); }
+
+static int plum_console_start(plum_console_reader *console) {
+    console->request = CreateEventW(NULL, FALSE, FALSE, NULL);
+    console->done = CreateEventW(NULL, TRUE, FALSE, NULL);
+    if (!console->request || !console->done) goto failed;
+    // Bound the reserved stack rather than taking the default 1 MiB.
+    console->thread = CreateThread(NULL, 64 * 1024, plum_console_worker, console,
+                                  STACK_SIZE_PARAM_IS_A_RESERVATION, NULL);
+    if (!console->thread) goto failed;
+    return 1;
+failed:
+    plum_console_close(console);
+    return 0;
+}
+
+// A long finite wait must not narrow into INFINITE (0xffffffff).
+static DWORD plum_console_wait_ms(long long deadline_ns) {
+    if (deadline_ns < 0) return INFINITE;
+    long long left = deadline_ns - plum_now_ns();
+    if (left <= 0) return 0;
+    unsigned long long ms = (unsigned long long)(left / 1000000LL) +
+                            (left % 1000000LL != 0);
+    return ms > 0xfffffffeULL ? 0xfffffffeUL : (DWORD)ms;
+}
+
+static int plum_console_fill(plum_stdin_reader *reader, HANDLE input,
+                             long long deadline_ns) {
+    plum_console_reader *console = &reader->console;
+    if (!console->pending) {
+        if (deadline_ns >= 0 && plum_now_ns() >= deadline_ns) return PLUM_STDIN_TIMED_OUT;
+        if (!console->thread) {
+            if (!plum_console_start(console)) return PLUM_STDIN_ERROR;
+            if (reader == &plum_stdin && atexit(plum_stdin_console_close) != 0) {
+                plum_console_close(console);
+                return PLUM_STDIN_ERROR;
+            }
+        }
+        console->input = input;
+        if (!ResetEvent(console->done)) return PLUM_STDIN_ERROR;
+        if (!SetEvent(console->request)) return PLUM_STDIN_ERROR;
+        console->pending = 1;
+    }
+    for (;;) {
+        DWORD wait = WaitForSingleObject(console->done, plum_console_wait_ms(deadline_ns));
+        if (wait == WAIT_OBJECT_0) break;
+        if (wait != WAIT_TIMEOUT) return PLUM_STDIN_ERROR;
+        if (deadline_ns >= 0 && plum_now_ns() >= deadline_ns) return PLUM_STDIN_TIMED_OUT;
+    }
+    console->pending = 0;
+    if (console->error != ERROR_SUCCESS) return PLUM_STDIN_ERROR;
+    if (console->count == 0) { reader->eof = 1; return 0; }
+    memcpy(reader->bytes + reader->len, console->bytes, console->count);
+    reader->len += console->count;
+    return 1;
+}
+#endif
+
+static void plum_stdin_pause(void) {
+#if defined(_WIN32)
+    Sleep(1);
+#else
+    struct timespec pause = {0, 1000000};
+    nanosleep(&pause, NULL);
+#endif
+}
+
+// Lock acquisition spends the SAME deadline as reading. A task holding a
+// blocking line read cannot make another task's finite read wait forever.
+static int plum_stdin_lock(plum_stdin_reader *reader, long long deadline_ns) {
+    while (atomic_flag_test_and_set_explicit(&reader->lock, memory_order_acquire)) {
+        if (deadline_ns >= 0 && plum_now_ns() >= deadline_ns) return 0;
+        plum_stdin_pause();
+    }
+    return 1;
+}
+
 // Reads once into the buffer, waiting no longer than `deadline_ns`
 // (negative means wait as long as it takes). Returns 1 if bytes were
 // added, 0 on end of stream, PLUM_STDIN_TIMED_OUT if the deadline
-// passed first, -1 on error.
-static int plum_in_fill(long long deadline_ns) {
-    if (plum_in_eof) return 0;
-    if (!plum_grow(&plum_in_buf, &plum_in_cap, plum_in_len + 4096)) return -1;
+// passed first, PLUM_STDIN_ERROR on error.
+static int plum_in_fill(plum_stdin_reader *reader, long long deadline_ns) {
+    if (reader->eof) return 0;
+    if (reader->len > SIZE_MAX - 4096 ||
+        !plum_grow(&reader->bytes, &reader->cap, reader->len + 4096)) return PLUM_STDIN_ERROR;
 
 #if defined(_WIN32)
     HANDLE h = GetStdHandle(STD_INPUT_HANDLE);
-    if (h == INVALID_HANDLE_VALUE || h == NULL) return -1;
+    if (h == INVALID_HANDLE_VALUE || h == NULL) return PLUM_STDIN_ERROR;
     DWORD type = GetFileType(h);
+    DWORD mode;
+    if (GetConsoleMode(h, &mode)) return plum_console_fill(reader, h, deadline_ns);
+    if (type != FILE_TYPE_DISK && type != FILE_TYPE_PIPE) return PLUM_STDIN_ERROR;
     for (;;) {
         // A file redirected into stdin is always ready; there is nothing
         // to wait for and no way to block.
@@ -319,29 +464,24 @@ static int plum_in_fill(long long deadline_ns) {
         if (type == FILE_TYPE_PIPE) {
             DWORD avail = 0;
             if (!PeekNamedPipe(h, NULL, 0, NULL, &avail, NULL)) {
-                // A closed pipe peeks as an error, which is end of
-                // stream rather than a failure.
-                plum_in_eof = 1;
-                return 0;
+                if (GetLastError() == ERROR_BROKEN_PIPE) { reader->eof = 1; return 0; }
+                return PLUM_STDIN_ERROR;
             }
             if (avail > 0) break;
-        } else {
-            // Console. `WaitForSingleObject` signals for any input
-            // record -- a key release, a mouse move, a focus change --
-            // so a wake is not proof that a byte is readable, and the
-            // loop re-checks rather than trusting it.
-            DWORD w = WaitForSingleObject(h, 0);
-            if (w == WAIT_OBJECT_0) break;
         }
         if (deadline_ns >= 0 && plum_now_ns() >= deadline_ns) return PLUM_STDIN_TIMED_OUT;
         Sleep(5);
     }
     DWORD got = 0;
-    if (!ReadFile(h, plum_in_buf + plum_in_len, 4096, &got, NULL) || got == 0) {
-        plum_in_eof = 1;
-        return 0;
+    if (!ReadFile(h, reader->bytes + reader->len, 4096, &got, NULL)) {
+        DWORD error = GetLastError();
+        if (error == ERROR_BROKEN_PIPE || error == ERROR_HANDLE_EOF) {
+            reader->eof = 1; return 0;
+        }
+        return PLUM_STDIN_ERROR;
     }
-    plum_in_len += (size_t)got;
+    if (got == 0) { reader->eof = 1; return 0; }
+    reader->len += (size_t)got;
     return 1;
 #else
     for (;;) {
@@ -360,116 +500,126 @@ static int plum_in_fill(long long deadline_ns) {
         int r = poll(&pfd, 1, ms);
         if (r < 0) {
             if (errno == EINTR) continue;
-            return -1;
+            return PLUM_STDIN_ERROR;
         }
         if (r == 0) return PLUM_STDIN_TIMED_OUT;
         break;
     }
-    ssize_t got = read(0, plum_in_buf + plum_in_len, 4096);
+    ssize_t got = read(0, reader->bytes + reader->len, 4096);
     if (got < 0) {
         if (errno == EINTR) return 1; // nothing added; the caller loops
-        return -1;
+        return PLUM_STDIN_ERROR;
     }
     if (got == 0) {
-        plum_in_eof = 1;
+        reader->eof = 1;
         return 0;
     }
-    plum_in_len += (size_t)got;
+    reader->len += (size_t)got;
     return 1;
 #endif
 }
 
 // The index of the first newline in the buffer, or -1.
-static long long plum_in_find_nl(void) {
-    for (size_t i = 0; i < plum_in_len; i++) {
-        if (plum_in_buf[i] == '\n') return (long long)i;
+static long long plum_in_find_nl(plum_stdin_reader *reader) {
+    for (size_t i = 0; i < reader->len; i++) {
+        if (reader->bytes[i] == '\n') return (long long)i;
     }
     return -1;
 }
 
 // Shared by the timed and untimed line reads. `deadline_ns` negative
 // means block.
-static long long plum_line_until(long long deadline_ns) {
+static long long plum_line_until(plum_stdin_reader *reader, long long deadline_ns) {
     for (;;) {
-        long long nl = plum_in_find_nl();
+        long long nl = plum_in_find_nl(reader);
         if (nl >= 0) {
             size_t len = (size_t)nl;
             // LSP framing is CRLF; a caller only ever wants the content.
-            if (len > 0 && plum_in_buf[len - 1] == '\r') len--;
-            return plum_in_take(len, (size_t)nl + 1);
+            if (len > 0 && reader->bytes[len - 1] == '\r') len--;
+            return plum_in_take(reader, len, (size_t)nl + 1);
         }
-        if (plum_in_eof) {
+        if (reader->eof) {
             // End of stream with bytes still held is a final line
             // without a trailing newline, which is an ordinary line and
             // must not be thrown away.
-            if (plum_in_len > 0) {
-                size_t len = plum_in_len;
-                if (len > 0 && plum_in_buf[len - 1] == '\r') len--;
-                return plum_in_take(len, plum_in_len);
+            if (reader->len > 0) {
+                size_t len = reader->len;
+                if (len > 0 && reader->bytes[len - 1] == '\r') len--;
+                return plum_in_take(reader, len, reader->len);
             }
             return -1;
         }
-        int r = plum_in_fill(deadline_ns);
-        if (r == PLUM_STDIN_TIMED_OUT) return PLUM_STDIN_TIMED_OUT;
-        if (r < 0) return -1;
-        // r == 0 sets `plum_in_eof`; the next turn of the loop handles it.
+        int r = plum_in_fill(reader, deadline_ns);
+        if (r < 0) return r;
+        // r == 0 sets EOF; the next turn of the loop handles it.
     }
 }
 
-static long long plum_bytes_until(long long max, long long deadline_ns) {
+static long long plum_bytes_until(plum_stdin_reader *reader, long long max, long long deadline_ns) {
     // A nonpositive request is an empty result even at EOF. Do not fill
     // or take: either would allocate, and filling could wait or consume
-    // input. Clear only the previous result, preserving pending input.
+    // input. Existing owned results and pending input remain untouched.
     if (max <= 0) {
-        plum_out_len = 0;
-        if (plum_out_buf) plum_out_buf[0] = '\0';
         return 0;
     }
-    while (plum_in_len == 0 && !plum_in_eof) {
-        int r = plum_in_fill(deadline_ns);
-        if (r == PLUM_STDIN_TIMED_OUT) return PLUM_STDIN_TIMED_OUT;
-        if (r < 0) return -1;
+    while (reader->len == 0 && !reader->eof) {
+        int r = plum_in_fill(reader, deadline_ns);
+        if (r < 0) return r;
     }
     // End of stream with nothing buffered is -1 here, so the TIMED
-    // caller can report it as a distinct outcome. `stdin_bytes_n` maps
-    // it back to 0, which is the contract its callers already have.
-    if (plum_in_eof && plum_in_len == 0) return -1;
-    size_t n = plum_in_len < (size_t)max ? plum_in_len : (size_t)max;
-    return plum_in_take(n, n);
+    // caller can report it as a distinct outcome. The blocking public
+    // wrapper maps EOF to empty bytes for compatibility.
+    if (reader->eof && reader->len == 0) return PLUM_STDIN_EOF;
+    size_t n = reader->len < (unsigned long long)max ? reader->len : (size_t)max;
+    return plum_in_take(reader, n, n);
 }
 
-// The line just read, without its newline. Returns the byte count, or
-// -1 at end of stream -- which is the distinction the whole pair exists
-// for. An empty line is 0, and that is not the same answer.
-long long stdin_line_n(void) { return plum_line_until(-1); }
+// Owned result protocol: positive = result handle, 0 = empty byte request,
+// -1 = EOF, -2 = timeout, -3 = I/O/allocation failure. A handle owns its
+// bytes until release, independent of later reads on any task. Plum wraps
+// it in a private handle before copying, including UTF-8 validation errors.
+long long stdin_read_owned(long long max, long long timeout_nanos, long long line) {
+    if (!line && max <= 0) return 0;
+    long long deadline = plum_stdin_deadline(timeout_nanos);
+    if (!plum_stdin_lock(&plum_stdin, deadline)) return PLUM_STDIN_TIMED_OUT;
+    long long result = line ? plum_line_until(&plum_stdin, deadline) :
+                              plum_bytes_until(&plum_stdin, max, deadline);
+    atomic_flag_clear_explicit(&plum_stdin.lock, memory_order_release);
+    return result;
+}
 
-const char *stdin_line_data(void) { return plum_out_buf ? plum_out_buf : ""; }
+long long stdin_result_len(long long handle) {
+    return handle > 0 ? (long long)((plum_stdin_result *)(intptr_t)handle)->len : 0;
+}
 
-// Up to `max` bytes. Returns how many were actually read: 0 at end of
-// stream, and a SHORT COUNT is data, not a failure -- a pipe hands over
-// what it has.
+const char *stdin_result_data(long long handle) {
+    return handle > 0 ? (const char *)((plum_stdin_result *)(intptr_t)handle)->bytes : "";
+}
+
+void stdin_result_release(long long handle) {
+    if (handle > 0) free((void *)(intptr_t)handle);
+}
+
+// Bootstrap ABI only: old seeds still reference these symbols. Their
+// single-consumer borrowed-result contract cannot express ownership. The
+// current public Os wrappers use the owned protocol above instead.
+static long long plum_legacy_result;
+static long long plum_stdin_legacy(long long max, long long timeout, long long line) {
+    stdin_result_release(plum_legacy_result);
+    plum_legacy_result = stdin_read_owned(max, timeout, line);
+    return plum_legacy_result < 0 ? plum_legacy_result : stdin_result_len(plum_legacy_result);
+}
+long long stdin_line_n(void) { return plum_stdin_legacy(0, -1, 1); }
+long long stdin_line_timed(long long timeout) { return plum_stdin_legacy(0, timeout, 1); }
 long long stdin_bytes_n(long long max) {
-    long long r = plum_bytes_until(max, -1);
-    if (r == PLUM_STDIN_TIMED_OUT) return 0;
-    return r < 0 ? 0 : r;
+    long long n = plum_stdin_legacy(max, -1, 0);
+    return n < 0 ? 0 : n;
 }
-
-const char *stdin_bytes_data(void) { return plum_out_buf ? plum_out_buf : ""; }
-
-// The timed counterparts. `-2` is "the deadline passed", which is a
-// third outcome neither of the two above has room to report -- they
-// spend their sentinel on end of stream.
-//
-// A timeout leaves everything already read IN THE BUFFER, so the next
-// call resumes mid-line rather than starting over. That is what makes
-// bounding the whole call safe.
-long long stdin_line_timed(long long timeout_nanos) {
-    return plum_line_until(plum_stdin_deadline(timeout_nanos));
+long long stdin_bytes_timed(long long max, long long timeout) {
+    return plum_stdin_legacy(max, timeout, 0);
 }
-
-long long stdin_bytes_timed(long long max, long long timeout_nanos) {
-    return plum_bytes_until(max, plum_stdin_deadline(timeout_nanos));
-}
+const char *stdin_line_data(void) { return stdin_result_data(plum_legacy_result); }
+const char *stdin_bytes_data(void) { return stdin_result_data(plum_legacy_result); }
 
 // Unbuffered by convention: stderr is where a program says something is
 // wrong, and a message lost in a buffer at exit is the one that mattered.
