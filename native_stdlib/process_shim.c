@@ -178,6 +178,18 @@ static void plum_process_capture(PlumProcessSlot *slot, const char *out, const c
 // failure to start anything.
 #define PLUM_SPAWN_FAILED (-1000000000LL)
 
+#if defined(_WIN32)
+// Call only after the process handle is signaled. DWORD is unsigned;
+// widening directly preserves all Windows exit values, including 259
+// (STILL_ACTIVE is also a valid exit value for a process already done).
+// Keep query failure outside that domain rather than inventing a status.
+static long long plum_win_exit_code(HANDLE process) {
+    DWORD code;
+    if (!GetExitCodeProcess(process, &code)) return PLUM_SPAWN_FAILED;
+    return (long long)code;
+}
+#endif
+
 // `stdin_mode`: -1 inherit the parent's stdin, 0 empty (`/dev/null` /
 // `NUL`), 1 feed `stdin_data` of length `stdin_len`.
 // `fail_on_exec`: when set, an `execvp` failure is `PLUM_SPAWN_FAILED`
@@ -634,7 +646,6 @@ static long long plum_spawn_capture(const char *program, char **argv, char *out_
     HANDLE ho, he;
     STARTUPINFOW si;
     PROCESS_INFORMATION pi;
-    DWORD code = 0;
     if (cmdline == NULL) return PLUM_SPAWN_FAILED;
     if (plum_win_env_block(envp, &env_block) != 0) {
         free(cmdline);
@@ -749,8 +760,8 @@ static long long plum_spawn_capture(const char *program, char **argv, char *out_
         return 0;
     }
 
-    WaitForSingleObject(pi.hProcess, INFINITE);
-    if (!GetExitCodeProcess(pi.hProcess, &code)) code = (DWORD)-1;
+    long long code = WaitForSingleObject(pi.hProcess, INFINITE) == WAIT_OBJECT_0 ?
+        plum_win_exit_code(pi.hProcess) : PLUM_SPAWN_FAILED;
     CloseHandle(pi.hProcess);
 
     // Closed only after the child has exited, so everything it wrote is
@@ -761,7 +772,11 @@ static long long plum_spawn_capture(const char *program, char **argv, char *out_
     if (in_path[0] != '\0') plum_capture_remove(in_path);
     (void)program;
     (void)fail_on_exec;
-    return (long long)(int)code;
+    if (code == PLUM_SPAWN_FAILED) {
+        plum_capture_remove(out_path);
+        plum_capture_remove(err_path);
+    }
+    return code;
 }
 
 #endif
@@ -968,6 +983,16 @@ static void plum_child_collect(long long handle, long long code, int capture) {
     c->finished = 1;
 }
 
+#if defined(_WIN32)
+static long long plum_win_child_collect(long long handle) {
+    HANDLE process = (HANDLE)(intptr_t)plum_process_slots[handle].child->pid;
+    long long code = plum_win_exit_code(process);
+    if (code == PLUM_SPAWN_FAILED) return -1;
+    plum_child_collect(handle, code, 1);
+    return 1;
+}
+#endif
+
 static PlumProcessSlot *plum_slot_of(long long handle) {
     if (handle < 0 || handle >= PLUM_PROC_MAX_SLOTS || !plum_process_slots[handle].in_use) {
         return NULL;
@@ -1047,10 +1072,7 @@ long long process_poll(long long handle) {
     DWORD w = WaitForSingleObject(h, 0);
     if (w == WAIT_TIMEOUT) return 0;
     if (w != WAIT_OBJECT_0) return -1;
-    DWORD code = 0;
-    if (!GetExitCodeProcess(h, &code)) code = (DWORD)-1;
-    plum_child_collect(handle, (long long)(int)code, 1);
-    return 1;
+    return plum_win_child_collect(handle);
 #else
     int status = 0;
     pid_t r = waitpid((pid_t)slot->child->pid, &status, WNOHANG);
@@ -1081,10 +1103,7 @@ long long process_child_wait(long long handle, long long timeout_nanos) {
 #if defined(_WIN32)
         HANDLE h = (HANDLE)(intptr_t)slot->child->pid;
         if (WaitForSingleObject(h, INFINITE) != WAIT_OBJECT_0) return -1;
-        DWORD code = 0;
-        if (!GetExitCodeProcess(h, &code)) code = (DWORD)-1;
-        plum_child_collect(handle, (long long)(int)code, 1);
-        return 1;
+        return plum_win_child_collect(handle);
 #else
         int status = 0;
         pid_t r;
@@ -1103,10 +1122,7 @@ long long process_child_wait(long long handle, long long timeout_nanos) {
         DWORD w = WaitForSingleObject(h, ms > 0x7FFFFFFELL ? 0x7FFFFFFE : (DWORD)ms);
         if (w == WAIT_TIMEOUT) return 0;
         if (w != WAIT_OBJECT_0) return -1;
-        DWORD code = 0;
-        if (!GetExitCodeProcess(h, &code)) code = (DWORD)-1;
-        plum_child_collect(handle, (long long)(int)code, 1);
-        return 1;
+        return plum_win_child_collect(handle);
     }
 #else
     {
@@ -1192,9 +1208,9 @@ void process_child_free(long long handle) {
 #if defined(_WIN32)
             HANDLE h = (HANDLE)(intptr_t)c->pid;
             WaitForSingleObject(h, 5000);
-            DWORD code = 0;
-            if (!GetExitCodeProcess(h, &code)) code = (DWORD)-1;
-            plum_child_collect(handle, (long long)(int)code, 0);
+            // Drop discards the status and output. A status-query failure
+            // must not obstruct resource cleanup or fabricate a result.
+            plum_child_collect(handle, -1, 0);
 #else
             int status = 0;
             pid_t r;
@@ -1244,7 +1260,6 @@ static long long plum_spawn_inherit(const char *program, char **argv) {
     wchar_t *cmdline = plum_win_command_line(argv);
     STARTUPINFOW si;
     PROCESS_INFORMATION pi;
-    DWORD code = 0;
     if (cmdline == NULL) return -1;
 
     // No `STARTF_USESTDHANDLES`: leaving the field unset is what makes
@@ -1261,11 +1276,11 @@ static long long plum_spawn_inherit(const char *program, char **argv) {
     free(cmdline);
     CloseHandle(pi.hThread);
 
-    WaitForSingleObject(pi.hProcess, INFINITE);
-    if (!GetExitCodeProcess(pi.hProcess, &code)) code = (DWORD)-1;
+    long long code = WaitForSingleObject(pi.hProcess, INFINITE) == WAIT_OBJECT_0 ?
+        plum_win_exit_code(pi.hProcess) : PLUM_SPAWN_FAILED;
     CloseHandle(pi.hProcess);
     (void)program;
-    return (long long)(int)code;
+    return code == PLUM_SPAWN_FAILED ? -1 : code;
 }
 
 #endif
