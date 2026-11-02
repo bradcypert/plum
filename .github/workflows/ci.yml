@@ -682,6 +682,36 @@ jobs:
         env:
           PLUM_CI_TIMINGS: "1"
         run: ./bootstrap/build-cache-check ./sh.real --require-objects
+
+  # Keep independent native-runtime checks out of the cache job's time
+  # budget. In run 41359820107 every check passed, but their combined
+  # runtime exhausted 30 minutes during cleanup and cancelled the job.
+  windows-native:
+    name: Windows native runtime validation
+    needs: windows-build
+    runs-on: windows-latest
+    timeout-minutes: 15
+    defaults:
+      run:
+        shell: msys2 {0}
+    steps:
+      - uses: actions/checkout@v5
+      - uses: msys2/setup-msys2@v2
+        with:
+          msystem: MINGW64
+          update: true
+          install: >-
+            mingw-w64-x86_64-clang
+            mingw-w64-x86_64-lld
+            mingw-w64-x86_64-binutils
+            diffutils
+            tar
+            mingw-w64-x86_64-python
+      - uses: actions/download-artifact@v4
+        with:
+          name: plum-windows-compiler
+      - name: restore freshly built compiler
+        run: tar -xzf plum-windows-compiler.tar.gz
       - name: task and channel failures preserve ownership
         run: ./bootstrap/thread-smoke ./sh.real
       - name: declared native dependencies preserve TLS compatibility
@@ -725,7 +755,7 @@ jobs:
   windows:
     name: windows x86_64 builds and runs real programs
     if: ${{ always() }}
-    needs: [windows-build, windows-smoke, windows-cache, windows-lsp]
+    needs: [windows-build, windows-smoke, windows-cache, windows-native, windows-lsp]
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
@@ -734,4 +764,5 @@ jobs:
           test "${{ needs.windows-build.result }}" = success
           test "${{ needs.windows-smoke.result }}" = success
           test "${{ needs.windows-cache.result }}" = success
+          test "${{ needs.windows-native.result }}" = success
           test "${{ needs.windows-lsp.result }}" = success
