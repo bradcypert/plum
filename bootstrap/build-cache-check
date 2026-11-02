@@ -86,8 +86,16 @@ with tempfile.TemporaryDirectory(prefix="plum-cache-check-") as tmp:
                                     env=env, stdout=subprocess.PIPE,
                                     stderr=subprocess.PIPE, text=True, cwd=work)
                     for _ in range(8)]
-        for cleaner in cleaners:
-            stdout, stderr = cleaner.communicate(timeout=180)
+        # Reap every cleaner before asserting: otherwise the scratch-tree
+        # cleanup races still-running children and hides the original error.
+        try:
+            outputs = [cleaner.communicate(timeout=180) for cleaner in cleaners]
+        finally:
+            for cleaner in cleaners:
+                if cleaner.poll() is None:
+                    cleaner.kill()
+                    cleaner.communicate(timeout=30)
+        for cleaner, (stdout, stderr) in zip(cleaners, outputs, strict=True):
             require(cleaner.returncode == 0, "concurrent cleaner failed: " + stderr)
         require(not cleaning_root.exists(), "concurrent cleaners left the old cache")
         require(not list((cache / "build").iterdir()),
