@@ -1,0 +1,56 @@
+// Calendar boundaries; expected dates derived with Python datetime and 400-year cycles.
+use Time;
+
+let show (epoch: Int): Unit =
+    println(Time.iso8601(epoch).concat("|").concat(Time.rfc7231(epoch)))
+
+let weekdays (n: Int): Unit = if n > 6 { () } else {
+    println(Time.weekday_name(n));
+    weekdays(n + 1)
+}
+let months (n: Int): Unit = if n > 12 { () } else {
+    println(Time.month_name(n));
+    months(n + 1)
+}
+
+let main (): Unit = {
+    show(-31619119219200);
+    show(-31619087596800);
+    show(-377736739200);
+    show(-62198755200);
+    show(-62167219200);
+    show(-62135596800);
+    show(-59042995200);
+    show(-30641760000);
+    show(-30610224000);
+    show(253370764800);
+    show(253402300800);
+    show(31494753244800);
+    show(31494784780800);
+    show(-62167219201);
+    show(253402300799);
+    show(-86401);
+    show(-86400);
+    show(-86399);
+    show(-1);
+    show(0);
+    show(1);
+    show(9223372036854775807);
+    show(-9223372036854775807);
+    show((-9223372036854775807 - 1));
+    weekdays(0);
+    months(1);
+    println("names");
+    println("[".concat(Time.weekday_name((-9223372036854775807 - 1))).concat("]"));
+    println("[".concat(Time.weekday_name(-1)).concat("]"));
+    println("[".concat(Time.weekday_name(0)).concat("]"));
+    println("[".concat(Time.weekday_name(6)).concat("]"));
+    println("[".concat(Time.weekday_name(7)).concat("]"));
+    println("[".concat(Time.weekday_name(9223372036854775807)).concat("]"));
+    println("[".concat(Time.month_name((-9223372036854775807 - 1))).concat("]"));
+    println("[".concat(Time.month_name(0)).concat("]"));
+    println("[".concat(Time.month_name(1)).concat("]"));
+    println("[".concat(Time.month_name(12)).concat("]"));
+    println("[".concat(Time.month_name(13)).concat("]"));
+    println("[".concat(Time.month_name(9223372036854775807)).concat("]"));
+}

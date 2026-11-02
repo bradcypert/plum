@@ -1,0 +1,8 @@
+// Keep four-digit ISO/HTTP years from doing unnecessary padding work.
+use Time;
+let measure (n: Int) (total: Int): Int = if n == 0 { total } else {
+    let iso = Time.iso8601(0);
+    let http = Time.rfc7231(0);
+    measure(n - 1, total + iso.len() + http.len())
+}
+let main (): Unit = { measure(1000, 0); () }
