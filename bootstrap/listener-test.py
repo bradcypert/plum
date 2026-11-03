@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
-"""A separate process cannot take over a live Plum listener, even with reuse."""
+"""Check Windows listener exclusivity and POSIX wildcard listener conflicts."""
+import errno
 import os
 from pathlib import Path
 import queue
@@ -27,9 +28,11 @@ def main():
             threading.Thread(target=lambda: lines.put(owner.stdout.readline()),
                              daemon=True).start()
             port = int(lines.get(timeout=10))
-            # The child owns an INADDR_ANY listener. The parent is the attacker;
-            # test wildcard and specific-interface binds, with and without reuse.
-            for host in ("0.0.0.0", "127.0.0.1"):
+            # Windows exclusivity must reject both wildcard and specific binds.
+            # POSIX preserves SO_REUSEADDR: BSD/macOS can allow a specific bind
+            # alongside a wildcard listener, so only require wildcard conflicts.
+            hosts = ("0.0.0.0", "127.0.0.1") if os.name == "nt" else ("0.0.0.0",)
+            for host in hosts:
                 for reuse in (False, True):
                     with socket.socket() as attacker:
                         if reuse:
@@ -37,8 +40,12 @@ def main():
                         try:
                             attacker.bind((host, port))
                         except OSError as error:
-                            expected = (10013, 10048) if os.name == "nt" else (98, 48)
-                            assert error.errno in expected, error
+                            if os.name == "nt":
+                                # Python translates errno to a POSIX equivalent;
+                                # winerror preserves the native Winsock code.
+                                assert error.winerror in (10013, 10048), error
+                            else:
+                                assert error.errno == errno.EADDRINUSE, error
                         else:
                             raise AssertionError(f"listener hijacked: {host=}, {reuse=}")
             # The original listener still receives connections after the attempts.
@@ -50,7 +57,7 @@ def main():
             if owner.poll() is None:
                 owner.kill()
             owner.wait(timeout=10)
-        print("separate-process listener takeover rejected")
+        print("separate-process listener binding conflicts rejected")
 
 
 if __name__ == "__main__":
