@@ -20,14 +20,20 @@ static int test_clock_gettime(clockid_t id, struct timespec *ts) {
 #if defined(__linux__) || defined(_WIN32)
 static int test_setclock(pthread_condattr_t *attr, clockid_t id) {
     if (fallback) return EINVAL;
-    return pthread_condattr_setclock(attr, id);
+    // Model capability explicitly. Some winpthreads versions reject the
+    // clock; using the host result makes the requested test mode ambiguous.
+    (void)attr;
+    assert(id == CLOCK_MONOTONIC);
+    cond_clock = id;
+    return 0;
 }
 #endif
 static int test_cond_init(pthread_cond_t *cond, const pthread_condattr_t *attr) {
-#if defined(__linux__) || defined(_WIN32)
-    if (attr) assert(pthread_condattr_getclock(attr, &cond_clock) == 0);
-#endif
-    return pthread_cond_init(cond, attr);
+    // Timed waits are virtual, so the underlying untimed condvar can keep
+    // its default clock. Actual platform capability is covered by the
+    // native lifetime checks and source-built select fixtures.
+    (void)attr;
+    return pthread_cond_init(cond, NULL);
 }
 long long channel_send(long long, void *);
 static void event(pthread_mutex_t *lock) {
