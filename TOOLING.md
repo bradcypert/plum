@@ -22,6 +22,31 @@ See [the issue 63 results](docs/issue-63-results.md) for the baseline and
 validation evidence, and [the incremental compilation proposal](docs/incremental-compilation.md)
 for the next architectural stage.
 
+## Generated reference documentation
+
+`plum doc <project> -o <folder> --html` writes a reference that works
+from a local folder. Omit `--html` for Markdown. Module and namespace
+pages keep ordinary filenames such as `prelude.html` and
+`prelude.Array.html`.
+Dots within module or namespace names, literal tildes, and other unsafe
+UTF-8 bytes are percent-encoded in filenames. A module named `index` uses
+`~index`, keeping the landing page separate. Thus module `foo.Bar` writes
+`foo%2EBar.html`, while namespace `Bar` in module `foo` writes `foo.Bar.html`.
+Links encode those filenames as URL components, so a literal `%` on disk
+is `%25` in a link. Remaining collisions, including case-only differences,
+are rejected before writing any output.
+
+`--home 'Project=https://example.com/'` adds a link back to your site.
+The destination must be an HTTP(S) URL or a relative reference such as
+`../index.html`, `/`, or `#overview`. Other schemes, protocol-relative
+URLs (`//host`), whitespace, ASCII controls and backslashes are rejected.
+Percent-encode spaces in destinations as `%20`. Labels and URLs are escaped
+for their HTML context.
+
+Search displays at most 40 results as text nodes. Its temporary match lists
+are also bounded by that display limit; the complete search index remains
+loaded in memory and is scanned on each query.
+
 ## Testing
 
 Any top-level function whose name starts with `test_` is a test. No

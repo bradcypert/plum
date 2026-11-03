@@ -229,9 +229,9 @@ check $? "plum doc on a project with a dependency exited nonzero: $(head -n 1 "$
 SH_TIMEOUT="${SH_TIMEOUT:-120}" "$plum" doc "$work/proj" -o "$work/docs3" --with-deps > "$work/doc3.log" 2>&1
 check $? "plum doc --with-deps exited nonzero: $(head -n 1 "$work/doc3.log")"
 [ -f "$work/docs3/greet.md" ]; check $? "--with-deps dropped the project's own module"
-[ -f "$work/docs3/vendor.vendored.md" ]
-check $? "--with-deps did not write the dependency's page (expected vendor.vendored.md)"
-grep -q 'borrowed' "$work/docs3/vendor.vendored.md"
+[ -f "$work/docs3/vendor%2Evendored.md" ]
+check $? "--with-deps did not write the dependency's page (expected vendor%2Evendored.md)"
+grep -q 'borrowed' "$work/docs3/vendor%2Evendored.md"
 check $? "--with-deps wrote the page without the declaration"
 
 # The note only fires where it helps: this project HAS its own module,
