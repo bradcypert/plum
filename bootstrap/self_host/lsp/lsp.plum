@@ -57,6 +57,7 @@
 
 use Path;
 use Json;
+use Encoding;
 
 pub let json_field (v: JsonValue) (key: String): Option[JsonValue] =
     match v {
@@ -329,50 +330,51 @@ pub let publish_message (uri: String) (diagnostics: Array[JsonValue]): String =
 
 // --- Paths ---
 
-// `file:///a/b/c.plum` -> `/a/b/c.plum`. No percent-decoding: a path
-// with an escaped character comes back wrong, a real limitation and a
-// small one next to not having a server at all.
-// `file:///home/x/a.plum` -> `/home/x/a.plum`.
-// `file:///C:/x/a.plum`     -> `C:/x/a.plum`.
-//
-// A `file:` URI has an empty authority, so the path component always
-// begins with `/`. On Unix that slash IS the root and must be kept. On
-// Windows the path begins with a drive letter instead, and the slash
-// in front of it belongs to the URI, not to the path -- `/C:/x` opens
-// nothing. Stripping a fixed seven characters was right on one
-// platform and silently wrong on the other.
-// The result is CLEANED, which on Windows also converts the URI's
-// forward slashes to the platform separator.
-//
-// That conversion is the point. A `file:` URI always uses `/`, while
-// every path the compiler itself reports is built by `Path.join` and so
-// uses the platform separator -- the two conventions meet here, and have
-// to be reconciled at the boundary rather than compared later and
-// silently found unequal. When they were not, hover, completion,
-// go-to-definition and cross-file diagnostics all failed at once on
-// Windows while every Unix platform passed: the server was handing a
-// child process a project directory spelled one way and a file path
-// spelled the other.
-//
-// The separator is a PARAMETER rather than read from the host, and that
-// is the whole reason this pair exists in this shape. The Windows branch
-// is unreachable on Linux -- not untested, UNREACHABLE -- so the bug
-// above could only ever be found by CI, fifteen minutes at a time, on a
-// machine nobody can attach a debugger to. Passing the convention in
-// makes both readings checkable from anywhere; `test_lsp_uri_roundtrip`
-// in `main.plum` exercises them.
+// File-URI syntax belongs at this boundary: split authority from path
+// BEFORE decoding, decode UTF-8 once, then apply the platform convention.
+// Empty authority and localhost are local; a Windows remote authority is
+// a UNC root. Keep non-file and malformed URIs unchanged, so a bad escape
+// cannot silently select a different on-disk filename.
+// The separator parameter lets tests exercise Windows from any host.
+let decode_uri_path (path: String): Result[String, String] =
+    // Avoid a decoded byte array for the common, unescaped path.
+    if !String.contains(path, "%") { Ok(path) }
+    // Native file APIs would truncate at a decoded NUL.
+    else if String.contains(path, "%00") { Err("NUL in file URI") }
+    else { match Encoding.percent_decode(path) {
+        Err(e) => Err(e),
+        Ok(bytes) => Bytes.as_string(bytes),
+    } }
+
 pub let uri_to_path_in (sep: String) (uri: String): String =
     if uri.starts_with("file://") {
-        let rest = String.slice(uri, 7, uri.len());
-        let p = if starts_with_drive(rest) { String.slice(rest, 1, rest.len()) } else { rest };
-        String.replace(p, "/", sep)
+        let rest = String.slice(uri, 7, String.char_len(uri));
+        let end = match String.index_of(rest, "/") { Some(i) => i, None => String.char_len(rest) };
+        let host = String.slice(rest, 0, end);
+        let raw = String.slice(rest, end, String.char_len(rest));
+        let local = host == "" || String.to_lower(host) == "localhost";
+        let path = if local { raw } else { "//".concat(host).concat(raw) };
+        // Remote authorities have a filesystem meaning only on Windows.
+        if !local && sep != "\\" { uri }
+        else { match decode_uri_path(path) {
+            Err(_) => uri,
+            Ok(decoded) => {
+                let p = if sep == "\\" && local && starts_with_drive(decoded) {
+                    String.slice(decoded, 1, String.char_len(decoded))
+                } else { decoded };
+                String.replace(p, "/", sep)
+            },
+        } }
     } else { uri }
 
 // The host form. Additionally CLEANS, which collapses a doubled
 // separator and resolves `.`/`..` -- normalization on top of the
 // conversion, so a path from an editor compares equal to the same path
 // as the compiler reports it.
-pub let uri_to_path (uri: String): String = Path.clean(uri_to_path_in(Path.separator(), uri))
+pub let uri_to_path (uri: String): String = {
+    let p = uri_to_path_in(Path.separator(), uri);
+    if p == uri && uri.starts_with("file://") { uri } else { Path.clean(p) }
+}
 
 // `/C:/...` -- a slash, then a letter, then a colon.
 let starts_with_drive (s: String): Bool =
@@ -636,23 +638,23 @@ pub let test_lsp_position_numbers (): Unit = {
     assert_eq(json_field_int(at(0.5, 0.0), "line"), 0)
 }
 
-// The inverse of `uri_to_path`, including the slash a drive letter
-// needs putting back: `C:/x` is `file:///C:/x`, and `file://C:/x` would
-// make `C:` the AUTHORITY -- a host name -- rather than part of the
-// path.
-// The inverse, and it undoes that separator conversion: a `file:` URI
-// is defined in terms of `/`, so `file:///C:\\x\\a.plum` is not
-// something an editor can open.
-//
-// Written as "replace the separator with `/`" rather than "replace
-// backslashes", so it is exactly a no-op under the Posix convention,
-// where a backslash is a legal character in a filename.
-pub let path_to_uri_in (sep: String) (path: String): String = {
-    let p = String.replace(path, sep, "/");
-    if p.starts_with("file://") { p }
-    else if is_drive_path(p) { "file:///".concat(p) }
-    else { "file://".concat(p) }
-}
+// Encode filename bytes while preserving URI path separators and colons
+// (including the drive delimiter). Encoding '%' first prevents literal
+// escape-looking filenames from being decoded twice. A Posix backslash
+// is filename data and becomes %5C; only Windows separators become '/'.
+let encode_uri_path (path: String): String =
+    Encoding.percent_encode(path.as_bytes()).replace("%2F", "/").replace("%3A", ":")
+
+pub let path_to_uri_in (sep: String) (path: String): String =
+    if path.starts_with("file://") { path }
+    else {
+        let p = String.replace(path, sep, "/");
+        let encoded = encode_uri_path(p);
+        if sep == "\\" && p.starts_with("//") {
+            "file:".concat(encoded)
+        } else if is_drive_path(p) { "file:///".concat(encoded) }
+        else { "file://".concat(encoded) }
+    }
 
 pub let path_to_uri (path: String): String = path_to_uri_in(Path.separator(), path)
 
@@ -770,7 +772,7 @@ pub let test_lsp_definition_location_uri (): Unit = {
     let posix = location_at_in(POSIX(), "/project/main.plum", 2, 3, 4);
     assert_eq(json_field_str(posix, "uri"), "file:///project/main.plum");
     let backslash = location_at_in(POSIX(), "/project/odd\\name.plum", 2, 3, 4);
-    assert_eq(json_field_str(backslash, "uri"), "file:///project/odd\\name.plum")
+    assert_eq(json_field_str(backslash, "uri"), "file:///project/odd%5Cname.plum")
 }
 
 // The conversion itself, spelled out. The round trip above would still
@@ -790,7 +792,7 @@ pub let test_lsp_uri_separators (): Unit = {
 
     // A backslash is a legal character in a Unix filename, so the Posix
     // conversion must not touch one.
-    assert_eq(path_to_uri_in(POSIX(), "/home/odd\\name.plum"), "file:///home/odd\\name.plum");
+    assert_eq(path_to_uri_in(POSIX(), "/home/odd\\name.plum"), "file:///home/odd%5Cname.plum");
 
     // Not a `file:` URI: handed back untouched rather than guessed at.
     assert_eq(uri_to_path_in(WINDOWS_SEP(), "untitled:Untitled-1"), "untitled:Untitled-1")
@@ -802,4 +804,41 @@ pub let test_lsp_uri_separators (): Unit = {
 pub let encode_json (value: JsonValue): String = match json_stringify(value) {
     Ok(text) => text,
     Err(e) => { panic_raw("compiler JSON serialization failed: ".concat(e)); "" },
+}
+
+pub let test_lsp_uri_escaped_paths (): Unit = {
+    let name = "my file%23+é😀#?.plum";
+    let encoded = "my%20file%2523%2B%C3%A9%F0%9F%98%80%23%3F.plum";
+    assert_eq(uri_to_path_in(POSIX(), "file:///home/".concat(encoded)), "/home/".concat(name));
+    assert_eq(path_to_uri_in(POSIX(), "/home/".concat(name)), "file:///home/".concat(encoded));
+    assert_eq(uri_to_path_in(WINDOWS_SEP(), "file:///C:/work/".concat(encoded)), "C:\\work\\".concat(name));
+    assert_eq(path_to_uri_in(WINDOWS_SEP(), "C:\\work\\".concat(name)), "file:///C:/work/".concat(encoded));
+    uri_round_trip(POSIX(), "file:///home/".concat(encoded));
+    uri_round_trip(WINDOWS_SEP(), "file:///C:/work/".concat(encoded));
+    assert_eq(uri_to_path_in(POSIX(), "file:///a%2bb%20c"), "/a+b c");
+    assert_eq(uri_to_path_in(POSIX(), "file:///odd%5Cname"), "/odd\\name");
+    assert_eq(path_to_uri_in(POSIX(), "/C:/a:b"), "file:///C:/a:b");
+    assert_eq(uri_to_path_in(POSIX(), "file:///C:/a:b"), "/C:/a:b")
+}
+
+pub let test_lsp_uri_unc (): Unit = {
+    let uri = "file://server/share/my%20file.plum";
+    let path = "\\\\server\\share\\my file.plum";
+    assert_eq(uri_to_path_in(WINDOWS_SEP(), uri), path);
+    assert_eq(path_to_uri_in(WINDOWS_SEP(), path), uri);
+    assert_eq(Path.clean_in(true, uri_to_path_in(WINDOWS_SEP(), uri)), path);
+    assert_eq(uri_to_path_in(WINDOWS_SEP(), "file:////server/share/my%20file.plum"), path);
+    assert_eq(uri_to_path_in(WINDOWS_SEP(), "file://localhost/C:/my%20file.plum"), "C:\\my file.plum");
+    assert_eq(uri_to_path_in(POSIX(), "file://localhost/home/my%20file.plum"), "/home/my file.plum")
+}
+
+pub let test_lsp_uri_invalid_escapes (): Unit = {
+    assert_eq(uri_to_path("file:///a%GG"), "file:///a%GG");
+    assert_eq(uri_to_path_in(POSIX(), "file://server/share/a.plum"), "file://server/share/a.plum");
+    assert_eq(uri_to_path_in(POSIX(), "file:///a%"), "file:///a%");
+    assert_eq(uri_to_path_in(POSIX(), "file:///a%GG"), "file:///a%GG");
+    assert_eq(uri_to_path_in(POSIX(), "file:///a%FF"), "file:///a%FF");
+    assert_eq(uri_to_path_in(POSIX(), "file:///a%00b"), "file:///a%00b");
+    assert_eq(uri_to_path_in(POSIX(), "file:///a%2500b"), "/a%00b");
+    assert_eq(path_to_uri_in(WINDOWS_SEP(), "file:///C:/my%20file.plum"), "file:///C:/my%20file.plum")
 }
