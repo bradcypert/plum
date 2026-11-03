@@ -26,8 +26,8 @@
 #   3. IDEMPOTENT -- formatting twice is formatting once. This failed
 #      when first checked: a block anchors to the indent of the line its
 #      brace is on, so moving an outer construct leaves everything
-#      inside anchored to where it used to be. `fmt` iterates to a fixed
-#      point for that reason.
+#      inside anchored to where it used to be. `fmt` now resolves each
+#      anchor's assigned indentation before its dependent lines.
 #
 # Usage:  bootstrap/fmt-check [path-to-plum-binary]   (default: ./sh.real)
 set -uo pipefail
@@ -175,6 +175,10 @@ for dir in bootstrap/fmt_corpus/*/; do
     fi
     ok=$((ok + 1))
 done
+
+if ! python3 bootstrap/formatter-layout-check.py "$plum"; then
+    fail=$((fail + 1))
+fi
 
 if [ "$fail" -ne 0 ]; then
     printf '\nfmt-check: %d file(s) failed, %d already formatted\n' "$fail" "$ok"
