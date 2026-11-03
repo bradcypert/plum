@@ -26,7 +26,8 @@ for the next architectural stage.
 
 `plum doc <project> -o <folder> --html` writes a reference that works
 from a local folder. Omit `--html` for Markdown. Module and namespace
-pages keep ordinary filenames such as `Http.html` and `Http.Request.html`.
+pages keep ordinary filenames such as `prelude.html` and
+`prelude.Array.html`.
 Dots within module or namespace names, literal tildes, and other unsafe
 UTF-8 bytes are percent-encoded in filenames. A module named `index` uses
 `~index`, keeping the landing page separate. Thus module `foo.Bar` writes
