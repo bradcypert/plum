@@ -82,10 +82,10 @@ class Client:
 def check(compiler):
     with tempfile.TemporaryDirectory(prefix="plum-lsp-snapshot-") as directory:
         root = Path(directory)
-        project, scratch = root / "project-üni", root / "scratch"
+        project, scratch = root / "project üni %23#+", root / "scratch"
         project.mkdir()
         scratch.mkdir()
-        a, b = project / "main.plum", project / "other.plum"
+        a, b = project / "main.plum", project / "other üni %23#+.plum"
         disk = 'let disk (): Int = 1\n'
         a.write_text(disk)
         b.write_text('let helper (): Int = 2\n')
@@ -191,7 +191,7 @@ def check(compiler):
                 link.unlink()
             assert client.query("hover", a, old_members, "Old") is not None
             # A URI sharing the directory's textual prefix is outside it.
-            outside = root / "project-üni-other"
+            outside = root / (project.name + "-other")
             outside.mkdir()
             unrelated = outside / "main.plum"
             unrelated.write_text('let outside (): Int = 1\n')

@@ -2,6 +2,7 @@
 import shutil
 import subprocess
 from pathlib import Path
+from urllib.parse import quote
 
 
 def native_path(path):
@@ -15,10 +16,9 @@ def native_path(path):
 
 
 def file_uri(path):
-    native = native_path(path)
+    native = quote(native_path(path), safe="/:")
     if len(native) >= 3 and native[1:3] == ":/":
         return "file:///" + native
-    # Keep the current server's URI contract; percent encoding is #160.
     return "file://" + native
 
 
