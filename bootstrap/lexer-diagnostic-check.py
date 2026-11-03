@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
-"""Lexer failures retain their file, original source line, and character offset."""
+"""Lexing and interpolation parsing retain original source positions."""
+import json
 import subprocess
 import sys
 import tempfile
@@ -42,6 +43,9 @@ def check(compiler):
             ('"${@}"', '@', 'expected a builtin name'),
             ('"${`}"', '`', 'unexpected character'),
             ('"${1 + }"', '}', 'expected an expression'),
+            ('"${1; unexpected}"', '; unexpected', 'expected the end of the file'),
+            ('"${1 2}"', '2', 'expected the end of the file'),
+            ('"${"${1; unexpected}"}"', '; unexpected', 'expected the end of the file'),
         ]
         for ending in ('\n', '\r', '\r\n'):
             for literal, marker, message in cases:
@@ -102,7 +106,39 @@ line two");
         main.write_text(valid.replace('println("line one', 'missing("line one'))
         result = run(compiler, 'check', project)
         assert result.returncode == 1 and f'{main}:4:' in result.stdout + result.stderr, result
-    print(f'lexer-diagnostic-check: {count} positioned rejections and parent context restoration pass')
+        # Query the real identifier recording path, including nested fragments,
+        # repeated names, escaped literal text, and restored parent context.
+        # Character columns must survive Unicode and every supported newline.
+        lines = [
+            '// unrelated tokens precede the interpolation',
+            'let value = "global"',
+            'let main (): Unit = {',
+            '    let value = 7;',
+            '    println("é😀 \\n value ${value} ${"${value}"} ${value}");',
+            '    println(value.to_string());',
+            '}',
+        ]
+        for ending in ('\n', '\r', '\r\n'):
+            main.write_bytes((ending.join(lines) + ending).encode())
+            # The same spelling outside interpolation is literal text; it
+            # must not acquire a type entry from a fragment-local token index.
+            positions = [(5, lines[4].index('value') + 1, False)]
+            positions += [(5, i + 3, True) for i in range(len(lines[4]))
+                          if lines[4].startswith('${value}', i)]
+            positions += [(6, lines[5].index('value') + 1, True)]
+            for line, column, typed in positions:
+                result = subprocess.run(
+                    [compiler, 'query', str(project), str(main), str(line), str(column)],
+                    capture_output=True, text=True, timeout=60)
+                assert result.returncode == 0, result.stdout + result.stderr
+                answer = json.loads(result.stdout)
+                if typed:
+                    assert answer == {'name': 'value', 'type': 'Int',
+                                      'defLine': 4, 'defCol': 9}, (ending, line, column, answer)
+                else:
+                    assert answer == {}, (ending, line, column, answer)
+                count += 1
+    print(f'lexer-diagnostic-check: {count} positioned diagnostics/queries and parent context restoration pass')
 
 
 if __name__ == '__main__':
