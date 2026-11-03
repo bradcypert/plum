@@ -689,6 +689,17 @@ expressions used as statements. The tail item, if it has no trailing
 `;`, is the block's value; with a trailing `;`, or an empty block, the
 value is `Unit`.
 
+An `if` without `else` has type `Unit`, and its then block must also
+have type `Unit`: the implicit false branch has no result. Use an
+explicit `else` to produce a value, or a trailing `;` inside the then
+block to discard its result. This constraint participates in inference,
+so an unresolved then-result type is unified with `Unit` and remains
+constrained at later uses. Requiring agreement before code generation
+prevents the false path from fabricating a zero or null heap value.
+Explicitly discarded heap temporaries still follow the ordinary scoped
+ownership rules; this is a type-safety guarantee, not a new reclamation
+optimization.
+
 This deliberately drops Rust's semicolon exemption for block-shaped
 statements (Rust doesn't require `;` after `if cond { ... }` used as a
 mid-block statement, because the closing brace already reads as a

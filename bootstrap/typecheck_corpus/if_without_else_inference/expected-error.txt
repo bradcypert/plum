@@ -1,0 +1,2 @@
+error: .push() argument: Int != Unit
+main.plum:4:5

@@ -1,0 +1,18 @@
+let effect (b: Bool): Unit = if b { println("taken") }
+let main (): Unit = {
+    effect(false);
+    effect(true);
+    if true {};
+    let identity = |x| x;
+    let result = if true { identity(()) };
+    identity(result);
+    let xs = [];
+    if false { xs[0] };
+    println(xs.push(()).len());
+    // An explicit discard still evaluates and releases the heap result.
+    for i in 0..1000 {
+        if i % 2 == 0 { ["temporary".concat(i.to_string())]; };
+    };
+    println(if false { "left" } else { "right" });
+    println("done")
+}
