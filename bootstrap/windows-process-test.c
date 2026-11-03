@@ -1,6 +1,7 @@
 // Run by platform-smoke on Windows. Include the real shim so allocation
 // failures and live scratch bytes can be checked without a production ABI.
 #include <assert.h>
+#include <limits.h>
 #include <stddef.h>
 #include <stdint.h>
 #include <io.h>
@@ -18,6 +19,12 @@ static int fail_snapshot, live_snapshots;
 static wchar_t *snapshot_override;
 static int expect_no_wait_scratch;
 static int fail_exit_query, exit_queries;
+// Script only the OS wait boundary: the real child state, collection and
+// allocator remain in use, so multi-day waits take no wall-clock time.
+static int scripted_wait, wait_calls, wait_stop_call, wait_allocation_baseline;
+static DWORD wait_stop_status;
+static long long wait_remaining, wait_consumed;
+static size_t wait_live_baseline;
 static int stdin_write_mode, stdin_write_calls, process_creations;
 static const char *stdin_base;
 static size_t stdin_offset, stdin_expected;
@@ -107,6 +114,16 @@ static BOOL checked_exit_code(HANDLE h, LPDWORD code) {
 static DWORD checked_wait(HANDLE h, DWORD ms) {
     // Check lifetime BEFORE the child wait, not merely at function exit.
     if (expect_no_wait_scratch) assert(live_bytes == 0 && live_allocs == 0 && live_snapshots == 0);
+    if (scripted_wait) {
+        assert(allocation_attempt == wait_allocation_baseline && live_bytes == wait_live_baseline);
+        DWORD expected = wait_remaining > 0x7FFFFFFELL ? 0x7FFFFFFE : (DWORD)wait_remaining;
+        assert(ms == expected && ms != INFINITE);
+        wait_calls++;
+        if (wait_calls == wait_stop_call) return wait_stop_status;
+        wait_remaining -= ms;
+        wait_consumed += ms;
+        return WAIT_TIMEOUT;
+    }
     return WaitForSingleObject(h, ms);
 }
 #define FreeEnvironmentStringsW checked_free_snapshot
@@ -396,6 +413,56 @@ static void test_exit_statuses(const char *program) {
     for (int i = 0; i < PLUM_PROC_MAX_SLOTS; i++) assert(!plum_process_slots[i].in_use);
 }
 
+static void arm_wait(long long nanos, int stop_call, DWORD status) {
+    wait_remaining = nanos / 1000000LL + (nanos % 1000000LL != 0);
+    wait_calls = 0;
+    wait_consumed = 0;
+    wait_stop_call = stop_call;
+    wait_stop_status = status;
+    wait_allocation_baseline = allocation_attempt;
+    wait_live_baseline = live_bytes;
+    scripted_wait = 1;
+}
+
+static void test_wait_timeouts(const char *program) {
+    long long h = process_spawn(program, "--exit-child\t0", 2, "", 0, "", 0, 0);
+    assert(h >= 0);
+    HANDLE child = (HANDLE)(intptr_t)plum_process_slots[h].child->pid;
+    // The child has really exited, but scripted waits model it still running.
+    assert(WaitForSingleObject(child, 30000) == WAIT_OBJECT_0);
+    const long long cap = 0x7FFFFFFELL * 1000000LL;
+    const long long durations[] = {0, 1, 999999, 1000000, 1000001,
+                                  cap - 1, cap, cap + 1, 2 * cap, 2 * cap + 1, LLONG_MAX};
+    for (size_t i = 0; i < sizeof(durations) / sizeof(durations[0]); i++) {
+        long long nanos = durations[i];
+        long long millis = nanos / 1000000LL + (nanos % 1000000LL != 0);
+        int queries = exit_queries;
+        arm_wait(nanos, 0, WAIT_TIMEOUT);
+        assert(process_child_wait(h, nanos) == 0);
+        assert(wait_remaining == 0 && wait_consumed == millis);
+        assert(wait_calls == (millis == 0 ? 1 : (millis + 0x7FFFFFFELL - 1) / 0x7FFFFFFELL));
+        assert(!plum_process_slots[h].child->finished && exit_queries == queries);
+        assert(allocation_attempt == wait_allocation_baseline && live_bytes == wait_live_baseline);
+        scripted_wait = 0;
+    }
+    // A failed later chunk must leave the child available for another wait.
+    arm_wait(2 * cap + 1, 2, WAIT_FAILED);
+    assert(process_child_wait(h, 2 * cap + 1) == -1 && wait_calls == 2);
+    assert(!plum_process_slots[h].child->finished);
+    scripted_wait = 0;
+    // Signalling during a later chunk collects exactly once, preserving output.
+    int queries = exit_queries;
+    arm_wait(2 * cap + 1, 2, WAIT_OBJECT_0);
+    assert(process_child_wait(h, 2 * cap + 1) == 1 && wait_calls == 2);
+    assert(exit_queries == queries + 1 && process_exit_code(h) == 0);
+    assert(process_capture_status(h) == 0);
+    scripted_wait = 0;
+    assert(process_child_wait(h, 0) == 1 && process_child_wait(h, LLONG_MAX) == 1);
+    assert(exit_queries == queries + 1);
+    process_child_free(h);
+    no_scratch();
+}
+
 static void test_spawns(void) {
     wchar_t original[4096], base[4096], path[4096];
     assert(GetModuleFileNameW(NULL, original, 4096));
@@ -459,6 +526,7 @@ static void test_spawns(void) {
     no_scratch();
     test_stdin_spawns(program);
     test_exit_statuses(program);
+    test_wait_timeouts(program);
     assert(DeleteFileW(path));
 }
 
@@ -518,6 +586,6 @@ int main(void) {
     assert(SetEnvironmentVariableW(L"TEMP", nt ? old_temp : NULL));
     assert(SetEnvironmentVariableW(L"TMP", np ? old_tmp : NULL));
     assert(RemoveDirectoryW(root));
-    printf("Windows process Unicode, overlays, chunked stdin, full exit status, failure cleanup: ok (peak scratch %zu bytes)\n", peak_bytes);
+    printf("Windows process Unicode, overlays, chunked stdin/waits, full exit status, failure cleanup: ok (peak scratch %zu bytes)\n", peak_bytes);
     return 0;
 }
