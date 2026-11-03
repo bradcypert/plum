@@ -63,6 +63,7 @@ use shims;
 use highlight;
 use pkg;
 use Path;
+use Encoding;
 use buildcache;
 
 // `query <project> <path> <line> <col>` -- what is the type of the
@@ -439,9 +440,43 @@ let doc_home_link (spec: String): String =
             None => "",
             Some(i) => {
                 let label = doc_html_escape(String.slice(spec, 0, i));
-                let url = doc_html_escape(String.slice(spec, i + 1, spec.len()));
+                let raw_url = String.slice(spec, i + 1, String.char_len(spec));
+                if !doc_home_url_safe(raw_url) { doc_fail("--home requires an http(s) or relative URL without whitespace, controls, or backslashes") }
+                else { () };
+                let url = doc_html_attr(raw_url);
                 "<p class=\"home\"><a href=\"${url}\">&larr; ${label}</a></p>\n"
             },
+        }
+    }
+
+// Browser URL parsing discards some controls and treats backslashes as slashes.
+// Reject them before checking the scheme; a colon in the first path segment
+// always denotes a scheme. Relative paths can disambiguate a colon with ./.
+let doc_home_url_safe (url: String): Bool = {
+    let lower = url.to_lower();
+    !String.is_empty(url) && doc_home_bytes_safe(url.as_bytes(), 0)
+        && !url.starts_with("//")
+        && (lower.starts_with("https://") || lower.starts_with("http://")
+            || doc_home_relative(url.as_bytes(), 0))
+}
+
+let doc_home_bytes_safe (bytes: Bytes) (i: Int): Bool =
+    if i >= bytes.len() { true }
+    else {
+        match bytes.at(i) {
+            Some(c) => c > 32 && c != 127 && c != 92 && doc_home_bytes_safe(bytes, i + 1),
+            None => false,
+        }
+    }
+
+let doc_home_relative (bytes: Bytes) (i: Int): Bool =
+    if i >= bytes.len() { true }
+    else {
+        match bytes.at(i) {
+            Some(c) => if c == 58 { false }
+                else if c == 47 || c == 63 || c == 35 { true }
+                else { doc_home_relative(bytes, i + 1) },
+            None => false,
         }
     }
 
@@ -696,11 +731,60 @@ let last_paren (s: String) (i: Int) (best: Int): Int =
     else if String.slice(s, i, i + 1) == ")" { last_paren(s, i + 1, i) }
     else { last_paren(s, i + 1, best) }
 
+// One boundary for every output page and link. A dot separates module from
+// namespace, so literal dots in either component must be encoded. Reserve ~
+// for generator-owned-name disambiguation, encoding a literal ~ as well.
+// Ordinary module/namespace URLs (including the stdlib) remain unchanged.
+let doc_page_component (name: String): String =
+    Encoding.percent_encode(name.as_bytes()).replace(".", "%2E").replace("~", "%7E")
+
+let doc_page_file (m: String) (ns: String) (ext: String): String = {
+    let encoded = doc_page_component(m);
+    let name = if m.to_lower() == "index" { "~${encoded}" } else { encoded };
+    if String.is_empty(ns) { "${name}.${ext}" }
+    else { "${name}.${doc_page_component(ns)}.${ext}" }
+}
+
+// A literal % on disk is %25 in a URL. This encoder's alphabet is also
+// safe in quoted HTML attributes; names never supply markup or a scheme.
+let doc_page_url (m: String) (ns: String) (ext: String): String =
+    Encoding.percent_encode(doc_page_file(m, ns, ext).as_bytes())
+
+// Detect collisions before either renderer writes anything. Include generator
+// artifacts and compare case-insensitively for portable output folders.
+let doc_reserve_page (seen: Ref[Map[String, Bool]]) (page: String): Unit = {
+    let key = page.to_lower();
+    if Map.contains(seen.get(), key) { doc_fail("documentation page filename collision: ${page}") }
+    else { seen.set(Map.insert(seen.get(), key, true)) }
+}
+
+let doc_check_pages (items: Array[parser.ItemNode]) (mods: Array[String]) (ext: String): Unit = {
+    let seen: Ref[Map[String, Bool]] = ref(Map.new(()));
+    doc_reserve_page(seen, "index.${ext}");
+    doc_check_mod_pages(items, mods, ext, seen, 0)
+}
+
+let doc_check_mod_pages (items: Array[parser.ItemNode]) (mods: Array[String]) (ext: String) (seen: Ref[Map[String, Bool]]) (i: Int): Unit =
+    if i >= mods.len() { () }
+    else {
+        doc_reserve_page(seen, doc_page_file(mods[i], "", ext));
+        doc_check_ns_pages(mods[i], doc_namespaces(items, mods[i], 0, []), ext, seen, 0);
+        doc_check_mod_pages(items, mods, ext, seen, i + 1)
+    }
+
+let doc_check_ns_pages (m: String) (nss: Array[String]) (ext: String) (seen: Ref[Map[String, Bool]]) (i: Int): Unit =
+    if i >= nss.len() { () }
+    else {
+        doc_reserve_page(seen, doc_page_file(m, nss[i], ext));
+        doc_check_ns_pages(m, nss, ext, seen, i + 1)
+    }
+
 let cmd_doc_items (items: Array[parser.ItemNode]) (out: String): Unit =
     cmd_doc_render(items, out, false, "")
 
 let cmd_doc_render (items: Array[parser.ItemNode]) (out: String) (html: Bool) (home: String): Unit = {
     let mods = sorted_namespaces(doc_modules(items, 0, []), 0);
+    doc_check_pages(items, mods, if html { "html" } else { "md" });
     if html { doc_write_html(items, mods, out, home) }
     else {
         doc_write_modules(items, mods, out, 0);
@@ -722,7 +806,7 @@ let doc_write_modules (items: Array[parser.ItemNode]) (mods: Array[String]) (out
     if i >= mods.len() { () }
     else {
         let nss = sorted_namespaces(doc_namespaces(items, mods[i], 0, []), 0);
-        doc_write("${out}/${mods[i]}.md", doc_module_page(items, mods[i], nss));
+        doc_write("${out}/${doc_page_file(mods[i], "", "md")}", doc_module_page(items, mods[i], nss));
         doc_write_ns_pages(items, mods[i], nss, out, 0);
         doc_write_modules(items, mods, out, i + 1)
     }
@@ -805,9 +889,9 @@ let doc_write_ns_pages (items: Array[parser.ItemNode]) (m: String) (nss: Array[S
     if i >= nss.len() { () }
     else {
         let body = "# ${m}.${nss[i]}\n\nGenerated by `plum doc` from the source. Do not edit by hand.\n\n"
-            .concat("Part of [`${m}`](${m}.md).\n")
+            .concat("Part of [`${m}`](${doc_page_url(m, "", "md")}).\n")
             .concat(doc_entries_ns(items, m, nss[i], 0, ""));
-        doc_write("${out}/${m}.${nss[i]}.md", body);
+        doc_write("${out}/${doc_page_file(m, nss[i], "md")}", body);
         doc_write_ns_pages(items, m, nss, out, i + 1)
     }
 
@@ -837,8 +921,8 @@ let doc_index_mod_sections (items: Array[parser.ItemNode]) (mods: Array[String])
     else {
         let nss = sorted_namespaces(doc_namespaces(items, mods[i], 0, []), 0);
         doc_index_mod_sections(items, mods, i + 1,
-            acc.concat("\n## [${mods[i]}](${mods[i]}.md)\n\n")
-                .concat(doc_index_links(items, mods[i], "", "${mods[i]}.md", 0, ""))
+            acc.concat("\n## [${mods[i]}](${doc_page_url(mods[i], "", "md")})\n\n")
+                .concat(doc_index_links(items, mods[i], "", doc_page_url(mods[i], "", "md"), 0, ""))
                 .concat(doc_index_ns_sections(items, mods[i], nss, 0, "")))
     }
 
@@ -846,8 +930,8 @@ let doc_index_ns_sections (items: Array[parser.ItemNode]) (m: String) (nss: Arra
     if i >= nss.len() { acc }
     else {
         doc_index_ns_sections(items, m, nss, i + 1,
-            acc.concat("\n### [${m}.${nss[i]}](${m}.${nss[i]}.md)\n\n")
-                .concat(doc_index_links(items, m, nss[i], "${m}.${nss[i]}.md", 0, "")))
+            acc.concat("\n### [${m}.${nss[i]}](${doc_page_url(m, nss[i], "md")})\n\n")
+                .concat(doc_index_links(items, m, nss[i], doc_page_url(m, nss[i], "md"), 0, "")))
     }
 
 // One line per declaration: the signature, linked to its anchor on the
@@ -867,7 +951,7 @@ let doc_index_links_in (items: Array[parser.ItemNode]) (m: String) (nss: Array[S
             match doc_entry_signature(items[i]) {
                 None => doc_index_links_in(items, m, nss, ns, page, i + 1, acc),
                 Some(sig) => doc_index_links_in(items, m, nss, ns, page, i + 1,
-                    acc.concat("- [`${sig}`](${page}#${doc_anchor(sig)})\n")),
+                    acc.concat("- [`${sig}`](${page}#${Encoding.percent_encode(doc_anchor(sig).as_bytes())})\n")),
             }
         }
     }
@@ -895,8 +979,8 @@ let doc_ns_index (m: String) (nss: Array[String]) (i: Int): String =
     // declaration to anything parsing this file, and an HTML renderer
     // or a search index is exactly such a thing. `##` means "a
     // declaration" here and nothing else.
-    else if i == 0 { "\n**Namespaces:**\n\n- [`${m}.${nss[i]}`](${m}.${nss[i]}.md)\n".concat(doc_ns_index(m, nss, i + 1)) }
-    else { "- [`${m}.${nss[i]}`](${m}.${nss[i]}.md)\n".concat(doc_ns_index(m, nss, i + 1)) }
+    else if i == 0 { "\n**Namespaces:**\n\n- [`${m}.${nss[i]}`](${doc_page_url(m, nss[i], "md")})\n".concat(doc_ns_index(m, nss, i + 1)) }
+    else { "- [`${m}.${nss[i]}`](${doc_page_url(m, nss[i], "md")})\n".concat(doc_ns_index(m, nss, i + 1)) }
 
 // A module's OWN description: the `///` block at the top of its source.
 //
@@ -994,6 +1078,11 @@ let doc_render (signature: String) (doc: String): String =
 let doc_html_escape (s: String): String =
     s.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
 
+// Attribute encoding is separate from prose encoding: quotes are syntax only
+// in attributes. URL validation/encoding must happen before this final step.
+let doc_html_attr (s: String): String =
+    doc_html_escape(s).replace("\"", "&quot;").replace("'", "&#39;")
+
 // Backticks become `<code>`, `**` becomes `<strong>`. Escaping happens
 // FIRST, so a `<` inside a doc comment is text rather than markup.
 let doc_inline (s: String): String =
@@ -1054,18 +1143,18 @@ let doc_html_nav (home: String) (mods: Array[String]) (items: Array[parser.ItemN
         let nss = sorted_namespaces(doc_namespaces(items, mods[i], 0, []), 0);
         let subs = doc_html_nav_ns(mods[i], nss, 0, "");
         doc_html_nav(home, mods, items, i + 1,
-            acc.concat("<li><a href=\"${mods[i]}.html\">${doc_html_escape(mods[i])}</a>${subs}</li>\n"))
+            acc.concat("<li><a href=\"${doc_page_url(mods[i], "", "html")}\">${doc_html_escape(mods[i])}</a>${subs}</li>\n"))
     }
 
 let doc_html_nav_ns (m: String) (nss: Array[String]) (i: Int) (acc: String): String =
     if Array.is_empty(nss) { "" }
     else if i >= nss.len() { "<ul class=\"ns\">\n".concat(acc).concat("</ul>\n") }
-    else { doc_html_nav_ns(m, nss, i + 1, acc.concat("<li><a href=\"${m}.${nss[i]}.html\">${doc_html_escape(nss[i])}</a></li>\n")) }
+    else { doc_html_nav_ns(m, nss, i + 1, acc.concat("<li><a href=\"${doc_page_url(m, nss[i], "html")}\">${doc_html_escape(nss[i])}</a></li>\n")) }
 
 // A declaration: its signature as code, its prose beneath. The `id` is
 // the signature's own name, so a link can point at one entry.
 let doc_html_entry (sig: String) (doc: String): String =
-    "    <section class=\"decl\" id=\"${doc_anchor(sig)}\">\n"
+    "    <section class=\"decl\" id=\"${doc_html_attr(doc_anchor(sig))}\">\n"
         .concat("      <h2><code>${highlight.hl_html(sig)}</code></h2>\n")
         .concat(doc_html_prose(doc))
         .concat("    </section>\n")
@@ -1226,7 +1315,7 @@ let doc_page_count (items: Array[parser.ItemNode]) (mods: Array[String]) (i: Int
 
 let doc_html_index (mods: Array[String]) (i: Int) (acc: String): String =
     if i >= mods.len() { "  <ul>\n".concat(acc).concat("  </ul>\n") }
-    else { doc_html_index(mods, i + 1, acc.concat("    <li><a href=\"${mods[i]}.html\">${doc_html_escape(mods[i])}</a></li>\n")) }
+    else { doc_html_index(mods, i + 1, acc.concat("    <li><a href=\"${doc_page_url(mods[i], "", "html")}\">${doc_html_escape(mods[i])}</a></li>\n")) }
 
 let doc_write_html_mods (items: Array[parser.ItemNode]) (mods: Array[String]) (nav: String) (out: String) (i: Int): Unit =
     if i >= mods.len() { () }
@@ -1235,7 +1324,7 @@ let doc_write_html_mods (items: Array[parser.ItemNode]) (mods: Array[String]) (n
         let body = "  <h1>${doc_html_escape(mods[i])}</h1>\n"
             .concat("  <div class=\"blurb\">\n").concat(doc_html_prose(doc_module_blurb_text(items, mods[i], 0))).concat("  </div>\n")
             .concat(doc_html_entries(items, mods[i], "", 0, ""));
-        doc_write("${out}/${mods[i]}.html", doc_html_page(mods[i], nav, body));
+        doc_write("${out}/${doc_page_file(mods[i], "", "html")}", doc_html_page(mods[i], nav, body));
         doc_write_html_ns(items, mods[i], nss, nav, out, 0);
         doc_write_html_mods(items, mods, nav, out, i + 1)
     }
@@ -1244,9 +1333,9 @@ let doc_write_html_ns (items: Array[parser.ItemNode]) (m: String) (nss: Array[St
     if i >= nss.len() { () }
     else {
         let body = "  <h1>${doc_html_escape(m)}.${doc_html_escape(nss[i])}</h1>\n"
-            .concat("  <p class=\"sub\">Part of <a href=\"${m}.html\">${doc_html_escape(m)}</a>.</p>\n")
+            .concat("  <p class=\"sub\">Part of <a href=\"${doc_page_url(m, "", "html")}\">${doc_html_escape(m)}</a>.</p>\n")
             .concat(doc_html_entries(items, m, nss[i], 0, ""));
-        doc_write("${out}/${m}.${nss[i]}.html", doc_html_page("${m}.${nss[i]}", nav, body));
+        doc_write("${out}/${doc_page_file(m, nss[i], "html")}", doc_html_page("${m}.${nss[i]}", nav, body));
         doc_write_html_ns(items, m, nss, nav, out, i + 1)
     }
 
@@ -1314,11 +1403,11 @@ let doc_index_items (items: Array[parser.ItemNode]) (m: String) (nss: Array[Stri
                 None => doc_index_items(items, m, nss, i + 1, acc),
                 Some(sig) => {
                     let ns = doc_ns_of_in(nss, items[i]);
-                    let page = if String.is_empty(ns) { "${m}.html" } else { "${m}.${ns}.html" };
+                    let page = doc_page_url(m, ns, "html");
                     doc_index_items(items, m, nss, i + 1, acc.push(JsonObject([
                         JsonEntry { key: "n", value: JsonString(doc_anchor(sig)) },
                         JsonEntry { key: "s", value: JsonString(sig) },
-                        JsonEntry { key: "u", value: JsonString("${page}#${doc_anchor(sig)}") },
+                        JsonEntry { key: "u", value: JsonString("${page}#${Encoding.percent_encode(doc_anchor(sig).as_bytes())}") },
                         JsonEntry { key: "m", value: JsonString(if String.is_empty(ns) { m } else { "${m}.${ns}" }) },
                     ])))
                 },
@@ -1331,33 +1420,42 @@ let doc_index_items (items: Array[parser.ItemNode]) (m: String) (nss: Array[Stri
 // Substring rather than fuzzy: a reader searching a reference knows
 // roughly what the thing is called, and fuzzy matching in a list this
 // size mostly produces confident wrong answers above the right one.
-// Ranked so a name that STARTS with the query comes first.
+// Ranked so a name that STARTS with the query comes first. Keep at most
+// one display limit in each rank; scanning a large index needs no unbounded
+// temporary match list, and rendering never constructs an HTML string.
 let doc_search_js (): String = Array.join([
     "(function () {",
     "  var box = document.getElementById('q');",
     "  var out = document.getElementById('results');",
     "  if (!box || !out || !window.PLUM_DOCS) { return; }",
+    "  var limit = 40;",
     "  function render(rows) {",
-    "    if (!rows.length) { out.innerHTML = '<li class=\"none\">No match</li>'; return; }",
-    "    out.innerHTML = rows.slice(0, 40).map(function (r) {",
-    "      return '<li><a href=\"' + r.u + '\"><code>' + r.n + '</code>' +",
-    "             '<span>' + r.m + '</span></a></li>';",
-    "    }).join('');",
+    "    out.replaceChildren();",
+    "    if (!rows.length) {",
+    "      var empty = document.createElement('li');",
+    "      empty.className = 'none'; empty.textContent = 'No match'; out.appendChild(empty); return;",
+    "    }",
+    "    rows.slice(0, limit).forEach(function (r) {",
+    "      var li = document.createElement('li'), a = document.createElement('a');",
+    "      var code = document.createElement('code'), module = document.createElement('span');",
+    "      a.setAttribute('href', r.u); code.textContent = r.n; module.textContent = r.m;",
+    "      a.appendChild(code); a.appendChild(module); li.appendChild(a); out.appendChild(li);",
+    "    });",
     "  }",
     "  box.addEventListener('input', function () {",
     "    var q = box.value.trim().toLowerCase();",
-    "    if (!q) { out.innerHTML = ''; out.hidden = true; return; }",
+    "    if (!q) { out.replaceChildren(); out.hidden = true; return; }",
     "    out.hidden = false;",
     "    var starts = [], contains = [];",
     "    for (var i = 0; i < window.PLUM_DOCS.length; i++) {",
     "      var r = window.PLUM_DOCS[i], n = r.n.toLowerCase();",
-    "      if (n.indexOf(q) === 0) { starts.push(r); }",
-    "      else if (n.indexOf(q) > 0 || r.s.toLowerCase().indexOf(q) >= 0) { contains.push(r); }",
+    "      if (n.indexOf(q) === 0) { if (starts.length < limit) { starts.push(r); } }",
+    "      else if (n.indexOf(q) > 0 || r.s.toLowerCase().indexOf(q) >= 0) { if (contains.length < limit) { contains.push(r); } }",
     "    }",
     "    render(starts.concat(contains));",
     "  });",
     "  box.addEventListener('keydown', function (e) {",
-    "    if (e.key === 'Escape') { box.value = ''; out.innerHTML = ''; out.hidden = true; box.blur(); }",
+    "    if (e.key === 'Escape') { box.value = ''; out.replaceChildren(); out.hidden = true; box.blur(); }",
     "  });",
     "  document.addEventListener('keydown', function (e) {",
     "    if (e.key === '/' && document.activeElement !== box) { e.preventDefault(); box.focus(); }",

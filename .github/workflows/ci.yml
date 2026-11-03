@@ -140,6 +140,11 @@ jobs:
         run: ./bootstrap/check-builtins
       - name: every stdlib name the docs mention exists
         run: ./bootstrap/check-doc-names
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: documentation HTML and URL boundaries
+        run: python3 ./bootstrap/doc-output-test.py ./sh.real
       - name: the generated docs match the compiler
         run: ./bootstrap/check-docs
       - name: highlighting does not corrupt code
