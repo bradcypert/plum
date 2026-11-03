@@ -185,7 +185,62 @@ typedef struct {
 } plum_chan;
 
 static pthread_mutex_t plum_sel_lock = PTHREAD_MUTEX_INITIALIZER;
-static pthread_cond_t plum_sel_ready = PTHREAD_COND_INITIALIZER;
+static pthread_cond_t plum_sel_ready;
+static int plum_sel_initialized;
+static int plum_sel_monotonic;
+
+// Called with sel_lock held, before any selector can wait. Sends before
+// the first select need no broadcast: readiness lives in the channel queue.
+static void plum_sel_init(void) {
+    if (plum_sel_initialized) return;
+    int status;
+#if defined(__linux__) || defined(_WIN32)
+    pthread_condattr_t attr;
+    if (pthread_condattr_init(&attr) == 0) {
+        if (pthread_condattr_setclock(&attr, CLOCK_MONOTONIC) == 0) {
+            status = pthread_cond_init(&plum_sel_ready, &attr);
+            if (status == 0) plum_sel_monotonic = 1;
+        }
+        pthread_condattr_destroy(&attr);
+    }
+#endif
+    // Platforms without clock selection (including macOS), or a runtime
+    // rejecting it, use the default condvar only for untimed selects.
+    if (!plum_sel_monotonic) {
+        status = pthread_cond_init(&plum_sel_ready, NULL);
+        if (status != 0) {
+            fputs("panic: channel select initialization failed\n", stdout);
+            exit(1);
+        }
+    }
+    plum_sel_initialized = 1;
+}
+
+// Return with sel_lock held. Never pass a realtime deadline to a timed
+// wait: even a short realtime wait can hang after a backward clock step.
+static int plum_sel_wait_until(const struct timespec *deadline) {
+    if (plum_sel_monotonic)
+        return pthread_cond_timedwait(&plum_sel_ready, &plum_sel_lock, deadline);
+    struct timespec now;
+    clock_gettime(CLOCK_MONOTONIC, &now);
+    if (now.tv_sec > deadline->tv_sec ||
+        (now.tv_sec == deadline->tv_sec && now.tv_nsec >= deadline->tv_nsec))
+        return ETIMEDOUT;
+    // Poll only on the portability fallback, in slices of at most 1ms.
+    // Relative sleep is independent of wall time. Recheck the original
+    // deadline after interruptions; never restart the timeout budget.
+    struct timespec delay = {0, 1000000L};
+    if (deadline->tv_sec == now.tv_sec &&
+        deadline->tv_nsec - now.tv_nsec < delay.tv_nsec)
+        delay.tv_nsec = deadline->tv_nsec - now.tv_nsec;
+    else if (deadline->tv_sec == now.tv_sec + 1 &&
+             1000000000L - now.tv_nsec + deadline->tv_nsec < delay.tv_nsec)
+        delay.tv_nsec = 1000000000L - now.tv_nsec + deadline->tv_nsec;
+    pthread_mutex_unlock(&plum_sel_lock);
+    nanosleep(&delay, NULL);
+    pthread_mutex_lock(&plum_sel_lock);
+    return 0;
+}
 
 long long channel_new(void) {
     plum_chan *c = (plum_chan *)malloc(sizeof(plum_chan));
@@ -247,7 +302,7 @@ long long channel_send(long long handle, void *value) {
     // of channels, so there is no such thing as "the right one" to
     // wake; each rechecks its own arms.
     pthread_mutex_lock(&plum_sel_lock);
-    pthread_cond_broadcast(&plum_sel_ready);
+    if (plum_sel_initialized) pthread_cond_broadcast(&plum_sel_ready);
     pthread_mutex_unlock(&plum_sel_lock);
     return 1;
 }
@@ -303,6 +358,7 @@ long long channel_select(const long long *handles, long long n, void **out) {
     *out = NULL;
     if (n <= 0) return -1;
     pthread_mutex_lock(&plum_sel_lock);
+    plum_sel_init();
     for (;;) {
         for (long long i = 0; i < n; i++) {
             void *v;
@@ -331,18 +387,15 @@ long long channel_select(const long long *handles, long long n, void **out) {
 // unrelated channel, so a select could wait far longer than it was
 // asked to and, under a busy enough process, never return.
 //
-// `CLOCK_REALTIME` because that is what `pthread_cond_timedwait` is
-// specified against by default. It can therefore be lengthened or
-// shortened by the system clock being set, which is a real limitation
-// and the reason `Time.since` reads the monotonic clock instead --
-// measuring elapsed time and bounding a wait are different jobs, and
-// only one of them can use a condition variable.
+// Both the deadline and the blocking primitive measure elapsed monotonic
+// time. The fallback bounds each relative sleep instead of relying on a
+// realtime condition-variable deadline.
 long long channel_select_timeout(const long long *handles, long long n, void **out, long long nanos) {
     struct timespec deadline;
     *out = NULL;
     if (n <= 0) return -1;
     if (nanos < 0) nanos = 0;
-    clock_gettime(CLOCK_REALTIME, &deadline);
+    clock_gettime(CLOCK_MONOTONIC, &deadline);
     deadline.tv_sec += (time_t)(nanos / 1000000000LL);
     deadline.tv_nsec += (long)(nanos % 1000000000LL);
     if (deadline.tv_nsec >= 1000000000L) {
@@ -350,6 +403,7 @@ long long channel_select_timeout(const long long *handles, long long n, void **o
         deadline.tv_nsec -= 1000000000L;
     }
     pthread_mutex_lock(&plum_sel_lock);
+    plum_sel_init();
     for (;;) {
         for (long long i = 0; i < n; i++) {
             void *v;
@@ -362,7 +416,7 @@ long long channel_select_timeout(const long long *handles, long long n, void **o
         // A sweep happens BEFORE the first wait and after every wakeup,
         // so a value that arrived before this call is still seen even
         // when the deadline has already passed.
-        if (pthread_cond_timedwait(&plum_sel_ready, &plum_sel_lock, &deadline) == ETIMEDOUT) {
+        if (plum_sel_wait_until(&deadline) == ETIMEDOUT) {
             // One last sweep: a send may have landed between the last
             // one and the deadline expiring, and reporting a timeout
             // while a value sits in the queue would lose it.
@@ -420,7 +474,7 @@ void channel_release(long long handle, long long receiver, void (*rel)(void *)) 
     pthread_mutex_unlock(&c->lock);
     if (closed) {
         pthread_mutex_lock(&plum_sel_lock);
-        pthread_cond_broadcast(&plum_sel_ready);
+        if (plum_sel_initialized) pthread_cond_broadcast(&plum_sel_ready);
         pthread_mutex_unlock(&plum_sel_lock);
     }
     // Run destructors outside both locks: payloads may own channel ends.

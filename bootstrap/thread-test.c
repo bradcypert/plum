@@ -10,6 +10,7 @@
 #include <string.h>
 #include <time.h>
 
+static pthread_cond_t plum_sel_ready; // Process-lifetime select state.
 static int fault, allocation, expect_closure, closure_releases;
 static atomic_int live, locks, conditions, drops;
 static void *shim_malloc(size_t size) {
@@ -38,7 +39,7 @@ static int mutex_destroy(pthread_mutex_t *m) {
 static int cond_init(pthread_cond_t *c, const pthread_condattr_t *a) {
     if (fault == 4) return EAGAIN;
     int r = pthread_cond_init(c, a);
-    if (!r) atomic_fetch_add(&conditions, 1);
+    if (!r && c != &plum_sel_ready) atomic_fetch_add(&conditions, 1);
     return r;
 }
 static int cond_destroy(pthread_cond_t *c) {

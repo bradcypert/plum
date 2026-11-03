@@ -31,6 +31,12 @@ with tempfile.TemporaryDirectory(prefix="plum-thread-") as directory:
     run(["clang", *flags, "-Wall", "-Wextra", "-Werror", "-DTHREAD_NATIVE_TEST",
          "bootstrap/thread-test.c", "-o", native])
     run([native])
+    clock_test = str(work / "select-clock.exe")
+    run(["clang", *flags, "-Wall", "-Wextra", "-Werror",
+         "bootstrap/select-clock-test.c", "-o", clock_test])
+    for fallback in (0, 1):
+        for jump in (-1, 1):
+            run([clock_test, str(fallback), str(jump)])
     trace_native = str(work / "trace.exe")
     run(["clang", *flags, "-Wall", "-Wextra", "-Werror",
          "bootstrap/trace-test.c", "-o", trace_native])
