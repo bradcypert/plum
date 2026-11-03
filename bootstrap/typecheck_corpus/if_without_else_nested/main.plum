@@ -1,0 +1,3 @@
+let main (): Unit = {
+    if true { if false { 7 } };
+}

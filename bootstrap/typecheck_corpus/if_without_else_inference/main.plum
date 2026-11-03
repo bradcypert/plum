@@ -1,0 +1,5 @@
+let main (): Unit = {
+    let xs = [];
+    if false { xs[0] };
+    println(xs.push(7).len())
+}

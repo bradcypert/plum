@@ -3160,7 +3160,12 @@ let infer_if (p2: Program2) (state: FreshState) (env: TyEnv) (acc: Subst) (cond:
             let s2 = match unify(subst_apply(er.subst, tr.ty), subst_apply(er.subst, er.ty)) { Ok(s) => subst_compose(s, er.subst), Err(err) => { fail_tc("'if'/'else' branches: ".concat(err)); er.subst } };
             ir_leaf(subst_apply(s2, tr.ty), s2, er.state, TIf(cr.texpr, tr.texpr, Some(er.texpr)))
         },
-        None => ir_leaf(tr.ty, tr.subst, tr.state, TIf(cr.texpr, tr.texpr, None)),
+        None => {
+            // The implicit false branch is Unit. Constrain the then
+            // branch too, including any shared inference variables.
+            let s2 = match unify(subst_apply(tr.subst, tr.ty), ITUnit) { Ok(s) => subst_compose(s, tr.subst), Err(err) => { fail_tc("'if' without 'else' then branch must be Unit: ".concat(err)); tr.subst } };
+            ir_leaf(ITUnit, s2, tr.state, TIf(cr.texpr, tr.texpr, None))
+        },
     }
 }
 

@@ -37,6 +37,9 @@ To run one by hand:
 
 Selected fixtures, and what each pins down:
 
+- `if_without_else_*/` — a missing false branch requires a Unit then
+  result, even for discarded, nested, heap-valued, or inferred results.
+
 - `wrong_return_type/` — a function's body doesn't match its declared
   return type.
 - `pattern_variant_missing_payload/`, `pattern_variant_extra_payload/`,

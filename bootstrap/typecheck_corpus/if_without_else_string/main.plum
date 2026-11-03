@@ -1,0 +1,2 @@
+let f (b: Bool): String = if b { "heap" }
+let main (): Unit = println(f(false))
