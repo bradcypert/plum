@@ -519,17 +519,63 @@ pub let String.hash (s: String): Int = {
 /// carriage return. Unicode spaces are not included.
 pub let String.is_ascii_ws (c: String): Bool = c == " " || c == "\t" || c == "\n" || c == "\r"
 
-let plum__string_matches_at (cs: Array[String]) (needle: Array[String]) (base: Int) (j: Int): Bool =
-    if j >= needle.len() { true }
-    else if cs[base + j] != needle[j] { false }
-    else { plum__string_matches_at(cs, needle, base, j + 1) }
+// KMP failure links: the longest proper prefix that is also a suffix
+// of the bytes matched so far. Following a link never advances the
+// input, and never repeats comparisons for a discarded prefix.
+let plum__string_search_fallback (needle: Bytes) (links: Array[Int]) (matched: Int) (byte: Int): Int =
+    if matched > 0 && bytes_at_raw(needle, matched) != byte {
+        plum__string_search_fallback(needle, links, links[matched - 1], byte)
+    } else { matched }
 
-let plum__string_index_of_acc (cs: Array[String]) (needle: Array[String]) (i: Int): Option[Int] =
-    if i + needle.len() > cs.len() { None }
-    else if plum__string_matches_at(cs, needle, i, 0) { Some(i) }
-    else { plum__string_index_of_acc(cs, needle, i + 1) }
+// Self-rebinding keeps the table uniquely owned while it grows, so
+// push reuses storage and total table construction remains linear.
+let plum__string_search_links (needle: Bytes): Array[Int] = {
+    let mut links = [0];
+    let mut matched = 0;
+    for i in 1..bytes_len_raw(needle) {
+        let byte = bytes_at_raw(needle, i);
+        let prefix = plum__string_search_fallback(needle, links, matched, byte);
+        matched = if bytes_at_raw(needle, prefix) == byte { prefix + 1 } else { 0 };
+        links = links.push(matched);
+    };
+    links
+}
+
+let plum__string_search_bytes (s: Bytes) (needle: Bytes) (links: Array[Int]) (i: Int) (matched: Int): Option[Int] =
+    if i >= bytes_len_raw(s) { None }
+    else {
+        let byte = bytes_at_raw(s, i);
+        let prefix = plum__string_search_fallback(needle, links, matched, byte);
+        let next = if bytes_at_raw(needle, prefix) == byte { prefix + 1 } else { 0 };
+        if next == bytes_len_raw(needle) { Some(i + 1 - next) }
+        else { plum__string_search_bytes(s, needle, links, i + 1, next) }
+    }
+
+// Valid UTF-8 matches start at codepoint boundaries. Count leading
+// bytes before the match, without decoding or allocating characters.
+let plum__string_search_char_index (s: Bytes) (end: Int) (i: Int) (count: Int): Int =
+    if i >= end { count }
+    else {
+        let byte = bytes_at_raw(s, i);
+        plum__string_search_char_index(s, end, i + 1, count + if byte < 128 || byte >= 192 { 1 } else { 0 })
+    }
+
 /// The CHARACTER index where `needle` first appears, or `None`.
-pub let String.index_of (s: String) (needle: String): Option[Int] = plum__string_index_of_acc(chars_of(s), chars_of(needle), 0)
+/// An empty needle matches at zero. Uses linear time in the UTF-8
+/// byte lengths and auxiliary storage proportional to the needle's
+/// byte length; the input text is borrowed without copying.
+pub let String.index_of (s: String) (needle: String): Option[Int] =
+    if needle.len() == 0 { Some(0) }
+    else if needle.len() > s.len() { None }
+    else {
+        let text = bytes_of_str_raw(s);
+        let pattern = bytes_of_str_raw(needle);
+        let links = plum__string_search_links(pattern);
+        match plum__string_search_bytes(text, pattern, links, 0, 0) {
+            Some(offset) => Some(plum__string_search_char_index(text, offset, 0, 0)),
+            None => None,
+        }
+    }
 
 /// --- Namespaced forms of the string METHODS ---
 ///
