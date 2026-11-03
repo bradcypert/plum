@@ -1574,7 +1574,10 @@ let reparse_interp_expr_at (src: String) (start: Int): PExpr = {
             fail_at(0, "a block can't appear inside \${...}; bind it to a variable first");
             EInt(0)
         },
-        _ => parse_expr(spanned.tokens, 0).value,
+        // An interpolation is one complete expression, just like a manifest.
+        // Check EOF before restoring CTX so trailing tokens point into the
+        // original file, including when the interpolation is nested.
+        _ => parse_whole_expr(spanned.tokens),
     };
     CTX.set(saved);
     value
