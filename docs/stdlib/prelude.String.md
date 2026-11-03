@@ -97,6 +97,9 @@ carriage return. Unicode spaces are not included.
 ## `let String.index_of (s: String) (needle: String): Option[Int]`
 
 The CHARACTER index where `needle` first appears, or `None`.
+An empty needle matches at zero. Uses linear time in the UTF-8
+byte lengths and auxiliary storage proportional to the needle's
+byte length; the input text is borrowed without copying.
 
 ## `let String.len (s: String): Int`
 

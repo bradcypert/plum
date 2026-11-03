@@ -1,0 +1,25 @@
+let show (s: String) (needle: String): Unit = println(Option.unwrap_or(String.index_of(s, needle), -1).to_string())
+
+let main (): Unit = {
+    show("", "");
+    show("abc", "");
+    show("", "a");
+    show("a", "aa");
+    show("abcabc", "abc");
+    show("abcabc", "bc");
+    show("abcabc", "cabc");
+    show("ababababac", "ababac");
+    show("aaaaab", "aaab");
+    show("aaaaaa", "aaaab");
+    show("é中🙂é!", "🙂");
+    show("é中🙂é!", "́!");
+    show("é中🙂é!", "!");
+    show("é中🙂é!", "é!");
+    show("ééé中", "éé中");
+    show(Bytes.as_string(Bytes.from_array([97, 0, 98, 0, 99])).unwrap_or(""), Bytes.as_string(Bytes.from_array([0, 99])).unwrap_or(""));
+    // Quadratic candidate rescanning used to do billions of comparisons.
+    let haystack = String.repeat("a", 200000);
+    let needle = String.repeat("a", 10000).concat("b");
+    show(haystack, needle);
+    show(haystack.concat("b"), needle)
+}

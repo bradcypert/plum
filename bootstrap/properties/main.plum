@@ -1828,3 +1828,44 @@ pub let test_json_decoder_literal_paths (): Unit = {
         check_eq("path distinct", seed.to_string().concat(" ").concat(error).concat(" / ").concat(nested_path), (nested_path != error).to_string(), "true");
     }
 }
+
+// Compare substring search with an independent, deliberately simple
+// codepoint oracle on small inputs. Repeated letters exercise failure
+// links; multi-byte and combining characters distinguish bytes from
+// the public codepoint index.
+let search_text (seed: Int) (n: Int) (acc: String): String =
+    if n <= 0 { acc } else {
+        let alphabet = ["a", "a", "b", "é", "中", "🙂", "́"];
+        search_text(next_seed(seed), n - 1, acc.concat(alphabet[rand_between(seed, 0, alphabet.len() - 1)]))
+    }
+
+let search_reference (s: String) (needle: String): Int = {
+    let text = chars_of(s);
+    let pattern = chars_of(needle);
+    let mut found = -1;
+    for i in 0..(text.len() + 1) {
+        if found < 0 && pattern.len() <= text.len() - i {
+            let mut same = true;
+            for j in 0..pattern.len() {
+                if text[i + j] != pattern[j] { same = false; };
+            };
+            if same { found = i; };
+        };
+    };
+    found
+}
+
+pub let test_string_index_of (): Unit = {
+    for i in 0..250 {
+        let seed = next_seed(i + 1);
+        let text = search_text(seed, rand_between(seed, 0, 24), "");
+        let independent = search_text(next_seed(seed), rand_between(seed, 0, 12), "");
+        let start = rand_between(seed, 0, String.char_len(text));
+        let end = rand_between(next_seed(seed), start, String.char_len(text));
+        for needle in [independent, String.slice(text, start, end), "", "aab", "é中"] {
+            check_eq("String.index_of codepoint oracle", text.concat(" / ").concat(needle),
+                Option.unwrap_or(String.index_of(text, needle), -1).to_string(),
+                search_reference(text, needle).to_string());
+        };
+    }
+}
