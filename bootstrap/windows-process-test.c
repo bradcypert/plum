@@ -424,6 +424,43 @@ static void arm_wait(long long nanos, int stop_call, DWORD status) {
     scripted_wait = 1;
 }
 
+// An inheritable capability unrelated to stdio must stay in the parent.
+static void test_handle_inheritance(const char *program) {
+    SECURITY_ATTRIBUTES sa = {sizeof(sa), NULL, TRUE};
+    HANDLE event = CreateEventW(&sa, TRUE, FALSE, NULL);
+    assert(event != NULL);
+    char args[96];
+    snprintf(args, sizeof(args), "--probe-handle\t%llu", (unsigned long long)(uintptr_t)event);
+    for (int mode = 0; mode < 4; mode++) {
+        if (mode == 3) assert(process_run_inherit(program, args, 2) == 0);
+        else {
+            long long h = mode == 0 ? process_run(program, args, 2) :
+                mode == 1 ? process_run_ex(program, args, 2, "", 0, "", 0, 0) :
+                            process_spawn(program, args, 2, "", 0, "", 0, 0);
+            assert(h >= 0);
+            if (mode == 2) assert(process_child_wait(h, -1) == 1);
+            assert(process_exit_code(h) == 0);
+            process_free(h);
+        }
+        assert(WaitForSingleObject(event, 0) == WAIT_TIMEOUT);
+        no_scratch();
+    }
+    // OOM after duplicating all three handles must release both heap scratch
+    // and the duplicated kernel handles without starting the child.
+    DWORD before, after;
+    assert(GetProcessHandleCount(GetCurrentProcess(), &before));
+    int creations = process_creations;
+    wchar_t command[] = L"plum-must-not-start.exe";
+    PROCESS_INFORMATION child;
+    fail_allocation = allocation_attempt + 1;
+    assert(!plum_win_create_process(command, NULL, event, event, event, &child));
+    fail_allocation = 0;
+    assert(process_creations == creations);
+    no_scratch();
+    assert(GetProcessHandleCount(GetCurrentProcess(), &after) && before == after);
+    CloseHandle(event);
+}
+
 static void test_wait_timeouts(const char *program) {
     long long h = process_spawn(program, "--exit-child\t0", 2, "", 0, "", 0, 0);
     assert(h >= 0);
@@ -525,6 +562,7 @@ static void test_spawns(void) {
     assert(process_run_ex("plum-no-such-program-108.exe", "", 0, "KEY=value", 1, "", 0, 0) == -1);
     no_scratch();
     test_stdin_spawns(program);
+    test_handle_inheritance(program);
     test_exit_statuses(program);
     test_wait_timeouts(program);
     assert(DeleteFileW(path));
@@ -534,6 +572,12 @@ int main(void) {
     int argc;
     wchar_t **argv = CommandLineToArgvW(GetCommandLineW(), &argc);
     assert(argv != NULL);
+    if (argc == 3 && wcscmp(argv[1], L"--probe-handle") == 0) {
+        HANDLE event = (HANDLE)(uintptr_t)wcstoull(argv[2], NULL, 10);
+        int inherited = SetEvent(event);
+        LocalFree(argv);
+        return inherited ? 9 : 0;
+    }
     if (argc == 3 && wcscmp(argv[1], L"--exit-child") == 0) {
         DWORD code = (DWORD)wcstoul(argv[2], NULL, 10);
         LocalFree(argv);

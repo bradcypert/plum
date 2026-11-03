@@ -52,6 +52,16 @@ int main(int argc, char **argv) {
         if (argc > 2) { fputs(argv[2], stdout); fputs(argv[2], stderr); }
         return 7;
     }
+#if defined(_WIN32)
+    // Test cleanup in-process too: leaked inherited capture handles can keep
+    // files alive after their owner exits, even when every slot is released.
+    wchar_t base[PLUM_PROC_PATH_MAX], capture_root[PLUM_PROC_PATH_MAX];
+    assert(GetTempPathW(PLUM_PROC_PATH_MAX, base));
+    assert(GetTempFileNameW(base, L"reg", 0, capture_root));
+    assert(DeleteFileW(capture_root) && CreateDirectoryW(capture_root, NULL));
+    assert(SetEnvironmentVariableW(L"TMP", capture_root));
+    assert(SetEnvironmentVariableW(L"TEMP", capture_root));
+#endif
     program = argv[0];
     for (int round = 0; round < 8; round++) {
         pthread_t threads[WORKERS];
@@ -129,5 +139,8 @@ int main(int argc, char **argv) {
     assert(index > 0 && plum_process_slots[0].reserved);
     plum_process_available(&plum_process_slots[index]);
     pthread_mutex_unlock(&plum_process_slots[index].lock);
+#if defined(_WIN32)
+    assert(RemoveDirectoryW(capture_root));
+#endif
     puts("process registry: concurrent launches, waits, terminate/drop and stale identities: ok");
 }

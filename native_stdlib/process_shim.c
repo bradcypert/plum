@@ -540,6 +540,51 @@ static int plum_win_append_arg(char *buf, size_t cap, size_t *len, const char *a
     return 0;
 }
 
+// Every launch uses an explicit stdio allowlist. The source handles remain
+// non-inheritable; only these short-lived duplicates can enter this child.
+// No global spawn lock is needed, and other tasks' captures cannot leak into
+// unrelated children and prevent their deletion after their owner exits.
+static BOOL plum_win_create_process(wchar_t *cmdline, wchar_t *env_block,
+                                    HANDLE input, HANDLE output, HANDLE error,
+                                    PROCESS_INFORMATION *process) {
+    STARTUPINFOEXW si;
+    ZeroMemory(&si, sizeof(si));
+    si.StartupInfo.cb = sizeof(si);
+    si.StartupInfo.dwFlags = STARTF_USESTDHANDLES;
+    HANDLE sources[3] = { input, output, error };
+    HANDLE inherited[3] = { NULL, NULL, NULL };
+    HANDLE *stdio[3] = { &si.StartupInfo.hStdInput, &si.StartupInfo.hStdOutput,
+                         &si.StartupInfo.hStdError };
+    SIZE_T count = 0, bytes = 0;
+    int initialized = 0;
+    BOOL result = FALSE;
+    for (int i = 0; i < 3; i++) {
+        if (sources[i] == NULL || sources[i] == INVALID_HANDLE_VALUE) continue;
+        if (!DuplicateHandle(GetCurrentProcess(), sources[i], GetCurrentProcess(),
+            &inherited[count], 0, TRUE, DUPLICATE_SAME_ACCESS)) goto done;
+        *stdio[i] = inherited[count++];
+    }
+    if (count > 0) {
+        InitializeProcThreadAttributeList(NULL, 1, 0, &bytes);
+        if (!bytes) goto done;
+        si.lpAttributeList = malloc(bytes);
+        if (si.lpAttributeList == NULL) goto done;
+        if (!InitializeProcThreadAttributeList(si.lpAttributeList, 1, 0, &bytes)) goto done;
+        initialized = 1;
+        if (!UpdateProcThreadAttribute(si.lpAttributeList, 0, PROC_THREAD_ATTRIBUTE_HANDLE_LIST,
+            inherited, count * sizeof(HANDLE), NULL, NULL)) goto done;
+    }
+    ZeroMemory(process, sizeof(*process));
+    result = CreateProcessW(NULL, cmdline, NULL, NULL, count > 0,
+        CREATE_UNICODE_ENVIRONMENT | EXTENDED_STARTUPINFO_PRESENT,
+        env_block, NULL, &si.StartupInfo, process);
+done:
+    if (initialized) DeleteProcThreadAttributeList(si.lpAttributeList);
+    free(si.lpAttributeList);
+    for (SIZE_T i = 0; i < count; i++) CloseHandle(inherited[i]);
+    return result;
+}
+
 // Keep capture paths in UTF-8 too: the shared whole-file reader and
 // cleanup routines use the same filesystem boundary as public Os APIs.
 static HANDLE plum_win_temp_handle(const char *prefix, char *path_out) {
@@ -552,7 +597,7 @@ static HANDLE plum_win_temp_handle(const char *prefix, char *path_out) {
     if (!plum_path_utf8(path, path_out, PLUM_PROC_PATH_MAX)) {
         DeleteFileW(path); return INVALID_HANDLE_VALUE;
     }
-    SECURITY_ATTRIBUTES sa = {sizeof(sa), NULL, TRUE};
+    SECURITY_ATTRIBUTES sa = {sizeof(sa), NULL, FALSE};
     HANDLE h = CreateFileW(path, GENERIC_WRITE, FILE_SHARE_READ | FILE_SHARE_WRITE,
                           &sa, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
     if (h == INVALID_HANDLE_VALUE) { DeleteFileW(path); path_out[0] = 0; }
@@ -706,7 +751,6 @@ static long long plum_spawn_capture(const char *program, char **argv, char *out_
     wchar_t *cmdline = plum_win_command_line(argv);
     wchar_t *env_block = NULL;
     HANDLE ho, he;
-    STARTUPINFOW si;
     PROCESS_INFORMATION pi;
     if (cmdline == NULL) return PLUM_SPAWN_FAILED;
     if (plum_win_env_block(envp, &env_block) != 0) {
@@ -733,7 +777,7 @@ static long long plum_spawn_capture(const char *program, char **argv, char *out_
         SECURITY_ATTRIBUTES sa;
         sa.nLength = sizeof(sa);
         sa.lpSecurityDescriptor = NULL;
-        sa.bInheritHandle = TRUE;
+        sa.bInheritHandle = FALSE;
         hi = CreateFileW(L"NUL", GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE,
                          &sa, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
         hi_owned = 1;
@@ -758,7 +802,7 @@ static long long plum_spawn_capture(const char *program, char **argv, char *out_
         }
         sa.nLength = sizeof(sa);
         sa.lpSecurityDescriptor = NULL;
-        sa.bInheritHandle = TRUE;
+        sa.bInheritHandle = FALSE;
         wchar_t *wide_in = plum_path_wide(in_path);
         hi = wide_in ? CreateFileW(wide_in, GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE,
                                   &sa, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL) : INVALID_HANDLE_VALUE;
@@ -775,21 +819,13 @@ static long long plum_spawn_capture(const char *program, char **argv, char *out_
         return PLUM_SPAWN_FAILED;
     }
 
-    ZeroMemory(&si, sizeof(si));
-    si.cb = sizeof(si);
-    si.dwFlags = STARTF_USESTDHANDLES;
-    si.hStdInput = hi;
-    si.hStdOutput = ho;
-    si.hStdError = he;
-    ZeroMemory(&pi, sizeof(pi));
-
     // `lpApplicationName` is NULL so that `CreateProcess` searches PATH
     // and appends `.exe`, which is what makes `clang` resolve the same
     // way it does everywhere else. The ambiguity that normally makes
     // that risky -- an unquoted program path containing spaces -- does
     // not apply, because the program was quoted above like any other
     // argument.
-    if (!CreateProcessW(NULL, cmdline, NULL, NULL, TRUE, CREATE_UNICODE_ENVIRONMENT, env_block, NULL, &si, &pi)) {
+    if (!plum_win_create_process(cmdline, env_block, hi, ho, he, &pi)) {
         CloseHandle(ho);
         CloseHandle(he);
         if (hi_owned) CloseHandle(hi);
@@ -805,9 +841,9 @@ static long long plum_spawn_capture(const char *program, char **argv, char *out_
     free(env_block);
     CloseHandle(pi.hThread);
 
-    // Asynchronous: keep the process handle to wait on, and keep the
-    // two file handles OPEN -- they are the child's stdout and stderr,
-    // and closing them here would close the child's own descriptors.
+    // Asynchronous: keep the process handle to wait on, and retain the
+    // parent's capture handles until collection. Child stdio uses its own
+    // inherited duplicates, independent of the parent's handle lifetimes.
     // The input file cannot be deleted yet either: Windows refuses to
     // unlink a file that is open, which is why POSIX can unlink it at
     // spawn and this cannot.
@@ -1352,18 +1388,13 @@ static long long plum_spawn_inherit(const char *program, char **argv) {
 
 static long long plum_spawn_inherit(const char *program, char **argv) {
     wchar_t *cmdline = plum_win_command_line(argv);
-    STARTUPINFOW si;
     PROCESS_INFORMATION pi;
     if (cmdline == NULL) return -1;
 
-    // No `STARTF_USESTDHANDLES`: leaving the field unset is what makes
-    // the child inherit this process's console, which is the entire
-    // point of this function as against `plum_spawn_capture`.
-    ZeroMemory(&si, sizeof(si));
-    si.cb = sizeof(si);
-    ZeroMemory(&pi, sizeof(pi));
-
-    if (!CreateProcessW(NULL, cmdline, NULL, NULL, TRUE, 0, NULL, NULL, &si, &pi)) {
+    // Preserve only stdio, even for `plum run`. Blanket inheritance here
+    // would otherwise pick up another task's temporary stdio duplicates.
+    if (!plum_win_create_process(cmdline, NULL, GetStdHandle(STD_INPUT_HANDLE),
+        GetStdHandle(STD_OUTPUT_HANDLE), GetStdHandle(STD_ERROR_HANDLE), &pi)) {
         free(cmdline);
         return -1;
     }
