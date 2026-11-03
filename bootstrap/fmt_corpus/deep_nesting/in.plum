@@ -1,0 +1,59 @@
+// Deep bodies, match/select arms, and continuations settle together.
+let deep (n: Int): Int =
+if n > 0 {
+match n {
+_ => {
+select {
+else => {
+if n > 0 {
+match n {
+_ => {
+select {
+else => {
+if n > 0 {
+match n {
+_ => {
+select {
+else => {
+if n > 0 {
+match n {
+_ => {
+select {
+else => {
+if n > 0 {
+match n {
+_ => {
+select {
+else => {
+// This comment follows the innermost value.
+let value =
+identity(
+1);
+value
+},
+}
+},
+}
+} else { 0 }
+},
+}
+},
+}
+} else { 0 }
+},
+}
+},
+}
+} else { 0 }
+},
+}
+},
+}
+} else { 0 }
+},
+}
+},
+}
+} else { 0 }
+
+let identity (n: Int): Int = n

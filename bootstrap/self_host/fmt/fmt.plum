@@ -33,7 +33,7 @@ use Os;
 // function. An arm sits inside braces exactly as a statement does, so
 // once `MatchArmNode` carried a start offset and `EMatch` carried its
 // closing brace, arms needed no rule of their own -- they call
-// `block_indent` and inherit its refusals too.
+// `resolve_candidate` and inherit its refusals too.
 //
 // The last of those rules is newer than the rest, and for most of this
 // file's life the header said the opposite: that a line belonging to a
@@ -69,6 +69,23 @@ use Os;
 // already does. The test of that is `bootstrap/fmt-check`: formatting
 // every file in the repo must change nothing.
 
+// Source positions are codepoint offsets, matching lexer/parser spans. Keep
+// one offset per line, rather than a table entry per character. All offset
+// lookups use binary search; dense lines never rescan their growing prefix.
+struct Source { text: Array[String], lines: Array[Int], token_starts: Array[Int] }
+
+let source_of (src: String) (token_starts: Array[Int]): Source = {
+    let text = chars_of(src);
+    Source { text: text, lines: collect_lines(text, 0, [0]), token_starts: token_starts }
+}
+
+let collect_lines (text: Array[String]) (at: Int) (acc: Array[Int]): Array[Int] =
+    if at >= text.len() { acc }
+    else { collect_lines(text, at + 1, if text[at] == "\n" { acc.push(at + 1) } else { acc }) }
+
+// A negative anchor is an absolute indent. Otherwise `indent` is a delta
+// from an EARLIER line's assigned indent. Structural rules precede
+// continuation rules; a refused rule leaves the next candidate available.
 // `owns_comments` says whether the run of comment lines above this one
 // belongs to it. A statement and an item own theirs -- a comment above
 // them documents them. A CLOSING BRACE does not: the comments above a
@@ -76,49 +93,45 @@ use Os;
 // follow, and pulling them out to the brace's level moves them out of
 // the body they belong to. That is a regression this had before the
 // flag existed, and five files in the repo caught it.
-pub struct Edit { pub line_start: Int, pub old_indent: Int, pub indent: Int, pub owns_comments: Bool }
+struct Edit { line_start: Int, anchor: Int, indent: Int, owns_comments: Bool, continuation: Bool }
 
-// The indentation edits an item implies, innermost last. An item's own
-// line goes to column zero; the statements of a block found at depth `d`
-// go to `4 * d`.
-pub let item_edits (chars: Array[String]) (it: parser.ItemNode) (acc: Array[Edit]): Array[Edit] =
+// Collect structural indentation dependencies, outer constructs first.
+// An item owns column zero; block bodies depend on their brace line.
+let item_edits (chars: Source) (it: parser.ItemNode) (acc: Array[Edit]): Array[Edit] =
     if it.start < 0 { acc }
     else {
-        let a = acc.push(edit_at(chars, it.start, 0));
+        let a = if first_on_line(chars, it.start) { acc.push(edit_at(chars, it.start, 0)) } else { acc };
         match it.kind {
-            IKLet(def) => expr_edits(chars, def.body, 1, a),
+            IKLet(def) => expr_edits(chars, def.body, a),
             _ => a,
         }
     }
 
-// `depth` is the indent level for statements of a block encountered
-// HERE. A block's own statements sit at `depth`, and anything nested
-// inside one of them at `depth + 1`.
-let expr_edits (chars: Array[String]) (e: parser.PExpr) (depth: Int) (acc: Array[Edit]): Array[Edit] =
+let expr_edits (chars: Source) (e: parser.PExpr) (acc: Array[Edit]): Array[Edit] =
     match e {
-        EBlock(b) => block_edits(chars, b, depth, acc),
+        EBlock(b) => block_edits(chars, b, acc),
         EIf(c, t, els) => {
-            let a1 = expr_edits(chars, c, depth, acc);
-            let a2 = block_edits(chars, t, depth, a1);
-            match els { Some(x) => expr_edits(chars, x, depth, a2), None => a2 }
+            let a1 = expr_edits(chars, c, acc);
+            let a2 = block_edits(chars, t, a1);
+            match els { Some(x) => expr_edits(chars, x, a2), None => a2 }
         },
-        EMatch(sc, arms, close) => arm_edits(chars, arms, 0, depth, arm_line_edits(chars, arm_starts(arms, 0, []), close, expr_edits(chars, sc, depth, acc))),
-        ESelect(arms, close) => select_edits(chars, arms, 0, depth, arm_line_edits(chars, select_arm_starts(arms, 0, []), close, acc)),
-        EFor(_, iter, body) => block_edits(chars, body, depth, expr_edits(chars, iter, depth, acc)),
-        EUnsafe(b) => block_edits(chars, b, depth, acc),
-        ESpawn(b) => block_edits(chars, b, depth, acc),
-        EClosure(_, body) => expr_edits(chars, body, depth, acc),
-        EUnary(_, a) => expr_edits(chars, a, depth, acc),
-        EBinary(_, l, r) => expr_edits(chars, r, depth, expr_edits(chars, l, depth, acc)),
-        EField(b, _) => expr_edits(chars, b, depth, acc),
-        ECall(callee, args) => list_edits(chars, args, 0, depth, expr_edits(chars, callee, depth, acc)),
-        EGenericInst(b, _) => expr_edits(chars, b, depth, acc),
-        EIndex(b, i) => expr_edits(chars, i, depth, expr_edits(chars, b, depth, acc)),
-        ETuple(xs) => list_edits(chars, xs, 0, depth, acc),
-        EArray(xs) => list_edits(chars, xs, 0, depth, acc),
+        EMatch(sc, arms, close) => arm_edits(chars, arms, 0, arm_line_edits(chars, arm_starts(arms, 0, []), close, expr_edits(chars, sc, acc))),
+        ESelect(arms, close) => select_edits(chars, arms, 0, arm_line_edits(chars, select_arm_starts(arms, 0, []), close, acc)),
+        EFor(_, iter, body) => block_edits(chars, body, expr_edits(chars, iter, acc)),
+        EUnsafe(b) => block_edits(chars, b, acc),
+        ESpawn(b) => block_edits(chars, b, acc),
+        EClosure(_, body) => expr_edits(chars, body, acc),
+        EUnary(_, a) => expr_edits(chars, a, acc),
+        EBinary(_, l, r) => expr_edits(chars, r, expr_edits(chars, l, acc)),
+        EField(b, _) => expr_edits(chars, b, acc),
+        ECall(callee, args) => list_edits(chars, args, 0, expr_edits(chars, callee, acc)),
+        EGenericInst(b, _) => expr_edits(chars, b, acc),
+        EIndex(b, i) => expr_edits(chars, i, expr_edits(chars, b, acc)),
+        ETuple(xs) => list_edits(chars, xs, 0, acc),
+        EArray(xs) => list_edits(chars, xs, 0, acc),
         EStructLit(_, fields, spread) => {
-            let a = field_edits(chars, fields, 0, depth, acc);
-            match spread { Some(x) => expr_edits(chars, x, depth, a), None => a }
+            let a = field_edits(chars, fields, 0, acc);
+            match spread { Some(x) => expr_edits(chars, x, a), None => a }
         },
         EInt(_) => acc,
         EFloat(_) => acc,
@@ -127,147 +140,73 @@ let expr_edits (chars: Array[String]) (e: parser.PExpr) (depth: Int) (acc: Array
         EIdent(_, _) => acc,
     }
 
-// A block's statements all share one indent, and it is read from the
-// source rather than counted: it is the indent of the line the block's
-// OPENING BRACE sits on, plus four.
-//
-// Counting depth instead was the first attempt and it was wrong, in a
-// way worth recording. It assumed a construct begins at `4 * depth`,
-// which is false the moment a body is written on a continuation line:
-//
-//     let drain (..): Int =
-//         if left <= 0 { acc }
-//         else {
-//             let got = select { .. };
-//
-// The `else` block is at depth 1 by the tree and at column 8 on the
-// page, because the author put the `if` on its own line at column 4 --
-// an indent chosen by hand that no span records. Anchoring to the brace
-// needs no expression spans at all, and gets both shapes right.
-//
-// If the character before the first statement is not a brace, this
-// block's shape is not one we can position, and it is left alone.
-// Refusing is always available and never wrong.
-let block_edits (chars: Array[String]) (b: parser.PBlock) (depth: Int) (acc: Array[Edit]): Array[Edit] = {
-    let a = match block_indent(chars, b.starts) {
+// Bodies depend on the opening brace's LINE, rather than AST depth:
+// a brace may live on a continuation line. Resolve that line first so
+// nested bodies follow its assigned indentation in this same traversal.
+let block_edits (chars: Source) (b: parser.PBlock) (acc: Array[Edit]): Array[Edit] = {
+    let a = match block_anchor(chars, b.starts) {
         None => acc,
-        // The closing brace belongs one level OUT from the statements
-        // it closes -- which is known exactly, because it is the indent
-        // just computed minus four. No scanning and no guessing: the
-        // block records where its own brace is.
-        Some(indent) => close_brace_edit(chars, b.close, indent - 4, stmt_line_edits(chars, b.starts, 0, indent, acc)),
+        Some(anchor) => close_brace_edit(chars, b.close, anchor, stmt_line_edits(chars, b.starts, 0, anchor, acc)),
     };
-    let a2 = stmt_body_edits(chars, b.stmts, 0, depth + 1, a);
-    match b.tail { Some(t) => expr_edits(chars, t, depth + 1, a2), None => a2 }
+    let a2 = stmt_body_edits(chars, b.stmts, 0, a);
+    match b.tail { Some(t) => expr_edits(chars, t, a2), None => a2 }
 }
 
-// Only when the brace BEGINS its line. A `}` that shares a line with
-// code -- `if a { b } else { c }` -- has no indent of its own, exactly
-// as a statement in that position has none.
-let close_brace_edit (chars: Array[String]) (close: Int) (indent: Int) (acc: Array[Edit]): Array[Edit] =
-    if close < 0 || indent < 0 { acc }
+// Only a closing brace that begins its line owns that line's indent.
+let close_brace_edit (chars: Source) (close: Int) (anchor: Int) (acc: Array[Edit]): Array[Edit] =
+    if close < 0 { acc }
     else if !first_on_line(chars, close) { acc }
-    else { acc.push(edit_kind(chars, close, indent, false)) }
+    else { acc.push(relative_edit(chars, close, anchor, 0, false, false)) }
 
-let block_indent (chars: Array[String]) (starts: Array[Int]): Option[Int] =
+let block_anchor (chars: Source) (starts: Array[Int]): Option[Int] =
     if Array.is_empty(starts) || starts[0] < 0 { None }
     else {
-        let brace = back_over_trivia(chars, starts[0] - 1);
-        if brace < 0 { None }
-        else if chars[brace] != "{" { None }
+        // The preceding token skips whitespace/comments without scanning
+        // raw text (or mistaking `//` inside a string for a comment).
+        let i = offset_index(chars.token_starts, starts[0], 0, chars.token_starts.len());
+        if i <= 0 { None }
         else {
-            let col = indent_columns(chars, line_start_of(chars, brace), 0);
-            // A brace whose line is indented off the four-space grid is
-            // sitting on a CONTINUATION line, not on the line its
-            // construct began:
-            //
-            //     else if nodes[i].path == path && nodes[i].def_offset >= 0
-            //          && nodes[i].def_offset <= off && !seen.contains(..) {
-            //
-            // That `{` is on a line indented nine, aligned under the
-            // condition by hand. Anchoring to it would indent the body
-            // to thirteen. The construct really begins on the `else if`
-            // line, which is four -- and finding THAT means knowing
-            // where the `if` starts.
-            //
-            // That span EXISTS now (`parser.ExprSpan`), and this still
-            // refuses, on purpose. The body of such a block is written
-            // relative to a column its author chose; the corpus has two
-            // of these and they are consistent with themselves and with
-            // nothing else. Refusing leaves them exactly as written,
-            // which is the outcome the measurement supports.
-            //
-            // So this refuses. Every statement indent in the corpus is a
-            // multiple of four; a brace line that is not is one of these
-            // alignment lines, and a formatter that cannot name the
-            // construct should leave the body alone rather than move it
-            // somewhere confidently wrong.
-            if col % 4 != 0 { None } else { Some(col + 4) }
+            let brace = chars.token_starts[i - 1];
+            if chars.text[brace] != "{" { None }
+            else { Some(line_start_of(chars, brace)) }
         }
     }
 
-// Backwards over whitespace and whole comment LINES. A `//` comment
-// runs to the end of its line, so anything to the left of one on the
-// same line is code -- which is why this steps to the line start and
-// keeps going rather than trying to scan a comment right to left.
-let back_over_trivia (chars: Array[String]) (at: Int): Int =
-    if at < 0 { 0 - 1 }
-    else if String.is_ascii_ws(chars[at]) { back_over_trivia(chars, at - 1) }
-    else if in_line_comment(chars, line_start_of(chars, at), at) { back_over_trivia(chars, line_start_of(chars, at) - 1) }
-    else { at }
-
-let in_line_comment (chars: Array[String]) (ls: Int) (at: Int): Bool =
-    if ls >= at { false }
-    else if chars[ls] == "/" && ls + 1 <= at && chars[ls + 1] == "/" { true }
-    else { in_line_comment(chars, ls + 1, at) }
-
-let stmt_line_edits (chars: Array[String]) (starts: Array[Int]) (i: Int) (indent: Int) (acc: Array[Edit]): Array[Edit] =
+let stmt_line_edits (chars: Source) (starts: Array[Int]) (i: Int) (anchor: Int) (acc: Array[Edit]): Array[Edit] =
     if i >= starts.len() { acc }
-    // A synthetic statement -- contract sugar builds those -- has no
-    // source to indent.
-    else if starts[i] < 0 { stmt_line_edits(chars, starts, i + 1, indent, acc) }
-    // Only a statement that BEGINS its line owns that line's indent.
-    // `if n <= 0 { xs } else { .. }` has a block whose one statement
-    // shares a line with the brace and with the `if`; moving that line
-    // would be moving the `if`, which this cannot see and does not own.
-    else if !first_on_line(chars, starts[i]) { stmt_line_edits(chars, starts, i + 1, indent, acc) }
-    else { stmt_line_edits(chars, starts, i + 1, indent, acc.push(edit_at(chars, starts[i], indent))) }
+    // Synthetic statements have no source. A statement sharing a line
+    // with its brace does not own that line's indentation either.
+    else if starts[i] < 0 { stmt_line_edits(chars, starts, i + 1, anchor, acc) }
+    else if !first_on_line(chars, starts[i]) { stmt_line_edits(chars, starts, i + 1, anchor, acc) }
+    else { stmt_line_edits(chars, starts, i + 1, anchor, acc.push(relative_edit(chars, starts[i], anchor, 4, true, false))) }
 
-let first_on_line (chars: Array[String]) (offset: Int): Bool = {
+let first_on_line (chars: Source) (offset: Int): Bool = {
     let ls = line_start_of(chars, offset);
     ls + indent_length(chars, ls, 0) == offset
 }
 
-let stmt_body_edits (chars: Array[String]) (stmts: Array[parser.PStmt]) (i: Int) (depth: Int) (acc: Array[Edit]): Array[Edit] =
+let stmt_body_edits (chars: Source) (stmts: Array[parser.PStmt]) (i: Int) (acc: Array[Edit]): Array[Edit] =
     if i >= stmts.len() { acc }
     else {
         let a = match stmts[i] {
-            SLet(_, _, _, v) => expr_edits(chars, v, depth, acc),
-            SAssign(_, v) => expr_edits(chars, v, depth, acc),
-            SExpr(v) => expr_edits(chars, v, depth, acc),
+            SLet(_, _, _, v) => expr_edits(chars, v, acc),
+            SAssign(_, v) => expr_edits(chars, v, acc),
+            SExpr(v) => expr_edits(chars, v, acc),
         };
-        stmt_body_edits(chars, stmts, i + 1, depth, a)
+        stmt_body_edits(chars, stmts, i + 1, a)
     }
 
-let list_edits (chars: Array[String]) (xs: Array[parser.PExpr]) (i: Int) (depth: Int) (acc: Array[Edit]): Array[Edit] =
-    if i >= xs.len() { acc } else { list_edits(chars, xs, i + 1, depth, expr_edits(chars, xs[i], depth, acc)) }
+let list_edits (chars: Source) (xs: Array[parser.PExpr]) (i: Int) (acc: Array[Edit]): Array[Edit] =
+    if i >= xs.len() { acc } else { list_edits(chars, xs, i + 1, expr_edits(chars, xs[i], acc)) }
 
-let field_edits (chars: Array[String]) (fs: Array[parser.FieldInitNode]) (i: Int) (depth: Int) (acc: Array[Edit]): Array[Edit] =
-    if i >= fs.len() { acc } else { field_edits(chars, fs, i + 1, depth, expr_edits(chars, fs[i].value, depth, acc)) }
+let field_edits (chars: Source) (fs: Array[parser.FieldInitNode]) (i: Int) (acc: Array[Edit]): Array[Edit] =
+    if i >= fs.len() { acc } else { field_edits(chars, fs, i + 1, expr_edits(chars, fs[i].value, acc)) }
 
-// An arm is positioned exactly the way a statement is, and by the same
-// function: arms sit inside braces, so the indent is the one their
-// opening brace's line implies. `block_indent` already knows how to
-// work that out, and how to REFUSE when the brace is on a continuation
-// line -- so arms inherit both behaviours instead of getting a second,
-// slightly different rule.
-let arm_line_edits (chars: Array[String]) (starts: Array[Int]) (close: Int) (acc: Array[Edit]): Array[Edit] =
-    match block_indent(chars, starts) {
+// Match/select arms use the same brace dependency as block statements.
+let arm_line_edits (chars: Source) (starts: Array[Int]) (close: Int) (acc: Array[Edit]): Array[Edit] =
+    match block_anchor(chars, starts) {
         None => acc,
-        // And the match's own closing brace, one level out from its
-        // arms -- the same relationship a block's `}` has to its
-        // statements, so the same call closes it.
-        Some(indent) => close_brace_edit(chars, close, indent - 4, stmt_line_edits(chars, starts, 0, indent, acc)),
+        Some(anchor) => close_brace_edit(chars, close, anchor, stmt_line_edits(chars, starts, 0, anchor, acc)),
     }
 
 let arm_starts (arms: Array[parser.MatchArmNode]) (i: Int) (acc: Array[Int]): Array[Int] =
@@ -276,105 +215,141 @@ let arm_starts (arms: Array[parser.MatchArmNode]) (i: Int) (acc: Array[Int]): Ar
 let select_arm_starts (arms: Array[parser.SelectArmNode]) (i: Int) (acc: Array[Int]): Array[Int] =
     if i >= arms.len() { acc } else { select_arm_starts(arms, i + 1, acc.push(arms[i].start)) }
 
-let arm_edits (chars: Array[String]) (arms: Array[parser.MatchArmNode]) (i: Int) (depth: Int) (acc: Array[Edit]): Array[Edit] =
+let arm_edits (chars: Source) (arms: Array[parser.MatchArmNode]) (i: Int) (acc: Array[Edit]): Array[Edit] =
     if i >= arms.len() { acc }
     else {
-        let a = match arms[i].guard { Some(g) => expr_edits(chars, g, depth, acc), None => acc };
-        arm_edits(chars, arms, i + 1, depth, expr_edits(chars, arms[i].body, depth + 1, a))
+        let a = match arms[i].guard { Some(g) => expr_edits(chars, g, acc), None => acc };
+        arm_edits(chars, arms, i + 1, expr_edits(chars, arms[i].body, a))
     }
 
-let select_edits (chars: Array[String]) (arms: Array[parser.SelectArmNode]) (i: Int) (depth: Int) (acc: Array[Edit]): Array[Edit] =
+let select_edits (chars: Source) (arms: Array[parser.SelectArmNode]) (i: Int) (acc: Array[Edit]): Array[Edit] =
     if i >= arms.len() { acc }
     else {
         let a = match arms[i].kind {
-            SARecv(_, chan) => expr_edits(chars, chan, depth, acc),
-            SAAfter(d) => expr_edits(chars, d, depth, acc),
+            SARecv(_, chan) => expr_edits(chars, chan, acc),
+            SAAfter(d) => expr_edits(chars, d, acc),
             SAElse => acc,
         };
-        select_edits(chars, arms, i + 1, depth, expr_edits(chars, arms[i].body, depth + 1, a))
+        select_edits(chars, arms, i + 1, expr_edits(chars, arms[i].body, a))
     }
 
 // --- Applying edits ---
 
-// The edit for the line `offset` sits on. `old_indent` is how many
-// leading indentation characters that line already has, so applying an
-// edit is a splice rather than a re-render.
-let edit_at (chars: Array[String]) (offset: Int) (indent: Int): Edit = edit_kind(chars, offset, indent, true)
+let edit_at (chars: Source) (offset: Int) (indent: Int): Edit =
+    Edit { line_start: line_start_of(chars, offset), anchor: -1, indent: indent, owns_comments: true, continuation: false }
 
-let edit_kind (chars: Array[String]) (offset: Int) (indent: Int) (owns: Bool): Edit = {
-    let ls = line_start_of(chars, offset);
-    Edit { line_start: ls, old_indent: indent_length(chars, ls, 0), indent: indent, owns_comments: owns }
-}
+let relative_edit (chars: Source) (offset: Int) (anchor: Int) (delta: Int) (owns: Bool) (cont: Bool): Edit =
+    Edit { line_start: line_start_of(chars, offset), anchor: anchor, indent: delta, owns_comments: owns, continuation: cont }
 
-let line_start_of (chars: Array[String]) (offset: Int): Int =
-    if offset <= 0 { 0 } else if chars[offset - 1] == "\n" { offset } else { line_start_of(chars, offset - 1) }
+let line_start_of (chars: Source) (offset: Int): Int =
+    chars.lines[offset_index(chars.lines, offset, 0, chars.lines.len())]
 
-let indent_length (chars: Array[String]) (at: Int) (n: Int): Int =
-    if at + n >= chars.len() { n } else if chars[at + n] == " " || chars[at + n] == "\t" { indent_length(chars, at, n + 1) } else { n }
+// Upper bound minus one: newline offsets belong to the preceding line,
+// while EOF after a final newline belongs to the empty last line.
+let offset_index (lines: Array[Int]) (offset: Int) (lo: Int) (hi: Int): Int =
+    if lo + 1 >= hi { lo }
+    else {
+        let mid = lo + (hi - lo) / 2;
+        if lines[mid] <= offset { offset_index(lines, offset, mid, hi) }
+        else { offset_index(lines, offset, lo, mid) }
+    }
+
+let indent_length (chars: Source) (at: Int) (n: Int): Int =
+    if at + n >= chars.text.len() { n } else if chars.text[at + n] == " " || chars.text[at + n] == "\t" { indent_length(chars, at, n + 1) } else { n }
 
 // Prefix length is a source offset; columns are layout. Tabs advance to
 // the next four-column stop, matching the formatter's indentation grid.
-let indent_columns (chars: Array[String]) (at: Int) (col: Int): Int =
-    if at >= chars.len() { col }
-    else if chars[at] == " " { indent_columns(chars, at + 1, col + 1) }
-    else if chars[at] == "\t" { indent_columns(chars, at + 1, col + 4 - col % 4) }
+let indent_columns (chars: Source) (at: Int) (col: Int): Int =
+    if at >= chars.text.len() { col }
+    else if chars.text[at] == " " { indent_columns(chars, at + 1, col + 1) }
+    else if chars.text[at] == "\t" { indent_columns(chars, at + 1, col + 4 - col % 4) }
     else { col }
 
 pub let spaces (n: Int): String = if n <= 0 { "" } else { " ".concat(spaces(n - 1)) }
 
-// Rebuilds the source with each edited line's indentation replaced.
-//
-// The walk produces edits depth-first, not in source order, so rather
-// than sorting them they go into a map keyed by the line they affect
-// and the SOURCE is walked once, in order, asking each line whether it
-// has an edit. That also settles duplicates for free: an item whose
-// whole body is on one line produces an edit for that line from the
-// item and another from the block, and the first one written wins,
-// which is the outer construct -- the one that decides where the line
-// starts.
-pub let apply_edits (chars: Array[String]) (edits: Array[Edit]) (toks: Array[parser.ExprSpan]): String = {
+// Collect candidates in AST priority order, resolve them in source order,
+// then render once. Relative code indentation never depends on comments.
+let apply_edits (chars: Source) (edits: Array[Edit]) (toks: Array[parser.ExprSpan]): String = {
     let empty: Map[Int, Int] = Map.new(());
-    let by_line = index_edits(with_comment_runs(chars, edits, 0, edits), 0, empty);
+    let candidates: Map[Int, Array[Edit]] = Map.new(());
+    let by_line = resolve_lines(chars, index_candidates(edits, 0, candidates), 0, empty);
     walk_lines(chars, by_line, toks, 0, false, "")
 }
 
-// A comment belongs to what it documents, so it is indented with it.
-//
-// For every line this is about to indent, the run of comment-ONLY lines
-// directly above it gets the same indent. The run stops at anything
-// that is not a comment, and so at a blank line -- a blank line is how
-// people separate a comment from the code below it, so a comment above
-// one is documenting something else, or nothing.
-//
-// A comment sharing a line with code is not touched: that line's indent
-// belongs to the code, and has already been decided.
-let with_comment_runs (chars: Array[String]) (edits: Array[Edit]) (i: Int) (acc: Array[Edit]): Array[Edit] =
-    if i >= edits.len() { acc }
-    else if !edits[i].owns_comments { with_comment_runs(chars, edits, i + 1, acc) }
-    else { with_comment_runs(chars, edits, i + 1, run_above(chars, edits[i].line_start, edits[i].indent, acc)) }
-
-let run_above (chars: Array[String]) (line_start: Int) (indent: Int) (acc: Array[Edit]): Array[Edit] =
+// A comment run immediately above code inherits its owner's RESOLVED
+// indent. Blank lines stop the run; closing braces do not own comments.
+let run_above (chars: Source) (line_start: Int) (indent: Int) (acc: Map[Int, Int]): Map[Int, Int] =
     if line_start <= 0 { acc }
     else {
         let prev = line_start_of(chars, line_start - 1);
         if !is_comment_line(chars, prev) { acc }
-        else {
-            run_above(chars, prev, indent,
-                acc.push(Edit { line_start: prev, old_indent: indent_length(chars, prev, 0), indent: indent, owns_comments: true }))
-        }
+        else { run_above(chars, prev, indent, Map.insert(acc, prev, indent)) }
     }
 
 // Comment-only: the first thing on the line is `//`. A blank line is
 // NOT one, which is what stops a run at a paragraph break.
-let is_comment_line (chars: Array[String]) (ls: Int): Bool = {
+let is_comment_line (chars: Source) (ls: Int): Bool = {
     let at = ls + indent_length(chars, ls, 0);
-    at + 1 < chars.len() && chars[at] == "/" && chars[at + 1] == "/"
+    at + 1 < chars.text.len() && chars.text[at] == "/" && chars.text[at + 1] == "/"
 }
 
-let index_edits (edits: Array[Edit]) (i: Int) (m: Map[Int, Int]): Map[Int, Int] =
+// Retain candidate order so an outer structural rule owns its line.
+// A structural rule whose anchor remains hand-aligned may refuse; only
+// then can a continuation rule place that line.
+let index_candidates (edits: Array[Edit]) (i: Int) (m: Map[Int, Array[Edit]]): Map[Int, Array[Edit]] =
     if i >= edits.len() { m }
-    else if Map.contains(m, edits[i].line_start) { index_edits(edits, i + 1, m) }
-    else { index_edits(edits, i + 1, Map.insert(m, edits[i].line_start, edits[i].indent)) }
+    else {
+        let prior = match Map.get(m, edits[i].line_start) { Some(xs) => xs, None => [] };
+        index_candidates(edits, i + 1, Map.insert(m, edits[i].line_start, prior.push(edits[i])))
+    }
+
+let assigned_indent (chars: Source) (assigned: Map[Int, Int]) (ls: Int): Int =
+    match Map.get(assigned, ls) {
+        Some(col) => col,
+        None => indent_columns(chars, ls, 0),
+    }
+
+// All anchors precede their dependent line. This makes source order a
+// topological order, including braces on continuation and `else` lines.
+// Attach comments only once their owner's indentation is known; comment
+// lines are never anchors for code, so these forward references are safe.
+let resolve_lines (chars: Source) (candidates: Map[Int, Array[Edit]]) (i: Int) (assigned: Map[Int, Int]): Map[Int, Int] =
+    if i >= chars.lines.len() { assigned }
+    else {
+        let ls = chars.lines[i];
+        let chosen = match Map.get(candidates, ls) {
+            None => None,
+            Some(xs) => resolve_candidate(chars, assigned, xs, 0),
+        };
+        match chosen {
+            None => resolve_lines(chars, candidates, i + 1, assigned),
+            Some(edit) => {
+                let next = Map.insert(assigned, ls, edit.indent);
+                let comments = if edit.owns_comments { run_above(chars, ls, edit.indent, next) } else { next };
+                resolve_lines(chars, candidates, i + 1, comments)
+            },
+        }
+    }
+
+let resolve_candidate (chars: Source) (assigned: Map[Int, Int]) (xs: Array[Edit]) (i: Int): Option[Edit] =
+    if i >= xs.len() { None }
+    else {
+        let e = xs[i];
+        if e.anchor < 0 { Some(e) }
+        else if e.anchor >= e.line_start { resolve_candidate(chars, assigned, xs, i + 1) }
+        else {
+            let col = assigned_indent(chars, assigned, e.anchor);
+            let want = col + e.indent;
+            let old = indent_columns(chars, e.line_start, 0);
+            // Keep hand-aligned anchors. A continuation line also keeps
+            // its own off-grid alignment when deeper than the answer.
+            if col % 4 != 0 || (e.continuation && old % 4 != 0 && old > want) {
+                resolve_candidate(chars, assigned, xs, i + 1)
+            } else {
+                Some(Edit { line_start: e.line_start, anchor: -1, indent: want, owns_comments: e.owns_comments, continuation: false })
+            }
+        }
+    }
 
 // One pass over the source. At the start of each line, either the line
 // has an edit -- in which case its existing indentation is dropped and
@@ -387,8 +362,8 @@ let index_edits (edits: Array[Edit]) (i: Int) (m: Map[Int, Int]): Map[Int, Int] 
 // rather than a preference. It is also the first rule here that changes
 // something other than leading whitespace, which is why `fmt-check`
 // checks the TOKEN sequence rather than comparing stripped lines.
-let walk_lines (chars: Array[String]) (by_line: Map[Int, Int]) (toks: Array[parser.ExprSpan]) (at: Int) (prev_blank: Bool) (acc: String): String =
-    if at >= chars.len() { acc }
+let walk_lines (chars: Source) (by_line: Map[Int, Int]) (toks: Array[parser.ExprSpan]) (at: Int) (prev_blank: Bool) (acc: String): String =
+    if at >= chars.text.len() { acc }
     // Literal contents must bypass every whitespace rule, including blank
     // line collapse. They also break runs of blank source lines.
     else if inside_token(toks, 0, at) {
@@ -398,7 +373,7 @@ let walk_lines (chars: Array[String]) (by_line: Map[Int, Int]) (toks: Array[pars
     else if is_blank_line(chars, at) {
         let e = line_end(chars, at);
         // Strip indentation while retaining the source line ending.
-        let nl = if e >= at + 2 && chars[e - 2] == "\r" && chars[e - 1] == "\n" { e - 2 } else { line_end_no_nl(chars, at) };
+        let nl = if e >= at + 2 && chars.text[e - 2] == "\r" && chars.text[e - 1] == "\n" { e - 2 } else { line_end_no_nl(chars, at) };
         if prev_blank { walk_lines(chars, by_line, toks, e, true, acc) }
         else { walk_lines(chars, by_line, toks, e, true, acc.concat(slice(chars, nl, e))) }
     }
@@ -417,47 +392,31 @@ let walk_lines (chars: Array[String]) (by_line: Map[Int, Int]) (toks: Array[pars
     }
 
 // Whitespace to the end of the line, and nothing else.
-let is_blank_line (chars: Array[String]) (at: Int): Bool = at + count_spaces_ws(chars, at, 0) >= line_end_no_nl(chars, at)
+let is_blank_line (chars: Source) (at: Int): Bool = at + count_spaces_ws(chars, at, 0) >= line_end_no_nl(chars, at)
 
-let count_spaces_ws (chars: Array[String]) (at: Int) (n: Int): Int =
-    if at + n >= chars.len() { n }
-    else if chars[at + n] == "\n" { n }
-    else if String.is_ascii_ws(chars[at + n]) { count_spaces_ws(chars, at, n + 1) }
+let count_spaces_ws (chars: Source) (at: Int) (n: Int): Int =
+    if at + n >= chars.text.len() { n }
+    else if chars.text[at + n] == "\n" { n }
+    else if String.is_ascii_ws(chars.text[at + n]) { count_spaces_ws(chars, at, n + 1) }
     else { n }
 
-let line_end_no_nl (chars: Array[String]) (at: Int): Int =
-    if at >= chars.len() { at } else if chars[at] == "\n" { at } else { line_end_no_nl(chars, at + 1) }
+let line_end_no_nl (chars: Source) (at: Int): Int =
+    if at >= chars.text.len() { at } else if chars.text[at] == "\n" { at } else { line_end_no_nl(chars, at + 1) }
 
 // Through the newline, so the caller always resumes at a line start.
-let line_end (chars: Array[String]) (at: Int): Int =
-    if at >= chars.len() { at } else if chars[at] == "\n" { at + 1 } else { line_end(chars, at + 1) }
+let line_end (chars: Source) (at: Int): Int =
+    if at >= chars.text.len() { at } else if chars.text[at] == "\n" { at + 1 } else { line_end(chars, at + 1) }
 
-let slice (chars: Array[String]) (from: Int) (to: Int): String =
+let slice (chars: Source) (from: Int) (to: Int): String = text_slice(chars.text, from, to)
+
+let text_slice (chars: Array[String]) (from: Int) (to: Int): String =
     Array.concat_all(Array.slice(chars, from, to))
 
-// The whole formatter: parse, collect what the spans say each line's
-// indent should be, apply -- and repeat until nothing moves.
-//
-// One pass is not enough, and the reason is worth stating. A block
-// anchors to the indent of the line its brace is on, read from the
-// SOURCE. So when a pass moves an outer construct, every block inside
-// it was anchored to where that construct used to be, and needs another
-// pass to follow. Each pass settles one more level of nesting, so this
-// converges; the cap is there because a formatter that does not
-// terminate is worse than one that gives up.
-//
-// Threading the newly ASSIGNED indent down instead of re-reading the
-// source would settle it in one pass. That is the better design and it
-// is not this one: it needs to know which line a block's brace will end
-// up on, which is an expression-span question again.
-pub let format (path: String) (src: String): String = format_pass(path, src, 8)
-
-let format_pass (path: String) (src: String) (fuel: Int): String =
-    if fuel <= 0 { src }
-    else {
-        let next = format_once(path, normalize_gaps(path, src));
-        if next == src { src } else { format_pass(path, next, fuel - 1) }
-    }
+// Normalize token gaps once, then parse and resolve layout once. Every
+// relative rule points backward in source order, so there is no fixed
+// point iteration, pass budget, or successful partially formatted result.
+pub let format (path: String) (src: String): String =
+    format_once(path, normalize_gaps(path, src))
 
 // --- Spacing between tokens, on one line ---
 //
@@ -485,14 +444,14 @@ pub let normalize_gaps (path: String) (src: String): String = {
 let gaps_acc (chars: Array[String]) (lexed: lexer.LexedSource) (i: Int) (acc: String): String =
     if i >= lexed.tokens.len() { acc }
     else {
-        let text = slice(chars, lexed.starts[i], lexed.ends[i]);
+        let text = text_slice(chars, lexed.starts[i], lexed.ends[i]);
         let from = if i == 0 { 0 } else { lexed.ends[i - 1] };
-        let gap = slice(chars, from, lexed.starts[i]);
-        let prev = if i == 0 { "" } else { slice(chars, lexed.starts[i - 1], lexed.ends[i - 1]) };
+        let gap = text_slice(chars, from, lexed.starts[i]);
+        let prev = if i == 0 { "" } else { text_slice(chars, lexed.starts[i - 1], lexed.ends[i - 1]) };
         // Two tokens back, because deciding whether `prev` was a BINARY
         // operator needs what came before IT -- `a - 1` and `(-1)`
         // differ only there.
-        let prev2 = if i < 2 { "" } else { slice(chars, lexed.starts[i - 2], lexed.ends[i - 2]) };
+        let prev2 = if i < 2 { "" } else { text_slice(chars, lexed.starts[i - 2], lexed.ends[i - 2]) };
         gaps_acc(chars, lexed, i + 1, acc.concat(canonical_gap(gap, prev, text, prev2)).concat(text))
     }
 
@@ -556,9 +515,9 @@ let format_once (path: String) (src: String): String = {
     let items = parser.parse_program(lexed.tokens).items;
     let spans = parser.recorded_spans();
     parser.record_spans(false);
-    let chars = chars_of(src);
+    let chars = source_of(src, lexed.starts);
     // Structural edits FIRST, continuation edits after, because
-    // `index_edits` keeps the first edit it sees for a line. A line that
+    // resolution takes the first applicable edit for a line. A line that
     // a block or an arm can place is placed by that, and the
     // continuation rule only ever speaks for lines nothing else claims.
     let toks = spanning_tokens(chars, lexed, 0, []);
@@ -605,10 +564,10 @@ let format_once (path: String) (src: String): String = {
 //     with `= a / b` at column zero in both. A rule that has to pick a
 //     side of a disagreement is not a rule the corpus dictated;
 //   * an anchor line that is not on the four-space grid is a hand
-//     aligned line, and `block_indent` already refuses those for the
+//     aligned line, and `resolve_candidate` already refuses those for the
 //     same reason. Whatever a construct is doing under such a line, it
 //     was not put there by counting.
-let continuation_edits (chars: Array[String]) (toks: Array[parser.ExprSpan]) (spans: Array[parser.ExprSpan]) (acc: Array[Edit]): Array[Edit] =
+let continuation_edits (chars: Source) (toks: Array[parser.ExprSpan]) (spans: Array[parser.ExprSpan]) (acc: Array[Edit]): Array[Edit] =
     cont_acc(chars, multiline_only(chars, spans, 0, []), toks, 0, acc)
 
 // Tokens that themselves cross a line -- which in Plum means one thing,
@@ -627,7 +586,7 @@ let continuation_edits (chars: Array[String]) (toks: Array[parser.ExprSpan]) (sp
 // Every rule before this one worked from AST offsets, which are always
 // at token boundaries; this is the first that walks raw lines, so it is
 // the first that has to know a line start can be inside a token.
-let spanning_tokens (chars: Array[String]) (lexed: lexer.LexedSource) (i: Int) (acc: Array[parser.ExprSpan]): Array[parser.ExprSpan] =
+let spanning_tokens (chars: Source) (lexed: lexer.LexedSource) (i: Int) (acc: Array[parser.ExprSpan]): Array[parser.ExprSpan] =
     if i >= lexed.tokens.len() || i >= lexed.starts.len() { acc }
     else if lexed.ends[i] > lexed.starts[i] && line_start_of(chars, lexed.starts[i]) != line_start_of(chars, lexed.ends[i] - 1) {
         spanning_tokens(chars, lexed, i + 1, acc.push(parser.ExprSpan { start: lexed.starts[i], end: lexed.ends[i] }))
@@ -642,51 +601,32 @@ let inside_token (toks: Array[parser.ExprSpan]) (i: Int) (ls: Int): Bool =
 // span that opens and closes on one line has nothing below it. Almost
 // every recorded span is single-line, so dropping them here is what
 // keeps the per-line scan short.
-let multiline_only (chars: Array[String]) (spans: Array[parser.ExprSpan]) (i: Int) (acc: Array[parser.ExprSpan]): Array[parser.ExprSpan] =
+let multiline_only (chars: Source) (spans: Array[parser.ExprSpan]) (i: Int) (acc: Array[parser.ExprSpan]): Array[parser.ExprSpan] =
     if i >= spans.len() { acc }
     else {
-        let last = if spans[i].end >= chars.len() { chars.len() - 1 } else { spans[i].end };
+        let last = if spans[i].end >= chars.text.len() { chars.text.len() - 1 } else { spans[i].end };
         if last <= spans[i].start || line_start_of(chars, spans[i].start) == line_start_of(chars, last) {
             multiline_only(chars, spans, i + 1, acc)
         } else { multiline_only(chars, spans, i + 1, acc.push(spans[i])) }
     }
 
-let cont_acc (chars: Array[String]) (spans: Array[parser.ExprSpan]) (toks: Array[parser.ExprSpan]) (at: Int) (acc: Array[Edit]): Array[Edit] =
-    if at >= chars.len() { acc }
+let cont_acc (chars: Source) (spans: Array[parser.ExprSpan]) (toks: Array[parser.ExprSpan]) (at: Int) (acc: Array[Edit]): Array[Edit] =
+    if at >= chars.text.len() { acc }
     else { cont_acc(chars, spans, toks, line_end(chars, at), cont_line(chars, spans, toks, at, acc)) }
 
-let cont_line (chars: Array[String]) (spans: Array[parser.ExprSpan]) (toks: Array[parser.ExprSpan]) (ls: Int) (acc: Array[Edit]): Array[Edit] = {
+let cont_line (chars: Source) (spans: Array[parser.ExprSpan]) (toks: Array[parser.ExprSpan]) (ls: Int) (acc: Array[Edit]): Array[Edit] = {
     let ind = indent_length(chars, ls, 0);
     let first = ls + ind;
-    let col = indent_columns(chars, ls, 0);
     if is_blank_line(chars, ls) { acc }
     else if is_comment_line(chars, ls) { acc }
     else if is_header_line(chars, first) { acc }
     else if is_closer_line(chars, first) { acc }
     else if inside_token(toks, 0, ls) { acc }
-    // A line whose own indent is off the four-space grid was aligned by
-    // hand, under an opening bracket or a condition:
-    //
-    //     else if nodes[i].path == path && nodes[i].def_offset >= 0
-    //          && nodes[i].def_offset <= off {
-    //
-    // Nine spaces, chosen to put `&&` under the `if`'s condition. The
-    // grid has no opinion about that column and moving the line to four
-    // would destroy the alignment without improving anything -- the
-    // same reason `block_indent` refuses a brace on such a line.
-    //
-    // But only when the line sits DEEPER than the grid answer, which is
-    // what alignment always is: you align to a column of something on
-    // the line above, and that column is to the right of where nesting
-    // would have put you. All four off-grid lines in this repo are.
-    // An off-grid line that is SHALLOWER aligns with nothing -- it is
-    // just mis-indented, and refusing to fix it would be refusing to do
-    // the job.
-    else if col % 4 != 0 && col > anchor_indent(chars, spans, ls, first) { acc }
     else {
-        let want = anchor_indent(chars, spans, ls, first);
-        if want < 0 { acc }
-        else { acc.push(Edit { line_start: ls, old_indent: ind, indent: want, owns_comments: true }) }
+        let anchor = innermost_start(spans, 0, ls, first, -1);
+        // Mid-line expressions have no independent indent to anchor to.
+        if anchor < 0 || !first_on_line(chars, anchor) { acc }
+        else { acc.push(relative_edit(chars, ls, line_start_of(chars, anchor), continues_level(chars, first), true, true)) }
     }
 }
 
@@ -703,7 +643,7 @@ let cont_line (chars: Array[String]) (spans: Array[parser.ExprSpan]) (toks: Arra
 // three files. An `else if` chain falls out of the same rule: each
 // `else` answers to the nearest `if` that began on an earlier line,
 // which is the one it belongs to.
-let continues_level (chars: Array[String]) (at: Int): Int = if word_at(chars, at, "else") { 0 } else { 4 }
+let continues_level (chars: Source) (at: Int): Int = if word_at(chars, at, "else") { 0 } else { 4 }
 
 // A line that OPENS with a closing bracket is left alone. `}` is placed
 // by `close_brace_edit`, which knows exactly what it closes because
@@ -716,33 +656,8 @@ let continues_level (chars: Array[String]) (at: Int): Int = if word_at(chars, at
 // The measurement never covered these -- it excluded lines beginning
 // with a closing bracket, so it said nothing about them, and a rule the
 // corpus did not dictate is not one to guess at.
-let is_closer_line (chars: Array[String]) (at: Int): Bool =
-    at < chars.len() && (chars[at] == "}" || chars[at] == ")" || chars[at] == "]")
-
-// What the continuation rule WOULD say this line's indent is, or -1
-// where it has nothing to say. Consulted by the off-grid guard above,
-// which needs the answer before deciding whether to allow it.
-let anchor_indent (chars: Array[String]) (spans: Array[parser.ExprSpan]) (ls: Int) (first: Int): Int = {
-    let anchor = innermost_start(spans, 0, ls, first, 0 - 1);
-    // An anchor that does not BEGIN its own line has no indent of its
-    // own to measure from, only a column someone typed:
-    //
-    //     IKUse(u) => if !Array.is_empty(u.path) .. { true }
-    //                 else { cg_uses_module(items, name, i + 1) },
-    //
-    // That `else` is under the `if`, at column 24, and the `if` starts a
-    // third of the way along the line above. `infer.plum` writes the
-    // same shape the other way, putting `else` four past the ARM's
-    // indent. Two files, two answers -- and where the corpus does not
-    // agree with itself, this does not choose. It refuses rather than
-    // falling back to the next anchor out, because falling back would
-    // be picking one of the two sides.
-    if anchor < 0 || !first_on_line(chars, anchor) { 0 - 1 }
-    else {
-        let col = indent_columns(chars, line_start_of(chars, anchor), 0);
-        if col % 4 != 0 { 0 - 1 } else { col + continues_level(chars, first) }
-    }
-}
+let is_closer_line (chars: Source) (at: Int): Bool =
+    at < chars.text.len() && (chars.text[at] == "}" || chars.text[at] == ")" || chars.text[at] == "]")
 
 // The enclosing extent that begins latest: it started before this line
 // and has not ended by this line's first character.
@@ -756,16 +671,16 @@ let innermost_start (spans: Array[parser.ExprSpan]) (i: Int) (ls: Int) (first: I
 // sit between an item's first token and its body, inside no expression
 // at all -- so nothing would place them anyway were it not for the
 // item's own extent, which covers them.
-let is_header_line (chars: Array[String]) (at: Int): Bool =
-    at < chars.len() && (chars[at] == "=" || word_at(chars, at, "require") || word_at(chars, at, "ensure"))
+let is_header_line (chars: Source) (at: Int): Bool =
+    at < chars.text.len() && (chars.text[at] == "=" || word_at(chars, at, "require") || word_at(chars, at, "ensure"))
 
-let word_at (chars: Array[String]) (at: Int) (w: String): Bool = word_eq(chars, at, chars_of(w), 0)
+let word_at (chars: Source) (at: Int) (w: String): Bool = word_eq(chars, at, chars_of(w), 0)
 
-let word_eq (chars: Array[String]) (at: Int) (w: Array[String]) (i: Int): Bool =
+let word_eq (chars: Source) (at: Int) (w: Array[String]) (i: Int): Bool =
     if i >= w.len() { true }
-    else if at + i >= chars.len() { false }
-    else if chars[at + i] != w[i] { false }
+    else if at + i >= chars.text.len() { false }
+    else if chars.text[at + i] != w[i] { false }
     else { word_eq(chars, at, w, i + 1) }
 
-let all_item_edits (chars: Array[String]) (items: Array[parser.ItemNode]) (i: Int) (acc: Array[Edit]): Array[Edit] =
+let all_item_edits (chars: Source) (items: Array[parser.ItemNode]) (i: Int) (acc: Array[Edit]): Array[Edit] =
     if i >= items.len() { acc } else { all_item_edits(chars, items, i + 1, item_edits(chars, items[i], acc)) }

@@ -307,22 +307,22 @@ let hl_gap_pieces (gap: String) (acc: Array[HlPiece]): Array[HlPiece] =
     if String.is_empty(gap) { acc }
     else {
         match String.index_of(gap, "//") {
-        None => acc.push(HlPiece { cls: "", text: gap }),
-        Some(at) => {
-            let head = acc.push(HlPiece { cls: "", text: String.slice(gap, 0, at) });
-            let rest = String.slice(gap, at, gap.len());
-            match String.index_of(rest, "\n") {
-                // A trailing comment with no newline after it: the
-                // last line of the snippet.
-                None => head.push(HlPiece { cls: hl_comment_class(rest), text: rest }),
-                Some(nl) => {
-                    let line = String.slice(rest, 0, nl);
-                    hl_gap_pieces(String.slice(rest, nl, rest.len()),
-                        head.push(HlPiece { cls: hl_comment_class(line), text: line }))
-                },
-            }
-        },
-    }
+            None => acc.push(HlPiece { cls: "", text: gap }),
+            Some(at) => {
+                let head = acc.push(HlPiece { cls: "", text: String.slice(gap, 0, at) });
+                let rest = String.slice(gap, at, gap.len());
+                match String.index_of(rest, "\n") {
+                    // A trailing comment with no newline after it: the
+                    // last line of the snippet.
+                    None => head.push(HlPiece { cls: hl_comment_class(rest), text: rest }),
+                    Some(nl) => {
+                        let line = String.slice(rest, 0, nl);
+                        hl_gap_pieces(String.slice(rest, nl, rest.len()),
+                            head.push(HlPiece { cls: hl_comment_class(line), text: line }))
+                    },
+                }
+            },
+        }
     }
 
 // A doc comment is a different thing from an aside to the next
