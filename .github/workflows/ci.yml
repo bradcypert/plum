@@ -201,6 +201,8 @@ jobs:
         run: tar -xzf plum-linux-compiler.tar.gz
       - name: TCP and HTTP work in a compiled binary
         run: ./bootstrap/net-smoke
+      - name: listeners reserve their port and release failed sockets
+        run: python3 bootstrap/listener-test.py
       - name: stdin reads preserve buffers and bound waits
         run: ./bootstrap/stdin-smoke
       - name: handle tracking grows and claims cleanup exactly once
@@ -375,6 +377,8 @@ jobs:
         run: tar -xzf plum-macos-compiler.tar.gz
       - name: real programs work on macOS
         run: ./bootstrap/platform-smoke ./sh.real
+      - name: listeners reserve their port and release failed sockets
+        run: python3 bootstrap/listener-test.py
       - name: build cache preserves program behavior
         run: ./bootstrap/build-cache-check ./sh.real
       - name: task and channel failures preserve ownership
@@ -748,6 +752,8 @@ jobs:
           name: plum-windows-compiler
       - name: restore freshly built compiler
         run: tar -xzf plum-windows-compiler.tar.gz
+      - name: listeners reject separate-process port takeover and release failed sockets
+        run: python3 bootstrap/listener-test.py
       - name: task and channel failures preserve ownership
         run: ./bootstrap/thread-smoke ./sh.real
       - name: declared native dependencies preserve TLS compatibility

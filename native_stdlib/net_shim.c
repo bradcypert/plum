@@ -163,10 +163,12 @@ long long tcp_connect(const char *host, long long port) {
 // Binds+listens on `port` across all local interfaces (`INADDR_ANY`,
 // IPv4 only — a real, deliberate v1 scope trade, matches `tcp_connect`
 // not being IPv6-exclusive-only either way since `getaddrinfo` there
-// picks whatever resolves). `SO_REUSEADDR` is set so restarting a
-// server immediately after it exits doesn't hit `EADDRINUSE` from the
-// kernel's own `TIME_WAIT` hold on the port — standard practice for any
-// long-lived listener. Returns the listening fd, or -1 on failure.
+// picks whatever resolves). POSIX uses `SO_REUSEADDR` for server restarts
+// across TIME_WAIT. Winsock gives that option different semantics: another
+// process can forcibly bind the same port. Require `SO_EXCLUSIVEADDRUSE`
+// there before binding, even though accepted connections can delay reuse
+// after closure. Never publish a listener if its binding policy failed.
+// Returns the listening fd, or -1 on failure.
 long long tcp_listen(long long port) {
     plum_sock s;
     if (plum_net_init() != 0) return -1;
@@ -175,7 +177,15 @@ long long tcp_listen(long long port) {
         return -1;
     }
     int one = 1;
-    setsockopt(s, SOL_SOCKET, SO_REUSEADDR, PLUM_SOCKOPT(&one), sizeof(one));
+#if defined(_WIN32)
+    int option = SO_EXCLUSIVEADDRUSE;
+#else
+    int option = SO_REUSEADDR;
+#endif
+    if (setsockopt(s, SOL_SOCKET, option, PLUM_SOCKOPT(&one), sizeof(one)) != 0) {
+        PLUM_CLOSESOCK(s);
+        return -1;
+    }
 
     struct sockaddr_in addr;
     memset(&addr, 0, sizeof(addr));
