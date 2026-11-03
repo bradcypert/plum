@@ -377,14 +377,14 @@ static void test_exit_statuses(const char *program) {
             for (int method = 0; method < 3; method++) {
                 h = process_spawn(program, args, 2, "", 0, "", 0, 0);
                 assert(h >= 0);
-                HANDLE child = (HANDLE)(intptr_t)plum_process_slots[h].child->pid;
+                HANDLE child = (HANDLE)(intptr_t)plum_process_slots[(h - 1) % PLUM_PROC_MAX_SLOTS].child->pid;
                 assert(WaitForSingleObject(child, 30000) == WAIT_OBJECT_0);
                 fail_exit_query = failure;
                 if (failure) {
                     assert(await_status(h, method) == -1);
-                    assert(!plum_process_slots[h].child->finished);
-                    assert(plum_process_slots[h].child->pid == (long long)(intptr_t)child);
-                    assert(plum_process_slots[h].out_data == NULL);
+                    assert(!plum_process_slots[(h - 1) % PLUM_PROC_MAX_SLOTS].child->finished);
+                    assert(plum_process_slots[(h - 1) % PLUM_PROC_MAX_SLOTS].child->pid == (long long)(intptr_t)child);
+                    assert(plum_process_slots[(h - 1) % PLUM_PROC_MAX_SLOTS].out_data == NULL);
                     fail_exit_query = 0;
                 }
                 assert(await_status(h, method) == 1);
@@ -401,7 +401,7 @@ static void test_exit_statuses(const char *program) {
     // must not prevent releasing its resources or allocate capture buffers.
     long long h = process_spawn(program, "--exit-child\t0", 2, "", 0, "", 0, 0);
     assert(h >= 0);
-    assert(WaitForSingleObject((HANDLE)(intptr_t)plum_process_slots[h].child->pid, 30000) == WAIT_OBJECT_0);
+    assert(WaitForSingleObject((HANDLE)(intptr_t)plum_process_slots[(h - 1) % PLUM_PROC_MAX_SLOTS].child->pid, 30000) == WAIT_OBJECT_0);
     fail_exit_query = 1;
     assert(process_poll(h) == -1);
     int attempts = allocation_attempt;
@@ -427,7 +427,7 @@ static void arm_wait(long long nanos, int stop_call, DWORD status) {
 static void test_wait_timeouts(const char *program) {
     long long h = process_spawn(program, "--exit-child\t0", 2, "", 0, "", 0, 0);
     assert(h >= 0);
-    HANDLE child = (HANDLE)(intptr_t)plum_process_slots[h].child->pid;
+    HANDLE child = (HANDLE)(intptr_t)plum_process_slots[(h - 1) % PLUM_PROC_MAX_SLOTS].child->pid;
     // The child has really exited, but scripted waits model it still running.
     assert(WaitForSingleObject(child, 30000) == WAIT_OBJECT_0);
     const long long cap = 0x7FFFFFFELL * 1000000LL;
@@ -441,14 +441,14 @@ static void test_wait_timeouts(const char *program) {
         assert(process_child_wait(h, nanos) == 0);
         assert(wait_remaining == 0 && wait_consumed == millis);
         assert(wait_calls == (millis == 0 ? 1 : (millis + 0x7FFFFFFELL - 1) / 0x7FFFFFFELL));
-        assert(!plum_process_slots[h].child->finished && exit_queries == queries);
+        assert(!plum_process_slots[(h - 1) % PLUM_PROC_MAX_SLOTS].child->finished && exit_queries == queries);
         assert(allocation_attempt == wait_allocation_baseline && live_bytes == wait_live_baseline);
         scripted_wait = 0;
     }
     // A failed later chunk must leave the child available for another wait.
     arm_wait(2 * cap + 1, 2, WAIT_FAILED);
     assert(process_child_wait(h, 2 * cap + 1) == -1 && wait_calls == 2);
-    assert(!plum_process_slots[h].child->finished);
+    assert(!plum_process_slots[(h - 1) % PLUM_PROC_MAX_SLOTS].child->finished);
     scripted_wait = 0;
     // Signalling during a later chunk collects exactly once, preserving output.
     int queries = exit_queries;
@@ -503,8 +503,8 @@ static void test_spawns(void) {
         assert(h >= 0 && process_child_wait(h, -1) == 1 && process_exit_code(h) == 0);
         assert(strcmp(process_stdout_data(h), "ok\n") == 0);
         // Collection must delete the captures after closing Windows handles.
-        char *out = _strdup(plum_process_slots[h].child->out_path);
-        char *err = _strdup(plum_process_slots[h].child->err_path);
+        char *out = _strdup(plum_process_slots[(h - 1) % PLUM_PROC_MAX_SLOTS].child->out_path);
+        char *err = _strdup(plum_process_slots[(h - 1) % PLUM_PROC_MAX_SLOTS].child->err_path);
         assert(plum_path_attributes(out) == INVALID_FILE_ATTRIBUTES);
         assert(plum_path_attributes(err) == INVALID_FILE_ATTRIBUTES);
         process_child_free(h);

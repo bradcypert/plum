@@ -13,7 +13,7 @@ os.chdir(ROOT)
 
 def run(args, **kwargs):
     try:
-        return subprocess.run(list(map(str, args)), check=True, timeout=180, **kwargs)
+        return subprocess.run(list(map(str, args)), check=True, timeout=kwargs.pop("timeout", 180), **kwargs)
     except subprocess.CalledProcessError as error:
         sys.exit(f"{args}:\n{error.stdout or ''}{error.stderr or ''}")
 
@@ -35,6 +35,11 @@ with tempfile.TemporaryDirectory(prefix='plum-capture-') as directory:
          'bootstrap/process-capture-test.c', 'native_stdlib/whole_file_shim.c',
          'native_stdlib/os_shim.c', '-o', native])
     run([native])
+    registry = work / 'registry.exe'
+    run(['clang', *flags, '-Wall', '-Wextra', '-Werror',
+         'bootstrap/process-registry-test.c', 'native_stdlib/whole_file_shim.c',
+         'native_stdlib/os_shim.c', '-o', registry])
+    run([registry], timeout=25)
     def clean_files():
         captures = [p for p in work.iterdir()
                     if p.name.lower().startswith(('plum_proc_', 'plo', 'ple', 'pli'))]
