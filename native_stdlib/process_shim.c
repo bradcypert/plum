@@ -47,12 +47,13 @@
 // dependency at all — the parent just reads both files back, in full,
 // AFTER `waitpid` confirms the child is done.
 //
-// **Not thread-safe** (a single, static, unlocked slot table) —
-// acceptable for v1: every other blocking `native_stdlib` primitive
-// (`net_shim.c`'s sockets included) is already scoped to single-
-// threaded/sequential use, and a compiler shelling out to `clang` one
-// invocation at a time (the actual motivating use case) never needs
-// concurrent calls anyway.
+// Allocation reserves a slot before launching. Per-slot locks protect publication,
+// collection and cleanup; unrelated children never share an operation lock.
+// Positive generation-tagged handles prevent stale values from accessing reused
+// storage. The table and synchronization metadata stay bounded across launches.
+// Data accessors return borrowed immutable capture buffers: native callers must
+// keep the owning handle alive until they finish copying. Plum's wrappers retain
+// that owner while reading; freeing a raw handle ends its borrowed pointers.
 //
 // **Windows support is written but UNVERIFIED.** Everything above
 // describes the POSIX path, which is tested by every harness in this
@@ -72,6 +73,7 @@
 #include <stdint.h>
 #include <limits.h>
 #include <wchar.h>
+#include <pthread.h>
 #include "path_shim.h"
 
 #if defined(_WIN32)
@@ -127,6 +129,9 @@ typedef struct {
 } PlumChildState;
 
 typedef struct {
+    pthread_mutex_t lock;
+    long long identity;
+    int reserved; // allocator lock, independent of the operation lock
     int in_use;
     long long exit_code;
     char *out_data;
@@ -139,11 +144,68 @@ typedef struct {
 
 static PlumProcessSlot plum_process_slots[PLUM_PROC_MAX_SLOTS];
 
+static pthread_mutex_t plum_process_allocator = PTHREAD_MUTEX_INITIALIZER;
+static pthread_once_t plum_process_once = PTHREAD_ONCE_INIT;
+static int plum_process_ready;
+
+static void plum_process_init(void) {
+    for (int i = 0; i < PLUM_PROC_MAX_SLOTS; i++) {
+        if (pthread_mutex_init(&plum_process_slots[i].lock, NULL) != 0) {
+            while (i > 0) pthread_mutex_destroy(&plum_process_slots[--i].lock);
+            return;
+        }
+    }
+    plum_process_ready = 1;
+}
+
+// Never hold the allocator lock while taking a slot lock or performing I/O.
+static void plum_process_available(PlumProcessSlot *slot) {
+    pthread_mutex_lock(&plum_process_allocator);
+    slot->reserved = 0;
+    pthread_mutex_unlock(&plum_process_allocator);
+}
+
+// Returns a reserved, locked index. Every failed launch must release it.
+static long long plum_process_reserve(void) {
+    pthread_once(&plum_process_once, plum_process_init);
+    if (!plum_process_ready) return -1;
+    for (int i = 0; i < PLUM_PROC_MAX_SLOTS; i++) {
+        PlumProcessSlot *slot = &plum_process_slots[i];
+        pthread_mutex_lock(&plum_process_allocator);
+        int available = !slot->reserved;
+        if (available) slot->reserved = 1;
+        pthread_mutex_unlock(&plum_process_allocator);
+        if (!available) continue;
+        pthread_mutex_lock(&slot->lock);
+        if (slot->identity > LLONG_MAX - PLUM_PROC_MAX_SLOTS) {
+            // Retire instead of wrapping to an identity a stale caller holds.
+            pthread_mutex_unlock(&slot->lock);
+            continue;
+        }
+        slot->identity = slot->identity == 0 ? i + 1 : slot->identity + PLUM_PROC_MAX_SLOTS;
+        return i;
+    }
+    return -1;
+}
+
+static PlumProcessSlot *plum_process_lock(long long handle) {
+    if (handle <= 0) return NULL;
+    pthread_once(&plum_process_once, plum_process_init);
+    if (!plum_process_ready) return NULL;
+    PlumProcessSlot *slot = &plum_process_slots[(handle - 1) % PLUM_PROC_MAX_SLOTS];
+    pthread_mutex_lock(&slot->lock);
+    if (!slot->in_use || slot->identity != handle) {
+        pthread_mutex_unlock(&slot->lock);
+        return NULL;
+    }
+    return slot;
+}
+
 // Defined further down with the asynchronous children. Declared here
 // because `process_free` has to hand a spawned slot over to it, and
 // that appears first.
-void process_child_free(long long handle);
-long long process_terminate(long long handle, long long hard);
+static void process_child_free_locked(long long handle);
+static long long process_terminate_locked(long long handle, long long hard);
 
 static char *plum_strdup_or_null(const char *s) {
     if (s == NULL) return NULL;
@@ -478,6 +540,51 @@ static int plum_win_append_arg(char *buf, size_t cap, size_t *len, const char *a
     return 0;
 }
 
+// Every launch uses an explicit stdio allowlist. The source handles remain
+// non-inheritable; only these short-lived duplicates can enter this child.
+// No global spawn lock is needed, and other tasks' captures cannot leak into
+// unrelated children and prevent their deletion after their owner exits.
+static BOOL plum_win_create_process(wchar_t *cmdline, wchar_t *env_block,
+                                    HANDLE input, HANDLE output, HANDLE error,
+                                    PROCESS_INFORMATION *process) {
+    STARTUPINFOEXW si;
+    ZeroMemory(&si, sizeof(si));
+    si.StartupInfo.cb = sizeof(si);
+    si.StartupInfo.dwFlags = STARTF_USESTDHANDLES;
+    HANDLE sources[3] = { input, output, error };
+    HANDLE inherited[3] = { NULL, NULL, NULL };
+    HANDLE *stdio[3] = { &si.StartupInfo.hStdInput, &si.StartupInfo.hStdOutput,
+                         &si.StartupInfo.hStdError };
+    SIZE_T count = 0, bytes = 0;
+    int initialized = 0;
+    BOOL result = FALSE;
+    for (int i = 0; i < 3; i++) {
+        if (sources[i] == NULL || sources[i] == INVALID_HANDLE_VALUE) continue;
+        if (!DuplicateHandle(GetCurrentProcess(), sources[i], GetCurrentProcess(),
+            &inherited[count], 0, TRUE, DUPLICATE_SAME_ACCESS)) goto done;
+        *stdio[i] = inherited[count++];
+    }
+    if (count > 0) {
+        InitializeProcThreadAttributeList(NULL, 1, 0, &bytes);
+        if (!bytes) goto done;
+        si.lpAttributeList = malloc(bytes);
+        if (si.lpAttributeList == NULL) goto done;
+        if (!InitializeProcThreadAttributeList(si.lpAttributeList, 1, 0, &bytes)) goto done;
+        initialized = 1;
+        if (!UpdateProcThreadAttribute(si.lpAttributeList, 0, PROC_THREAD_ATTRIBUTE_HANDLE_LIST,
+            inherited, count * sizeof(HANDLE), NULL, NULL)) goto done;
+    }
+    ZeroMemory(process, sizeof(*process));
+    result = CreateProcessW(NULL, cmdline, NULL, NULL, count > 0,
+        CREATE_UNICODE_ENVIRONMENT | EXTENDED_STARTUPINFO_PRESENT,
+        env_block, NULL, &si.StartupInfo, process);
+done:
+    if (initialized) DeleteProcThreadAttributeList(si.lpAttributeList);
+    free(si.lpAttributeList);
+    for (SIZE_T i = 0; i < count; i++) CloseHandle(inherited[i]);
+    return result;
+}
+
 // Keep capture paths in UTF-8 too: the shared whole-file reader and
 // cleanup routines use the same filesystem boundary as public Os APIs.
 static HANDLE plum_win_temp_handle(const char *prefix, char *path_out) {
@@ -490,7 +597,7 @@ static HANDLE plum_win_temp_handle(const char *prefix, char *path_out) {
     if (!plum_path_utf8(path, path_out, PLUM_PROC_PATH_MAX)) {
         DeleteFileW(path); return INVALID_HANDLE_VALUE;
     }
-    SECURITY_ATTRIBUTES sa = {sizeof(sa), NULL, TRUE};
+    SECURITY_ATTRIBUTES sa = {sizeof(sa), NULL, FALSE};
     HANDLE h = CreateFileW(path, GENERIC_WRITE, FILE_SHARE_READ | FILE_SHARE_WRITE,
                           &sa, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
     if (h == INVALID_HANDLE_VALUE) { DeleteFileW(path); path_out[0] = 0; }
@@ -644,7 +751,6 @@ static long long plum_spawn_capture(const char *program, char **argv, char *out_
     wchar_t *cmdline = plum_win_command_line(argv);
     wchar_t *env_block = NULL;
     HANDLE ho, he;
-    STARTUPINFOW si;
     PROCESS_INFORMATION pi;
     if (cmdline == NULL) return PLUM_SPAWN_FAILED;
     if (plum_win_env_block(envp, &env_block) != 0) {
@@ -671,7 +777,7 @@ static long long plum_spawn_capture(const char *program, char **argv, char *out_
         SECURITY_ATTRIBUTES sa;
         sa.nLength = sizeof(sa);
         sa.lpSecurityDescriptor = NULL;
-        sa.bInheritHandle = TRUE;
+        sa.bInheritHandle = FALSE;
         hi = CreateFileW(L"NUL", GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE,
                          &sa, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
         hi_owned = 1;
@@ -696,7 +802,7 @@ static long long plum_spawn_capture(const char *program, char **argv, char *out_
         }
         sa.nLength = sizeof(sa);
         sa.lpSecurityDescriptor = NULL;
-        sa.bInheritHandle = TRUE;
+        sa.bInheritHandle = FALSE;
         wchar_t *wide_in = plum_path_wide(in_path);
         hi = wide_in ? CreateFileW(wide_in, GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE,
                                   &sa, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL) : INVALID_HANDLE_VALUE;
@@ -713,21 +819,13 @@ static long long plum_spawn_capture(const char *program, char **argv, char *out_
         return PLUM_SPAWN_FAILED;
     }
 
-    ZeroMemory(&si, sizeof(si));
-    si.cb = sizeof(si);
-    si.dwFlags = STARTF_USESTDHANDLES;
-    si.hStdInput = hi;
-    si.hStdOutput = ho;
-    si.hStdError = he;
-    ZeroMemory(&pi, sizeof(pi));
-
     // `lpApplicationName` is NULL so that `CreateProcess` searches PATH
     // and appends `.exe`, which is what makes `clang` resolve the same
     // way it does everywhere else. The ambiguity that normally makes
     // that risky -- an unquoted program path containing spaces -- does
     // not apply, because the program was quoted above like any other
     // argument.
-    if (!CreateProcessW(NULL, cmdline, NULL, NULL, TRUE, CREATE_UNICODE_ENVIRONMENT, env_block, NULL, &si, &pi)) {
+    if (!plum_win_create_process(cmdline, env_block, hi, ho, he, &pi)) {
         CloseHandle(ho);
         CloseHandle(he);
         if (hi_owned) CloseHandle(hi);
@@ -743,9 +841,9 @@ static long long plum_spawn_capture(const char *program, char **argv, char *out_
     free(env_block);
     CloseHandle(pi.hThread);
 
-    // Asynchronous: keep the process handle to wait on, and keep the
-    // two file handles OPEN -- they are the child's stdout and stderr,
-    // and closing them here would close the child's own descriptors.
+    // Asynchronous: keep the process handle to wait on, and retain the
+    // parent's capture handles until collection. Child stdio uses its own
+    // inherited duplicates, independent of the parent's handle lifetimes.
     // The input file cannot be deleted yet either: Windows refuses to
     // unlink a file that is open, which is why POSIX can unlink it at
     // spawn and this cannot.
@@ -789,18 +887,7 @@ static long long plum_spawn_capture(const char *program, char **argv, char *out_
 // is a normal, successful `process_run` outcome retrievable via `
 // process_exit_code` (a failing compile is expected/routine, not a
 // shim-level error).
-long long process_run(const char *program, const char *args_joined, long long argc) {
-    long long slot = -1;
-    for (long long i = 0; i < PLUM_PROC_MAX_SLOTS; i++) {
-        if (!plum_process_slots[i].in_use) {
-            slot = i;
-            break;
-        }
-    }
-    if (slot < 0) {
-        return -1;
-    }
-
+static long long process_run_locked(long long slot, const char *program, const char *args_joined, long long argc) {
     char *args_copy = NULL;
     char **argv = plum_split_args(program, args_joined, argc, &args_copy);
     if (argv == NULL) {
@@ -831,20 +918,9 @@ long long process_run(const char *program, const char *args_joined, long long ar
 // entries, TAB-joined like args), optional stdin bytes. `has_stdin` of
 // 0 feeds the child an empty stdin; 1 feeds `stdin_data` of length
 // `stdin_len`. Exec failure is a launch error (handle -1), not exit 127.
-long long process_run_ex(const char *program, const char *args_joined, long long argc,
+static long long process_run_ex_locked(long long slot, const char *program, const char *args_joined, long long argc,
                          const char *env_joined, long long envc,
                          const char *stdin_data, long long stdin_len, long long has_stdin) {
-    long long slot = -1;
-    for (long long i = 0; i < PLUM_PROC_MAX_SLOTS; i++) {
-        if (!plum_process_slots[i].in_use) {
-            slot = i;
-            break;
-        }
-    }
-    if (slot < 0) {
-        return -1;
-    }
-
     char *args_copy = NULL;
     char **argv = plum_split_args(program, args_joined, argc, &args_copy);
     if (argv == NULL) {
@@ -884,21 +960,21 @@ long long process_run_ex(const char *program, const char *args_joined, long long
     return slot;
 }
 
-long long process_exit_code(long long handle) {
+static long long process_exit_code_locked(long long handle) {
     if (handle < 0 || handle >= PLUM_PROC_MAX_SLOTS || !plum_process_slots[handle].in_use) {
         return -1;
     }
     return plum_process_slots[handle].exit_code;
 }
 
-const char *process_stdout_data(long long handle) {
+static const char *process_stdout_data_locked(long long handle) {
     if (handle < 0 || handle >= PLUM_PROC_MAX_SLOTS || !plum_process_slots[handle].in_use) {
         return "";
     }
     return plum_process_slots[handle].out_data != NULL ? plum_process_slots[handle].out_data : "";
 }
 
-const char *process_stderr_data(long long handle) {
+static const char *process_stderr_data_locked(long long handle) {
     if (handle < 0 || handle >= PLUM_PROC_MAX_SLOTS || !plum_process_slots[handle].in_use) {
         return "";
     }
@@ -906,35 +982,23 @@ const char *process_stderr_data(long long handle) {
 }
 
 // A completed capture failure is sticky, independent of the exit status.
-long long process_capture_status(long long handle) {
+static long long process_capture_status_locked(long long handle) {
     if (handle < 0 || handle >= PLUM_PROC_MAX_SLOTS || !plum_process_slots[handle].in_use) return -1;
     return plum_process_slots[handle].capture_failed ? -1 : 0;
 }
 
-long long process_stdout_length(long long handle) {
+static long long process_stdout_length_locked(long long handle) {
     if (handle < 0 || handle >= PLUM_PROC_MAX_SLOTS || !plum_process_slots[handle].in_use) return 0;
     return plum_process_slots[handle].out_length;
 }
 
-long long process_stderr_length(long long handle) {
+static long long process_stderr_length_locked(long long handle) {
     if (handle < 0 || handle >= PLUM_PROC_MAX_SLOTS || !plum_process_slots[handle].in_use) return 0;
     return plum_process_slots[handle].err_length;
 }
 
-void process_free(long long handle) {
-    if (handle < 0 || handle >= PLUM_PROC_MAX_SLOTS || !plum_process_slots[handle].in_use) {
-        return;
-    }
-    // A slot filled by `process_spawn` carries more than these two
-    // buffers, so it is released by the function that knows about all
-    // of it rather than half-released here.
-    if (plum_process_slots[handle].child != NULL) {
-        process_child_free(handle);
-        return;
-    }
-    free(plum_process_slots[handle].out_data);
-    free(plum_process_slots[handle].err_data);
-    plum_process_slots[handle].in_use = 0;
+static void process_free_locked(long long handle) {
+    process_child_free_locked(handle);
 }
 
 // --- Asynchronous children (issue #7) ---
@@ -1003,15 +1067,9 @@ static PlumProcessSlot *plum_slot_of(long long handle) {
 // Starts `program` without waiting for it. Same argument, environment
 // and stdin packing as `process_run_ex`; same -1 for a child that could
 // not be started at all, including a program that does not exist.
-long long process_spawn(const char *program, const char *args_joined, long long argc,
+static long long process_spawn_locked(long long slot, const char *program, const char *args_joined, long long argc,
                         const char *env_joined, long long envc,
                         const char *stdin_data, long long stdin_len, long long has_stdin) {
-    long long slot = -1;
-    for (long long i = 0; i < PLUM_PROC_MAX_SLOTS; i++) {
-        if (!plum_process_slots[i].in_use) { slot = i; break; }
-    }
-    if (slot < 0) return -1;
-
     char *args_copy = NULL;
     char **argv = plum_split_args(program, args_joined, argc, &args_copy);
     if (argv == NULL) return -1;
@@ -1053,7 +1111,7 @@ long long process_spawn(const char *program, const char *args_joined, long long 
     if (child->out_path == NULL || child->err_path == NULL) {
         // Tracking allocation failed after launch. Reap without reading,
         // then use the stack paths to delete even an untracked capture.
-        process_child_free(slot);
+        process_child_free_locked(slot);
         plum_capture_remove(out_path);
         plum_capture_remove(err_path);
         return -1;
@@ -1063,7 +1121,7 @@ long long process_spawn(const char *program, const char *args_joined, long long 
 
 // 1 if the child has exited (its result is now readable), 0 if it is
 // still running, -1 if the handle is not a live child.
-long long process_poll(long long handle) {
+static long long process_poll_locked(long long handle) {
     PlumProcessSlot *slot = plum_slot_of(handle);
     if (slot == NULL || slot->child == NULL) return -1;
     if (slot->child->finished) return 1;
@@ -1075,7 +1133,8 @@ long long process_poll(long long handle) {
     return plum_win_child_collect(handle);
 #else
     int status = 0;
-    pid_t r = waitpid((pid_t)slot->child->pid, &status, WNOHANG);
+    pid_t r;
+    do { r = waitpid((pid_t)slot->child->pid, &status, WNOHANG); } while (r < 0 && errno == EINTR);
     if (r == 0) return 0;
     if (r < 0) return -1;
     plum_child_collect(handle, WIFEXITED(status) ? (long long)WEXITSTATUS(status) : -1, 1);
@@ -1086,70 +1145,62 @@ long long process_poll(long long handle) {
 // Waits for the child. A negative `timeout_nanos` waits forever.
 // Returns 1 if it exited, 0 if the timeout expired first, -1 on error.
 //
-// On POSIX a bounded wait POLLS with a capped backoff rather than using a timed
-// wait primitive, because POSIX has no portable one: `waitpid` cannot
-// take a deadline, and the alternatives (`sigtimedwait` on SIGCHLD,
-// `pidfd_open`) are per-platform and interact with any other signal
-// handling in the program. The backoff starts at 1ms and caps at 20ms,
-// so a short wait stays responsive and a long one costs about fifty
-// wakeups a second. An UNBOUNDED wait does not poll at all -- it blocks
-// in `waitpid`, which is the case that would otherwise spin for hours.
+// POSIX waits poll with a capped 1–20ms backoff, releasing the slot lock
+// between checks. Windows waits pin the OS process with a duplicate handle.
+// Neither strategy blocks termination or unrelated process operations.
 long long process_child_wait(long long handle, long long timeout_nanos) {
-    PlumProcessSlot *slot = plum_slot_of(handle);
-    if (slot == NULL || slot->child == NULL) return -1;
-    if (slot->child->finished) return 1;
-
-    if (timeout_nanos < 0) {
 #if defined(_WIN32)
-        HANDLE h = (HANDLE)(intptr_t)slot->child->pid;
-        if (WaitForSingleObject(h, INFINITE) != WAIT_OBJECT_0) return -1;
-        return plum_win_child_collect(handle);
-#else
-        int status = 0;
-        pid_t r;
-        do { r = waitpid((pid_t)slot->child->pid, &status, 0); } while (r < 0 && errno == EINTR);
-        if (r < 0) return -1;
-        plum_child_collect(handle, WIFEXITED(status) ? (long long)WEXITSTATUS(status) : -1, 1);
-        return 1;
-#endif
+    PlumProcessSlot *slot = plum_process_lock(handle);
+    if (slot == NULL) return -1;
+    if (slot->child == NULL || slot->child->finished) {
+        long long result = slot->child == NULL ? -1 : 1;
+        pthread_mutex_unlock(&slot->lock);
+        return result;
     }
-
-#if defined(_WIN32)
-    {
-        HANDLE h = (HANDLE)(intptr_t)slot->child->pid;
-        long long ms = timeout_nanos / 1000000LL;
-        if (timeout_nanos % 1000000LL != 0) ms++;
-        // Round once, then consume the full budget in finite OS waits.
-        // A single capped wait would report an early timeout for durations
-        // above the cap. Keep the remainder in 64 bits; even Int's largest
-        // nanosecond duration fits, without constructing an absolute deadline.
-        for (;;) {
-            DWORD chunk = ms > 0x7FFFFFFELL ? 0x7FFFFFFE : (DWORD)ms;
-            DWORD w = WaitForSingleObject(h, chunk);
-            if (w == WAIT_OBJECT_0) return plum_win_child_collect(handle);
-            if (w != WAIT_TIMEOUT) return -1;
-            ms -= chunk;
-            if (ms == 0) return 0;
-        }
+    // A duplicate pins the OS object while another task terminates or frees
+    // the slot. Revalidate the identity before publishing the result.
+    HANDLE process = NULL;
+    int duplicated = DuplicateHandle(GetCurrentProcess(), (HANDLE)(intptr_t)slot->child->pid,
+        GetCurrentProcess(), &process, 0, FALSE, DUPLICATE_SAME_ACCESS);
+    pthread_mutex_unlock(&slot->lock);
+    if (!duplicated) return -1;
+    long long ms = timeout_nanos < 0 ? -1 : timeout_nanos / 1000000LL;
+    if (timeout_nanos > 0 && timeout_nanos % 1000000LL != 0) ms++;
+    long long result;
+    for (;;) {
+        DWORD chunk = ms < 0 ? INFINITE : ms > 0x7FFFFFFELL ? 0x7FFFFFFE : (DWORD)ms;
+        DWORD w = WaitForSingleObject(process, chunk);
+        if (w == WAIT_OBJECT_0) { result = 1; break; }
+        if (w != WAIT_TIMEOUT) { result = -1; break; }
+        ms -= chunk;
+        if (ms == 0) { result = 0; break; }
     }
+    CloseHandle(process);
+    slot = plum_process_lock(handle);
+    if (slot == NULL) return -1;
+    if (slot->child->finished) result = 1;
+    else if (result == 1) result = plum_win_child_collect((handle - 1) % PLUM_PROC_MAX_SLOTS);
+    pthread_mutex_unlock(&slot->lock);
+    return result;
 #else
-    {
-        long long waited = 0;
-        long long step = 1000000LL; // 1ms
-        for (;;) {
-            long long r = process_poll(handle);
-            if (r != 0) return r;
-            if (waited >= timeout_nanos) return 0;
-            long long left = timeout_nanos - waited;
-            long long nap = step < left ? step : left;
-            struct timespec req;
-            req.tv_sec = (time_t)(nap / 1000000000LL);
-            req.tv_nsec = (long)(nap % 1000000000LL);
-            while (nanosleep(&req, &req) != 0 && errno == EINTR) { }
-            waited += nap;
-            step *= 2;
-            if (step > 20000000LL) step = 20000000LL;
-        }
+    // A blocking waitpid under the slot lock would prevent terminate/drop.
+    // Poll and reap under that lock instead, so concurrent waiters cannot reap
+    // twice or signal a PID between reaping it and recording completion.
+    long long waited = 0, step = 1000000LL;
+    for (;;) {
+        PlumProcessSlot *slot = plum_process_lock(handle);
+        if (slot == NULL) return -1;
+        long long result = process_poll_locked((handle - 1) % PLUM_PROC_MAX_SLOTS);
+        pthread_mutex_unlock(&slot->lock);
+        if (result != 0) return result;
+        if (timeout_nanos >= 0 && waited >= timeout_nanos) return 0;
+        long long nap = step;
+        if (timeout_nanos >= 0 && nap > timeout_nanos - waited) nap = timeout_nanos - waited;
+        struct timespec req = { (time_t)(nap / 1000000000LL), (long)(nap % 1000000000LL) };
+        while (nanosleep(&req, &req) != 0 && errno == EINTR) { }
+        if (timeout_nanos >= 0) waited += nap;
+        if (step < 20000000LL) step *= 2;
+        if (step > 20000000LL) step = 20000000LL;
     }
 #endif
 }
@@ -1166,7 +1217,7 @@ long long process_child_wait(long long handle, long long timeout_nanos) {
 // Returns 0 on success, -1 if the handle is not a live child. Signalling
 // a child that has ALREADY exited is success, not failure: the caller
 // asked for it to be gone and it is.
-long long process_terminate(long long handle, long long hard) {
+static long long process_terminate_locked(long long handle, long long hard) {
     PlumProcessSlot *slot = plum_slot_of(handle);
     if (slot == NULL || slot->child == NULL) return -1;
     if (slot->child->finished) return 0;
@@ -1182,7 +1233,7 @@ long long process_terminate(long long handle, long long hard) {
 // has to report it or hand it to something else. Windows reports the
 // process id rather than the handle, which is what a user would
 // recognise in Task Manager.
-long long process_child_pid(long long handle) {
+static long long process_child_pid_locked(long long handle) {
     PlumProcessSlot *slot = plum_slot_of(handle);
     if (slot == NULL || slot->child == NULL) return -1;
 #if defined(_WIN32)
@@ -1206,13 +1257,13 @@ long long process_child_pid(long long handle) {
 //
 // `drop_policy` is where a future choice would live. It is not settable
 // from Plum today.
-void process_child_free(long long handle) {
+static void process_child_free_locked(long long handle) {
     PlumProcessSlot *slot = plum_slot_of(handle);
     if (slot == NULL) return;
     PlumChildState *c = slot->child;
     if (c != NULL) {
         if (!c->finished) {
-            (void)process_terminate(handle, 1);
+            (void)process_terminate_locked(handle, 1);
 #if defined(_WIN32)
             HANDLE h = (HANDLE)(intptr_t)c->pid;
             WaitForSingleObject(h, 5000);
@@ -1236,7 +1287,78 @@ void process_child_free(long long handle) {
     free(slot->err_data);
     slot->out_data = NULL;
     slot->err_data = NULL;
+    slot->out_length = slot->err_length = 0;
+    slot->capture_failed = 0;
     slot->in_use = 0;
+}
+
+// The ABI boundary owns identity validation and locking. Internal helpers use
+// indices only while the corresponding slot is locked.
+#define PLUM_PROCESS_ACCESSOR(type, name, invalid) \
+    type name(long long handle) { \
+        PlumProcessSlot *slot = plum_process_lock(handle); \
+        if (slot == NULL) return invalid; \
+        type result = name##_locked((handle - 1) % PLUM_PROC_MAX_SLOTS); \
+        pthread_mutex_unlock(&slot->lock); \
+        return result; \
+    }
+PLUM_PROCESS_ACCESSOR(long long, process_exit_code, -1)
+PLUM_PROCESS_ACCESSOR(const char *, process_stdout_data, "")
+PLUM_PROCESS_ACCESSOR(const char *, process_stderr_data, "")
+PLUM_PROCESS_ACCESSOR(long long, process_capture_status, -1)
+PLUM_PROCESS_ACCESSOR(long long, process_stdout_length, 0)
+PLUM_PROCESS_ACCESSOR(long long, process_stderr_length, 0)
+PLUM_PROCESS_ACCESSOR(long long, process_poll, -1)
+PLUM_PROCESS_ACCESSOR(long long, process_child_pid, -1)
+#undef PLUM_PROCESS_ACCESSOR
+
+long long process_terminate(long long handle, long long hard) {
+    PlumProcessSlot *slot = plum_process_lock(handle);
+    if (slot == NULL) return -1;
+    long long result = process_terminate_locked((handle - 1) % PLUM_PROC_MAX_SLOTS, hard);
+    pthread_mutex_unlock(&slot->lock);
+    return result;
+}
+
+void process_child_free(long long handle) {
+    PlumProcessSlot *slot = plum_process_lock(handle);
+    if (slot == NULL) return;
+    process_free_locked((handle - 1) % PLUM_PROC_MAX_SLOTS);
+    plum_process_available(slot);
+    pthread_mutex_unlock(&slot->lock);
+}
+void process_free(long long handle) { process_child_free(handle); }
+
+// Finish a reserved launch. Failed launches release the reservation; successful
+// launches publish the complete state before exposing its identity to callers.
+static long long plum_process_publish(long long index, long long result) {
+    PlumProcessSlot *slot = &plum_process_slots[index];
+    if (result < 0) plum_process_available(slot);
+    long long handle = result < 0 ? -1 : slot->identity;
+    pthread_mutex_unlock(&slot->lock);
+    return handle;
+}
+
+long long process_run(const char *program, const char *args, long long argc) {
+    long long index = plum_process_reserve();
+    if (index < 0) return -1;
+    return plum_process_publish(index, process_run_locked(index, program, args, argc));
+}
+long long process_run_ex(const char *program, const char *args, long long argc,
+                         const char *env, long long envc,
+                         const char *input, long long length, long long has_input) {
+    long long index = plum_process_reserve();
+    if (index < 0) return -1;
+    return plum_process_publish(index, process_run_ex_locked(index, program, args, argc,
+        env, envc, input, length, has_input));
+}
+long long process_spawn(const char *program, const char *args, long long argc,
+                        const char *env, long long envc,
+                        const char *input, long long length, long long has_input) {
+    long long index = plum_process_reserve();
+    if (index < 0) return -1;
+    return plum_process_publish(index, process_spawn_locked(index, program, args, argc,
+        env, envc, input, length, has_input));
 }
 
 // The inherited-stdio counterpart to `plum_spawn_capture`, and the
@@ -1266,18 +1388,13 @@ static long long plum_spawn_inherit(const char *program, char **argv) {
 
 static long long plum_spawn_inherit(const char *program, char **argv) {
     wchar_t *cmdline = plum_win_command_line(argv);
-    STARTUPINFOW si;
     PROCESS_INFORMATION pi;
     if (cmdline == NULL) return -1;
 
-    // No `STARTF_USESTDHANDLES`: leaving the field unset is what makes
-    // the child inherit this process's console, which is the entire
-    // point of this function as against `plum_spawn_capture`.
-    ZeroMemory(&si, sizeof(si));
-    si.cb = sizeof(si);
-    ZeroMemory(&pi, sizeof(pi));
-
-    if (!CreateProcessW(NULL, cmdline, NULL, NULL, TRUE, 0, NULL, NULL, &si, &pi)) {
+    // Preserve only stdio, even for `plum run`. Blanket inheritance here
+    // would otherwise pick up another task's temporary stdio duplicates.
+    if (!plum_win_create_process(cmdline, NULL, GetStdHandle(STD_INPUT_HANDLE),
+        GetStdHandle(STD_OUTPUT_HANDLE), GetStdHandle(STD_ERROR_HANDLE), &pi)) {
         free(cmdline);
         return -1;
     }

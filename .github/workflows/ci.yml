@@ -588,7 +588,7 @@ jobs:
 
       - name: process captures preserve Unicode temporary paths
         run: |
-          clang -O1 -g -Wall -Wextra -Werror bootstrap/windows-process-test.c native_stdlib/os_shim.c -lshell32 -o windows-process-test.exe
+          clang -O1 -g -Wall -Wextra -Werror -pthread bootstrap/windows-process-test.c native_stdlib/os_shim.c -lshell32 -o windows-process-test.exe
           ./windows-process-test.exe
 
       - name: stdin owns concurrent results and bounds real console reads

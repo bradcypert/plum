@@ -1,0 +1,34 @@
+use Os;
+use Process;
+use Time;
+
+let options (self: String) (label: String): Process.Options = Process.Options {
+    program: self, args: ["--child", label], env: [], stdin: None,
+}
+let worker (self: String) (label: String): Bool = {
+    let sync_ok = match Process.run(options(self, label)) {
+        Ok(r) => r.exit_code == 0 && r.stdout == label.concat("\n"),
+        Err(_) => false,
+    };
+    let async_ok = match Process.start(options(self, label)) {
+        Ok(c) => match c.wait() {
+            Ok(r) => r.exit_code == 0 && r.stdout == label.concat("\n"),
+            Err(_) => false,
+        },
+        Err(_) => false,
+    };
+    sync_ok && async_ok
+}
+let main (): Unit = {
+    if args().len() > 0 { Time.sleep(Time.millis(50)); println(args()[1]); }
+    else {
+        let self = Result.unwrap_or(Os.self_exe(), "");
+        assert(self != "");
+        let mut tasks: Array[Task[Bool]] = [];
+        for i in 0..16 {
+            tasks = tasks.push(spawn { worker(self, i.to_string()) });
+        };
+        for task in tasks { assert(task.join()); };
+        println("concurrent process results remain isolated");
+    }
+}

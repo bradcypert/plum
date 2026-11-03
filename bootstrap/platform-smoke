@@ -303,7 +303,7 @@ case "$(uname -s)" in
             cat "$work/windows-path-test.log"
             fail=$((fail + 1))
         fi
-        if clang -O1 -g -Wall -Wextra bootstrap/windows-process-test.c native_stdlib/os_shim.c -lshell32 \
+        if clang -O1 -g -Wall -Wextra -pthread bootstrap/windows-process-test.c native_stdlib/os_shim.c -lshell32 \
                 -o "$work/windows-process-test.exe" > "$work/windows-process-test.log" 2>&1 &&
                 "$work/windows-process-test.exe"; then
             printf 'OK    %-24s\n' "windows_process_unicode"

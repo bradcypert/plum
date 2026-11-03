@@ -70,6 +70,20 @@ int main(int argc, char **argv) {
         fwrite("e\0r", 1, 3, stderr);
         return 7;
     }
+    // Failed argv allocation must return every reservation, across all entry
+    // points, even after more attempts than the table's fixed capacity.
+    for (int mode = 0; mode < 3; mode++) {
+        for (int i = 0; i < PLUM_PROC_MAX_SLOTS + 1; i++) {
+            capture_arm(0);
+            fail_malloc = 1;
+            long long h = mode == 0 ? process_run(argv[0], "child", 1) :
+                mode == 1 ? process_run_ex(argv[0], "child", 1, "", 0, "", 0, 0) :
+                            process_spawn(argv[0], "child", 1, "", 0, "", 0, 0);
+            assert(h == -1);
+            for (int j = 0; j < PLUM_PROC_MAX_SLOTS; j++) assert(!plum_process_slots[j].reserved);
+            capture_clean();
+        }
+    }
     for (int iteration = 0; iteration < 20; iteration++) {
         for (int mode = 0; mode < 3; mode++) for (int fail = 0; fail <= 2; fail++) {
             capture_arm(fail);
@@ -99,8 +113,8 @@ int main(int argc, char **argv) {
         long long h = process_spawn(argv[0], "child", 1, "", 0, "", 0, 0);
         assert(h >= 0);
         // Drop must close/delete captures without allocating output buffers.
-        char *out = strdup(plum_process_slots[h].child->out_path);
-        char *err = strdup(plum_process_slots[h].child->err_path);
+        char *out = strdup(plum_process_slots[(h - 1) % PLUM_PROC_MAX_SLOTS].child->out_path);
+        char *err = strdup(plum_process_slots[(h - 1) % PLUM_PROC_MAX_SLOTS].child->err_path);
         process_child_free(h);
         assert(read_calls == 0);
         assert(fopen(out, "rb") == NULL && fopen(err, "rb") == NULL);
