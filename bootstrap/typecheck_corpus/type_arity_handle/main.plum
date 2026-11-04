@@ -1,0 +1,4 @@
+extern "C" { fn release(raw: Int); }
+handle Resource { on_drop: release }
+let unused (value: Resource[Int]): Unit = ()
+let main (): Unit = ()

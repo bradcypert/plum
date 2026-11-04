@@ -1,0 +1,2 @@
+let unused (value: (Array) -> Unit): Unit = ()
+let main (): Unit = ()

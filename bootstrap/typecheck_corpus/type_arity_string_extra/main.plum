@@ -1,0 +1,2 @@
+let unused (value: String[Int]): Unit = ()
+let main (): Unit = ()

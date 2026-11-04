@@ -6,19 +6,9 @@
 // them separate the way the real compiler does, since this checker
 // has no `extern` support to justify the split).
 //
-// **Deliberate v1 scope cut**: of the real compiler's own five built-in
-// generic-arity-one pseudo-types, only `Array` is recognized here
-// (`Task`/`Sender`/`Receiver`/`Ref` aren't — `interp/interp.plum`
-// doesn't support concurrency either, so there's nothing for a type
-// checker to validate for those yet). Referencing one of THOSE names in
-// an annotation still fails with a clear "unknown type" error, not
-// silently wrong behavior. `Array[T]` resolves to `ITStruct("Array",
-// [T])` — the exact same representation the real compiler's own
-// `ast_type_to_type` uses (`Type::Struct("Array", vec![elem_ty])`, see
-// `plum-types::infer.rs`), reused as-is rather than adding a dedicated
-// `ITy` case: every existing `ITStruct` machinery (`unify`, `subst_
-// apply`, `instantiate_template`) already handles it correctly with
-// zero new code.
+// Built-in container and concurrency types resolve here alongside
+// declared types. Validate their arity at this boundary so inference
+// and layout code only receive well-formed annotation types.
 
 use parser;
 use treefs;
@@ -557,34 +547,46 @@ pub let resolve_ann_seen (ctx: TyContext) (viewer: String) (in_scope: Array[Stri
         TyTuple(elems) => ITTuple(Array.map(elems, |e| resolve_ann_seen(ctx, viewer, in_scope, e))),
     }
 
+let check_type_arity (name: String) (expected: Int) (supplied: Int): Unit =
+    if expected == supplied { () }
+    else { fail_ctx("type ${name} expects ${expected} type argument(s), got ${supplied}") }
+
 let resolve_named (ctx: TyContext) (viewer: String) (in_scope: Array[String]) (name: String) (args: Array[ITy]): ITy =
-    if name == "Int" { ITInt }
-    else if name == "Float" { ITFloat }
-    else if name == "Bool" { ITBool }
-    else if name == "String" { ITStr }
-    else if name == "CStr" { ITCStr }
-    else if name == "Bytes" { ITBytes }
-    else if name == "Unit" { ITUnit }
-    else if name == "Array" { ITStruct("Array", args) }
+    if name == "Int" { check_type_arity(name, 0, args.len()); ITInt }
+    else if name == "Float" { check_type_arity(name, 0, args.len()); ITFloat }
+    else if name == "Bool" { check_type_arity(name, 0, args.len()); ITBool }
+    else if name == "String" { check_type_arity(name, 0, args.len()); ITStr }
+    else if name == "CStr" { check_type_arity(name, 0, args.len()); ITCStr }
+    else if name == "Bytes" { check_type_arity(name, 0, args.len()); ITBytes }
+    else if name == "Unit" { check_type_arity(name, 0, args.len()); ITUnit }
+    else if name == "Array" { check_type_arity(name, 1, args.len()); ITStruct("Array", args) }
     // Handles, not declarations: `Task`/`Sender`/`Receiver` have no
     // fields to look up, and the type argument is what `.join()`/
     // `.recv()` read the element type from.
-    else if name == "Task" { ITStruct("Task", args) }
-    else if name == "Sender" { ITStruct("Sender", args) }
-    else if name == "Receiver" { ITStruct("Receiver", args) }
+    else if name == "Task" { check_type_arity(name, 1, args.len()); ITStruct("Task", args) }
+    else if name == "Sender" { check_type_arity(name, 1, args.len()); ITStruct("Sender", args) }
+    else if name == "Receiver" { check_type_arity(name, 1, args.len()); ITStruct("Receiver", args) }
     // `Ref[T]` is a TYPE you can write, not only one inference can
     // produce. `ITRef` has always existed and `ref(v)` has always made
     // one; there was simply no way to NAME it, so `let r: Ref[Int] =
     // ref(1)` failed with "unknown type: Ref" while the identical line
     // without the annotation compiled.
-    else if name == "Ref" && args.len() == 1 { ITRef(args[0]) }
-    else if Array.contains(in_scope, name) { ITParam(name) }
+    else if name == "Ref" { check_type_arity(name, 1, args.len()); ITRef(args[0]) }
+    else if Array.contains(in_scope, name) { check_type_arity(name, 0, args.len()); ITParam(name) }
     // Resolved through the VIEWER's own module first, so a name means
     // what it means where it was written.
     else { match best_struct(ctx, viewer, rewrite_type_path(name)) {
-        Some(info) => { check_struct_named(ctx, viewer, name); ITStruct(info.name, args) },
+        Some(info) => {
+            check_struct_named(ctx, viewer, name);
+            check_type_arity(name, info.generics.len(), args.len());
+            ITStruct(info.name, args)
+        },
         None => match best_enum(ctx, viewer, name) {
-            Some(info) => { check_enum_named(ctx, viewer, name); ITEnum(info.name, args) },
+            Some(info) => {
+                check_enum_named(ctx, viewer, name);
+                check_type_arity(name, info.generics.len(), args.len());
+                ITEnum(info.name, args)
+            },
             None => { fail_ctx("unknown type: ".concat(name)); ITUnit },
         },
     } }

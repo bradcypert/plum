@@ -1,0 +1,1 @@
+self-hosted type checker: type Later expects 2 type argument(s), got 1

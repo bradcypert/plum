@@ -1,0 +1,2 @@
+// Reject even when the parameter is unused.
+let main (value: Array): Unit = ()

@@ -1,0 +1,3 @@
+struct Pair[A, B] { first: A, second: B }
+let unused (value: Pair[Int, String, Bool]): Unit = ()
+let main (): Unit = ()

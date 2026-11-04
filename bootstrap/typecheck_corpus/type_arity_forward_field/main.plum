@@ -1,0 +1,3 @@
+struct First { value: Later }
+struct Later[T] { value: T }
+let main (): Unit = ()

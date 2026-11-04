@@ -1,0 +1,1 @@
+self-hosted type checker: type Receiver expects 1 type argument(s), got 2
