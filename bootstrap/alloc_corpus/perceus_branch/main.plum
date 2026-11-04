@@ -1,0 +1,16 @@
+enum Tree { Leaf(Int), Fork(Tree, Tree) }
+let build (depth: Int): Tree =
+    if depth == 0 { Leaf(depth + 1) } else { Fork(build(depth - 1), Leaf(depth + 1)) }
+let update (tree: Tree) (depth: Int): Tree = match tree {
+    Leaf(value) => if value < 0 { tree } else { Leaf(value + 1) },
+    Fork(left, right) => if depth < 0 { tree } else { Fork(update(left, depth - 1), right) },
+}
+let sum (tree: Tree): Int = match tree {
+    Leaf(value) => value,
+    Fork(left, right) => sum(left) + sum(right),
+}
+let main (): Unit = {
+    let mut tree = build(16);
+    for i in 0..32 { tree = update(tree, 16); };
+    assert_eq(sum(tree), 185);
+}
