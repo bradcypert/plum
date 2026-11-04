@@ -4712,7 +4712,9 @@ let cg_token_release (slot: String) (suffix: String): String =
 // retained their projected children, so dropping the unique parent's edges
 // leaves those bindings owning the children before recursive work begins.
 let cg_match_reset (p: CgProgram) (sity: typecheck.ITy) (owner: String) (token: String) (id: Int): String =
-    if owner == "" { "" } else {
+    if owner == "" { "" }
+    else if token == "" { cg_release_slot(sity, owner, "_reset${id}") }
+    else {
         let slot = CgSlot { name: "<owner>", ptr: owner, ity: sity, ty: cg_of_ity(sity) };
         match cg_reuse_of_ity(p, slot, sity, 0) {
             None => "",
@@ -4974,6 +4976,23 @@ let cg_store_payload (cell: String) (vals: Array[String]) (i: Int) (n: Int) (acc
 // `tail`: each ARM BODY is in tail position and pays its own pop; the
 // scrutinee and the patterns are not. The `fail_label` block pays one
 // too -- see there.
+// A token with no possible consumer only prolongs the empty cell's lifetime
+// and expands every match arm into a uniqueness branch. Keep early parent
+// release, but reserve raw storage only when a compatible constructor exists.
+// Nullary variants are immortal constants and never consume a token.
+let cg_token_needed (p: CgProgram) (name: String) (bytes: Int) (xs: Array[typecheck.TExpr]) (i: Int): Bool =
+    if i >= xs.len() { false } else {
+        let here = match xs[i].node {
+            TStructReuse(sname, _, cands) => Array.contains(cands, name)
+                && 8 + 8 * typecheck.ctx_field_names(p.ctx, sname).len() <= bytes,
+            TVariantReuse(ename, _, args, cands) => args.len() > 0 && Array.contains(cands, name)
+                && cg_enum_cell_size(p, ename) <= bytes,
+            _ => false,
+        };
+        here || cg_token_needed(p, name, bytes, typecheck.t_children(xs[i]), 0)
+            || cg_token_needed(p, name, bytes, xs, i + 1)
+    }
+
 let cg_match (p: CgProgram) (env: Array[CgSlot]) (n: Int) (scrutinee: typecheck.TExpr) (arms: Array[typecheck.TArm]) (body_ty: CgTy) (tail: Bool) (pending: String) (token_name: String): Emit = {
     let sity = cg_concrete(p, typecheck.texpr_ty(p.subst, scrutinee));
     // The arms only READ the scrutinee — every binding takes its own
@@ -4984,9 +5003,14 @@ let cg_match (p: CgProgram) (env: Array[CgSlot]) (n: Int) (scrutinee: typecheck.
     let reset = token_name != "" && sc.drop != "" && cg_rc_enabled(())
         && cg_early_release_safe(p, sity, [])
         && Option.is_some(cg_reuse_of_ity(p, CgSlot { name: token_name, ptr: token, ty: cg_of_ity(sity), ity: sity }, sity, 0));
+    let reserve = reset && match cg_reuse_of_ity(p,
+        CgSlot { name: token_name, ptr: token, ty: cg_of_ity(sity), ity: sity }, sity, 0) {
+            Some(c) => cg_token_needed(p, token_name, c.bytes, lv_arm_exprs(arms, 0, []), 0),
+            None => false,
+        };
     let drop = if reset { cg_release_slot(sity, owner, "_match_end") } else { sc.drop };
-    let inner = if reset { env.push(CgSlot { name: token_name, ptr: token, ty: cg_of_ity(sity), ity: sity }) } else { env };
-    let token_drop = if reset { cg_token_release(token, "_end") } else { "" };
+    let inner = if reserve { env.push(CgSlot { name: token_name, ptr: token, ty: cg_of_ity(sity), ity: sity }) } else { env };
+    let token_drop = if reserve { cg_token_release(token, "_end") } else { "" };
     let slot = cg_reg(sc.n);
     let end_label = cg_label(sc.n + 1);
     let fail_label = cg_label(sc.n + 2);
@@ -4995,7 +5019,7 @@ let cg_match (p: CgProgram) (env: Array[CgSlot]) (n: Int) (scrutinee: typecheck.
     // leaves by a tail self-call never reaches the merge below, where
     // `sc.drop` is emitted, so it has to run it itself. PREPENDED, so
     // the innermost drop still goes first.
-    let a = cg_match_arms(p, inner, sc.n + 3, arms, 0, sc.val, sity, slot, lty, end_label, fail_label, "", "", "", "", tail, drop.concat(pending), if reset { owner } else { "" }, token);
+    let a = cg_match_arms(p, inner, sc.n + 3, arms, 0, sc.val, sity, slot, lty, end_label, fail_label, "", "", "", "", tail, drop.concat(pending), if reset { owner } else { "" }, if reserve { token } else { "" });
     let res = cg_reg(a.n);
     let code = sc.code
         .concat(if reset { "  store ptr ${sc.val}, ptr ${owner}\n" } else { "" })
@@ -5023,7 +5047,8 @@ let cg_match (p: CgProgram) (env: Array[CgSlot]) (n: Int) (scrutinee: typecheck.
     Emit {
         code: code,
         allocas: "  ${slot} = alloca ${lty}\n${sc.allocas}${a.allocas}"
-            .concat(if reset { "  ${owner} = alloca ptr\n  store ptr null, ptr ${owner}\n  ${token} = alloca ptr\n  store ptr null, ptr ${token}\n" } else { "" }),
+            .concat(if reset { "  ${owner} = alloca ptr\n  store ptr null, ptr ${owner}\n" } else { "" })
+            .concat(if reserve { "  ${token} = alloca ptr\n  store ptr null, ptr ${token}\n" } else { "" }),
         releases: sc.releases.concat(a.releases).concat(token_drop),
         globals: sc.globals.concat(a.globals), val: res, ty: body_ty, n: a.n + 1,
     }

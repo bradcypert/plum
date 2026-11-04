@@ -21634,3 +21634,20 @@ uses the same move and array emitters; it does not restore a separate
 assignment code path. The resource-array allocation fixture bounds both
 allocations and requested bytes, and guard_cleanup checks closures capturing
 resources through both replacement and discarded non-assignment pushes.
+
+### Reserve reset storage only for possible reuse
+
+The arm64 compiler-memory gate caught the cost of emitting reset machinery
+for matches with no compatible constructor. Early parent release is still
+useful there, but storing an empty cell for later reuse is not. Codegen now
+checks the arm expressions for compatible reuse candidates; nullary variants
+are immortal constants and cannot consume storage. Without a possible
+consumer, commitment to the arm releases the parent directly. Otherwise the
+existing reset token path applies unchanged.
+
+On the local Linux x86_64 whole-compiler emission, generated token slots fell
+from 850 to 218, IR size fell from 31,724,990 to 30,182,489 bytes, and observed
+peak RSS fell from 130,404 to 125,532 KiB. This reduces compiler overhead and
+avoids retaining unusable empty storage in generated programs. Memory ceilings
+remain unchanged; failures now report exact KiB rather than truncating both
+the peak and ceiling to the same whole-MB value.
