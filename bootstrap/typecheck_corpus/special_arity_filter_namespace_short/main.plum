@@ -1,0 +1,4 @@
+let main (): Unit = {
+    Array.filter([1, 2]);
+    ()
+}

@@ -1,0 +1,4 @@
+let main (): Unit = {
+    "value".to_string(missing());
+    ()
+}

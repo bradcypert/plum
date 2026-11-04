@@ -1,0 +1,4 @@
+let main (): Unit = {
+    Array.fold([1, 2], 0, |a, x| a + x, missing());
+    ()
+}

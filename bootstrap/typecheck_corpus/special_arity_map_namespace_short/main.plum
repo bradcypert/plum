@@ -1,0 +1,4 @@
+let main (): Unit = {
+    Array.map([1, 2]);
+    ()
+}

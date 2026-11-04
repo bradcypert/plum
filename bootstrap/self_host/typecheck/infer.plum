@@ -2204,11 +2204,29 @@ let infer_call_shapes (p2: Program2) (state: FreshState) (env: TyEnv) (acc: Subs
         },
     }
 
-let infer_array_ns_call (p2: Program2) (state: FreshState) (env: TyEnv) (acc: Subst) (fn_name: String) (args: Array[parser.PExpr]): InferResult =
-    if fn_name == "map" { infer_array_map(p2, state, env, acc, args[0], args[1]) }
-    else if fn_name == "filter" { infer_array_filter(p2, state, env, acc, args[0], args[1]) }
-    else if fn_name == "fold" { infer_array_fold(p2, state, env, acc, args[0], args[1], args[2]) }
+// Special calls lower directly to fixed-shape typed nodes instead of
+// going through a FnSig. Validate their whole argument list before any
+// indexing or inference so no source expression can be silently dropped.
+let require_call_arity (name: String) (expected: Int) (actual: Int): Unit =
+    if actual != expected {
+        fail_tc("${name} expects ${expected.to_string()} argument(s), got ${actual.to_string()}")
+    }
+
+let infer_array_ns_call (p2: Program2) (state: FreshState) (env: TyEnv) (acc: Subst) (fn_name: String) (args: Array[parser.PExpr]): InferResult = {
+    // Method syntax reaches here with the receiver prepended, so both
+    // spellings share the same signature and validation.
+    if fn_name == "map" {
+        require_call_arity("Array.map", 2, args.len());
+        infer_array_map(p2, state, env, acc, args[0], args[1])
+    } else if fn_name == "filter" {
+        require_call_arity("Array.filter", 2, args.len());
+        infer_array_filter(p2, state, env, acc, args[0], args[1])
+    } else if fn_name == "fold" {
+        require_call_arity("Array.fold", 3, args.len());
+        infer_array_fold(p2, state, env, acc, args[0], args[1], args[2])
+    }
     else { { fail_tc("unsupported Array.${fn_name}(...) call"); ir_unsupported(acc, state, "Array.".concat(fn_name)) } }
+}
 
 // Infers a closure argument with its parameter types ALREADY KNOWN,
 // instead of letting them start as fresh variables the body is checked
@@ -2475,6 +2493,7 @@ let infer_named_call (p2: Program2) (state: FreshState) (env: TyEnv) (acc: Subst
     }
 
 let infer_println_call (p2: Program2) (state: FreshState) (env: TyEnv) (acc: Subst) (args: Array[parser.PExpr]): InferResult = {
+    require_call_arity("println", 1, args.len());
     let r = infer_expr(p2, state, env, acc, args[0]);
     ir_leaf(ITUnit, r.subst, r.state, TPrintln(r.texpr))
 }
@@ -2749,6 +2768,7 @@ let infer_method_call (p2: Program2) (state: FreshState) (env: TyEnv) (acc: Subs
         };
         ir_leaf(ITInt, r.subst, r.state, TMethodCall("hash", r.texpr, []))
     } else if method_name == "to_string" {
+        require_call_arity(".to_string", 0, args.len());
         let r = infer_expr(p2, state, env, acc, base);
         reject_unrenderable(p2, subst_apply(r.subst, r.ty));
         ir_leaf(ITStr, r.subst, r.state, TMethodCall("to_string", r.texpr, []))
@@ -2867,6 +2887,7 @@ let infer_method_call (p2: Program2) (state: FreshState) (env: TyEnv) (acc: Subs
         };
         ir_leaf(subst_apply(s1, ef.ty), s1, ef.state, TTaskJoin(r.texpr))
     } else if method_name == "as_cstr" {
+        require_call_arity(".as_cstr", 0, args.len());
         // `s.as_cstr()` -- hand a Plum cell's bytes to C as a `char*`.
         // A BORROWED interior pointer (`getelementptr` past the header),
         // not a copy, so it is valid exactly as long as the cell is.

@@ -1,0 +1,4 @@
+let main (): Unit = {
+    Bytes.from_string("value").as_cstr(missing());
+    ()
+}
