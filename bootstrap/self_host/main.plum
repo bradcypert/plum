@@ -1892,27 +1892,21 @@ let line_width (src: String) (line: Int): Int = {
     if line - 1 >= ls.len() || line < 1 { 1 } else { ls[line - 1].len() }
 }
 
-// Publish for the edited document AND, when the error lives in another
-// file of the same project, for that one too.
-//
-// The empty publish for `uri` is what CLEARS a stale error: an editor
-// keeps showing the last diagnostics it was given until it is told
-// otherwise, so a fixed mistake stays on screen unless the fix
-// publishes an empty list.
+// Attribute the check to the original project, not its temporary root or
+// whichever open document happened to initiate this check.
 let lsp_publish (uri: String) (d0: Option[lsp.Diagnostic]) (snapshot: LspSnapshot): Unit = {
     let d = match d0 { Some(x) => Some(widen(x, snapshot)), None => None };
-    match d {
-        None => lsp_send(lsp.publish_message(uri, [])),
+    let roots = Array.map(snapshot.roots, |root| root.original);
+    let result = match d {
+        None => LspDiagnostics { roots: roots, target: uri, items: [] },
         Some(diag) => {
             let real = snapshot_restore(snapshot, diag.path);
             let target = if real == "" { uri } else { lsp.path_to_uri(real) };
-            if target == uri { lsp_send(lsp.publish_message(uri, [lsp.diagnostic_json(diag)])) }
-            else {
-                lsp_send(lsp.publish_message(uri, []));
-                lsp_send(lsp.publish_message(target, [lsp.diagnostic_json(diag)]))
-            }
+            LspDiagnostics { roots: roots, target: target, items: [lsp.diagnostic_json(diag)] }
         },
-    }
+    };
+    lsp_replace_diagnostics(snapshot_restore(snapshot, snapshot.root), result);
+    if result.target != uri { lsp_publish_target(uri) }
 }
 
 enum LspState { LspNew, LspReady, LspShutdown, LspExited(Int) }
@@ -1920,6 +1914,7 @@ enum LspState { LspNew, LspReady, LspShutdown, LspExited(Int) }
 let lsp_serve (): Unit = {
     let status = lsp_loop(LspNew);
     BUFFERS.set(empty_buffers(()));
+    LSP_DIAGNOSTICS.set(empty_lsp_diagnostics(()));
     if status == 0 { () } else { Os.exit_with(status) }
 }
 
@@ -1962,6 +1957,7 @@ let lsp_handle (body: String) (state: LspState): LspState =
                     None => state,
                     Some(_) => {
                         BUFFERS.set(empty_buffers(()));
+                        LSP_DIAGNOSTICS.set(empty_lsp_diagnostics(()));
                         lsp_reply(req.id, JsonNull);
                         LspShutdown
                     },
@@ -2060,7 +2056,7 @@ let lsp_dispatch (req: lsp.Request): Unit =
     } else if req.method == "textDocument/didClose" {
         let uri = lsp.document_uri(req.params);
         forget_buffer(uri);
-        if uri == "" { () } else { lsp_send(lsp.publish_message(uri, [])) };
+        if uri == "" { () } else { lsp_close_diagnostics(uri) };
         ()
     } else {
         lsp_error(req.id, 0 - 32601, "Method not found")

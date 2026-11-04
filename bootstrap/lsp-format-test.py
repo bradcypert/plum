@@ -128,7 +128,10 @@ def check(compiler):
                 assert edits[0]["newText"] == formatted, (ident, edits)
         diagnostics = [m["params"] for m in replies if m.get("method") == "textDocument/publishDiagnostics"]
         assert any("function broken" in json.dumps(d["diagnostics"]) for d in diagnostics)
-        assert diagnostics[-2:] == [{"uri": uri_a, "diagnostics": []}, {"uri": uri_b, "diagnostics": []}]
+        # Closing A can recheck the project through B. Assert the final
+        # editor state per URI rather than a particular notification order.
+        latest = {d["uri"]: d["diagnostics"] for d in diagnostics}
+        assert latest[uri_a] == [] and latest[uri_b] == [], latest
         assert a.read_text() == disk
         assert b.read_text() == 'let other (): Int = 2\n'
         assert by_id[2]["result"] is None
