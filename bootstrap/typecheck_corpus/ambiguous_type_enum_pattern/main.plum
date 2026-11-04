@@ -1,0 +1,5 @@
+use left;
+use right;
+
+let consume (s: left.Shade): Int = match s { Shade.On => 1, _ => 0 }
+let main (): Unit = ()

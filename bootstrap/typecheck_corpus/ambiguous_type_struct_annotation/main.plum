@@ -1,0 +1,5 @@
+use left;
+use right;
+
+let consume (s: Shade): Int = s.n
+let main (): Unit = ()

@@ -1,0 +1,7 @@
+use left;
+use right;
+pub enum Shade { On, Off }
+pub struct Mode { pub n: Int }
+let read (s: Shade): Int = match s { Shade.On => 7, Shade.Off => 0 }
+pub let enum_local (): Int = read(Shade.On)
+pub let struct_local (): Int = Mode { n: 8 }.n

@@ -124,6 +124,15 @@ wrote it: your own module first, then the root, then the prelude. A
 root declaration shadows a prelude one of the same name rather than
 colliding with it.
 
+If none of those scopes declares the name, a bare name may refer to a
+single public type in another module. Multiple public declarations make
+that fallback ambiguous, including a struct and an enum sharing a name.
+Write the module-qualified name to choose one; directory discovery order
+never chooses for you. Private sibling declarations do not compete with
+public ones. In patterns, an unqualified struct name or variant tag can
+still be determined by the scrutinee's type. An explicit enum name such
+as `Shade.On` must itself resolve unambiguously.
+
 They do not silently unify:
 
 ```plum

@@ -1,0 +1,5 @@
+use left;
+use right;
+
+let consume[T] (s: T): Int = match s { Shade(n) => n }
+let main (): Unit = ()

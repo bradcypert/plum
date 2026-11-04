@@ -18,10 +18,7 @@ use Os;
 // `is_pub` was parsed into `StructFieldNode` and dropped here until
 // 2026-08-27, which is why `pub` on a field did nothing.
 struct StructFieldTemplate { name: String, ty: ITy, is_pub: Bool }
-// `module`/`is_pub` are carried for VISIBILITY only. A type's identity
-// is still its bare name (`ITStruct(name, args)`), so two modules
-// still cannot declare the same type name -- that is unchanged, and is
-// its own piece of work. What these add is the ability to say no.
+// Names carry the module-qualified identity; visibility belongs to the declaration.
 struct StructInfo { name: String, generics: Array[String], fields: Array[StructFieldTemplate], module: String, is_pub: Bool }
 struct VariantInfo { tag: String, enum_name: String, payload: Array[ITy] }
 struct EnumInfo { name: String, generics: Array[String], variants: Array[VariantInfo], module: String, is_pub: Bool }
@@ -319,47 +316,15 @@ pub let check_struct_named (ctx: TyContext) (viewer: String) (name: String): Uni
         None => (),
     }
 
-// A type's identity is still its bare NAME, so two modules declaring
-// the same name both land in one flat list and `find_struct` returns
-// whichever is first. That was harmless while nothing read the extra
-// fields; it is not harmless for visibility, because it would let a
-// module be told that its OWN type is private to somebody else.
-//
-// So the visibility lookup prefers the viewer's own module, then the
-// root, then anything -- the same current-then-root order `find_sig`
-// uses for functions, for the same reason.
-//
-// This does NOT make duplicate type names work properly: the type the
-// checker then uses is still whichever the flat lookup finds, and its
-// FIELDS may come from the other declaration. Fixing that means giving
-// a type a module-qualified identity, which is a separate and much
-// wider change (see DESIGN.md).
+// Source names share one namespace across structs, handles and enums.
+// Select the identity before asking for a particular declaration kind, so
+// a sibling struct cannot mask a local enum (or hide a mixed-kind ambiguity).
+// Identity lookups below also avoid allocating arrays of every type name.
 pub let best_struct (ctx: TyContext) (viewer: String) (name: String): Option[StructInfo] =
-    match find_struct_in(ctx.structs, viewer, name, 0) {
-        Some(info) => Some(info),
-        None => match find_struct_in(ctx.structs, "", name, 0) {
-            Some(info) => Some(info),
-            None => match find_struct_in(ctx.structs, parser.PRELUDE_MODULE(()), name, 0) {
-                Some(info) => Some(info),
-                // A name already written with its module -- see
-                // `find_type_exact` below `best_enum` for why this sits
-                // fourth and not first.
-                None => match find_type_exact(struct_names(ctx.structs, 0, []), name, 0) {
-                    Some(i) => Some(ctx.structs[i]),
-                    // Last resort: any module at all, matched on the bare
-                    // name. Reached when a name is not declared by the
-                    // viewer, the root or the prelude, and is not a
-                    // qualified name either.
-                    None => find_struct_bare(ctx.structs, name, 0),
-                },
-            },
-        },
+    match best_type_name(ctx, viewer, name) {
+        Some(qname) => find_struct(ctx, qname),
+        None => None,
     }
-
-let find_struct_in (structs: Array[StructInfo]) (module_name: String) (name: String) (i: Int): Option[StructInfo] =
-    if i >= structs.len() { None }
-    else if structs[i].name == parser.qualify_type(module_name, name) && structs[i].module == module_name { Some(structs[i]) }
-    else { find_struct_in(structs, module_name, name, i + 1) }
 
 // Checked against the ENUM, not the variant: `Hidden.A` is private
 // because `Hidden` is, and a variant has no visibility of its own.
@@ -370,76 +335,75 @@ pub let check_enum_named (ctx: TyContext) (viewer: String) (enum_name: String): 
     }
 
 pub let best_enum (ctx: TyContext) (viewer: String) (name: String): Option[EnumInfo] =
-    match find_enum_in(ctx.enums, viewer, name, 0) {
-        Some(info) => Some(info),
-        None => match find_enum_in(ctx.enums, "", name, 0) {
-            Some(info) => Some(info),
-            None => match find_enum_in(ctx.enums, parser.PRELUDE_MODULE(()), name, 0) {
-                Some(info) => Some(info),
-                None => match find_type_exact(enum_names(ctx.enums, 0, []), name, 0) {
-                    Some(i) => Some(ctx.enums[i]),
-                    None => find_enum_bare(ctx.enums, name, 0),
-                },
-            },
-        },
+    match best_type_name(ctx, viewer, name) {
+        Some(qname) => find_enum(ctx, qname),
+        None => None,
     }
 
-let enum_names (enums: Array[EnumInfo]) (i: Int) (acc: Array[String]): Array[String] =
-    if i >= enums.len() { acc } else { enum_names(enums, i + 1, acc.push(enums[i].name)) }
+let has_type_name (ctx: TyContext) (name: String): Bool =
+    Option.is_some(find_struct(ctx, name)) || Option.is_some(find_enum(ctx, name))
 
-let struct_names (structs: Array[StructInfo]) (i: Int) (acc: Array[String]): Array[String] =
-    if i >= structs.len() { acc } else { struct_names(structs, i + 1, acc.push(structs[i].name)) }
+let best_type_name (ctx: TyContext) (viewer: String) (name: String): Option[String] = {
+    // A qualified name is exact, even if a relative path could also exist.
+    if String.contains(name, ".") {
+        if has_type_name(ctx, name) { Some(name) } else { None }
+    }
+    else {
+        let local = parser.qualify_type(viewer, name);
+        let prelude = parser.qualify_type(parser.PRELUDE_MODULE(()), name);
+        if has_type_name(ctx, local) { Some(local) }
+        else if has_type_name(ctx, name) { Some(name) }
+        else if has_type_name(ctx, prelude) { Some(prelude) }
+        else {
+            let suffix = ".".concat(name);
+            let structs = bare_struct_names(ctx.structs, viewer, suffix, 0, BareTypeNames { visible: None, hidden: None });
+            let found = bare_enum_names(ctx.enums, viewer, suffix, 0, structs);
+            // Preserve a visibility diagnostic for a private-only name. A private
+            // sibling does not compete with a public declaration for fallback.
+            match found.visible { Some(qname) => Some(qname), None => found.hidden }
+        }
+    }
+}
 
-// A name that IS a declaration's full name, module and all: `a.Shade`
-// for the `Shade` declared in module `a`.
-//
-// The three lookups above all ask "what does this BARE name mean to
-// this viewer", qualifying it with a module before comparing. None of
-// them can match a name the author already qualified, so `a.Shade.Light`
-// did not resolve -- in an expression or in a pattern -- even though
-// `enum_path_name` had read `a.Shade` out of it correctly and the
-// ambiguity error told people to write exactly that. The advice named a
-// spelling the compiler rejected.
-//
-// It sits fourth on purpose, after the viewer, the root and the
-// prelude. Ahead of them it would change what an UNQUALIFIED name means:
-// a module `a` that declares `Shade` and a root that also declares one
-// both answer to the bare `Shade`, and the viewer's own must keep
-// winning. A fully qualified name reaches none of the first three, so
-// by the time it gets here nothing else wanted it.
-//
-// It sits ahead of the bare last-resort scan for the opposite reason:
-// `find_enum_bare` matches on the last segment and takes the first
-// module that has one, so it would answer `a.Shade` with `b.Shade` --
-// the very confusion the qualifier was written to settle.
-let find_type_exact (names: Array[String]) (name: String) (i: Int): Option[Int] =
-    if i >= names.len() { None }
-    else if names[i] == name { Some(i) }
-    else { find_type_exact(names, name, i + 1) }
+// Only two candidate identities are retained; no candidate list or index
+// lives in TyContext. Ambiguity diagnostics are independent of scan order.
+struct BareTypeNames { visible: Option[String], hidden: Option[String] }
 
-let find_enum_in (enums: Array[EnumInfo]) (module_name: String) (name: String) (i: Int): Option[EnumInfo] =
-    if i >= enums.len() { None }
-    else if enums[i].name == parser.qualify_type(module_name, name) && enums[i].module == module_name { Some(enums[i]) }
-    else { find_enum_in(enums, module_name, name, i + 1) }
+let add_bare_type (found: BareTypeNames) (viewer: String) (qname: String) (owner: String) (is_pub: Bool): BareTypeNames =
+    if is_pub || viewer == owner || viewer == ANY_MODULE() {
+        match found.visible {
+            None => BareTypeNames { visible: Some(qname), hidden: found.hidden },
+            Some(_) => {
+                fail_ctx("ambiguous type name: ".concat(parser.bare_type_name(qname)).concat("; use a module-qualified type name"));
+                found
+            },
+        }
+    }
+    else {
+        // Stable even when several inaccessible declarations share a name.
+        let hidden = match found.hidden { None => qname, Some(old) => if qname < old { qname } else { old } };
+        BareTypeNames { visible: found.visible, hidden: Some(hidden) }
+    }
 
-// Matches the bare LAST SEGMENT, for the last-resort lookup only. Two
-// modules declaring the same name both match here and the first wins,
-// which is exactly the old behaviour -- but it is now reached only
-// after the viewer, the root and the prelude have all been tried, so
-// it can no longer make a module lose its own type.
-let find_struct_bare (structs: Array[StructInfo]) (name: String) (i: Int): Option[StructInfo] =
-    if i >= structs.len() { None }
-    else if structs[i].name == parser.qualify_type(structs[i].module, name) { Some(structs[i]) }
-    else { find_struct_bare(structs, name, i + 1) }
+let bare_struct_names (structs: Array[StructInfo]) (viewer: String) (suffix: String) (i: Int) (found: BareTypeNames): BareTypeNames =
+    if i >= structs.len() { found }
+    else {
+        let info = structs[i];
+        let next = if String.ends_with(info.name, suffix) { add_bare_type(found, viewer, info.name, info.module, info.is_pub) } else { found };
+        bare_struct_names(structs, viewer, suffix, i + 1, next)
+    }
 
-let find_enum_bare (enums: Array[EnumInfo]) (name: String) (i: Int): Option[EnumInfo] =
-    if i >= enums.len() { None }
-    else if enums[i].name == parser.qualify_type(enums[i].module, name) { Some(enums[i]) }
-    else { find_enum_bare(enums, name, i + 1) }
+let bare_enum_names (enums: Array[EnumInfo]) (viewer: String) (suffix: String) (i: Int) (found: BareTypeNames): BareTypeNames =
+    if i >= enums.len() { found }
+    else {
+        let info = enums[i];
+        let next = if String.ends_with(info.name, suffix) { add_bare_type(found, viewer, info.name, info.module, info.is_pub) } else { found };
+        bare_enum_names(enums, viewer, suffix, i + 1, next)
+    }
 
 // `find_struct`/`find_enum` take a QUALIFIED name -- the one carried in
 // `ITStruct`/`ITEnum`. Resolving a name written in SOURCE goes through
-// `best_struct`/`best_enum` instead, which take the bare form.
+// `best_struct`/`best_enum` instead, which take the source spelling.
 pub let find_struct (ctx: TyContext) (name: String): Option[StructInfo] = find_struct_acc(ctx.structs, name, 0)
 let find_struct_acc (structs: Array[StructInfo]) (name: String) (i: Int): Option[StructInfo] =
     if i >= structs.len() { None } else if structs[i].name == name { Some(structs[i]) } else { find_struct_acc(structs, name, i + 1) }

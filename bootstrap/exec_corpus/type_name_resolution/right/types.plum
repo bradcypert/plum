@@ -1,0 +1,2 @@
+pub struct Shade { pub n: Int }
+pub enum Mode { On, Off }

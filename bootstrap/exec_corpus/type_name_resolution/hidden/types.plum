@@ -1,0 +1,3 @@
+struct Shade { pub secret: Int }
+struct Solo { pub secret: Int }
+struct SoloMode { pub secret: Int }

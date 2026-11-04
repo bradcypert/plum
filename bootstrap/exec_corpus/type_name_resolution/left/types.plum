@@ -1,0 +1,4 @@
+pub struct Shade { pub n: Int }
+pub enum Mode { On, Off }
+pub struct RootChoice { pub n: Int }
+pub struct Option { pub n: Int }
