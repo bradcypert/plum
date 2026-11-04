@@ -1249,7 +1249,8 @@ let cg_expr (p: CgProgram) (env: Array[CgSlot]) (n: Int) (e: typecheck.TExpr): E
             val: "@.str".concat(n.to_string()), ty: CgStr, n: n + 2,
         },
         TIdent(name) => cg_ident(p, env, n, name, cg_ty(p, e)),
-        TMove(name) => cg_move_ident(p, env, n, name, cg_ty(p, e)),
+        TMove(name) => cg_move_ident(p, env, n, name, cg_ty(p, e), false),
+        TMovePreserving(name) => cg_move_ident(p, env, n, name, cg_ty(p, e), true),
         // A global's slot owns its value for the whole program, so a
         // read borrows a reference the same way a local's does.
         TGlobalRef(gm, name) => {
@@ -1453,14 +1454,14 @@ let cg_early_release_variants (p: CgProgram) (name: String) (tags: Array[String]
 
 // A consuming read transfers the slot's reference. Captures are excluded
 // by lv_dead; observable handle lifetimes keep their original scope cleanup.
-let cg_move_ident (p: CgProgram) (env: Array[CgSlot]) (n: Int) (name: String) (ty: CgTy): Emit =
+let cg_move_ident (p: CgProgram) (env: Array[CgSlot]) (n: Int) (name: String) (ty: CgTy) (preserving: Bool): Emit =
     match cg_lookup(env, name) {
         Some(slot) => if cg_rc_enabled(()) && cg_is_heap(slot.ty)
-            && cg_early_release_safe(p, cg_concrete(p, slot.ity), []) {
-            let reg = cg_reg(n);
-            Emit { code: "  ${reg} = load ptr, ptr ${slot.ptr}\n  store ptr null, ptr ${slot.ptr}\n",
-                allocas: "", releases: "", globals: "", val: reg, ty: slot.ty, n: n + 1 }
-        } else { cg_ident(p, env, n, name, ty) },
+            && (preserving || cg_early_release_safe(p, cg_concrete(p, slot.ity), [])) {
+                let reg = cg_reg(n);
+                Emit { code: "  ${reg} = load ptr, ptr ${slot.ptr}\n  store ptr null, ptr ${slot.ptr}\n",
+                    allocas: "", releases: "", globals: "", val: reg, ty: slot.ty, n: n + 1 }
+            } else { cg_ident(p, env, n, name, ty) },
         None => cg_ident(p, env, n, name, ty),
     }
 
@@ -2208,6 +2209,7 @@ let cg_reads_max (name: String) (e: typecheck.TExpr): Int =
     match e.node {
         TIdent(v) => if v == name { 1 } else { 0 },
         TMove(v) => if v == name { 1 } else { 0 },
+        TMovePreserving(v) => if v == name { 1 } else { 0 },
         TInt(_) => 0,
         TFloat(_) => 0,
         TStr(_) => 0,
@@ -2404,6 +2406,7 @@ let lv_node (ctx: LvCtx) (node: typecheck.TNode): typecheck.TNode =
         TUnitLit => node,
         TIdent(v) => if lv_dead(ctx, v) { TMove(v) } else { node },
         TMove(_) => node,
+        TMovePreserving(_) => node,
         TGlobalRef(_, _) => node,
         TUnsupported(_) => node,
         TChannelNew => node,
@@ -2626,6 +2629,17 @@ let lv_self_slot (): String = "<slot>"
 // 167 apart, which was the measurement generation, not the code.
 let lv_self_reuse (nm: String) (e: typecheck.TExpr): typecheck.TExpr =
     match e.node {
+        // Array.push transfers every existing element into its result. When
+        // that result replaces this same slot, no payload lifetime ends early,
+        // even for handles or closures. Only a proven final receiver read can
+        // transfer; an argument that reads it keeps the ordinary owning path.
+        TMethodCall(method, base, args) => match base.node {
+            TMove(v) => if v == nm && method == "push" && args.len() == 1 {
+                typecheck.TExpr { ty: e.ty, node: TMethodCall(method,
+                    typecheck.TExpr { ty: base.ty, node: TMovePreserving(v) }, args) }
+            } else { e },
+            _ => e,
+        },
         TArrayLit(xs) => typecheck.TExpr { ty: e.ty, node: TArrayLitReuse(xs, [nm]) },
         TArrayLitReuse(xs, cands) => typecheck.TExpr { ty: e.ty, node: TArrayLitReuse(xs, lv_cat_names([nm], cands, 0)) },
         TStructLit(sname, fs, None) => typecheck.TExpr { ty: e.ty, node: TStructReuse(sname, fs, [nm]) },
@@ -4651,16 +4665,16 @@ struct ReuseEmit { code: String, cell: String, n: Int }
 // drop. Inc-before-dec, obtained by ordering rather than by care.
 let cg_reuse_cell (p: CgProgram) (c: ReuseCand) (want: Int) (n: Int): ReuseEmit =
     if c.reset { cg_reuse_token(c, want, n) } else {
-    let old = cg_reg(n);
-    let ok = cg_reg(n + 1);
-    let lr = cg_label(n + 2);
-    let lf = cg_label(n + 3);
-    let lj = cg_label(n + 4);
-    let fresh = cg_reg(n + 5);
-    let cell = cg_reg(n + 6);
-    let drops = cg_reuse_drops(c.children, old, 0, n + 7, "");
-    ReuseEmit {
-        code: "  ${old} = load ptr, ptr ${c.slot.ptr}\n"
+        let old = cg_reg(n);
+        let ok = cg_reg(n + 1);
+        let lr = cg_label(n + 2);
+        let lf = cg_label(n + 3);
+        let lj = cg_label(n + 4);
+        let fresh = cg_reg(n + 5);
+        let cell = cg_reg(n + 6);
+        let drops = cg_reuse_drops(c.children, old, 0, n + 7, "");
+        ReuseEmit {
+            code: "  ${old} = load ptr, ptr ${c.slot.ptr}\n"
             .concat("  store ptr null, ptr ").concat(c.slot.ptr).concat("\n")
             .concat("  ").concat(ok).concat(" = call i1 @plum_reuse_ok(ptr ").concat(old).concat(", i64 ").concat(want.to_string()).concat(")\n")
             .concat("  br i1 ").concat(ok).concat(", label %").concat(lr).concat(", label %").concat(lf).concat("\n")
@@ -4672,9 +4686,9 @@ let cg_reuse_cell (p: CgProgram) (c: ReuseCand) (want: Int) (n: Int): ReuseEmit 
             .concat("  br label %").concat(lj).concat("\n")
             .concat(lj).concat(":\n")
             .concat("  ").concat(cell).concat(" = phi ptr [ ").concat(old).concat(", %").concat(lr).concat(" ], [ ").concat(fresh).concat(", %").concat(lf).concat(" ]\n"),
-        cell: cell, n: drops.n,
+            cell: cell, n: drops.n,
     }
-}
+    }
 
 // Reset tokens own raw storage only. They are null after consumption;
 // ordinary object release must never inspect their stale tag/payload.
@@ -6547,6 +6561,7 @@ let cg_invalidates_in (xs: Array[typecheck.TExpr]) (name: String) (i: Int): Bool
     if i >= xs.len() { false } else {
         let here = match xs[i].node {
             TMove(v) => v == name,
+            TMovePreserving(v) => v == name,
             TStructReuse(_, _, cands) => Array.contains(cands, name),
             TVariantReuse(_, _, _, cands) => Array.contains(cands, name),
             TArrayLitReuse(_, cands) => Array.contains(cands, name),
@@ -7381,7 +7396,7 @@ let cg_rel_in (p: CgProgram) (e: typecheck.TExpr) (acc: Array[typecheck.ITy]): A
         TArrayNsReuse(_, xs, _) => cg_rel_in_list(p, xs, 0, here),
         TVariantReuse(_, _, xs, _) => cg_rel_in_list(p, xs, 0, here),
         TInt(_) => here, TFloat(_) => here, TStr(_) => here, TBool(_) => here,
-        TUnitLit => here, TIdent(_) => here, TMove(_) => here, TGlobalRef(_, _) => here, TUnsupported(_) => here,
+        TUnitLit => here, TIdent(_) => here, TMove(_) => here, TMovePreserving(_) => here, TGlobalRef(_, _) => here, TUnsupported(_) => here,
     }
 }
 
@@ -7486,7 +7501,7 @@ let cg_eq_in (p: CgProgram) (e: typecheck.TExpr) (acc: Array[typecheck.ITy]): Ar
         TArrayNsReuse(_, xs, _) => cg_eq_in_list(p, xs, 0, acc),
         TVariantReuse(_, _, xs, _) => cg_eq_in_list(p, xs, 0, acc),
         TInt(_) => acc, TFloat(_) => acc, TStr(_) => acc, TBool(_) => acc,
-        TUnitLit => acc, TIdent(_) => acc, TMove(_) => acc, TGlobalRef(_, _) => acc, TUnsupported(_) => acc,
+        TUnitLit => acc, TIdent(_) => acc, TMove(_) => acc, TMovePreserving(_) => acc, TGlobalRef(_, _) => acc, TUnsupported(_) => acc,
     }
 
 let cg_eq_in_list (p: CgProgram) (es: Array[typecheck.TExpr]) (i: Int) (acc: Array[typecheck.ITy]): Array[typecheck.ITy] =
@@ -7581,7 +7596,7 @@ let cg_calls_in (p: CgProgram) (e: typecheck.TExpr) (acc: Array[CgInst]): Array[
         TArrayNsReuse(_, xs, _) => cg_calls_in_list(p, xs, acc),
         TVariantReuse(_, _, xs, _) => cg_calls_in_list(p, xs, acc),
         TInt(_) => acc, TFloat(_) => acc, TStr(_) => acc, TBool(_) => acc,
-        TUnitLit => acc, TIdent(_) => acc, TMove(_) => acc, TGlobalRef(_, _) => acc, TUnsupported(_) => acc,
+        TUnitLit => acc, TIdent(_) => acc, TMove(_) => acc, TMovePreserving(_) => acc, TGlobalRef(_, _) => acc, TUnsupported(_) => acc,
     }
 
 let cg_calls_in_list (p: CgProgram) (es: Array[typecheck.TExpr]) (acc: Array[CgInst]): Array[CgInst] = cg_calls_in_list_acc(p, es, 0, acc)

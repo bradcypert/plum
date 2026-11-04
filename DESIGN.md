@@ -21615,3 +21615,22 @@ Patricia result rule out claiming a universal collection improvement. Full
 branch-specific reset placement remains separate work. The checked-in
 allocation corpus shows no regressions and covers the supported recursive
 rebuild invariant directly.
+
+
+### Preserving resource ownership during replacement
+
+The first CI run exposed an important distinction between releasing ownership
+and transferring it into a replacement. Rejecting all consuming reads of
+resource-containing arrays made source discovery quadratic: its SourceFile
+entries own TreeRoot handles, and `files = files.push(file)` retained the old
+array during the push. The existing allocation corpus did not cover that
+payload type; source discovery's allocated-byte scaling gate caught it.
+
+`TMovePreserving` now records the narrower proof that a final array receiver
+is passed to `push` and its result replaces the same slot. Push preserves
+all existing children in the result, so their finalization cannot happen
+earlier. Other resource reads keep the scoped-lifetime restriction. This
+uses the same move and array emitters; it does not restore a separate
+assignment code path. The resource-array allocation fixture bounds both
+allocations and requested bytes, and guard_cleanup checks closures capturing
+resources through both replacement and discarded non-assignment pushes.

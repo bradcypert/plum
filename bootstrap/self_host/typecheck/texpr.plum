@@ -71,6 +71,8 @@ pub enum TNode {
     TIdent(String),
     // Backend ownership annotation: transfer a final frame-owned read.
     TMove(String),
+    // Transfer into a replacement that preserves the owned payload's lifetime.
+    TMovePreserving(String),
     // MODULE and name of a top-level 0-parameter binding. Inference used to
     // INLINE these — it returned the global's body in place of the
     // reference — which is correct but makes the backend re-evaluate
@@ -266,6 +268,7 @@ pub let t_children (e: TExpr): Array[TExpr] =
         TUnitLit => [],
         TIdent(_) => [],
         TMove(_) => [],
+        TMovePreserving(_) => [],
         TGlobalRef(_, _) => [],
         TChannelNew => [],
         TUnsupported(_) => [],

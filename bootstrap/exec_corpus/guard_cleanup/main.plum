@@ -54,7 +54,26 @@ let exercise (accept: Bool): Unit = {
     assert_eq(live(), 1)
 }
 
+// Assignment keeps all existing captured resources in the replacement.
+// A discarded non-assignment push must still leave its source alive.
+let resource_array (): Unit = {
+    let mut held = [capture()];
+    held = held.push(capture());
+    assert_eq(live(), 2);
+    held = held.push(held[0]);
+    assert_eq(live(), 2);
+    let shared = held;
+    held = held.push(capture());
+    assert_eq(live(), 3);
+    assert_eq(shared.len(), 3);
+    assert_eq(held.len(), 4);
+    held.push(capture());
+    assert_eq(live(), 3)
+}
+
 let main (): Unit = {
+    resource_array();
+    assert_eq(live(), 0);
     exercise(false);
     assert_eq(live(), 0);
     exercise(true);
