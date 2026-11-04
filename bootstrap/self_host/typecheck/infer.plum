@@ -3756,7 +3756,7 @@ let bind_variant_pattern (p2: Program2) (state: FreshState) (acc: Subst) (env: T
         // `exec_corpus/refs`), so this checker has to as well.
         None => match (if path.len() >= 2 { None } else { struct_by_scrutinee(p2.ctx, p2.current, subst_apply(acc, scrutinee_ty), tag) }) {
             Some(info) => {
-                check_struct_named(p2.ctx, p2.current, tag);
+                check_struct_named(p2.ctx, p2.current, info.name);
                 let fr = fresh_list(state, info.generics.len());
                 let s1 = match unify(subst_apply(acc, scrutinee_ty), ITStruct(info.name, fr.tys)) { Ok(s) => subst_compose(s, acc), Err(e) => { fail_tc(e); acc } };
                 if arg_pats.len() != info.fields.len() {
@@ -3805,9 +3805,9 @@ let resolve_pattern_struct (p2: Program2) (acc: Subst) (scrutinee_ty: ITy) (path
 
 let bind_struct_pattern (p2: Program2) (state: FreshState) (acc: Subst) (env: TyEnv) (path: Array[String]) (field_pats: Array[parser.FieldPatternNode]) (rest: Bool) (scrutinee_ty: ITy): BindResult = {
     let name = parser.join_dot(path);
-    check_struct_named(p2.ctx, p2.current, name);
     match resolve_pattern_struct(p2, acc, scrutinee_ty, path) {
         Some(info) => {
+            check_struct_named(p2.ctx, p2.current, info.name);
             let fr = fresh_list(state, info.generics.len());
             let s1 = match unify(subst_apply(acc, scrutinee_ty), ITStruct(info.name, fr.tys)) { Ok(s) => subst_compose(s, acc), Err(e) => { fail_tc(e); acc } };
             let r = bind_struct_field_pats(p2, fr.state, s1, env, info, fr.tys, field_pats, 0, []);

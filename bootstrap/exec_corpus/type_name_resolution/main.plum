@@ -1,0 +1,30 @@
+use left;
+use right;
+use hidden;
+use public;
+use local;
+
+enum RootChoice { Yes, No }
+let root (s: RootChoice): Int = match s { RootChoice.Yes => 9, RootChoice.No => 0 }
+let prelude (s: Option[Int]): Int = match s { Some(n) => n, None => 0 }
+
+// The scrutinee supplies identity for unqualified struct and variant patterns.
+let named (s: left.Shade): Int = match s { Shade { n } => n }
+let positional (s: right.Shade): Int = match s { Shade(n) => n }
+let mode (s: left.Mode): Int = match s { On => 3, Off => 0 }
+let qualified (s: right.Mode): Int = match s { right.Mode.On => 4, right.Mode.Off => 0 }
+let unique_enum (s: SoloMode): Int = match s { SoloMode.On => 11, SoloMode.Off => 0 }
+let main (): Unit = {
+    println(named(left.Shade { n: 1 }).to_string());
+    println(positional(right.Shade { n: 2 }).to_string());
+    println(mode(left.Mode.On).to_string());
+    println(qualified(right.Mode.On).to_string());
+    // A unique public fallback survives a private sibling with the same name.
+    let solo: Solo = Solo { n: 5 };
+    println(solo.n.to_string());
+    println(local.enum_local().to_string());
+    println(local.struct_local().to_string());
+    println(root(RootChoice.Yes).to_string());
+    println(prelude(Some(10)).to_string());
+    println(unique_enum(SoloMode.On).to_string())
+}
