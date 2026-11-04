@@ -1,0 +1,3 @@
+enum Choice[T] { Chosen(T), Empty }
+let unused (value: Choice[Int, Bool]): Unit = ()
+let main (): Unit = ()

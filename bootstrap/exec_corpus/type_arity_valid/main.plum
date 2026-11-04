@@ -1,0 +1,23 @@
+use types;
+
+// Forward and self references are resolved against declared arities.
+struct Chain[T] { value: T, next: Option[Chain[T]] }
+struct Forward { value: Later[Int] }
+struct Later[T] { value: T }
+
+let identity[T] (value: T): T = value
+let apply (f: (Int) -> Int) (value: Int): Int = f(value)
+let main (): Unit = {
+    let boxed: types.Box[Array[Int]] = types.Box { value: [21, 42] };
+    let choice: types.Choice[Int, String] = types.choose(boxed.value[1]);
+    let chain: Chain[Int] = Chain { value: 7, next: None };
+    let forward: Forward = Forward { value: Later { value: chain.value } };
+    let cell: Ref[Int] = ref(forward.value.value);
+    let pair: (Sender[Int], Receiver[Int]) = channel[Int]();
+    let task: Task[Int] = spawn { 9 };
+    let (sender, receiver) = pair;
+    sender.send(cell.get());
+    println(match receiver.recv() { Some(n) => identity(n).to_string(), None => "missing" });
+    println(task.join().to_string());
+    println(match choice { First(n) => apply(|x| x, n).to_string(), Second(s) => s });
+}

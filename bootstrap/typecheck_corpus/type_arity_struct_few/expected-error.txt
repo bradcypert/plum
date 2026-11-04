@@ -1,0 +1,1 @@
+self-hosted type checker: type Pair expects 2 type argument(s), got 1

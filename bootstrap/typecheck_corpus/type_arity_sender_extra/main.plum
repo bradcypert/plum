@@ -1,0 +1,3 @@
+// Reject even when the parameter is unused.
+let unused (value: Sender[Int, String]): Unit = ()
+let main (): Unit = ()

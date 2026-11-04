@@ -1,0 +1,1 @@
+self-hosted type checker: type Ref expects 1 type argument(s), got 2

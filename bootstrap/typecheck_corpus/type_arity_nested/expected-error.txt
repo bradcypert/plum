@@ -1,0 +1,1 @@
+self-hosted type checker: type Option expects 1 type argument(s), got 0

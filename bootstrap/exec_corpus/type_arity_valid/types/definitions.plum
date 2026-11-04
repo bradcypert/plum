@@ -1,0 +1,4 @@
+pub struct Box[T] { pub value: T }
+pub enum Choice[A, B] { First(A), Second(B) }
+
+pub let choose (value: Int): Choice[Int, String] = First(value)

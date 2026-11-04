@@ -1,0 +1,2 @@
+error: type Array expects 1 type argument(s), got 0
+main.plum:1:23

@@ -1,0 +1,3 @@
+use types;
+let unused (value: types.Box): Unit = ()
+let main (): Unit = ()

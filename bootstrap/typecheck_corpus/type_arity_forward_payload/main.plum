@@ -1,0 +1,3 @@
+enum First { Value(Later[Int]) }
+enum Later[A, B] { Pair(A, B) }
+let main (): Unit = ()

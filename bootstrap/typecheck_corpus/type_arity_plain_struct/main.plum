@@ -1,0 +1,3 @@
+struct Plain { value: Int }
+let unused (value: Plain[Int]): Unit = ()
+let main (): Unit = ()

@@ -1,0 +1,2 @@
+let unused (value: (Int, Array[Option])): Unit = ()
+let main (): Unit = ()

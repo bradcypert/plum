@@ -1,0 +1,3 @@
+enum Plain { Empty }
+let unused (value: Plain[Int]): Unit = ()
+let main (): Unit = ()
