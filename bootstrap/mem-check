@@ -134,7 +134,7 @@ check() {   # <threshold-KB> <label> <args...>
     fi
     printf '  %-34s %6d MB   (ceiling %d MB)\n' "$label" "$((kb / 1024))" "$((limit / 1024))"
     if [ "$kb" -gt "$limit" ]; then
-        echo "FAIL: $label peaked at $((kb / 1024)) MB, over its $((limit / 1024)) MB ceiling" >&2
+        echo "FAIL: $label peaked at $kb KiB, over its $limit KiB ceiling" >&2
         fail=1
     fi
 }

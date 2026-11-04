@@ -1,0 +1,12 @@
+enum Chain { End, Link(Int, Chain) }
+let build (n: Int) (xs: Chain): Chain =
+    if n == 0 { xs } else { build(n - 1, Link(n, xs)) }
+let bump (xs: Chain): Chain = match xs {
+    End => End,
+    Link(x, tail) => Link(x + 1, bump(tail)),
+}
+let total (xs: Chain): Int = match xs {
+    End => 0,
+    Link(x, tail) => x + total(tail),
+}
+let main (): Unit = { let original = build(64, End); let changed = bump(original); assert_eq(total(original), 2080); assert_eq(total(changed), 2144) }
