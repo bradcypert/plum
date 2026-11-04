@@ -66,11 +66,11 @@
 // the alternative, a whole second copy of each function, is how the two
 // halves drift apart.
 //
-// **Untested.** No Windows toolchain has compiled this. See PORTING.md.
 #if defined(_WIN32)
 // winsock2.h must precede windows.h, which ws2tcpip.h pulls in.
 #include <winsock2.h>
 #include <ws2tcpip.h>
+#include <windows.h>
 
 typedef SOCKET plum_sock;
 #define PLUM_BAD_SOCK       INVALID_SOCKET
@@ -82,20 +82,23 @@ typedef SOCKET plum_sock;
 #define PLUM_IO_LEN(n)      ((n) > INT_MAX ? INT_MAX : (n))
 #define PLUM_ADDRLEN(n)     ((int)PLUM_IO_LEN(n))
 
-// Winsock refuses every call until the library is initialised, and
-// there is no natural place to do it once -- this shim has no
-// initialiser and Plum has no module-load hook. Doing it lazily on each
-// entry point is the standard answer; `WSAStartup` is reference-counted
-// and cheap to call repeatedly, and the matching `WSACleanup` is
-// deliberately never called, because the only correct time to do it is
-// at process exit, when it buys nothing.
-static int plum_net_init(void) {
-    static int started = 0;
+// Serialize lazy startup and publish success to all calling threads.
+// FALSE leaves the once object uninitialized: this caller gets an error,
+// and a waiting or later caller may retry. Never loop on startup failure.
+// Keep exactly one successful Winsock reference for this adapter's process
+// lifetime; per-socket cleanup must not shut down other threads' sockets.
+static INIT_ONCE plum_net_once = INIT_ONCE_STATIC_INIT;
+
+static BOOL CALLBACK plum_net_start(PINIT_ONCE once, PVOID param, PVOID *context) {
+    (void)once;
+    (void)param;
+    (void)context;
     WSADATA wsa;
-    if (started) return 0;
-    if (WSAStartup(MAKEWORD(2, 2), &wsa) != 0) return -1;
-    started = 1;
-    return 0;
+    return WSAStartup(MAKEWORD(2, 2), &wsa) == 0;
+}
+
+static int plum_net_init(void) {
+    return InitOnceExecuteOnce(&plum_net_once, plum_net_start, NULL, NULL) ? 0 : -1;
 }
 #else
 #include <sys/types.h>

@@ -57,7 +57,18 @@
 #define write(fd, buf, len)       send(fd, (char *) (buf), (int) (len), 0)
 #define close(fd)               closesocket(fd)
 
-static int wsa_init_done = 0;
+/* Plum local change: HTTPS tasks can enter net_prepare concurrently.
+ * Keep one process-lifetime reference, retrying after failed startup. */
+static INIT_ONCE wsa_once = INIT_ONCE_STATIC_INIT;
+
+static BOOL CALLBACK wsa_start(PINIT_ONCE once, PVOID param, PVOID *context)
+{
+    WSADATA wsaData;
+    (void) once;
+    (void) param;
+    (void) context;
+    return WSAStartup(MAKEWORD(2, 0), &wsaData) == 0;
+}
 
 #else /* ( _WIN32 || _WIN32_WCE ) && !EFIX64 && !EFI32 */
 
@@ -100,14 +111,8 @@ static int net_prepare(void)
 {
 #if (defined(_WIN32) || defined(_WIN32_WCE)) && !defined(EFIX64) && \
     !defined(EFI32)
-    WSADATA wsaData;
-
-    if (wsa_init_done == 0) {
-        if (WSAStartup(MAKEWORD(2, 0), &wsaData) != 0) {
-            return MBEDTLS_ERR_NET_SOCKET_FAILED;
-        }
-
-        wsa_init_done = 1;
+    if (!InitOnceExecuteOnce(&wsa_once, wsa_start, NULL, NULL)) {
+        return MBEDTLS_ERR_NET_SOCKET_FAILED;
     }
 #else
 #if !defined(EFIX64) && !defined(EFI32)
