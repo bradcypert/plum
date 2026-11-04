@@ -1,0 +1,117 @@
+// Ownership integration: moves must preserve outstanding borrows, guard
+// fallthrough, snapshots and escaping values. All data comes from calls so
+// immortal literal cells cannot hide invalid ownership transfers.
+struct Point { n: Int }
+struct TextBox { value: String }
+struct Wide { a: String, b: String, c: String, d: String }
+let wider (b: TextBox): Wide = match b {
+    TextBox(s) => Wide { a: s, b: s, c: s, d: s },
+}
+let different (p: Point): Bool = p != Point { n: 99 }
+enum Chain { End, Link(String, Chain) }
+enum Choice { Text(String), Number(Int) }
+let dynamic (n: Int): String = n.to_string().concat("value")
+let array (n: Int): Array[Int] = [n, n + 1, n + 2]
+let build (n: Int) (xs: Chain): Chain =
+    if n == 0 { xs } else { build(n - 1, Link(dynamic(n), xs)) }
+let update (xs: Chain): Chain = match xs {
+    End => End,
+    Link(x, tail) => Link(x.concat("!"), update(tail)),
+}
+let count (xs: Chain): Int = match xs {
+    End => 0,
+    Link(x, tail) => x.len() + count(tail),
+}
+let tail_count (xs: Chain) (n: Int): Int = match xs {
+    End => n,
+    Link(_, tail) => tail_count(tail, n + 1),
+}
+let bump_ref (r: Ref[Int]): Unit = r.set(r.get() + 1)
+let reassigned_index (initial: Array[Int]): Int = {
+    let mut xs = initial;
+    xs[{ xs = array(9); 0 }]
+}
+let last (xs: Array[Int]): Int = xs[xs.len() - 1]
+let equal_after_borrow (xs: Array[Int]): Bool = xs == xs.set(0, 99)
+let string_after_borrow (s: String): String = s.replace(s, s.concat("!"))
+let rhs_block (initial: Array[Int]): Array[Int] = {
+    let mut xs = initial;
+    xs = { let saved = xs; assert_eq(xs.len(), 3); saved };
+    xs
+}
+let rhs_shadow (initial: Array[Int]): Array[Int] = {
+    let mut xs = initial;
+    xs = { let xs = array(10); let saved = xs; assert_eq(xs.len(), 3); saved };
+    xs
+}
+let reject (c: Choice): Bool = match c {
+    Text(s) => s.len() == 0,
+    Number(_) => false,
+}
+let guarded (c: Choice): Int = match c {
+    Text(_) if reject(c) => 0,
+    Text(s) => s.len(),
+    Number(n) => n,
+}
+let guard_outer (xs: Array[Int]): Int = match Some(1) {
+    Some(_) if xs.len() == 0 => 0,
+    _ => xs[0],
+}
+let borrowed_cstr (s: String): Int = unsafe {
+    let raw = s.as_cstr();
+    let n = s.len();
+    assert_eq(raw.as_string().len(), n);
+    n
+}
+let escaped (xs: Chain): () -> String = match xs {
+    Link(s, _) => || s,
+    End => || "",
+}
+let nested (xs: Chain): String = match xs {
+    Link(a, Link(b, _)) => a.concat(b),
+    _ => "",
+}
+let guarded_update (xs: Chain): Chain = match xs {
+    Link(s, _) if s.len() == 0 => End,
+    Link(s, tail) if s.len() > 0 => Link(s.concat("!"), guarded_update(tail)),
+    _ => End,
+}
+let original_name (xs: Chain): Chain = match xs {
+    Link(_, _) => xs,
+    End => End,
+}
+let main (): Unit = {
+    assert(different(Point { n: 1 }));
+    bump_ref(ref(1));
+    let wide = wider(TextBox { value: dynamic(3) });
+    assert_eq(wide.a.concat(wide.d), "3value3value");
+    assert_eq(count(guarded_update(build(4, End))), 28);
+    assert_eq(reassigned_index(array(1)), 1);
+    assert_eq(last(array(1)), 3);
+    assert(!equal_after_borrow(array(1)));
+    assert_eq(string_after_borrow(dynamic(2)), "2value!");
+    assert_eq(rhs_block(array(1)), [1, 2, 3]);
+    assert_eq(rhs_shadow(array(1)), [10, 11, 12]);
+    assert_eq(guarded(Text(dynamic(2))), 6);
+    assert_eq(guard_outer(array(7)), 7);
+    assert_eq(borrowed_cstr(dynamic(2)), 6);
+    let mut growing = array(1);
+    for i in 0..32 { growing = growing.push(growing[growing.len() - 1] + 1); };
+    assert_eq(last(growing), 35);
+    let mut text = dynamic(1);
+    for i in 0..3 { text = text.concat(text); };
+    assert_eq(text.len(), 48);
+    let original = build(8, End);
+    let changed = update(original);
+    assert_eq(count(original), 48);
+    assert_eq(count(changed), 56);
+    assert_eq(count(update(build(8, End))), 56);
+    assert_eq(tail_count(build(100, End), 0), 100);
+    assert_eq(escaped(build(2, End))(), "1value");
+    assert_eq(nested(build(2, End)), "1value2value");
+    assert_eq(count(original_name(build(2, End))), 12);
+    let mut xs = build(2, End);
+    for i in 0..10 { xs = update(xs); };
+    assert_eq(count(xs), 32);
+    println("ok");
+}

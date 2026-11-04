@@ -21533,3 +21533,85 @@ with a parent watchdog: unfinished input, noise records, repeated
 timeouts, resumed lines, editing, Unicode, raw VT keys, startup failures,
 I/O failures and shutdown all exercise the actual console adapter. This
 supersedes the compile-only console limitation described under #32 above.
+
+## Consuming reads and early match reset (2026-11-04)
+
+Investigating #281 exposed a compiler prerequisite for persistent data
+structures: keeping a dead parent alive while recursively rebuilding its
+child makes that child appear shared. A reuse check at the final constructor
+is too late. The flat Map representation has its own copying cost, but a
+Patricia trie, bitmap trie, or balanced tree cannot achieve unique-path reuse
+while the compiler retains that extra ownership.
+
+This follows the reset/reuse mechanism in [Perceus, sections 2.4–2.6](https://www.microsoft.com/en-us/research/wp-content/uploads/2020/11/perceus-tr-v4.pdf).
+The liveness pass marks consuming reads of frame-owned bindings with `TMove`.
+A consuming read transfers the slot's reference and nulls the slot; ordinary
+cleanup consequently remains safe on either branch. Assignment's replacement
+boundary permits the old value to move even when the new value is read on the
+next loop iteration. Later RHS reads and shadowing still constrain that move.
+
+`TMatchReuse` supplies a separate storage token. After a complete pattern and
+its guard succeed, projected bindings own their children. A unique scrutinee
+then releases its child edges before recursion and leaves its empty allocation
+in the token. A shared scrutinee drops only the match's reference and leaves a
+null token. A compatible constructor consumes the token or allocates fresh
+storage; an unused token is freed without walking its already-released payload.
+Guard failure cannot reset the scrutinee. Ordinary return, tail call, and loop
+re-entry all dispose of unused tokens.
+
+The ownership boundary also replaces the special assignment emitters for
+`x = x.concat(...)` and `xs = xs.push(...)`. Receivers now use the same owning
+expression path as calls. Primitive borrows acquire a temporary owner when a
+later operand can consume, reuse, or reassign their slot. This is necessary for
+expressions such as `xs[xs.len() - 1]` and `r.set(r.get() + 1)`.
+
+### Memory consequences and remaining limits
+
+The allocation fixtures distinguish unique and shared paths. Building and
+incrementing a 64-cell chain can reuse all 64 cells; retaining the original
+snapshot requires another 64 cells. Repeated updates of the unique chain
+exercise the same invariant across assignment and loop boundaries. This saves
+allocation traffic and redundant ownership, rather than adding a collector or
+changing value semantics. Fewer requested bytes do not by themselves establish
+lower peak RSS, which also depends on live snapshots, allocator behavior, and
+recursion depth. Raw reset storage remains live until consumed or cleaned up.
+
+This is a bounded extension of Perceus-style reuse, not a claim that every
+value is dropped at its precise last use. Resources, closures (whose types
+hide captured resources), and aggregates containing either retain existing
+finalization timing. CStr source bindings remain pinned to preserve borrowed
+pointer lifetimes. Field owners remain available to the existing record-reuse
+pass, and closure captures are not frame-owned move candidates. Array storage
+still uses its existing specialized runtime operations.
+
+No Map layout or public API changes here. In particular, copying a shared flat
+bucket table remains O(n), and `Ref.get()` followed by `Ref.set(...)` retains
+the old value during RHS evaluation. #281 therefore remains open: this work
+makes a later representation decision measurable without the compiler's
+parent-retention gap obscuring its unique-path behavior. It also extends the
+ownership work tracked in #349; it does not change cycles, cross-thread
+ownership, or the intentional retention of historical snapshots.
+
+The bounded map experiment also exposes a remaining specialization boundary.
+When any arm forwards the original scrutinee (as the Patricia insertion
+prototype does on a prefix mismatch), it remains live across this match;
+reset is not yet pushed into the individual branches that rebuild it. On the
+same 1,000-key Int insertion workload, recompiling the unchanged prototype
+with this compiler requested the following cumulative bytes:
+
+| representation, local update | main | consuming reads + match reset |
+| --- | ---: | ---: |
+| flat Map | 25,084,560 | 25,068,560 |
+| Patricia | 471,744 | 471,744 |
+| bitmap trie, 16-way | 483,176 | 492,120 |
+| bitmap trie, 32-way | 600,744 | 630,376 |
+| red-black tree | 776,384 | 712,384 |
+
+These throwaway representations omit collision containers and deletion; they
+are diagnostic workloads, not production acceptance or a representation
+recommendation. In particular, early release can also remove an opportunity
+for an existing later reuse candidate. The bitmap regressions and unchanged
+Patricia result rule out claiming a universal collection improvement. Full
+branch-specific reset placement remains separate work. The checked-in
+allocation corpus shows no regressions and covers the supported recursive
+rebuild invariant directly.

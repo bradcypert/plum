@@ -69,6 +69,8 @@ pub enum TNode {
     // where that stops being a tuple.
     TUnitLit,
     TIdent(String),
+    // Backend ownership annotation: transfer a final frame-owned read.
+    TMove(String),
     // MODULE and name of a top-level 0-parameter binding. Inference used to
     // INLINE these — it returned the global's body in place of the
     // reference — which is correct but makes the backend re-evaluate
@@ -94,6 +96,8 @@ pub enum TNode {
     // `TBlock` out of every node that contains a body.
     TIf(TExpr, TExpr, Option[TExpr]),
     TMatch(TExpr, Array[TArm]),
+    // Backend reset scope; the name identifies raw reusable storage.
+    TMatchReuse(TExpr, Array[TArm], String),
     // pattern, range start, range end, body
     TFor(TPattern, TExpr, TExpr, TExpr),
     // `for x in xs` over an ARRAY, as opposed to `TFor`'s range. Its
@@ -261,6 +265,7 @@ pub let t_children (e: TExpr): Array[TExpr] =
         TBool(_) => [],
         TUnitLit => [],
         TIdent(_) => [],
+        TMove(_) => [],
         TGlobalRef(_, _) => [],
         TChannelNew => [],
         TUnsupported(_) => [],
@@ -274,6 +279,7 @@ pub let t_children (e: TExpr): Array[TExpr] =
         TBlockE(b) => t_block_children(b),
         TIf(c, t, els) => match els { Some(x) => [c, t, x], None => [c, t] },
         TMatch(sc, arms) => Array.concat([sc], t_arm_children(arms, 0, [])),
+        TMatchReuse(sc, arms, _) => Array.concat([sc], t_arm_children(arms, 0, [])),
         TFor(_, a, b, c) => [a, b, c],
         TForArray(_, a, b) => [a, b],
         TClosure(_, body) => [body],
