@@ -1,104 +1,104 @@
-Plum v0.0.40 brings 40 development commits since v0.0.39, focused on correctness,
-resource ownership, safer I/O, and faster native builds.
+Plum v0.0.41 brings 56 development commits since v0.0.40, improving compiler
+correctness, editor tooling, filesystem safety, and Windows I/O.
 
 ## Compatibility and migration
 
-- **JSON serialization can fail.** `json_stringify(value)` now returns
-  `Result[String, String]`. Match `Ok(text)` before sending or writing it;
+- **JSON serialization is now fallible.** `json_stringify(value)` returns
+  `Result[String, String]`. Handle `Ok(text)` before writing or sending JSON;
   `Err("non-finite JSON number")` rejects NaN and either infinity, including
-  inside arrays and objects. JSON parsing, `String.parse_float`, and source
-  float literals also reject binary64 overflow. Underflow still rounds to
-  subnormal values or signed zero. `Float.is_finite` is available to validate
-  values before constructing JSON.
+  nested values. JSON parsing, `String.parse_float`, and source float literals
+  reject binary64 overflow. Underflow still rounds to subnormal values or
+  signed zero. Use `Float.is_finite` to validate values before serialization.
+- **Native byte copies require explicit unsafe calls.** Call
+  `Bytes.from_cstr(pointer, length)` inside `unsafe { ... }`, supplying all
+  arguments. It cannot be partially applied or used as a function value. For
+  positive lengths, the caller must provide readable memory for the entire
+  copy; the returned bytes own a fresh copy.
+- **Invalid programs are rejected consistently.** Empty matches, incorrect
+  generic type arities, invalid boolean/unary operands, and non-Unit branches
+  in conditionals without `else` are rejected. When public types in multiple
+  modules share a bare name, use a module-qualified name to resolve the
+  ambiguity. Local, root, and prelude declarations retain their precedence.
+- **Partial applications capture inputs once.** Supplied arguments and the
+  callee are evaluated when the closure is constructed, rather than again
+  each time it is called. Move repeated work into the closure body explicitly
+  if that behavior is required.
 
-- **Channels report disconnection.** `Receiver.recv()` now returns `Option[T]`:
-  match `Some(value)` for a message and `None` after the final sender drops and
-  buffered messages have drained. `Sender.send(value)` now returns
-  `Result[Unit, T]`: `Err(unsent)` returns ownership of the payload when there
-  are no receivers. Unit-returning producers must handle the result or
-  explicitly discard it with `tx.send(value); ()`.
-- **Select receive bindings also contain `Option[T]`.** Keep the
-  `received = rx => ...` binding and match `Some`/`None` inside the arm.
-  Refutable receive patterns such as `Some(value) = rx` are rejected. Remove
-  closed receivers from subsequent selects: they remain ready, and ties use
-  arm order. See the updated [concurrency example](https://github.com/bradcypert/plum/blob/v0.0.40/examples/concurrency/main.plum).
-- **Invalid or ambiguous input is rejected earlier.** JSON parsing rejects
-  duplicate object members, and `Json.int` rejects values outside the binary64
-  safe integer range, `-9007199254740991` through `9007199254740991`. Send
-  larger integer identifiers as strings. Base64 decoding rejects
-  malformed padding and nonzero unused tail bits. Package manifests reject
-  duplicate fields and conflicting dependency namespaces. HTTP and URL
-  validation is stricter; malformed messages that previously slipped through
-  can now fail.
-- **Seeded floating-point RNG samples may change.** `Rng.float` now uses 53
-  exactly representable bits to keep its result below 1.0. Existing integer
-  sequences are preserved for range widths through the maximum Int.
+- **Project symlinks stay within their declared root.** The default
+  `symlinks: "within-root"` policy rejects absolute links, escapes, cycles,
+  and duplicate physical sources. Use explicit path dependencies for external
+  trees, or `symlinks: "reject"` to refuse source links entirely.
+- **Linked Git packages use versioned hashes.** `plum fetch` prints
+  `hash_version: 2` alongside `sha256`; copy both fields into the dependency.
+  Existing link-free version 1 hashes remain valid. To migrate a package with
+  links, fetch without its old hash, review the contents, and record both new
+  fields. Package validation rejects escaping links and special files.
 
-## Concurrency and memory
+## Compiler and language server
 
-- Channel receivers and selectors wake when the last sender disappears;
-  dropping the last receiver releases queued payloads. Task/channel failure
-  paths and detached task results preserve ownership, and discarded loop
-  results are released. Channels remain unbounded while consumers are live.
-- Heap reference counts are thread-safe. Native handle cleanup tracking grows
-  beyond its former fixed capacity and synchronizes cleanup claims.
-- Generic channel types remain scoped correctly, and generic factories with
-  Unit arguments instantiate correctly.
+- Lexer errors retain original source positions, unterminated strings are
+  rejected, and interpolations are validated completely. CR and CRLF source
+  positions are handled consistently.
+- Guard temporaries are released when scoped match arms fall through, and
+  traced call stacks remain local to each thread.
+- LSP semantic requests use current buffer snapshots. Lifecycle and JSON-RPC
+  validation reject malformed requests, and position validation handles large
+  inputs without recursion proportional to their numeric magnitude.
+- File URIs escape paths correctly and preserve UNC authorities.
 
-## Files, processes, and platform support
+## Formatting, documentation, and editor grammar
 
-- Whole-file writes use atomic replacement to preserve existing contents on
-  failure. Symlinks and special-file destinations are rejected; replacement
-  changes file identity and does not preserve hard links, ownership, ACLs, or
-  other metadata. On Unix, new files use mode 0600 and replacements preserve
-  ordinary permission bits. Whole-file reads reject incomplete reads; text reads
-  reject invalid UTF-8, while byte reads preserve binary data. Nonpositive read
-  sizes fail explicitly.
-- Recursive removal anchors traversal to held directories to prevent symlink
-  traversal. Recursive copies reject overlapping source and destination paths.
-- Windows process creation and environment overlays preserve Unicode, path
-  handling preserves drive-relative paths, and socket I/O bounds native lengths.
-- OS path results are safe under concurrent calls, truncated executable paths
-  are rejected, and environment values are validated before becoming strings.
-- Empty stdin reads return immediately, and timed waits avoid deadline overflow.
+- Formatter indentation follows source order and handles tabs while preserving
+  multiline literal contents.
+- Documentation rendering escapes untrusted content, disambiguates generated
+  page paths, and anchors output writes without following symlinks.
+- The editor grammar supports function contracts, opaque handles, compile-time
+  builtins, negative integer patterns, scientific literals, interpolation
+  expressions, nested struct update paths, and all select arm forms. Bitwise
+  expressions follow compiler precedence, and multiline strings retain their
+  string tokens.
 
-## HTTP and URLs
+## Files, paths, and packages
 
-- HTTP bodies preserve arbitrary bytes, and transport reads/writes handle
-  partial I/O. Response handling respects request methods and status codes,
-  including HEAD and responses without bodies.
-- Request heads and message framing are validated before reading bodies or
-  dispatching handlers. Invalid fields are rejected before serialization,
-  and URL components use bounded UTF-8 validation.
+- File handles avoid identity reuse and coordinate concurrent access and close.
+  Streaming seeks preserve 64-bit offsets.
+- Directory listing preserves ownership, reports read errors, and validates
+  UTF-8. Source discovery, directory collection, and lexical path helpers use
+  linear growth; UNC share roots are preserved.
+- Project traversal is confined, recursive copies preserve symlinks, and
+  changing a path extension cannot escape the original directory.
+- Windows filesystem APIs preserve UTF-8 paths. Git dependency cache and vendor
+  paths retain repository identity.
+- `Os.is_directory` documentation now matches its missing-path behavior.
 
-## Collections, numbers, and JSON
+## Processes, concurrency, and time
 
-- Arrays use stable merge sort and bounds-check updates and removals. Map
-  hashing follows structural key equality, so equal keys hash consistently.
-- Seeded integer RNG ranges support all ordered Int bounds, including widths
-  that overflow signed subtraction. `Float.abs(-0.0)` produces positive zero.
-- Replacing an empty search string leaves the original string unchanged.
-- JSON serialization accumulates output linearly and uses explicit traversal.
-- `Float.to_fixed` documentation now states its existing 0–17 decimal-place
-  precision limit.
+- Process capture preserves output and reports capture failures. Process
+  registries are synchronized, and Windows children inherit only intended
+  handles. Windows process exit statuses retain all 32 bits, child stdin
+  writes complete in bounded chunks, and console reads keep owned results.
+- Finite child waits honor their duration across platforms. Channel select
+  timeouts use monotonic deadlines.
+- Windows TCP listeners reserve ports exclusively, and TCP/HTTPS share safe
+  Winsock initialization.
+- Wall-clock conversion retains millisecond precision, and calendar formatting
+  enforces supported bounds across the full Int epoch range.
 
-## Compiler and tooling
+## Collections and JSON
 
-- Native builds select embedded TLS from declared native dependencies, avoiding
-  unnecessary TLS compilation. Windows reuses validated native objects;
-  concurrent temporary-directory creation is safer. macOS debug builds compile
-  native C inputs before linking.
-- Unsupported target operating systems are rejected explicitly.
-- LSP formatting fixes document ownership and replacement ranges. `plum doc`
-  exits with an error when its output cannot be written.
+- `String.index_of` searches in linear time without materializing characters.
+  Empty-separator splits build one owning codepoint array.
+- `Map.from_arrays` respects the shared prefix when input lengths differ.
+- JSON parsing uses owned byte builders with bounded nesting. Decoder error
+  paths distinguish literal object keys from nested paths.
 
 ## Installing
 
 Release archives are built natively for Linux x86_64 and arm64, macOS x86_64
-and arm64, and Windows x86_64. Each archive has a SHA-256 checksum and contains
-the compiler, README, and license. **Clang is required to compile Plum programs.**
+and arm64, and Windows x86_64. Each archive has a SHA-256 checksum.
+**Clang is required to compile Plum programs.**
 
-See [RUNNING.md](https://github.com/bradcypert/plum/blob/v0.0.40/RUNNING.md)
+See [RUNNING.md](https://github.com/bradcypert/plum/blob/v0.0.41/RUNNING.md)
 for setup and build-cache controls, and the
-[full commit comparison](https://github.com/bradcypert/plum/compare/v0.0.39...v0.0.40)
+[full commit comparison](https://github.com/bradcypert/plum/compare/v0.0.40...v0.0.41)
 for all changes.
