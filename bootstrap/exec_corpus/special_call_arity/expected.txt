@@ -1,0 +1,26 @@
+println argument
+7
+to_string receiver
+8
+map namespace
+map namespace
+[2, 3]
+map method
+map method
+[2, 3]
+filter namespace
+filter namespace
+[2]
+filter method
+filter method
+[2]
+fold namespace
+fold namespace
+3
+fold method
+fold method
+3
+borrowed
+borrowed
+buffer
+buffer

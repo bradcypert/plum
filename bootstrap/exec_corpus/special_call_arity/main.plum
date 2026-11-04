@@ -1,0 +1,25 @@
+// Valid special calls preserve once-only evaluation and borrowing.
+let value (label: String) (n: Int): Int = { println(label); n }
+let main (): Unit = {
+    println(value("println argument", 7));
+    println(value("to_string receiver", 8).to_string());
+    let xs = [1, 2];
+    println(Array.map(xs, |x| value("map namespace", x + 1)));
+    println(xs.map(|x| value("map method", x + 1)));
+    println(Array.filter(xs, |x| value("filter namespace", x) > 1));
+    println(xs.filter(|x| value("filter method", x) > 1));
+    println(Array.fold(xs, 0, |a, x| value("fold namespace", a + x)));
+    println(xs.fold(0, |a, x| value("fold method", a + x)));
+    let text = "borrowed";
+    let bytes = Bytes.from_string("buffer");
+    unsafe {
+        println(text.as_cstr().as_string());
+        println(String.as_cstr(text).as_string());
+        println(bytes.as_cstr().as_string());
+        println(Bytes.as_cstr(bytes).as_string())
+    };
+    // A locally bound println still takes the ordinary closure path.
+    let println = |a: Int, b: Int| a + b;
+    let sum = println(1, 2);
+    assert(sum == 3)
+}

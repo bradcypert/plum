@@ -1,0 +1,1 @@
+Array.map expects 2 argument(s), got 0
