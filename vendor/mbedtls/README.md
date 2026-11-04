@@ -10,3 +10,8 @@ embeds the source and headers into generated user builds. The native shim uses
 Unix CA bundle paths and the Windows system ROOT certificate store; a future
 release can add a macOS Keychain-specific loader if `/etc/ssl/cert.pem` is
 unavailable.
+
+Local change: `library/net_sockets.c` uses Windows `INIT_ONCE` for lazy
+Winsock startup, matching the plain TCP adapter's synchronization and
+failure/retry policy (#129). Preserve this fix when updating the snapshot;
+`bootstrap/winsock-init-check` tests both adapters against real Windows APIs.

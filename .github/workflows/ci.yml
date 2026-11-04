@@ -754,6 +754,8 @@ jobs:
         run: tar -xzf plum-windows-compiler.tar.gz
       - name: listeners reject separate-process port takeover and release failed sockets
         run: python3 bootstrap/listener-test.py
+      - name: TCP and HTTPS synchronize Winsock startup and retry failures
+        run: python3 bootstrap/winsock-init-check
       - name: task and channel failures preserve ownership
         run: ./bootstrap/thread-smoke ./sh.real
       - name: declared native dependencies preserve TLS compatibility

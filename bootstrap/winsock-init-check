@@ -1,0 +1,21 @@
+#!/usr/bin/env python3
+"""Run the Windows startup regression in fresh processes for each policy case."""
+from pathlib import Path
+import subprocess
+import tempfile
+
+ROOT = Path(__file__).resolve().parent.parent
+
+with tempfile.TemporaryDirectory(prefix="plum-winsock-") as work:
+    for adapter in ("tcp", "mbedtls"):
+        exe = Path(work) / f"{adapter}.exe"
+        command = ["clang", "-O1", "-g", "-Wall", "-Wextra", "-Werror",
+                   "-I", str(ROOT / "vendor/mbedtls/include"),
+                   "-I", str(ROOT / "vendor/mbedtls/library"),
+                   str(ROOT / "bootstrap/winsock-init-test.c"),
+                   "-o", str(exe), "-lws2_32"]
+        if adapter == "mbedtls":
+            command += ["-DTEST_MBEDTLS"]
+        subprocess.run(command, check=True, timeout=60)
+        for args in ([], ["--fail-during-wave"]):
+            subprocess.run([str(exe), *args], check=True, timeout=30)
