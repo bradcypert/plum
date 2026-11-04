@@ -339,6 +339,137 @@ def check_roots(compiler):
     print("lsp declared roots and aliases: ok")
 
 
+def check_diagnostics(compiler):
+    """Replay notifications as an editor does: each publish replaces a URI's list."""
+    with tempfile.TemporaryDirectory(prefix="plum-lsp-diagnostics-") as directory:
+        base = Path(directory)
+        project, unrelated, scratch = (base / name for name in ("project", "unrelated", "scratch"))
+        for folder in (project, unrelated, scratch):
+            folder.mkdir()
+        a, b, c = (project / name for name in ("main.plum", "other üni %.plum", "third.plum"))
+        clean = {a: 'let main (): Unit = ()\n', b: 'let helper (): Int = 1\n',
+                 c: 'let third (): Int = 2\n'}
+        broken = 'let broken (): Int = "bad"\n'
+        for path, text in clean.items():
+            path.write_text(text)
+        b.write_text(broken)
+        other = unrelated / "main.plum"
+        other.write_text(broken)
+        client = Client(compiler, scratch)
+        visible = {}
+
+        def drain():
+            client.request("textDocument/formatting")  # Barrier after all earlier notifications.
+            for message in client.notifications:
+                assert message["method"] == "textDocument/publishDiagnostics", message
+                params = message["params"]
+                assert "scratch" not in params["uri"], params
+                visible[params["uri"]] = params["diagnostics"]
+            client.notifications.clear()
+
+        try:
+            client.request("initialize")
+            client.notify("didOpen", a, clean[a])
+            drain()
+            assert visible.get(uri(b)), visible
+            # A later check of A succeeds after the disk error in B is fixed.
+            b.write_text(clean[b])
+            client.notify("didSave", a)
+            drain()
+            assert not visible.get(uri(b)), ("stale cross-file diagnostic after success", visible)
+            b.write_text(broken)
+            client.notify("didSave", a)
+            drain()
+            assert visible.get(uri(b)), visible
+            b.write_text(clean[b])
+            c.write_text(broken)
+            client.notify("didSave", a)
+            drain()
+            assert not visible.get(uri(b)) and visible.get(uri(c)), visible
+            c.write_text(clean[c])
+            # Moving the error must clear the previous target, even when a
+            # different document initiates the next check of the same project.
+            client.notify("didOpen", b, broken)
+            client.notify("didOpen", other, broken)
+            drain()
+            assert visible.get(uri(b)) and visible.get(uri(other)), visible
+            client.notify("didChange", b, clean[b])
+            client.notify("didOpen", c, broken)
+            drain()
+            assert not visible.get(uri(b)) and visible.get(uri(c)), visible
+            assert visible.get(uri(other)), "another project's result was cleared"
+            # Closing the buffer changes the snapshot back to disk. Recheck
+            # while A/B remain open; closing the last observer clears B too.
+            client.notify("didClose", c)
+            drain()
+            assert not visible.get(uri(c)), visible
+            b.write_text(broken)
+            client.notify("didClose", b)
+            drain()
+            assert visible.get(uri(b)), visible
+            client.notify("didClose", a)
+            drain()
+            assert not visible.get(uri(b)), ("last close left a cross-file diagnostic", visible)
+            assert visible.get(uri(other)), visible
+            client.notify("didClose", other)
+            drain()
+            assert all(not diagnostics for diagnostics in visible.values()), visible
+            # Repeated sessions of documents must not retain stale publications.
+            for _ in range(10):
+                client.notify("didOpen", a, clean[a])
+                client.notify("didClose", a)
+                drain()
+                assert not visible.get(uri(b)), visible
+            # Two project checks can own the same dependency diagnostic.
+            # Clearing or closing one must preserve the other's publication.
+            dependency = base / "dependency"
+            dependency.mkdir()
+            (dependency / "plum.pkg").write_text('Package { name: "dep" }')
+            module = dependency / "dep"
+            module.mkdir()
+            shared = module / "main.plum"
+            shared.write_text('pub let shared (): Int = "bad"\n')
+            apps = []
+            for name in ("app1", "app2"):
+                app = base / name
+                app.mkdir()
+                (app / "plum.pkg").write_text(
+                    'Package { name: "%s", deps: [Dep { name: "dep", path: "../dependency" }] }' % name)
+                source = app / "main.plum"
+                source.write_text('use dep;\nlet main (): Unit = ()\n')
+                apps.append(source)
+                client.notify("didOpen", source, source.read_text())
+            drain()
+            assert len(visible.get(uri(shared), [])) == 1, visible
+            client.notify("didClose", apps[0])
+            drain()
+            assert visible.get(uri(shared)), "closing one owner cleared another's diagnostic"
+            shared.write_text('pub let shared (): Int = 1\n')
+            client.notify("didSave", apps[1])
+            drain()
+            assert not visible.get(uri(shared)), visible
+            # Closing a live dependency overlay also rechecks its consumers.
+            client.notify("didOpen", shared, 'pub let shared (): Int = "bad"\n')
+            client.notify("didSave", apps[1])
+            drain()
+            assert visible.get(uri(shared)), visible
+            client.notify("didClose", shared)
+            drain()
+            assert not visible.get(uri(shared)), visible
+            client.notify("didClose", apps[1])
+            drain()
+            assert client.request("shutdown") is None
+            client.send("exit")
+            client.proc.wait(timeout=10)
+            assert client.proc.returncode == 0, client.proc.stderr.read().decode()
+        finally:
+            if client.proc.poll() is None:
+                client.proc.kill()
+                client.proc.wait()
+    print("lsp diagnostic ownership: ok")
+
+
 if __name__ == "__main__":
     check(sys.argv[1])
     check_roots(sys.argv[1])
+    check_diagnostics(sys.argv[1])
