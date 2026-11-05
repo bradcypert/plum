@@ -1,0 +1,103 @@
+// Assignment replaces a slot's value, but aliases, pending operands and
+// observable resource lifetimes must keep their own references intact.
+extern "C" {
+    fn guard_open() -> Int;
+    fn guard_close(h: Int);
+    fn guard_live() -> Int;
+}
+handle Resource { on_drop: guard_close }
+let acquire (): Resource = unsafe { Resource.from_raw(guard_open()) }
+let live (): Int = unsafe { guard_live() }
+let ints (n: Int): Array[Int] = [n, n + 1]
+let append (xs: Array[Int]) (value: Int): Array[Int] = xs.push(value)
+let consume (text: String): Int = text.len()
+let read_after_consume (text: String) (raw: CStr): String = {
+    assert(consume(text) > 0);
+    unsafe { raw.as_string() }
+}
+let pinned_cstr (): Unit = {
+    let mut text = "borrowed-".concat(42.to_string());
+    let raw = unsafe { text.as_cstr() };
+    // The caller must keep the old text alive through this entire RHS.
+    text = read_after_consume(text, raw);
+    text = text.concat("!");
+    assert_eq(text, "borrowed-42!")
+}
+let aliases (take: Bool): Unit = {
+    let mut xs = ints(1);
+    let snapshot = xs;
+    let holder = ref(xs);
+    let captured = || xs;
+    xs = xs.push(3);
+    xs = xs.push(xs[0]);
+    if take { xs = xs.push(4); };
+    xs = append(xs, xs.len());
+    assert_eq(snapshot, [1, 2]);
+    assert_eq(holder.get(), [1, 2]);
+    assert_eq(captured(), [1, 2]);
+    assert_eq(xs, if take { [1, 2, 3, 1, 4, 5] } else { [1, 2, 3, 1, 4] });
+}
+let nested_rhs (): Unit = {
+    let mut xs = ints(4);
+    let saved = xs;
+    xs = {
+        let old = xs;
+        xs = xs.push(6);
+        assert_eq(old, [4, 5]);
+        xs.push(7)
+    };
+    xs = xs.push(8);
+    assert_eq(saved, [4, 5]);
+    assert_eq(xs, [4, 5, 6, 7, 8]);
+    xs = { let xs = ints(10); xs.push(12) };
+    xs = xs.push(13);
+    assert_eq(xs, [10, 11, 12, 13]);
+    xs = xs.push({ xs = ints(20); xs[0] });
+    xs = xs.push(21);
+    assert_eq(xs, [10, 11, 12, 13, 20, 21])
+}
+let loops (): Unit = {
+    let mut xs = ints(0);
+    for i in 0..32 {
+        let saved = xs;
+        if i % 2 == 0 { xs = xs.push(i); };
+        xs = xs.push(xs[0]);
+        assert_eq(saved.len(), 2 + i + (i + 1) / 2);
+        assert_eq(saved[0], 0);
+    };
+    assert_eq(xs.len(), 50)
+}
+let resources (): Unit = {
+    let root = acquire();
+    let mut xs = [root];
+    let snapshot = xs;
+    for i in 0..64 {
+        xs = xs.push(acquire());
+        xs = xs.push(xs[0]);
+        assert_eq(live(), i + 2);
+    };
+    assert_eq(snapshot.len(), 1);
+    assert_eq(xs.len(), 129);
+    assert_eq(live(), 65)
+}
+let replacements (): Unit = {
+    let mut xs = [acquire()];
+    // Resource destruction must occur at replacement, not before an RHS
+    // finishes observing the previous value's scoped owner.
+    xs = { assert_eq(live(), 1); [acquire()] };
+    xs = { assert_eq(live(), 1); xs.push(acquire()) };
+    assert_eq(live(), 2);
+    assert_eq(xs.len(), 2)
+}
+let main (): Unit = {
+    pinned_cstr();
+    aliases(false);
+    aliases(true);
+    nested_rhs();
+    loops();
+    resources();
+    assert_eq(live(), 0);
+    replacements();
+    assert_eq(live(), 0);
+    println("successive replacements preserve aliases, borrows and resource lifetimes")
+}

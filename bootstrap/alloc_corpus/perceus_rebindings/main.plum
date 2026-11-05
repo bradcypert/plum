@@ -1,0 +1,28 @@
+// Each assignment consumes the previous value of xs. A later assignment
+// refers to its replacement, so neither append needs to retain the old slot.
+let grow (n: Int) (xs: Array[Int]): Array[Int] =
+    if n == 0 { xs } else {
+        xs = xs.push(0);
+        xs = xs.push(1);
+        grow(n - 1, xs)
+    }
+
+// The same proof must apply across an ordinary consuming function call.
+let append (xs: Array[Int]) (value: Int): Array[Int] = xs.push(value)
+let grow_indirect (n: Int) (xs: Array[Int]): Array[Int] =
+    if n == 0 { xs } else {
+        xs = append(xs, 0);
+        xs = append(xs, 1);
+        grow_indirect(n - 1, xs)
+    }
+
+let main (): Unit = {
+    let xs = grow(2000, []);
+    assert_eq(xs.len(), 4000);
+    assert_eq(xs[0], 0);
+    assert_eq(xs[3999], 1);
+    let ys = grow_indirect(2000, []);
+    assert_eq(ys.len(), 4000);
+    assert_eq(ys[0], 0);
+    assert_eq(ys[3999], 1);
+}
