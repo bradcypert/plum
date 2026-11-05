@@ -21832,6 +21832,28 @@ The selected layout's build traffic is about 221 times smaller than flat Map,
 while this workload's live storage rises by 2,528 bytes (about 0.4%). It is not
 packed CHAMP and makes no claim about an unmeasured packed representation.
 
+Five-sample uninstrumented medians of the final inline layouts (10,000 keys,
+local construction; lookup includes 100,000 hits and 100,000 misses plus
+validation) confirm the tradeoff. The same flat-Map executables from PR #445
+were retimed separately, without concurrent validation jobs:
+
+| Layout / key | Build ms | Lookup ms | Mixed ms | Delete ms |
+|---|---:|---:|---:|---:|
+| Flat / Int | 547.48 | 15.09 | 1279.18 | 621.69 |
+| Inline16 / Int | 9.16 | 29.64 | 19.60 | 13.65 |
+| Inline32 / Int | 13.59 | 24.83 | 20.12 | 12.40 |
+| Flat / String | 742.37 | 26.55 | 1769.97 | 808.23 |
+| Inline16 / String | 11.81 | 40.01 | 19.85 | 16.04 |
+| Inline32 / String | 15.12 | 35.31 | 21.64 | 15.73 |
+
+These are local workload timings, not portable guarantees or primitive latency:
+mixed/deletion phases also validate results and retain the original snapshot.
+Flat lookup remains faster (the Int workload is about 1.6 times faster than
+inline32); the trie trades pointer traversal for bounded persistent updates.
+The inline32 choice is therefore a storage/lookup balance among trie layouts,
+not a claim that every operation improves. Five-sample Ref/history workloads
+also passed semantic assertions at both widths.
+
 The production Map, measured with PR #445's driver/native malloc/free tracker
 and the source-built compiler, requests 654,376 bytes building 1,000 integer
 entries versus 8,380,824 at 10,000 (~12.8 times for ten times as many keys).
