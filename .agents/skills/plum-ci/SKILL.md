@@ -51,6 +51,13 @@ shims, use the documented seed path or explicitly link current-source IR
 against current native shims. Record the workaround, then still verify the
 regenerated seed through `check-seed`; a manual link is not that proof.
 
+For compiler allocation/performance fixes in the prelude or generated runtime,
+measure a compiler built through CI's seed-to-source path. Functional seed
+comparison can pass while that executable still uses the seed's older runtime
+internally. Refresh the seed when needed to put the fix in the distributed
+compiler, then rebuild from that seed and verify the allocation/performance
+regression again. Compiling fixed user programs alone does not prove this.
+
 Follow root `AGENTS.md` for property-test and documentation requirements.
 Use the source-built compiler for relevant public API fixtures as well as
 native shim tests, so tests exercise the embedded implementation users get.

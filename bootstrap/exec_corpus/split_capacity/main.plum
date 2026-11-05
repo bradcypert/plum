@@ -1,0 +1,36 @@
+let escaped_piece (): String = String.split("a:a:a:a:a:a:a:a:a:a:a:a:a:a:a:a:é", ":")[16]
+
+let main (): Unit = {
+    assert_eq(String.split("", ":"), [""]);
+    assert_eq(String.split("abc", "longer"), ["abc"]);
+    assert_eq(String.split("aaaaa", "aa"), ["", "", "a"]);
+    assert_eq(String.split("::a::::b::", "::"), ["", "a", "", "b", ""]);
+    assert_eq(String.split("é🙂é🙂", "🙂"), ["é", "é", ""]);
+    assert_eq(String.split("abc", ""), ["", "a", "b", "c", ""]);
+    assert_eq(String.split("", ""), ["", ""]);
+    let zero = Result.unwrap_or(Bytes.as_string(Bytes.from_array([0])), "invalid UTF-8");
+    let text = "start".concat(zero).concat("middle").concat(zero).concat("end");
+    assert_eq(String.split(text, zero), ["start", "middle", "end"]);
+    // Cross several growth boundaries, including the final empty piece.
+    for n in [7, 8, 9, 15, 16, 17, 1024] {
+        let dense = String.repeat(":", n);
+        let pieces = String.split(dense, ":");
+        assert_eq(pieces.len(), n + 1);
+        for piece in pieces { assert_eq(piece, ""); };
+        let appended = pieces.push("tail");
+        assert_eq(appended.len(), n + 2);
+        assert_eq(appended[n + 1], "tail");
+        assert_eq(pieces[n], "");
+        assert_eq(pieces.len(), n + 1);
+    };
+    assert_eq(escaped_piece(), "é");
+    let mut long = "x";
+    for i in 0..16 { long = long.concat(long); };
+    let source = long.concat("::").concat(long);
+    let parts = String.split(source, "::");
+    let retained = parts;
+    assert_eq(parts, [long, long]);
+    assert_eq(retained[1], long);
+    assert_eq(source.char_len(), long.char_len() * 2 + 2);
+    println("split capacity ok");
+}
