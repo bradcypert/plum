@@ -236,13 +236,17 @@ pub struct CgProgram { fns: Array[typecheck.TFn], globals: Array[typecheck.TFn],
     cur_sym: String, cur_frame: Bool,
     // Everything this function must release on its way out, and whether
     // a self-call in tail position may RETURN DIRECTLY rather than
-    // funnelling through the shared epilogue. See `cg_tail_self_call`.
-    // `tail_ok` is false on the first of `cg_fn`'s two passes, so the
-    // release text is discovered before anything relies on it.
+    // funnelling through the shared epilogue. `tail_ok` is false on
+    // the first pass, so release text is discovered before use.
     tail_rel: String, tail_ok: Bool,
     // This function's own LLVM prototype, so a cyclic tail call can
     // tell whether `musttail` is legal against the callee's.
-    cur_proto: String }
+    cur_proto: String,
+    // Scoped to one named function specialization. The first emission
+    // observes actual tail-call sites; only a cycle requires replay.
+    tail_observation: Option[Ref[TailObservation]] }
+
+struct TailObservation { found: Bool, verdicts: Map[String, Bool] }
 
 // --- Cell layouts ---
 //
@@ -422,6 +426,7 @@ pub let cg_build_program (program: parser.ProgramNode): CgProgram =
         tail_rel: "",
         tail_ok: false,
         cur_proto: "",
+        tail_observation: None,
     }
 
 // `next_tag` runs across the whole program, so every variant in every
@@ -950,8 +955,8 @@ pub let cg_dbg_module (unit: Unit): String =
 let TAIL_SITE: Ref[Int] = ref(0)
 
 // Unique per hoist site, and deliberately NOT drawn from the emitter's
-// register counter: `cg_fn` emits each function TWICE and compares the
-// two, which only works if both passes number their registers
+// register counter: `cg_fn` can replay a function and compare the
+// two emissions, which only works if both passes number their registers
 // identically. Taking ids from here leaves that sequence untouched.
 let cg_tail_site (unit: Unit): Int = {
     let k = TAIL_SITE.get();
@@ -1002,11 +1007,33 @@ let cg_reaches (p: CgProgram) (pending: Array[CgInst]) (target: String) (seen: A
             None => cg_reaches(p, rest, target, seen.push(s), fuel + 1),
             Some(def) => {
                 let inner = CgProgram { fns: p.fns, globals: p.globals, ctx: p.ctx, enums: p.enums, subst: def.subst,
-                    generics: def.generics, targs: head.targs, movable: [], cur_sym: "", cur_frame: false, tail_rel: "", tail_ok: false, cur_proto: "" };
+                    generics: def.generics, targs: head.targs, movable: [], cur_sym: "", cur_frame: false, tail_rel: "", tail_ok: false, cur_proto: "", tail_observation: None };
                 cg_reaches(p, Array.concat(rest, cg_calls_in(inner, def.body, [])), target, seen.push(s), fuel + 1)
             },
         } }
     }
+
+// Cache both outcomes for this caller specialization. A negative result
+// includes a fuel-exhausted search: replay must make the same conservative
+// decision without walking the graph again. Callee symbols include all
+// concrete type arguments, matching the emitter's specialization identity.
+let cg_tail_cycle (p: CgProgram) (module_name: String) (name: String) (targs: Array[typecheck.ITy]) (sym: String) (is_self: Bool): Bool = {
+    match p.tail_observation {
+        None => false,
+        Some(observed) => {
+            let current = observed.get();
+            match current.verdicts.get(sym) {
+                Some(cyclic) => cyclic,
+                None => {
+                    let cyclic = is_self || (cg_has_fn_in(p, module_name, name, 0)
+                        && cg_reaches(p, [CgInst { module: module_name, name: name, targs: cg_concrete_list(p, targs, 0, []) }], p.cur_sym, [], 0));
+                    observed.set(TailObservation { found: current.found || cyclic, verdicts: current.verdicts.insert(sym, cyclic) });
+                    cyclic
+                },
+            }
+        },
+    }
+}
 
 // `musttail` is only legal when the two prototypes match exactly, which
 // a self-call has by construction and a mutual one only sometimes. When
@@ -1021,7 +1048,7 @@ let cg_callee_proto (p: CgProgram) (module_name: String) (name: String) (targs: 
         None => None,
         Some(def) => {
             let inner = CgProgram { fns: p.fns, globals: p.globals, ctx: p.ctx, enums: p.enums, subst: def.subst,
-                generics: def.generics, targs: targs, movable: [], cur_sym: "", cur_frame: false, tail_rel: "", tail_ok: false, cur_proto: "" };
+                generics: def.generics, targs: targs, movable: [], cur_sym: "", cur_frame: false, tail_rel: "", tail_ok: false, cur_proto: "", tail_observation: None };
             Some(cg_proto(cg_of_ity(cg_concrete(inner, def.ret)),
                 Array.map(def.params, |q| cg_of_ity(cg_concrete(inner, q.ty)))))
         },
@@ -2058,8 +2085,7 @@ let cg_block_ty (p: CgProgram) (env: Array[CgSlot]) (n: Int) (block: typecheck.T
 // A marker rather than a location computed here, because the offset ->
 // line conversion needs the enclosing FUNCTION's file, which this does
 // not know and should not have to be told. Keeping it an offset also
-// means the two passes `cg_fn` runs stay byte-identical, which it
-// checks.
+// keeps replay independent of debug metadata numbering.
 let cg_stmts (p: CgProgram) (env: Array[CgSlot]) (n: Int) (stmts: Array[typecheck.TStmt]) (i: Int) (starts: Array[Int]): BlockEmit =
     if i >= stmts.len() { BlockEmit { code: "", allocas: "", releases: "", globals: "", env: env, n: n } }
     else {
@@ -3024,13 +3050,10 @@ let cg_fn_call_real (p: CgProgram) (env: Array[CgSlot]) (n: Int) (module_name: S
     // instantiation of the same generic function is correctly not a
     // self-call: it is a different symbol and a real frame.
     let is_self = p.cur_sym != "" && sym == "@".concat(p.cur_sym);
-    // A tail call may return early only if it is part of a recursion
-    // CYCLE -- see `cg_reaches`. The graph walk is gated behind
-    // everything cheap: it runs only on the emitting pass, only in tail
-    // position, and only for a call that is not already a self-call.
-    let cyclic = tail && p.tail_ok && p.cur_sym != ""
-        && (is_self || (cg_has_fn_in(p, module_name, name, 0)
-            && cg_reaches(p, [CgInst { module: module_name, name: name, targs: cg_concrete_list(p, targs, 0, []) }], p.cur_sym, [], 0)));
+    // Observe the first emission's actual sites, then replay only callers
+    // with a cycle. Replay reuses the verdict and the discovered releases.
+    let cyclic_site = tail && p.cur_sym != "" && cg_tail_cycle(p, module_name, name, targs, sym, is_self);
+    let cyclic = p.tail_ok && cyclic_site;
     // `musttail` needs the prototypes to match, which a self-call has by
     // construction. A mutual one that does not still returns directly,
     // which is what lets the optimiser reuse the frame.
@@ -4018,7 +4041,11 @@ let cg_closure (p: CgProgram) (env: Array[CgSlot]) (n: Int) (params: Array[Strin
     // slots directly — those are `alloca`s in a different function.
     let used = cg_used_captures(env, params, body, 0, []);
     let inner_env = cg_closure_inner_env(used, params, param_tys, param_itys, 0, []);
-    let inner = cg_expr(p, inner_env, n + 1, body);
+    // A lifted closure is a different function. Its calls must not mark
+    // the enclosing named function for replay; closures are emitted with
+    // tail=false and retain their existing cleanup and frame policy.
+    let closure_p = CgProgram { tail_observation: None, ..p };
+    let inner = cg_expr(closure_p, inner_env, n + 1, body);
     let lifted = "define ${cg_llvm_ty(inner.ty)} ${fn_name}(ptr %env".concat(cg_closure_param_decls(param_tys, 0, "")).concat(") {\nentry:\n")
         .concat(cg_capture_loads(used, 0, ""))
         .concat(cg_closure_param_slots(param_tys, 0, ""))
@@ -5933,8 +5960,9 @@ let cg_fn (p0: CgProgram) (def: typecheck.TFn) (targs: Array[typecheck.ITy]) (n0
     let sym = cg_sym(def.module, def.name, targs);
     let shown = cg_frame_name(def.module, def.name);
     let framed = DEBUG_FRAMES.get() && cg_frame_visible(shown);
+    let observed = ref(TailObservation { found: false, verdicts: Map.new(()) });
     let p = CgProgram { fns: p0.fns, globals: p0.globals, ctx: p0.ctx, enums: p0.enums, subst: def.subst, generics: def.generics, targs: targs,
-        movable: mov, cur_sym: sym, cur_frame: framed, tail_rel: "", tail_ok: false, cur_proto: "" };
+        movable: mov, cur_sym: sym, cur_frame: framed, tail_rel: "", tail_ok: false, cur_proto: "", tail_observation: Some(observed) };
     let params = cg_params_of(p, def.params, 0, []);
     let entry = cg_param_slots(params, Array.map(def.params, |q| cg_concrete(p, q.ty)), 0, [], "", "");
     let ret = cg_of_ity(cg_concrete(p, def.ret));
@@ -5942,29 +5970,21 @@ let cg_fn (p0: CgProgram) (def: typecheck.TFn) (targs: Array[typecheck.ITy]) (n0
     // frame pop (see `cg_expr_t`), which is why nothing pops before the
     // `ret` below.
     //
-    // Emitted TWICE, and the second pass is what lets a self-call in
-    // tail position return directly (`cg_tail_site`). The releases it
-    // has to perform before calling are only known once the body has
-    // been emitted -- they are what the body ACCUMULATED -- so the first
-    // pass discovers them and the second uses them. Reading them off
-    // the emitted text rather than predicting them from the typed tree
-    // is deliberate: a predictor that drifted from what emission
-    // actually produced would drop a release, and a dropped release is
-    // a silent leak.
+    // Discover cleanup through actual emission, never a separate typed-tree
+    // predictor that could drift from the releases we really produce.
+    // Only a cyclic tail call needs those releases before its call, so
+    // functions without one keep the first result and need no replay.
     let dry = cg_expr_t(p, entry.env, n0, lbody, true, "");
-    let rel_all = dry.releases.concat(entry.releases);
-    let p2 = CgProgram { fns: p0.fns, globals: p0.globals, ctx: p0.ctx, enums: p0.enums, subst: def.subst, generics: def.generics, targs: targs,
-        movable: mov, cur_sym: sym, cur_frame: framed, tail_rel: rel_all, tail_ok: true,
-        cur_proto: cg_proto(ret, Array.map(def.params, |q| cg_of_ity(cg_concrete(p, q.ty)))) };
-    let wet = cg_expr_t(p2, entry.env, n0, lbody, true, "");
-    // Both passes must number their registers identically, or the
-    // release text taken from the first would name slots that mean
-    // something else in the second. Nothing in the second pass draws
-    // from the register counter -- site ids and labels come from
-    // `cg_tail_site` -- so they agree, and this CHECKS that rather than
-    // trusting it: on any disagreement the first pass is used, which is
-    // simply the previous behaviour.
-    let body = if wet.releases == dry.releases && wet.allocas == dry.allocas { wet } else { dry };
+    let body = if !observed.get().found { dry } else {
+        let p2 = CgProgram { tail_rel: dry.releases.concat(entry.releases), tail_ok: true,
+            cur_proto: cg_proto(ret, Array.map(def.params, |q| cg_of_ity(cg_concrete(p, q.ty)))), ..p };
+        let wet = cg_expr_t(p2, entry.env, n0, lbody, true, "");
+        // Both passes must number their registers identically, or cleanup
+        // would name different slots. Tail-site ids use their own counter.
+        // Keep the first result on any mismatch, preserving safe cleanup
+        // even if a future emission change makes replay inconsistent.
+        if wet.releases == dry.releases && wet.allocas == dry.allocas { wet } else { dry }
+    };
     // One subprogram per emitted function, so a debugger and a profiler
     // can name it and its file. `shown` is the name a person wrote, the
     // same one a stack trace prints.
@@ -7542,7 +7562,7 @@ let cg_emit_globals (p: CgProgram) (i: Int) (n: Int) (slots: String) (body: Stri
         cg_emit_globals(p, i + 1, n, slots, body)
     } else {
         let g = p.globals[i];
-        let gp = CgProgram { fns: p.fns, globals: p.globals, ctx: p.ctx, enums: p.enums, subst: g.subst, generics: [], targs: [], movable: [], cur_sym: "", cur_frame: false, tail_rel: "", tail_ok: false, cur_proto: "" };
+        let gp = CgProgram { fns: p.fns, globals: p.globals, ctx: p.ctx, enums: p.enums, subst: g.subst, generics: [], targs: [], movable: [], cur_sym: "", cur_frame: false, tail_rel: "", tail_ok: false, cur_proto: "", tail_observation: None };
         let ty = cg_of_ity(cg_concrete(gp, g.ret));
         let r = cg_expr(gp, [], n, g.body);
         let slot = cg_global_slot(g.module, g.name).concat(" = global ").concat(cg_llvm_ty(ty)).concat(" ").concat(cg_zero_of(ty)).concat("\n");
@@ -7581,7 +7601,7 @@ let cg_reachable (p: CgProgram) (pending: Array[CgInst]) (done: Array[CgInst]) (
                     done
                 },
                 Some(def) => {
-                    let inner = CgProgram { fns: p.fns, globals: p.globals, ctx: p.ctx, enums: p.enums, subst: def.subst, generics: def.generics, targs: head.targs, movable: [], cur_sym: "", cur_frame: false, tail_rel: "", tail_ok: false, cur_proto: "" };
+                    let inner = CgProgram { fns: p.fns, globals: p.globals, ctx: p.ctx, enums: p.enums, subst: def.subst, generics: def.generics, targs: head.targs, movable: [], cur_sym: "", cur_frame: false, tail_rel: "", tail_ok: false, cur_proto: "", tail_observation: None };
                     cg_reachable(p, Array.concat(rest, cg_calls_in(inner, def.body, [])), done.push(head), fuel + 1)
                 },
             }
@@ -7599,7 +7619,7 @@ let cg_rel_types_of (p: CgProgram) (insts: Array[CgInst]) (i: Int) (acc: Array[t
         match cg_find_tfn(p, insts[i].module, insts[i].name, 0) {
             None => cg_rel_types_of(p, insts, i + 1, acc),
             Some(def) => {
-                let inner = CgProgram { fns: p.fns, globals: p.globals, ctx: p.ctx, enums: p.enums, subst: def.subst, generics: def.generics, targs: insts[i].targs, movable: [], cur_sym: "", cur_frame: false, tail_rel: "", tail_ok: false, cur_proto: "" };
+                let inner = CgProgram { fns: p.fns, globals: p.globals, ctx: p.ctx, enums: p.enums, subst: def.subst, generics: def.generics, targs: insts[i].targs, movable: [], cur_sym: "", cur_frame: false, tail_rel: "", tail_ok: false, cur_proto: "", tail_observation: None };
                 let withparams = cg_rel_close_list(inner, Array.map(def.params, |q| cg_concrete(inner, q.ty)), 0, acc);
                 let withret = cg_rel_close(inner, cg_concrete(inner, def.ret), withparams);
                 cg_rel_types_of(p, insts, i + 1, cg_rel_in(inner, def.body, withret))
@@ -7690,7 +7710,7 @@ let cg_rel_in_fields (p: CgProgram) (fields: Array[typecheck.TFieldInit]) (i: In
 let cg_eq_in_globals (p: CgProgram) (i: Int) (acc: Array[typecheck.ITy]): Array[typecheck.ITy] =
     if i >= p.globals.len() { acc } else {
         let g = p.globals[i];
-        let gp = CgProgram { fns: p.fns, globals: p.globals, ctx: p.ctx, enums: p.enums, subst: g.subst, generics: [], targs: [], movable: [], cur_sym: "", cur_frame: false, tail_rel: "", tail_ok: false, cur_proto: "" };
+        let gp = CgProgram { fns: p.fns, globals: p.globals, ctx: p.ctx, enums: p.enums, subst: g.subst, generics: [], targs: [], movable: [], cur_sym: "", cur_frame: false, tail_rel: "", tail_ok: false, cur_proto: "", tail_observation: None };
         cg_eq_in_globals(p, i + 1, cg_eq_in(gp, g.body, acc))
     }
 
@@ -7700,7 +7720,7 @@ let cg_eq_types_of (p: CgProgram) (insts: Array[CgInst]) (i: Int) (acc: Array[ty
         match cg_find_tfn(p, insts[i].module, insts[i].name, 0) {
             None => cg_eq_types_of(p, insts, i + 1, acc),
             Some(def) => {
-                let inner = CgProgram { fns: p.fns, globals: p.globals, ctx: p.ctx, enums: p.enums, subst: def.subst, generics: def.generics, targs: insts[i].targs, movable: [], cur_sym: "", cur_frame: false, tail_rel: "", tail_ok: false, cur_proto: "" };
+                let inner = CgProgram { fns: p.fns, globals: p.globals, ctx: p.ctx, enums: p.enums, subst: def.subst, generics: def.generics, targs: insts[i].targs, movable: [], cur_sym: "", cur_frame: false, tail_rel: "", tail_ok: false, cur_proto: "", tail_observation: None };
                 cg_eq_types_of(p, insts, i + 1, cg_eq_in(inner, def.body, acc))
             },
         }
@@ -7798,7 +7818,7 @@ let cg_global_roots (p: CgProgram) (i: Int) (acc: Array[CgInst]): Array[CgInst] 
     if i >= p.globals.len() { acc }
     else {
         let g = p.globals[i];
-        let gp = CgProgram { fns: p.fns, globals: p.globals, ctx: p.ctx, enums: p.enums, subst: g.subst, generics: [], targs: [], movable: [], cur_sym: "", cur_frame: false, tail_rel: "", tail_ok: false, cur_proto: "" };
+        let gp = CgProgram { fns: p.fns, globals: p.globals, ctx: p.ctx, enums: p.enums, subst: g.subst, generics: [], targs: [], movable: [], cur_sym: "", cur_frame: false, tail_rel: "", tail_ok: false, cur_proto: "", tail_observation: None };
         cg_global_roots(p, i + 1, Array.concat(acc, cg_calls_in(gp, g.body, [])))
     }
 
