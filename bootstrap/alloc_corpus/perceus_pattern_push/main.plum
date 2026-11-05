@@ -1,0 +1,28 @@
+// Growing a resource-containing array transfers its existing children into
+// the replacement. Count bytes so quadratic prefix copies cannot hide behind
+// a linear allocation count.
+extern "C" {
+    fn guard_open() -> Int;
+    fn guard_close(h: Int);
+    fn guard_live() -> Int;
+}
+handle Resource { on_drop: guard_close }
+let fill (): Unit = {
+    let root = unsafe { Resource.from_raw(guard_open()) };
+    let mut entries: Array[Resource] = [];
+    for i in 0..1024 {
+        match Some(i) {
+            Some(disposable) => {
+                assert(disposable >= 0);
+                entries = entries.push(root);
+            },
+            None => (),
+        };
+    };
+    assert_eq(entries.len(), 1024);
+    assert_eq(unsafe { guard_live() }, 1);
+}
+let main (): Unit = {
+    fill();
+    assert_eq(unsafe { guard_live() }, 0);
+}

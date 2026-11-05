@@ -1,0 +1,1 @@
+pattern ownership ok

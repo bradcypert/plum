@@ -1217,6 +1217,7 @@ let cg_expr_t (p: CgProgram) (env: Array[CgSlot]) (n: Int) (e: typecheck.TExpr) 
     match e.node {
         TResetBefore(source, token, body) => cg_reset_before(p, env, n, source, token, body, tail, pending),
         TMatchReleaseBefore(token, body) => cg_match_release_before(p, env, n, token, body, tail, pending),
+        TReleaseBefore(names, body) => cg_release_before(p, env, n, names, body, tail, pending),
         TIf(cond, then_branch, else_branch) => cg_if(p, env, n, cond, then_branch, else_branch, cg_ty(p, e), tail, pending),
         TBlockE(block) => cg_block_ty(p, env, n, block, cg_ty(p, e), tail, pending),
         TMatch(scrutinee, arms) => cg_match(p, env, n, scrutinee, arms, cg_ty(p, e), tail, pending, "", ""),
@@ -1243,6 +1244,7 @@ let cg_expr (p: CgProgram) (env: Array[CgSlot]) (n: Int) (e: typecheck.TExpr): E
     match e.node {
         TResetBefore(source, token, body) => cg_reset_before(p, env, n, source, token, body, false, ""),
         TMatchReleaseBefore(token, body) => cg_match_release_before(p, env, n, token, body, false, ""),
+        TReleaseBefore(names, body) => cg_release_before(p, env, n, names, body, false, ""),
         TInt(v) => Emit { code: "", allocas: "", releases: "", globals: "", val: v.to_string(), ty: CgInt, n: n },
         TFloat(v) => cg_float_literal(v, n),
         TBool(v) => Emit { code: "", allocas: "", releases: "", globals: "", val: if v { "1" } else { "0" }, ty: CgBool, n: n },
@@ -2261,6 +2263,7 @@ let cg_reads_max (name: String) (e: typecheck.TExpr): Int =
             None => 0,
         })),
         TMatchReleaseBefore(_, body) => cg_reads_max(name, body),
+        TReleaseBefore(names, body) => cg_cap2((if Array.contains(names, name) { 1 } else { 0 }) + cg_reads_max(name, body)),
         TResetBefore(source, _, body) => cg_cap2((if name == source { 1 } else { 0 }) + cg_reads_max(name, body)),
         TMatch(sc, arms) => cg_cap2(cg_reads_max(name, sc) + cg_reads_max_arms(name, arms, 0, 0)),
         TMatchReuse(sc, arms, _, _) => cg_cap2(cg_reads_max(name, sc) + cg_reads_max_arms(name, arms, 0, 0)),
@@ -2463,6 +2466,70 @@ let lv_reset_conflict (source: String) (e: typecheck.TExpr): Bool = {
     here || Array.any(typecheck.t_children(e), |child| lv_reset_conflict(source, child))
 }
 
+// Successful arm bindings own their references independently of the source.
+// Release a binding where neither this expression nor its local continuation
+// reads it. Plan before constructor candidates introduce artificial reads.
+// Like reset placement, only structured boundaries qualify: never descend
+// into pending operands, loop bodies, closures, or nested match selection.
+let lv_release_frontier (names: Array[String]) (e: typecheck.TExpr) (after: Array[typecheck.TExpr]): typecheck.TExpr = {
+    let eligible = Array.filter(names, |name| lv_none_read(after, name, 0));
+    let unused = Array.filter(eligible, |name| cg_reads_max(name, e) == 0);
+    // A dead binding may still supply storage to a local constructor. Keep
+    // that opportunity for the existing reuse pass, whose concrete layout
+    // checks happen in codegen. Branch recursion can still release on paths
+    // with no constructor. Calls cannot reuse this frame's slots directly.
+    let dead = if !Array.is_empty(unused) && (lv_local_constructor(e)
+        || Array.any(after, |x| lv_local_constructor(x))) { [] } else { unused };
+    let live = Array.filter(eligible, |name| !Array.contains(dead, name));
+    let body = if Array.is_empty(live) { e } else { typecheck.TExpr { ty: e.ty, node: match e.node {
+        TIf(c, a, b) => TIf(c, lv_release_frontier(live, a, after),
+            match b { None => None, Some(x) => Some(lv_release_frontier(live, x, after)) }),
+        TBlockE(b) => TBlockE(lv_release_block(live, b, 0, [], after)),
+        TResetBefore(source, token, x) => TResetBefore(source, token, lv_release_frontier(live, x, after)),
+        TMatchReleaseBefore(token, x) => TMatchReleaseBefore(token, lv_release_frontier(live, x, after)),
+        _ => e.node,
+    } } };
+    if Array.is_empty(dead) { body } else { typecheck.TExpr { ty: e.ty, node: TReleaseBefore(dead, body) } }
+}
+
+let lv_release_block (names: Array[String]) (b: typecheck.TBlock) (i: Int) (acc: Array[typecheck.TStmt]) (after: Array[typecheck.TExpr]): typecheck.TBlock =
+    if i >= b.stmts.len() {
+        typecheck.TBlock { stmts: acc, starts: b.starts, tail: match b.tail {
+            None => None, Some(x) => Some(lv_release_frontier(names, x, after)),
+        } }
+    } else {
+        let rest = lv_cat(lv_cat(after, lv_stmt_rest(b.stmts, i + 1, []), 0), lv_opt_list(b.tail), 0);
+        let value = match b.stmts[i] { TSLet(_, v) => v, TSAssign(_, v) => v, TSExpr(v) => v };
+        let planned = lv_release_frontier(names, value, rest);
+        let stmt = match b.stmts[i] { TSLet(pat, _) => TSLet(pat, planned), TSAssign(nm, _) => TSAssign(nm, planned), TSExpr(_) => TSExpr(planned) };
+        // Whole-statement releases need not be repeated. Partial branch
+        // releases may reconverge; clearing slots makes later cleanup safe.
+        let released = lv_released_before(planned);
+        let remaining = Array.filter(names, |name| !Array.contains(released, name));
+        lv_release_block(remaining, b, i + 1, acc.push(stmt), after)
+    }
+
+let lv_local_constructor (e: typecheck.TExpr): Bool =
+    match e.node {
+        TStructLit(_, _, _) => true,
+        TVariantNew(_, _, args) => !Array.is_empty(args),
+        TArrayLit(_) => true,
+        _ => Array.any(typecheck.t_children(e), |x| lv_local_constructor(x)),
+    }
+
+// Only unconditional leading releases carry over to the next statement.
+// Keep lexical scope unchanged, but never offer a cleared slot for reuse.
+let lv_released_before (e: typecheck.TExpr): Array[String] =
+    match e.node {
+        TReleaseBefore(names, _) => names,
+        TResetBefore(_, _, x) => lv_released_before(x),
+        TMatchReleaseBefore(_, x) => lv_released_before(x),
+        _ => [],
+    }
+
+let lv_after_release (ctx: LvCtx) (e: typecheck.TExpr): LvCtx =
+    LvCtx { exprs: ctx.exprs, names: lv_cat_names(ctx.names, lv_released_before(e), 0), scope: ctx.scope, replaced: ctx.replaced }
+
 let lv_node (ctx: LvCtx) (node: typecheck.TNode): typecheck.TNode =
     match node {
         // Leaves: nothing to rewrite, nothing evaluated after them.
@@ -2544,6 +2611,12 @@ let lv_node (ctx: LvCtx) (node: typecheck.TNode): typecheck.TNode =
         TMatchReuse(_, _, _, _) => node,
         TResetBefore(source, token, body) => TResetBefore(source, token, lv_expr(ctx, body)),
         TMatchReleaseBefore(token, body) => TMatchReleaseBefore(token, lv_expr(ctx, body)),
+        // A released slot cannot also be offered as constructor storage.
+        // Keep scope intact (reset names depend on its depth), but exclude
+        // these names from subsequent consuming reads/reuse candidates.
+        TReleaseBefore(names, body) => TReleaseBefore(names, lv_expr(LvCtx {
+            exprs: ctx.exprs, names: lv_cat_names(ctx.names, names, 0), scope: ctx.scope, replaced: ctx.replaced,
+        }, body)),
         TBlockE(b) => TBlockE(lv_block(ctx, b, 0, ctx.scope, [])),
         // A loop body and a closure body can run AGAIN. Pushing the body
         // into its own continuation is the back edge: anything the body
@@ -2639,13 +2712,30 @@ let lv_arm_exprs (arms: Array[typecheck.TArm]) (i: Int) (acc: Array[typecheck.TE
 let lv_arms (ctx: LvCtx) (arms: Array[typecheck.TArm]) (i: Int) (acc: Array[typecheck.TArm]) (sc: typecheck.TExpr): Array[typecheck.TArm] =
     if i >= arms.len() { acc }
     else {
-        let inner = lv_scoped(ctx, lv_pat_names(arms[i].pattern, []));
+        let bound = lv_pat_names(arms[i].pattern, []);
+        let inner = lv_scoped(ctx, bound);
+        let candidates = Array.filter(bound, |name| !Array.contains(ctx.names, name)
+            && !lv_reset_conflict(name, arms[i].body)
+            && match arms[i].guard { None => true, Some(g) => !lv_reset_conflict(name, g) });
         lv_arms(ctx, arms, i + 1, acc.push(typecheck.TArm {
             pattern: arms[i].pattern,
-            guard: lv_opt(lv_with(inner, lv_arm_exprs(arms, i, []).push(sc)), arms[i].guard),
-            body: lv_expr(inner, arms[i].body),
+            guard: lv_opt(lv_with(inner, lv_arm_exprs(arms, i, []).push(sc)), lv_release_guard(candidates, arms[i].guard)),
+            body: lv_expr(inner, lv_release_frontier(candidates, arms[i].body, [])),
         }), sc)
     }
+
+// On failure, this arm's bindings have no continuation at all. Express that
+// edge with the same release instruction as successful-body frontiers. The
+// guard is evaluated exactly once, and its existing temporary cleanup stays
+// with the match emitter. CStr pins and resource restrictions still apply.
+let lv_release_guard (names: Array[String]) (guard: Option[typecheck.TExpr]): Option[typecheck.TExpr] =
+    if Array.is_empty(names) { guard } else { match guard {
+        None => None,
+        Some(g) => Some(typecheck.TExpr { ty: g.ty, node: TIf(g,
+            typecheck.TExpr { ty: g.ty, node: TBool(true) },
+            Some(typecheck.TExpr { ty: g.ty, node: TReleaseBefore(names,
+                typecheck.TExpr { ty: g.ty, node: TBool(false) }) })) }),
+    } }
 
 // Statement `i`'s continuation is every LATER statement's value, then
 // the tail. A later ASSIGNMENT to a name is not a read, but treating it
@@ -2668,10 +2758,10 @@ let lv_block (ctx: LvCtx) (b: typecheck.TBlock) (i: Int) (scope: Array[String]) 
             // is offered under `lv_self_slot`, not under the bound
             // name, because the bound name does not mean this slot
             // yet.
-            TSLet(pat, v) => lv_block(lv_unreplace(ctx, lv_pat_names(pat, [])), b, i + 1, lv_cat_names(scope, lv_pat_names(pat, []), 0),
+            TSLet(pat, v) => lv_block(lv_unreplace(lv_after_release(ctx, v), lv_pat_names(pat, [])), b, i + 1, lv_cat_names(scope, lv_pat_names(pat, []), 0),
                 acc.push(TSLet(pat, if cg_is_ident_pattern(pat) { lv_self_reuse(lv_self_slot(()), lv_expr(sctx, v)) } else { lv_expr(sctx, v) }))),
-            TSAssign(nm, v) => lv_block(ctx, b, i + 1, scope, acc.push(TSAssign(nm, lv_self_reuse(nm, lv_expr(LvCtx { exprs: sctx.exprs, names: sctx.names, scope: sctx.scope, replaced: sctx.replaced.push(nm) }, v))))),
-            TSExpr(v) => lv_block(ctx, b, i + 1, scope, acc.push(TSExpr(lv_expr(sctx, v)))),
+            TSAssign(nm, v) => lv_block(lv_after_release(ctx, v), b, i + 1, scope, acc.push(TSAssign(nm, lv_self_reuse(nm, lv_expr(LvCtx { exprs: sctx.exprs, names: sctx.names, scope: sctx.scope, replaced: sctx.replaced.push(nm) }, v))))),
+            TSExpr(v) => lv_block(lv_after_release(ctx, v), b, i + 1, scope, acc.push(TSExpr(lv_expr(sctx, v)))),
         }
     }
 
@@ -2709,6 +2799,7 @@ let lv_self_slot (): String = "<slot>"
 // 167 apart, which was the measurement generation, not the code.
 let lv_self_reuse (nm: String) (e: typecheck.TExpr): typecheck.TExpr =
     match e.node {
+        TReleaseBefore(names, body) => typecheck.TExpr { ty: e.ty, node: TReleaseBefore(names, lv_self_reuse(nm, body)) },
         // Array.push transfers every existing element into its result. When
         // that result replaces this same slot, no payload lifetime ends early,
         // even for handles or closures. Only a proven final receiver read can
@@ -4798,6 +4889,26 @@ let cg_match_release_before (p: CgProgram) (env: Array[CgSlot]) (n: Int) (token:
         },
     }
 
+let cg_release_before (p: CgProgram) (env: Array[CgSlot]) (n: Int) (names: Array[String]) (body: typecheck.TExpr) (tail: Bool) (pending: String): Emit = {
+    let code = cg_release_bindings(p, env, names, 0, n, "");
+    let r = cg_expr_t(p, env, n + 1, body, tail, pending);
+    Emit { code: code.concat(r.code), allocas: r.allocas, releases: r.releases, globals: r.globals, val: r.val, ty: r.ty, n: r.n }
+}
+
+// Match bindings have concrete slot types here. Keep the same resource and
+// erased-closure restrictions as consuming reads; scalars need no cleanup.
+let cg_release_bindings (p: CgProgram) (env: Array[CgSlot]) (names: Array[String]) (i: Int) (n: Int) (acc: String): String =
+    if i >= names.len() { acc } else {
+        let code = match cg_lookup(env, names[i]) {
+            None => "",
+            Some(slot) => if cg_rc_enabled(()) && cg_is_heap(slot.ty)
+                && cg_early_release_safe(p, cg_concrete(p, slot.ity), []) {
+                    cg_release_slot(cg_concrete(p, slot.ity), slot.ptr, "_dead${n}_${i}")
+                } else { "" },
+        };
+        cg_release_bindings(p, env, names, i + 1, n, acc.concat(code))
+    }
+
 // The match keeps its defensive owner throughout pattern/guard selection.
 // At a proven frontier, release the original frame slot first, then reset
 // that owner. External aliases make the reset fail safely. On reconvergence
@@ -6703,6 +6814,7 @@ let cg_borrow_across (p: CgProgram) (env: Array[CgSlot]) (n: Int) (e: typecheck.
 let cg_invalidates_in (xs: Array[typecheck.TExpr]) (name: String) (i: Int): Bool =
     if i >= xs.len() { false } else {
         let here = match xs[i].node {
+            TReleaseBefore(names, _) => Array.contains(names, name),
             TResetBefore(v, _, _) => v == name,
             TMove(v) => v == name,
             TMovePreserving(v) => v == name,
@@ -7504,6 +7616,7 @@ let cg_rel_in (p: CgProgram) (e: typecheck.TExpr) (acc: Array[typecheck.ITy]): A
     match e.node {
         TResetBefore(_, _, body) => cg_rel_in(p, body, here),
         TMatchReleaseBefore(_, body) => cg_rel_in(p, body, here),
+        TReleaseBefore(_, body) => cg_rel_in(p, body, here),
         TFnCall(_, _, args, _) => cg_rel_in_list(p, args, 0, here),
         TClosureCall(callee, args) => cg_rel_in_list(p, args, 0, cg_rel_in(p, callee, here)),
         TMethodCall(_, base, args) => cg_rel_in_list(p, args, 0, cg_rel_in(p, base, here)),
@@ -7599,6 +7712,7 @@ let cg_eq_in (p: CgProgram) (e: typecheck.TExpr) (acc: Array[typecheck.ITy]): Ar
     match e.node {
         TResetBefore(_, _, body) => cg_eq_in(p, body, acc),
         TMatchReleaseBefore(_, body) => cg_eq_in(p, body, acc),
+        TReleaseBefore(_, body) => cg_eq_in(p, body, acc),
         TBinary(op, l, r) => {
             let inner = cg_eq_in(p, r, cg_eq_in(p, l, acc));
             if cg_is_equality(op) { cg_eq_close(p, cg_concrete(p, typecheck.texpr_ty(p.subst, l)), inner) } else { inner }
@@ -7708,6 +7822,7 @@ let cg_calls_in (p: CgProgram) (e: typecheck.TExpr) (acc: Array[CgInst]): Array[
     match e.node {
         TResetBefore(_, _, body) => cg_calls_in(p, body, acc),
         TMatchReleaseBefore(_, body) => cg_calls_in(p, body, acc),
+        TReleaseBefore(_, body) => cg_calls_in(p, body, acc),
         TFnCall(m, name, args, targs) => cg_calls_in_list(p, args, acc.push(CgInst { module: m, name: name, targs: cg_concrete_list(p, targs, 0, []) })),
         TClosureCall(callee, args) => cg_calls_in_list(p, args, cg_calls_in(p, callee, acc)),
         TMethodCall(_, base, args) => cg_calls_in_list(p, args, cg_calls_in(p, base, acc)),

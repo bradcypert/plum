@@ -9,10 +9,8 @@ let sum (tree: Tree): Int = match tree {
     Leaf(value) => value,
     Fork(left, right) => sum(left) + sum(right),
 }
-// The forwarding branch keeps a and b alive as pattern bindings. Their
-// child aliases still force 16 path copies per call; only the root becomes
-// unique when the match pin is released. The rebuilding branch reuses all
-// 17 path nodes. 33 initial nodes + 16 forwarding calls * 16 copies = 289.
+// Both paths release their extra pattern aliases before forwarding or
+// rebuilding. All updates reuse the original 33 nodes.
 let forward (tree: Tree) (pass: Bool): Tree = match tree {
     Leaf(v) => if pass { update(tree, 16) } else { Leaf(v + 1) },
     Fork(a, b) => if pass { update(tree, 16) } else { Fork(update(a, 15), b) },
