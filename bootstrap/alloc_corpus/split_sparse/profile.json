@@ -1,0 +1,108 @@
+{
+  "before_source": "230b302",
+  "after_runtime_commit": "f1b105b",
+  "measurement": "direct linked allocator requests; timings instrumented and not a performance verdict",
+  "phases": {
+    "before": {
+      "phase_lines": [
+        "PHASE dependency resolution bytes=27209 allocations=1013 live_peak=10200 ms=0.000",
+        "PHASE source discovery bytes=143798 allocations=5021 live_peak=27488 ms=0.872",
+        "PHASE IR lookup bytes=50565 allocations=1753 live_peak=24578 ms=0.225",
+        "PHASE lex/parse bytes=172786175 allocations=4993013 live_peak=26317840 ms=640.810",
+        "PHASE prelude/stdlib bytes=32570449 allocations=918115 live_peak=28889273 ms=104.230",
+        "PHASE type checking bytes=144347796 allocations=4915267 live_peak=31966482 ms=1270.771",
+        "PHASE reachability bytes=217003557 allocations=536768 live_peak=31569316 ms=674.219",
+        "PHASE helper discovery bytes=35953330 allocations=1128320 live_peak=31572902 ms=346.052",
+        "PHASE global emission bytes=958283 allocations=6556 live_peak=31597552 ms=2.843",
+        "PHASE helper emission bytes=123724369 allocations=2910753 live_peak=34389611 ms=483.588",
+        "PHASE function emission bytes=5800540480 allocations=66896242 live_peak=71002593 ms=12909.405",
+        "PHASE debug metadata bytes=84 allocations=3 live_peak=46058767 ms=0.014",
+        "PHASE IR join bytes=28053398 allocations=13953 live_peak=72556940 ms=4.265",
+        "PHASE before TLS scan bytes=10343 allocations=360 live_peak=46159440 ms=31.577",
+        "PHASE TLS scan bytes=244791708 allocations=441978 live_peak=271280511 ms=84.294",
+        "PHASE before shim materialization bytes=16 allocations=1 live_peak=26488819 ms=0.005",
+        "PHASE shim materialization bytes=0 allocations=0 live_peak=26488803 ms=0.000",
+        "PHASE shim writes bytes=45600 allocations=1697 live_peak=26489904 ms=0.385",
+        "PHASE shim extraction bytes=0 allocations=0 live_peak=26489597 ms=0.001",
+        "PHASE native compile/link bytes=9711 allocations=102 live_peak=26491126 ms=18358.600",
+        "PHASE exit bytes=204 allocations=5 live_peak=26489708 ms=0.290",
+        "CATEGORY outside-functions bytes=1000449490 allocations=15873669 ms=22003.194",
+        "CATEGORY fn/liveness bytes=171480616 allocations=761002 ms=276.350",
+        "CATEGORY fn/setup bytes=10748402 allocations=262749 ms=34.226",
+        "CATEGORY fn/dry bytes=2578814839 allocations=31830193 ms=5535.099",
+        "CATEGORY fn/wet bytes=2925579494 allocations=33995379 ms=6944.587",
+        "CATEGORY fn/assemble bytes=88880864 allocations=42855 ms=7.283",
+        "CATEGORY fn/rest bytes=25036161 allocations=4060 ms=111.700",
+        "compiler-heap: peak_bytes=271280511 exit_bytes=72657"
+      ],
+      "compiler_sha256": "ce6271d073299acda516c2447eb894b01d5137066d754607a487c5178a143f7a"
+    },
+    "after": {
+      "phase_lines": [
+        "PHASE dependency resolution bytes=27208 allocations=1013 live_peak=10199 ms=0.000",
+        "PHASE source discovery bytes=143798 allocations=5021 live_peak=27487 ms=0.859",
+        "PHASE IR lookup bytes=50564 allocations=1753 live_peak=24577 ms=0.223",
+        "PHASE lex/parse bytes=169988164 allocations=4993498 live_peak=26318092 ms=651.477",
+        "PHASE prelude/stdlib bytes=31930041 allocations=918276 live_peak=28889525 ms=97.228",
+        "PHASE type checking bytes=143678226 allocations=4915244 live_peak=31966620 ms=1139.169",
+        "PHASE reachability bytes=217004308 allocations=536769 live_peak=31569569 ms=648.395",
+        "PHASE helper discovery bytes=35770474 allocations=1128321 live_peak=31573155 ms=340.925",
+        "PHASE global emission bytes=947371 allocations=6556 live_peak=31597805 ms=2.806",
+        "PHASE helper emission bytes=119770252 allocations=2910750 live_peak=34389864 ms=479.570",
+        "PHASE function emission bytes=5207337723 allocations=66894799 live_peak=71002766 ms=14319.831",
+        "PHASE debug metadata bytes=84 allocations=3 live_peak=46058955 ms=0.010",
+        "PHASE IR join bytes=27468478 allocations=13962 live_peak=72557128 ms=4.818",
+        "PHASE before TLS scan bytes=10256 allocations=357 live_peak=46159628 ms=37.294",
+        "PHASE TLS scan bytes=41873788 allocations=441994 live_peak=64168092 ms=103.215",
+        "PHASE before shim materialization bytes=16 allocations=1 live_peak=26488816 ms=0.006",
+        "PHASE shim materialization bytes=0 allocations=0 live_peak=26488800 ms=0.000",
+        "PHASE shim writes bytes=45600 allocations=1697 live_peak=26489901 ms=0.408",
+        "PHASE shim extraction bytes=0 allocations=0 live_peak=26489594 ms=0.001",
+        "PHASE native compile/link bytes=9663 allocations=102 live_peak=26491123 ms=19785.940",
+        "PHASE exit bytes=203 allocations=5 live_peak=26489705 ms=0.590",
+        "CATEGORY outside-functions bytes=788691390 allocations=15874313 ms=23293.123",
+        "CATEGORY fn/liveness bytes=171480856 allocations=761001 ms=301.915",
+        "CATEGORY fn/setup bytes=10756627 allocations=262891 ms=36.460",
+        "CATEGORY fn/dry bytes=2282162411 allocations=31829376 ms=6179.034",
+        "CATEGORY fn/wet bytes=2629052255 allocations=33994624 ms=7671.639",
+        "CATEGORY fn/assemble bytes=88849309 allocations=42843 ms=8.074",
+        "CATEGORY fn/rest bytes=25036161 allocations=4060 ms=122.512",
+        "compiler-heap: peak_bytes=72557128 exit_bytes=72657"
+      ],
+      "compiler_sha256": "cf525471df64409fece6a49f6813a452467faa87984f1299287caa959f5ed786"
+    }
+  },
+  "identical_emitted_ir_sha256": "1879a3e5dd4a529e5beea539fe4efa54c089ae20df4c9786264ee2a199c78d1a",
+  "ordinary_build_timings": [
+    {
+      "label": "before",
+      "rep": 0,
+      "seconds": 32.8934845830081
+    },
+    {
+      "label": "after",
+      "rep": 0,
+      "seconds": 32.74944590893574
+    },
+    {
+      "label": "after",
+      "rep": 1,
+      "seconds": 33.109321095980704
+    },
+    {
+      "label": "before",
+      "rep": 1,
+      "seconds": 32.77924373198766
+    },
+    {
+      "label": "before",
+      "rep": 2,
+      "seconds": 32.98684059304651
+    },
+    {
+      "label": "after",
+      "rep": 2,
+      "seconds": 32.81884059298318
+    }
+  ]
+}

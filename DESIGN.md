@@ -21892,3 +21892,66 @@ Maps used inside the compiler. Final emission/checking measured 124/44 MiB
 pattern-triggered equality helpers reduced emission from the intermediate
 126 MiB. Application allocation savings do not justify relaxing compiler-memory
 ceilings.
+
+### Split output capacity and compiler native preparation
+
+Phase profiling after #447 isolated two independent costs. Function emission
+requested about 5.77 GB: roughly 2.56 GB in its dry pass and 2.91 GB in its final
+pass, compared with about 169 MB in liveness/move analysis. Removing the dry pass
+is not justified by this measurement alone: it discovers release text used for
+safe tail calls. The probes do not establish which emission operations should
+be redesigned.
+
+The full compiler build's much larger requested live-heap peak was instead in
+TLS detection, before shim materialization or Clang. `needs_tls` splits the LLVM
+text into lines. Nonempty-separator `String.split` reserved `input_bytes + 1`
+pointer slots, even if only a few pieces existed. A 26 MB IR string therefore
+reserved about 211 MB of pointer storage. This affected every split caller,
+not just the compiler.
+
+The runtime now uses a private, single-pass builder starting at the smaller of
+eight slots and the input's maximum possible piece count. When full, it doubles
+capacity and moves its owned string pointers into the replacement cell, then
+frees only the old array cell. No retain/drop of those strings is needed: the
+builder never escapes or acquires aliases until return. The final header records
+the actual length. Live capacity is bounded by a constant or twice the piece
+count, with amortized linear copying. Empty-separator codepoint splitting keeps
+its existing implementation and padding semantics.
+
+Exact sizing with a count pass was measured first, but cost 20–30% more split
+time by repeating the separator search. The selected builder keeps sparse split
+time near baseline. A five-sample dense benchmark (50 splits of 262,144 `x,`
+pairs, validating lengths) rose from about 281 to 311 ms; capacity checks and
+occasional growth are a CPU tradeoff. This is not a claim that every split gets
+faster or uses less memory at maximal separator density.
+
+A permanent allocation regression builds a 1 MiB string by doubling and splits
+it on an absent separator. It previously requested 11,534,715 bytes; it now
+requests 3,146,163 bytes, with 22 allocation calls in both cases and a 4 MB byte
+ceiling. Semantic coverage includes leading/trailing/repeated and overlapping
+separators, empty input, Unicode, embedded NUL data constructed through Bytes,
+multiple growth boundaries, shared result arrays and an escaping child string.
+A public-API property compares generated inputs against a codepoint-level oracle.
+
+On identical instrumented compiler inputs, the TLS scan's requested allocation
+traffic falls from 244,791,708 to 41,873,788 bytes, and its requested live-heap peak
+falls from 271,280,511 to 64,168,092 bytes. The complete compiler build's peak then
+moves back to emission: 72,557,128 bytes, about 73% below the prior peak. These
+are directly wrapped allocator requests, not physical RSS. Allocator reservation
+can differ from resident pages; Clang-inclusive RSS is a separate metric. The
+instrumented before/after compilers emit byte-identical IR. The probe checkouts
+keep all allocation/category hooks outside production compiler sources.
+
+The bootstrap seed is refreshed so the compiler distributed through CI also
+uses the builder internally. Functional seed equivalence alone was insufficient
+for this performance property: a source-built compiler can emit a new runtime
+while still using the seed's older runtime itself. The refreshed seed is rebuilt
+with Clang, then builds today's source, and that compiler's build behavior is
+measured again. This refresh naturally includes preceding merged compiler work;
+the generated seed diff is large and must be reviewed as a generated artifact.
+
+Three isolated, alternating ordinary full-compiler release builds using the
+before compiler and the fresh seed-to-source compiler measured medians of
+32.893 and 32.819 seconds, respectively (before range 32.779–32.987; after
+32.749–33.109). This supports no meaningful end-to-end throughput change on
+this workload; instrumented phase timings above are not used for that claim.
