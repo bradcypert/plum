@@ -702,7 +702,8 @@ pub let set_debug_info (on: Bool): Unit = DEBUG_INFO.set(on)
 
 let no_dbg_files (unit: Unit): Array[DbgFile] = []
 let DBG_FILES: Ref[Array[DbgFile]] = ref(no_dbg_files(()))
-let DBG_META: Ref[String] = ref("")
+let no_dbg_meta (unit: Unit): Array[String] = []
+let DBG_META: Ref[Array[String]] = ref(no_dbg_meta(()))
 // `!0` to `!4` are the fixed nodes `cg_dbg_module` emits -- five of
 // them, not four, which is exactly the off-by-one that first produced
 // `Metadata id is already used`. Everything else is allocated here.
@@ -710,7 +711,7 @@ let DBG_ID: Ref[Int] = ref(5)
 
 pub let cg_dbg_reset (unit: Unit): Unit = {
     DBG_FILES.set(no_dbg_files(()));
-    DBG_META.set("");
+    DBG_META.set(no_dbg_meta(()));
     DBG_ID.set(5)
 }
 
@@ -720,7 +721,14 @@ let cg_dbg_next (unit: Unit): Int = {
     k
 }
 
-let cg_dbg_emit (line: String): Unit = DBG_META.set(DBG_META.get().concat(line))
+// Keep metadata as ordered fragments until the module is complete. Taking
+// the array out of the Ref before pushing removes that extra owner, so the
+// normal last-use/reuse path can grow it without copying every prefix.
+let cg_dbg_emit (line: String): Unit = if line == "" { () } else {
+    let parts = DBG_META.get();
+    DBG_META.set(no_dbg_meta(()));
+    DBG_META.set(parts.push(line))
+}
 
 // Where every line of a file begins, computed ONCE per file. The
 // obvious `lexer.line_col` cannot be used here: it calls `chars_of` on
@@ -895,7 +903,7 @@ let cg_dbg_fn (shown: String) (path: String) (offset: Int): DbgRef =
 // metadata inside an operand list and produce IR that does not parse.
 let cg_dbg_attach (body: String) (loc: Int) (sp: Int) (f: DbgFile): String =
     if loc < 0 { body }
-    else { cg_dbg_lines(String.split(body, "\n"), 0, loc, false, "", sp, f) }
+    else { cg_dbg_lines(String.split(body, "\n"), 0, loc, false, [], sp, f) }
 
 // A `; plum.off N` marker moves the current location to the line
 // holding offset N; every instruction after it is attributed there.
@@ -906,33 +914,80 @@ let cg_dbg_marker_off (l: String): Int =
     if l.starts_with("  ; plum.off ") { Result.unwrap_or(String.parse_int(String.trim_end(String.slice(l, 13, l.len()))), 0 - 1) }
     else { 0 - 1 }
 
-let cg_dbg_lines (ls: Array[String]) (i: Int) (loc: Int) (in_list: Bool) (acc: String) (sp: Int) (f: DbgFile): String =
-    if i >= ls.len() { acc }
+// Thread an owned fragment array through tail calls, appending once per
+// branch. Later assignments to the same name conservatively pin earlier
+// reads, so build each line before pushing it. Join the complete body once.
+let cg_dbg_lines (ls: Array[String]) (i: Int) (loc: Int) (in_list: Bool) (parts: Array[String]) (sp: Int) (f: DbgFile): String =
+    if i >= ls.len() { Array.concat_all(parts) }
     else {
         let l = ls[i];
         let off = cg_dbg_marker_off(l);
         // The last element of a split on a trailing newline is empty;
         // re-emitting it would double the newline.
-        if i == ls.len() - 1 && l == "" { acc }
+        if i == ls.len() - 1 && l == "" { Array.concat_all(parts) }
         else if in_list {
-            cg_dbg_lines(ls, i + 1, loc, !(String.trim_end(l) == "  ]"), acc.concat(l).concat("\n"), sp, f)
+            parts = parts.push(l.concat("\n"));
+            cg_dbg_lines(ls, i + 1, loc, !(String.trim_end(l) == "  ]"), parts, sp, f)
         }
         else if off >= 0 {
-            cg_dbg_lines(ls, i + 1, cg_dbg_loc(sp, f, off), false, acc.concat(l).concat("\n"), sp, f)
+            parts = parts.push(l.concat("\n"));
+            cg_dbg_lines(ls, i + 1, cg_dbg_loc(sp, f, off), false, parts, sp, f)
         }
         else if l.starts_with("  ") && !l.starts_with("  ;") && String.trim_end(l) != "" {
             let opens = l.ends_with("[");
-            cg_dbg_lines(ls, i + 1, loc, opens,
-                acc.concat(l).concat(if opens { "" } else { ", !dbg !".concat(loc.to_string()) }).concat("\n"), sp, f)
+            parts = parts.push(l.concat(if opens { "" } else { ", !dbg !".concat(loc.to_string()) }).concat("\n"));
+            cg_dbg_lines(ls, i + 1, loc, opens, parts, sp, f)
         }
-        else { cg_dbg_lines(ls, i + 1, loc, false, acc.concat(l).concat("\n"), sp, f) }
+        else {
+            parts = parts.push(l.concat("\n"));
+            cg_dbg_lines(ls, i + 1, loc, false, parts, sp, f)
+        }
     }
+
+pub let test_debug_annotation_text_and_locations (): Unit = {
+    cg_dbg_reset(());
+    set_debug_info(true);
+    let file = DbgFile { path: "", id: 1, starts: [0, 4, 8] };
+    let body = "entry:\n  %x = add i64 1, 2\n\n  ; comment\n  switch i64 %x, label %done [\n    i64 0, label %done\n  ]\ndone:\n  ; plum.off 4\n  ret i64 %x\n";
+    let expected = "entry:\n  %x = add i64 1, 2, !dbg !7\n\n  ; comment\n  switch i64 %x, label %done [\n    i64 0, label %done\n  ]\ndone:\n  ; plum.off 4\n  ret i64 %x, !dbg !5\n";
+    assert_eq(cg_dbg_attach(body, 7, 8, file), expected);
+    assert_eq(cg_dbg_attach("", 7, 8, file), "");
+    assert_eq(cg_dbg_attach("  ret i64 0", 7, 8, file), "  ret i64 0, !dbg !7\n");
+    assert_eq(cg_dbg_attach(body, 0 - 1, 8, file), body);
+    let markers = "  ; plum.off 8\n  ret i64 1\n  ; plum.off 4\n  ret i64 2\n";
+    assert_eq(cg_dbg_attach(markers, 7, 8, file),
+        "  ; plum.off 8\n  ret i64 1, !dbg !6\n  ; plum.off 4\n  ret i64 2, !dbg !5\n");
+    assert(cg_dbg_module(()).ends_with("!5 = !DILocation(line: 2, column: 1, scope: !8)\n!6 = !DILocation(line: 3, column: 1, scope: !8)\n"));
+    cg_dbg_reset(());
+    set_debug_info(false)
+}
+
+pub let test_debug_metadata_snapshots_and_reset (): Unit = {
+    cg_dbg_reset(());
+    set_debug_info(true);
+    assert_eq(cg_dbg_module(()), "");
+    cg_dbg_emit("");
+    assert_eq(cg_dbg_module(()), "");
+    cg_dbg_emit("first\n");
+    cg_dbg_emit("second\n");
+    let snapshot = cg_dbg_module(());
+    cg_dbg_emit("third\n");
+    assert(snapshot.ends_with("first\nsecond\n"));
+    assert(cg_dbg_module(()).ends_with("first\nsecond\nthird\n"));
+    cg_dbg_reset(());
+    assert_eq(cg_dbg_module(()), "");
+    cg_dbg_emit("fourth\n");
+    assert(cg_dbg_module(()).ends_with("fourth\n"));
+    assert(!cg_dbg_module(()).contains("first\n"));
+    cg_dbg_reset(());
+    set_debug_info(false)
+}
 
 // The fixed nodes, and the compile unit every subprogram points at.
 // Emitted only when something actually produced debug info, so a
 // release build's module carries none of this.
 pub let cg_dbg_module (unit: Unit): String =
-    if !DEBUG_INFO.get() || DBG_META.get() == "" { "" }
+    if !DEBUG_INFO.get() || DBG_META.get().len() == 0 { "" }
     else {
         "\n!llvm.module.flags = !{!0}\n!llvm.dbg.cu = !{!1}\n"
             .concat("!0 = !{i32 2, !\"Debug Info Version\", i32 3}\n")
@@ -949,7 +1004,7 @@ pub let cg_dbg_module (unit: Unit): String =
             // line tables only, nothing reads it.
             .concat("!3 = !DISubroutineType(types: !4)\n")
             .concat("!4 = !{null}\n")
-            .concat(DBG_META.get())
+            .concat(Array.concat_all(DBG_META.get()))
     }
 
 let TAIL_SITE: Ref[Int] = ref(0)

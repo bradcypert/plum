@@ -111,6 +111,85 @@ elif grep -qE "DISubprogram|DICompileUnit|!dbg !" "$work/rel.ll"; then
     fail=1
 fi
 
+# Exercise the public emission path at two widths. The release run removes
+# shared parsing/type-checking/emission costs from the debug allocation budget.
+# Repeatedly copying the annotated prefix grows faster than these linear caps.
+if ! python3 - "$plum" "$work" <<'PYDEBUG'
+import os
+from pathlib import Path
+import re
+import subprocess
+import sys
+
+compiler, work = sys.argv[1], Path(sys.argv[2])
+failed = False
+
+def extra_bytes(project):
+    totals = []
+    debug_ir = b""
+    for flags in ([], ["--release"]):
+        result = subprocess.run([compiler, "emit-llvm", str(project), *flags],
+                                capture_output=True, timeout=120,
+                                env=dict(os.environ, PLUM_RT_STATS="1"))
+        if result.returncode:
+            sys.stderr.buffer.write(result.stdout + result.stderr)
+            sys.exit("debug allocation fixture failed to emit")
+        if not flags:
+            debug_ir = result.stdout
+        elif b"!DILocation(" in result.stdout:
+            sys.exit("release allocation fixture unexpectedly carries debug info")
+        stats = re.search(rb"\[plum-rt\] alloc n=[0-9]+ bytes=([0-9]+)", result.stderr)
+        if not stats:
+            sys.exit("debug allocation fixture produced no runtime counters")
+        totals.append(int(stats[1]))
+    return totals[0] - totals[1], debug_ir
+
+for count in (128, 256):
+    project = work / ("debug-width-" + str(count))
+    project.mkdir()
+    (project / "main.plum").write_text(
+        'let main (): Unit = {\n' + '    println("x");\n' * count + '}\n')
+    extra, debug_ir = extra_bytes(project)
+    locations = {int(line) for line in re.findall(rb"!DILocation\(line: ([0-9]+),", debug_ir)}
+    if not set(range(2, count + 2)).issubset(locations):
+        sys.exit("wide allocation fixture lost statement locations")
+    ceiling = count * 31250
+    print("  debug allocation width=%d extra=%d bytes (ceiling %d)" %
+          (count, extra, ceiling), flush=True)
+    if extra > ceiling:
+        print("FAIL: debug line attachment exceeded its allocation budget", flush=True)
+        failed = True
+
+# A reachable tree keeps each function tiny while growing module metadata.
+# This catches copying the metadata prefix independently of wide bodies.
+for count in (127, 255):
+    project = work / ("debug-functions-" + str(count))
+    project.mkdir()
+    functions = []
+    for i in range(count):
+        children = [j for j in (i * 2 + 1, i * 2 + 2) if j < count]
+        body = "{ " + "; ".join("f%d(())" % j for j in children) + " }" if children else "()"
+        functions.append("let f%d (): Unit = %s" % (i, body))
+    functions.append("let main (): Unit = f0(())")
+    (project / "main.plum").write_text("\n".join(functions) + "\n")
+    extra, debug_ir = extra_bytes(project)
+    names = set(re.findall(rb'DISubprogram\(name: "([^"]+)"', debug_ir))
+    expected_names = {("f%d" % i).encode() for i in range(count)} | {b"main"}
+    if not expected_names.issubset(names):
+        sys.exit("metadata allocation fixture lost function locations")
+    ceiling = count * 32768
+    print("  debug metadata functions=%d extra=%d bytes (ceiling %d)" %
+          (count, extra, ceiling), flush=True)
+    if extra > ceiling:
+        print("FAIL: debug metadata exceeded its allocation budget", flush=True)
+        failed = True
+if failed:
+    sys.exit("debug emission exceeded its allocation budgets")
+PYDEBUG
+then
+    fail=1
+fi
+
 # --- the linked binary, where it actually matters ---
 #
 # The IR above is what this compiler WROTE. This is what a debugger

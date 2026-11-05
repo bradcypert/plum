@@ -163,7 +163,10 @@ esac
 
 # 120 MB on Linux with compact TLS embedding; 744 MB measured on the
 # pre-fix compiler, before tail calls in a cycle returned early.
-check "$emit_ceiling" 0 "emit-llvm, whole compiler" emit-llvm bootstrap/self_host
+# Fragment collection reduced default/debug allocation traffic from about
+# 38.4 GB to 6.7 GB. Keep an independent requested-byte budget: RSS alone
+# does not catch repeatedly copying either annotated text or metadata.
+check "$emit_ceiling" 8000000000 "emit-llvm, whole compiler" emit-llvm bootstrap/self_host
 
 # 40 MB on Linux with compact TLS embedding; 83 MB on that same pre-fix
 # compiler.
