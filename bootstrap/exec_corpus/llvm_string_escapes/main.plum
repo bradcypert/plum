@@ -1,4 +1,10 @@
 // LLVM escapes must preserve literal escape-like text, control bytes,
 // and multi-byte UTF-8. Backslashes introduced by escaping other bytes
 // must not themselves be escaped a second time.
-let main (): Unit = println(Bytes.from_string("\"\\22\\\n\t\rλ🙂").to_hex())
+let main (): Unit = {
+    println(Bytes.from_string("\"\\22\\\n\t\rλ🙂").to_hex());
+    assert_eq("\x00".len(), 1);
+    assert_eq(Bytes.from_string("\x00a\x00\x00b\x00").to_hex(), "006100006200");
+    assert_eq(String.split("left\x00right", "\x00"), ["left", "right"]);
+    println(Bytes.from_string("\x00\\00\x00\\5C").to_hex());
+}

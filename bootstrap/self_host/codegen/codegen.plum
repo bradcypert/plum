@@ -543,16 +543,15 @@ let cg_label (n: Int): String = "L".concat(n.to_string())
 // already a BYTE count, not a codepoint count), plus one for the
 // trailing NUL every cell carries.
 //
-// Only the four bytes LLVM's `c"..."` syntax can't carry literally are
-// escaped. Everything else — including multi-byte UTF-8 — passes
-// through as raw bytes, which is exactly right: `c"..."` is a byte
-// string, and a codepoint's own bytes need no special handling.
+// Escape formatting delimiters and NUL so the LLVM module stays safe
+// for text output, including the CLI's C-string stdout path. Other bytes,
+// including multi-byte UTF-8, pass through: `c"..."` is a byte string.
 // Replace whole byte strings rather than allocating a cell for every
 // character in an embedded file. Escape backslashes first, so later
 // replacements do not escape the backslashes they introduce.
 let cg_escape_llvm (s: String): String =
     s.replace("\\", "\\5C").replace("\"", "\\22")
-        .replace("\n", "\\0A").replace("\t", "\\09").replace("\r", "\\0D")
+        .replace("\x00", "\\00").replace("\n", "\\0A").replace("\t", "\\09").replace("\r", "\\0D")
 
 // A string literal is emitted as a COMPLETE, STATIC cell — refcount,
 // length and bytes — not as raw bytes to be copied into a fresh cell at
