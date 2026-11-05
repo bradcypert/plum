@@ -60,6 +60,19 @@ let pong (n: Int) (s: String): Int =
 let odd_a (n: Int) (s: String): Int = if n == 0 { s.len() } else { odd_b(n - 1, [s.concat("c")]) }
 let odd_b (n: Int) (xs: Array[String]): Int = if n == 0 { xs.len() } else { odd_a(n - 1, xs[0]) }
 
+// Repeated cyclic and acyclic tail sites in the same generic function.
+// Each specialization must keep its own cycle verdicts and release policy.
+let finish[T] (value: T): T = value
+let mixed[T] (n: Int) (value: T): T =
+    if n == 0 { finish(value) }
+    else if n % 2 == 0 { mixed(n - 1, value) }
+    else { match Some(value) { Some(v) => mixed(n - 1, v), None => finish(value) } }
+
+// A call to the same source name with different type arguments is not a
+// self-call. Only the Int specialization can call back to itself.
+let specialize[T] (value: T) (n: Int): Int =
+    if n == 0 { 7 } else { specialize(n, n - 1) }
+
 let main (): Unit = {
     println(through(2000, "abc").to_string());
     println(via_let(2000, "abc").to_string());
@@ -67,4 +80,7 @@ let main (): Unit = {
     println(nested(100, "abc").to_string());
     println(ping(300, "x").to_string());
     println(odd_a(300, "x").to_string());
+    println(mixed(2000, "a".concat("bc")));
+    println(mixed(2000, 42));
+    println(specialize("start".concat(" here"), 2000));
 }

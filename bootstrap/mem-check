@@ -108,31 +108,43 @@ fail=0
 # to emit and 40 MB to check. Embedding files directly replaced the
 # per-line string arrays that had raised emission to 570 MB. The
 # existing 128/64 MB ceilings still pass; no guard increase is needed.
-peak_kb() {
+compiler_usage() {
     python3 - "$@" <<'PY'
-import resource, shutil, subprocess, sys
+import os, re, resource, shutil, subprocess, sys
 runner = next((t for t in ("timeout", "gtimeout") if shutil.which(t)), None)
 argv = ([runner, "600"] if runner else []) + sys.argv[1:]
-rc = subprocess.run(argv,
-                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL).returncode
+result = subprocess.run(argv,
+                    stdout=subprocess.DEVNULL, stderr=subprocess.PIPE,
+                    env=dict(os.environ, PLUM_RT_STATS="1"))
+stats = result.stderr.decode("utf-8", errors="replace")
+match = re.search(r"\[plum-rt\] alloc n=[0-9]+ bytes=([0-9]+)", stats)
+allocated = int(match[1]) if match else -1
+rc = result.returncode
 kb = resource.getrusage(resource.RUSAGE_CHILDREN).ru_maxrss
 if sys.platform == "darwin":
     kb //= 1024
-print("%d %d" % (kb, rc))
+print("%d %d %d" % (kb, rc, allocated))
 PY
 }
 
-check() {   # <threshold-KB> <label> <args...>
-    local limit="$1" label="$2"; shift 2
-    local out kb rc
-    out="$(peak_kb "$plum" "$@")" || { echo "FAIL: $label could not be measured" >&2; fail=1; return; }
-    kb="${out%% *}"; rc="${out##* }"
+check() {   # <threshold-KB> <allocated-byte-ceiling-or-0> <label> <args...>
+    local limit="$1" byte_limit="$2" label="$3"; shift 3
+    local out kb rc allocated
+    out="$(compiler_usage "$plum" "$@")" || { echo "FAIL: $label could not be measured" >&2; fail=1; return; }
+    read -r kb rc allocated <<< "$out"
     if [ "$rc" != "0" ]; then
         echo "FAIL: $label exited $rc -- measuring a failed run proves nothing" >&2
         fail=1
         return
     fi
     printf '  %-34s %6d MB   (ceiling %d MB)\n' "$label" "$((kb / 1024))" "$((limit / 1024))"
+    if [ "$byte_limit" -gt 0 ]; then
+        printf '    cumulative allocated bytes: %s (ceiling %s)\n' "$allocated" "$byte_limit"
+        if [ "$allocated" -lt 0 ] || [ "$allocated" -gt "$byte_limit" ]; then
+            echo "FAIL: $label missing allocation stats or over its byte ceiling" >&2
+            fail=1
+        fi
+    fi
     if [ "$kb" -gt "$limit" ]; then
         echo "FAIL: $label peaked at $kb KiB, over its $limit KiB ceiling" >&2
         fail=1
@@ -151,11 +163,19 @@ esac
 
 # 120 MB on Linux with compact TLS embedding; 744 MB measured on the
 # pre-fix compiler, before tail calls in a cycle returned early.
-check "$emit_ceiling" "emit-llvm, whole compiler" emit-llvm bootstrap/self_host
+check "$emit_ceiling" 0 "emit-llvm, whole compiler" emit-llvm bootstrap/self_host
 
 # 40 MB on Linux with compact TLS embedding; 83 MB on that same pre-fix
 # compiler.
-check "$check_ceiling" "check, whole compiler" check bootstrap/self_host
+check "$check_ceiling" 0 "check, whole compiler" check bootstrap/self_host
+
+# Selective emission replay reduced release emission from about 6.0 GB
+# to 4.5 GB allocated cumulatively. RSS alone cannot catch that regression:
+# cumulative allocation traffic can fall without moving the live peak.
+# Use the built-in requested-byte counter, not allocator-dependent timing.
+# This leaves about 1 GB for growth while rejecting unconditional replay.
+# Release mode also keeps debug line-attachment work out of this budget.
+check "$emit_ceiling" 5500000000 "release emit-llvm, whole compiler" emit-llvm bootstrap/self_host --release
 
 [ $fail -ne 0 ] && exit 1
 echo "mem-check: the compiler stays within its memory ceilings"
