@@ -1,0 +1,24 @@
+enum Tree { Leaf(Int), Fork(Tree, Tree) }
+let build (depth: Int): Tree =
+    if depth == 0 { Leaf(depth + 1) } else { Fork(build(depth - 1), Leaf(depth + 1)) }
+let update (tree: Tree) (depth: Int): Tree = match tree {
+    Leaf(value) => if value < 0 { tree } else { Leaf(value + 1) },
+    Fork(left, right) => if depth < 0 { tree } else { Fork(update(left, depth - 1), right) },
+}
+let sum (tree: Tree): Int = match tree {
+    Leaf(value) => value,
+    Fork(left, right) => sum(left) + sum(right),
+}
+// The forwarding branch keeps a and b alive as pattern bindings. Their
+// child aliases still force 16 path copies per call; only the root becomes
+// unique when the match pin is released. The rebuilding branch reuses all
+// 17 path nodes. 33 initial nodes + 16 forwarding calls * 16 copies = 289.
+let forward (tree: Tree) (pass: Bool): Tree = match tree {
+    Leaf(v) => if pass { update(tree, 16) } else { Leaf(v + 1) },
+    Fork(a, b) => if pass { update(tree, 16) } else { Fork(update(a, 15), b) },
+}
+let main (): Unit = {
+    let mut tree = build(16);
+    for i in 0..32 { tree = forward(tree, i < 16); };
+    assert_eq(sum(tree), 185);
+}

@@ -1,0 +1,96 @@
+// Branch last-use frontiers must preserve snapshots, outstanding borrows,
+// guard fallthrough and escaping aliases. Dynamic payloads expose RC errors.
+enum Tree { Leaf(String), Fork(Tree, Tree) }
+let leaf (n: Int): Tree = Leaf(n.to_string())
+let build (n: Int): Tree = if n == 0 { leaf(n) } else { Fork(build(n - 1), leaf(n)) }
+let size (t: Tree): Int = match t { Leaf(s) => s.len(), Fork(a, b) => size(a) + size(b) }
+let update (t: Tree) (keep: Bool): Tree = match t {
+    Leaf(s) => if keep { t } else { Leaf(s.concat("!")) },
+    Fork(a, b) => if keep { t } else { Fork(update(a, false), b) },
+}
+let condition (t: Tree): Tree = match t {
+    Leaf(s) => if size(t) == 0 { t } else { Leaf(s.concat("!")) },
+    Fork(a, b) => if size(t) == 0 { t } else { Fork(condition(a), b) },
+}
+let sequence (t: Tree) (flag: Bool): Tree = match t {
+    Leaf(s) => {
+        if flag { assert(size(t) > 0); } else { assert(s.len() > 0); };
+        assert(s.len() > 0);
+        Leaf(s.concat("!"))
+    },
+    Fork(a, b) => { assert(size(t) > 0); Fork(sequence(a, flag), b) },
+}
+let guarded (t: Tree): Tree = match t {
+    Leaf(_) if size(t) < 0 => t,
+    Leaf(s) if size(t) > 0 => Leaf(s.concat("!")),
+    Fork(_, _) if size(t) < 0 => t,
+    Fork(a, b) => Fork(guarded(a), b),
+    _ => t,
+}
+let borrow (t: Tree): Bool = t == update(t, false)
+let capture (t: Tree): () -> Tree = match t {
+    Leaf(s) => if s.len() == 0 { || leaf(1) } else { || t },
+    Fork(_, _) => || t,
+}
+let nested (t: Tree): Tree = match t {
+    Leaf(s) => if s.len() == 0 { t } else { match s.len() { 1 => Leaf(s.concat("!")), _ => Leaf(s) } },
+    Fork(a, b) => if size(t) == 0 { t } else { Fork(nested(a), b) },
+}
+let shadow (t: Tree): Tree = match t {
+    Leaf(s) => { let t = leaf(9); if s.len() == 0 { t } else { Leaf(s.concat("!")) } },
+    Fork(a, b) => Fork(shadow(a), b),
+}
+let reassigned (initial: Tree): Tree = {
+    let mut t = initial;
+    match t {
+        Leaf(s) => { t = leaf(99); if s.len() == 0 { t } else { Leaf(s.concat("!")) } },
+        Fork(a, b) => { t = leaf(99); Fork(a, b) },
+    }
+}
+let loop_read (t: Tree): Tree = match t {
+    Leaf(s) => { for i in 0..3 { assert(size(t) > 0); }; Leaf(s.concat("!")) },
+    Fork(a, b) => { for i in 0..3 { assert(size(t) > 0); }; Fork(loop_read(a), b) },
+}
+let countdown (t: Tree) (n: Int): Tree = match t {
+    Leaf(s) => if n == 0 { t } else { countdown(Leaf(s), n - 1) },
+    Fork(a, b) => if n == 0 { t } else { countdown(Fork(a, b), n - 1) },
+}
+let prune (t: Tree) (keep: Bool): Tree = match t {
+    Leaf(_) => t,
+    Fork(a, _) => if keep { t } else { prune(a, false) },
+}
+let main (): Unit = {
+    let original = build(4);
+    assert_eq(size(update(original, true)), 5);
+    assert_eq(size(update(original, false)), 6);
+    assert_eq(size(original), 5);
+    assert_eq(size(update(build(4), false)), 6);
+    assert_eq(size(condition(build(4))), 6);
+    assert_eq(size(sequence(build(4), true)), 6);
+    assert_eq(size(sequence(build(4), false)), 6);
+    assert_eq(size(guarded(build(4))), 6);
+    assert(!borrow(build(4)));
+    let f = capture(build(4));
+    assert_eq(size(f()), 5);
+    assert_eq(size(f()), 5);
+    assert_eq(size(nested(build(4))), 6);
+    assert_eq(size(shadow(build(4))), 6);
+    assert_eq(size(reassigned(leaf(2))), 2);
+    assert_eq(size(reassigned(build(4))), 5);
+    assert_eq(size(loop_read(build(4))), 6);
+    assert_eq(size(countdown(build(4), 1000)), 5);
+    assert_eq(size(prune(build(4), true)), 5);
+    assert_eq(size(prune(build(4), false)), 1);
+    let mut t = leaf(1);
+    for i in 0..8 {
+        t = match t {
+            Leaf(s) => if i < 4 { t } else { Leaf(s.concat("!")) },
+            Fork(_, _) => t,
+        };
+    };
+    assert_eq(size(t), 5);
+    let holder = ref(build(4));
+    holder.set(update(holder.get(), false));
+    assert_eq(size(holder.get()), 6);
+    println("branch ownership ok");
+}

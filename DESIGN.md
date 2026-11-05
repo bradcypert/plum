@@ -21651,3 +21651,81 @@ peak RSS fell from 130,404 to 125,532 KiB. This reduces compiler overhead and
 avoids retaining unusable empty storage in generated programs. Memory ceilings
 remain unchanged; failures now report exact KiB rather than truncating both
 the peak and ceiling to the same whole-MB value.
+
+### Branch-specific reset placement (#441)
+
+A match may forward its original scrutinee on one path and rebuild it on
+another. Treating the source as live for the entire match kept its child
+edges alive during recursive work, so even a uniquely owned tree copied its
+update path. The liveness pass now plans explicit last-use frontiers against
+the original typed expressions, before constructor reuse candidates add
+synthetic reads. Placement remains in liveness; codegen implements the
+ownership operation and concrete layout/resource checks.
+
+`TResetBefore` releases the original frame slot and then resets the match's
+defensive owner. Pattern binding and guard selection finish before either
+operation. Unique parents yield raw reusable storage and release their child
+edges before recursion; shared parents lose only this frame's references.
+A null owner makes a reconverging frontier a no-op, preserving any unused
+raw token. A match without a compatible constructor releases the parent
+without reserving storage. Terminal forwarding paths use
+`TMatchReleaseBefore` to drop only the defensive owner, so passing the
+original to another function does not artificially defeat its uniqueness.
+Matches with no reset frontier keep ordinary arm-entry release.
+
+The proof is intentionally structured: successful arm entry, `if` branch
+entry, and block sequence boundaries. It does not insert resets inside
+argument evaluation, loop bodies, or closures, nor recursively plan through
+nested matches. Source assignment or shadowing anywhere in the match rejects
+the plan. Existing frame-ownership, raw CStr, resource-lifetime, and closure
+restrictions still apply. Existing borrow protection sees reset annotations
+as source invalidations. A general control-flow ownership IR with binding
+identities could extend these boundaries, but is not required for this case.
+
+The allocation regressions build a 33-node tree and update one 17-node path
+32 times. The unique case goes from 577 allocations / 18,464 requested bytes
+to 33 / 1,056. Keeping the original snapshot takes 50 / 1,600: one path copy,
+then reuse of the new path. Separate forwarding-only and mixed forwarding /
+rebuilding fixtures ensure the match pin does not introduce fresh copying.
+The sanitizer fixture covers forwarding, shared snapshots, condition and
+block last uses, reconverging resets, guards, nested matches, overlapping
+borrows, escaping captures, reassignment, shadowing, loops, direct assignment
+replacement, Ref-held roots, and tail calls.
+
+These are cumulative allocation measurements, not peak live memory or RSS.
+They establish less allocation/copying for uniquely owned rebuilds; retained
+versions still require distinct live nodes. The unchanged bounded 1,000-key
+Int prototype gives another diagnostic (requested bytes during local build):
+
+| representation | after #434 | branch-specific reset |
+| --- | ---: | ---: |
+| flat Map | 25,068,560 | 25,068,560 |
+| Patricia | 471,744 | 95,952 |
+| bitmap trie, 16-way | 492,120 | 452,200 |
+| bitmap trie, 32-way | 630,376 | 590,456 |
+| red-black tree | 712,384 | 671,488 |
+
+For Patricia, a Ref-held root still requests 471,744 bytes and keeping every
+version requests 496,128, because those workloads retain aliases. The local
+case has 1,999 node allocations, matching its final tree size. Native malloc
+tracking reports zero live bytes after each prototype scope; this does not
+prove allocator RSS falls. Collisions and deletion remain absent from these
+throwaway representations. #281 stays open: production Map still copies its
+flat bucket table, and choosing its representation requires the complete
+workload comparison. This compiler improvement makes that comparison fairer
+without committing Map to a trie or tree.
+
+One remaining alias source is tracked in #442: heap-valued pattern bindings
+used only by another branch stay owned until function exit. In the mixed
+forwarding/rebuilding fixture these bindings still require 16 child-path
+copies per forwarding call (289 allocations total), although the root now
+reuses its cell. With a scalar payload and no child aliases, 32 mixed updates
+reuse one allocation. Neither behavior is hidden by loosening an existing
+allocation ceiling.
+
+On the final local Linux x86_64 build, the existing compiler-memory gate
+reports 122 MiB for whole-compiler LLVM emission and 43 MiB for checking,
+within the unchanged 128/64 MiB limits. Seed-to-source equivalence and the
+self-hosting fixed point pass without regenerating the seed. This separates
+application allocation improvements from compiler memory overhead; CI remains
+the check for other platforms.
