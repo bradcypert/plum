@@ -1909,3 +1909,36 @@ pub let test_map_persistent_updates (): Unit = {
         }; };
     }
 }
+
+// Codepoint-level oracle independent of the runtime's byte scan/capacity.
+let split_reference (text: String) (separator: String): Array[String] = {
+    let chars = chars_of(text);
+    let sep = chars_of(separator);
+    if sep.len() == 0 {
+        let mut out = [""];
+        for c in chars { out = out.push(c); };
+        out.push("")
+    } else {
+        let mut out = [];
+        let mut piece = "";
+        let mut next = 0;
+        for i in 0..chars.len() {
+            if i >= next {
+                let mut matches = sep.len() <= chars.len() - i;
+                if matches { for j in 0..sep.len() { if chars[i + j] != sep[j] { matches = false; }; }; };
+                if matches { out = out.push(piece); piece = ""; next = i + sep.len(); }
+                else { piece = piece.concat(chars[i]); };
+            };
+        };
+        out.push(piece)
+    }
+}
+
+pub let test_split_pieces (): Unit = {
+    for seed in 1..151 {
+        let text = search_text(next_seed(seed), rand_between(seed, 0, 30), "");
+        for separator in ["", "a", "aa", "aab", "é", "🙂", "never"] {
+            assert_eq(String.split(text, separator), split_reference(text, separator));
+        };
+    }
+}

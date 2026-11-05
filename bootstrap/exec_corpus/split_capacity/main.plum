@@ -1,0 +1,20 @@
+let main (): Unit = {
+    assert_eq(String.split("", ":"), [""]);
+    assert_eq(String.split("abc", "longer"), ["abc"]);
+    assert_eq(String.split("aaaaa", "aa"), ["", "", "a"]);
+    assert_eq(String.split("::a::::b::", "::"), ["", "a", "", "b", ""]);
+    assert_eq(String.split("é🙂é🙂", "🙂"), ["é", "é", ""]);
+    assert_eq(String.split("abc", ""), ["", "a", "b", "c", ""]);
+    assert_eq(String.split("", ""), ["", ""]);
+    let text = "start\x00middle\x00end";
+    assert_eq(String.split(text, "\x00"), ["start", "middle", "end"]);
+    let mut long = "x";
+    for i in 0..16 { long = long.concat(long); };
+    let source = long.concat("::").concat(long);
+    let parts = String.split(source, "::");
+    let retained = parts;
+    assert_eq(parts, [long, long]);
+    assert_eq(retained[1], long);
+    assert_eq(source.char_len(), long.char_len() * 2 + 2);
+    println("split capacity ok");
+}

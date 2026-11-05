@@ -1,0 +1,8 @@
+// Sparse separators must not reserve one pointer for every input byte.
+let main (): Unit = {
+    let mut text = "x";
+    for i in 0..20 { text = text.concat(text); };
+    let parts = String.split(text, "\n");
+    assert_eq(parts.len(), 1);
+    assert_eq(parts[0], text);
+}
