@@ -21854,7 +21854,19 @@ the reversible word mixer, then verified against Plum's public hash operation;
 future hash changes cannot silently turn the collision test into a noncollision.
 Resource-valued maps separately verify snapshot lifetime and eventual cleanup.
 
+A compatibility check exposed an over-broad equality-helper discovery rule:
+matching any aggregate requested equality for every payload, even closures.
+That made previously valid closure-valued Map insertion fail after moving values
+into trie leaves. Pattern emission only destructures aggregates and uses inline
+numeric or runtime string comparisons. Equality discovery now traverses match
+scrutinees, guards and bodies without requesting aggregate equality just for
+matching. Explicit equality still collects its transitive helpers. Closure-valued
+maps with captured resources and nested literal patterns have dedicated tests;
+independently built maps exercise actual structural equality and hashing.
+
 Compiler memory is checked independently: this representation also changes the
-Maps used inside the compiler. Initial final-source emission measured 126 MiB
-within the unchanged 128 MiB gate; the checking gate remains 64 MiB. Application
-allocation savings do not justify relaxing compiler-memory ceilings.
+Maps used inside the compiler. Final emission/checking measured 124/44 MiB
+(previous main 123/43), within unchanged 128/64 MiB gates. Removing unnecessary
+pattern-triggered equality helpers reduced emission from the intermediate
+126 MiB. Application allocation savings do not justify relaxing compiler-memory
+ceilings.

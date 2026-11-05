@@ -54,8 +54,10 @@ let main (): Unit = {
     assert_eq(Set.len(Set.intersection(set, Set.from_array([a, b]))), 2);
     assert_eq(Set.len(Set.union(set, Set.from_array([a, b]))), keys.len());
     // Preserve generic structural equality and hashing for shared values.
-    assert_eq(old, old);
-    assert_eq(old.hash(), old.hash());
+    let mut independent: Map[Int, String] = Map.new(());
+    for i in 0..keys.len() { independent = Map.insert(independent, keys[i], i.to_string()); };
+    assert_eq(old, independent);
+    assert_eq(old.hash(), independent.hash());
     assert_ne(old, snapshot);
     println("map trie ok");
 }

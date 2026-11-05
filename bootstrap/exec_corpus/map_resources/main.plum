@@ -24,4 +24,24 @@ let exercise (): Unit = {
         };
     };
 }
-let main (): Unit = { exercise(()); assert_eq(live(), 0); println("map resources ok"); }
+// Map values need no equality capability. Enum matching must not ask for
+// closure equality merely because a value is stored in a trie leaf.
+let closure_values (): Unit = {
+    let owner = acquire();
+    let f = || unsafe { owner.raw() };
+    let m = Map.insert(Map.new(()), 0, f);
+    let snapshot = m;
+    let other = acquire();
+    let replaced = Map.insert(m, 0, || unsafe { other.raw() });
+    assert(Map.contains(replaced, 0));
+    match Map.get(snapshot, 0) { Some(g) => assert_eq(g(), 1), None => assert(false) };
+    match Map.get(replaced, 0) { Some(g) => assert_eq(g(), 2), None => assert(false) };
+    assert_eq(Map.values(snapshot)[0](), 1);
+    assert_eq(Map.len(Map.remove(replaced, 0)), 0);
+    assert_eq(live(), 2);
+}
+let main (): Unit = {
+    exercise(()); assert_eq(live(), 0);
+    closure_values(()); assert_eq(live(), 0);
+    println("map resources ok");
+}
