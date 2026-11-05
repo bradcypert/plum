@@ -6155,9 +6155,8 @@ let cg_structural_close (p: CgProgram) (t: typecheck.ITy) (acc: Array[typecheck.
     // the container's anyway would emit a call to the handle's, which is
     // deliberately never generated.
     //
-    // Reached without any `==` in the program at all: every `match`
-    // seeds an equality type for its scrutinee, so `match Os.open(..)`
-    // asked for `Result[Os.File, String]`'s.
+    // Hashing shares this layout walk, so retain the capability guard
+    // even though pattern matching no longer requests equality helpers.
     if Option.is_some(typecheck.first_handle_within(p.ctx, t, [])) { acc }
     else if cg_eq_is_primitive(t) { acc }
     else if cg_type_seen(seen, t) { acc }
@@ -7750,11 +7749,12 @@ let cg_eq_in (p: CgProgram) (e: typecheck.TExpr) (acc: Array[typecheck.ITy]): Ar
             Some(x) => cg_eq_in(p, x, cg_eq_in(p, t, cg_eq_in(p, c, acc))),
             None => cg_eq_in(p, t, cg_eq_in(p, c, acc)),
         },
-        // A literal PATTERN compares too (`match c { "0" => .. }`), and
-        // it compares against the SCRUTINEE's type, so the scrutinee is
-        // closed over here rather than only at explicit `==` sites.
-        TMatch(sc, arms) => cg_eq_in_arms(p, arms, 0, cg_eq_close(p, cg_concrete(p, typecheck.texpr_ty(p.subst, sc)), cg_eq_in(p, sc, acc))),
-        TMatchReuse(sc, arms, _, _) => cg_eq_in_arms(p, arms, 0, cg_eq_close(p, cg_concrete(p, typecheck.texpr_ty(p.subst, sc)), cg_eq_in(p, sc, acc))),
+        // Patterns destructure aggregates; literal tests use inline numeric
+        // comparisons or the runtime string comparator. They do not require
+        // structural equality for every payload (which may contain closures).
+        // Explicit equality in scrutinees, guards and bodies is still visited.
+        TMatch(sc, arms) => cg_eq_in_arms(p, arms, 0, cg_eq_in(p, sc, acc)),
+        TMatchReuse(sc, arms, _, _) => cg_eq_in_arms(p, arms, 0, cg_eq_in(p, sc, acc)),
         TFor(_, lo, hi, body) => cg_eq_in(p, body, cg_eq_in(p, hi, cg_eq_in(p, lo, acc))),
         TForArray(_, arr, body) => cg_eq_in(p, body, cg_eq_in(p, arr, acc)),
         TClosure(_, body) => cg_eq_in(p, body, acc),

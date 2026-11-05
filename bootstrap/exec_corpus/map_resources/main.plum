@@ -1,0 +1,47 @@
+extern "C" {
+    fn map_resource_open() -> Int;
+    fn map_resource_close(value: Int);
+    fn map_resource_live() -> Int;
+}
+handle Resource { on_drop: map_resource_close }
+let acquire (): Resource = unsafe { Resource.from_raw(map_resource_open()) }
+let live (): Int = unsafe { map_resource_live() }
+let exercise (): Unit = {
+    let mut m: Map[Int, Resource] = Map.new(());
+    for i in 0..64 { m = Map.insert(m, i, acquire()); };
+    let snapshot = m;
+    let holder = ref(m);
+    for i in 0..64 {
+        assert(Map.contains(holder.get(), i));
+        holder.set(Map.remove(holder.get(), i));
+    };
+    assert_eq(Map.len(holder.get()), 0);
+    assert_eq(Map.len(snapshot), 64);
+    assert_eq(live(), 64);
+    for i in 0..64 {
+        match Map.get(snapshot, i) {
+            Some(r) => assert_eq(unsafe { r.raw() }, i + 1), None => assert(false),
+        };
+    };
+}
+// Map values need no equality capability. Enum matching must not ask for
+// closure equality merely because a value is stored in a trie leaf.
+let closure_values (): Unit = {
+    let owner = acquire();
+    let f = || unsafe { owner.raw() };
+    let m = Map.insert(Map.new(()), 0, f);
+    let snapshot = m;
+    let other = acquire();
+    let replaced = Map.insert(m, 0, || unsafe { other.raw() });
+    assert(Map.contains(replaced, 0));
+    match Map.get(snapshot, 0) { Some(g) => assert_eq(g(), 1), None => assert(false) };
+    match Map.get(replaced, 0) { Some(g) => assert_eq(g(), 2), None => assert(false) };
+    assert_eq(Map.values(snapshot)[0](), 1);
+    assert_eq(Map.len(Map.remove(replaced, 0)), 0);
+    assert_eq(live(), 2);
+}
+let main (): Unit = {
+    exercise(()); assert_eq(live(), 0);
+    closure_values(()); assert_eq(live(), 0);
+    println("map resources ok");
+}

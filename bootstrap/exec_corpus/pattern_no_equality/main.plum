@@ -1,0 +1,17 @@
+// Literal/nested patterns only compare their tested fields. An untested
+// closure payload must not cause aggregate equality helper generation.
+enum Packet { Data(String, Int, () -> Int), Empty }
+struct Envelope { packet: Packet, flag: Bool }
+let evaluate (x: Envelope): Int = match x {
+    Envelope { packet: Data("other", _, _), flag: true } => -1,
+    Envelope { packet: Data("yes", 7, f), flag: true } if f() == 42 => f(),
+    _ => 0,
+}
+let main (): Unit = {
+    let captured = "forty-two";
+    let f = || if captured.char_len() == 9 { 42 } else { -1 };
+    assert_eq(evaluate(Envelope { packet: Data("yes", 7, f), flag: true }), 42);
+    assert_eq(evaluate(Envelope { packet: Data("other", 7, f), flag: false }), 0);
+    assert_eq(match (1.5, f) { (1.5, g) => g(), _ => 0 }, 42);
+    println("patterns need no aggregate equality");
+}

@@ -1,0 +1,14 @@
+// A flat bucket table requests about 1.85 GB building this map. A bounded
+// trie path stays below 12 MB, including replacement/removal snapshots.
+let main (): Unit = {
+    let mut m: Map[Int, Int] = Map.new(());
+    for i in 0..10000 { m = Map.insert(m, i, i); };
+    assert_eq(Map.len(m), 10000);
+    let old = m;
+    for i in 0..1000 { m = Map.insert(m, i, i + 1); };
+    for i in 0..1000 { m = Map.remove(m, i); };
+    assert_eq(Map.len(m), 9000);
+    assert_eq(Map.get(old, 0), Some(0));
+    assert_eq(Map.get(m, 0), None);
+    assert_eq(Map.get(m, 9999), Some(9999));
+}

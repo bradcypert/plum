@@ -21787,3 +21787,108 @@ The local Linux compiler-memory gate measures 123 MiB for emission and 43 MiB
 for checking, within unchanged 128/64 MiB limits (the preceding change measured
 122/43). Self-hosting, source-discovery scaling, and allocation gates remain
 independent requirements: application savings must not hide compiler overhead.
+
+### Persistent Map bitmap trie (#281)
+
+Map now owns a 32-way bitmap trie and a size, rather than a flat bucket table.
+Five hash bits select a branch slot; the bitmap's population count gives the
+index in its compact child array. Each child array has at most 32 elements.
+Insertion/removal rebuild only the affected path, under the existing Perceus
+ownership/reuse rules. There is no global resize or rehash step. Full-hash
+collisions use linear collision arrays, so adversarial collisions still have
+linear bucket costs; bounded trie depth does not promise constant collision
+handling time.
+
+Singleton leaves store the hash, key and value directly. A collision array is
+allocated only for distinct keys with the same complete hash. Deletion turns a
+two-entry collision into a leaf, removes empty branches, and lifts singleton
+leaves/collisions. It must NOT lift a singleton branch: branch depth is implicit
+in the lookup shift. Distinct-hash joining is shared by leaves and collisions.
+Presence checks have their own boolean traversal; implementing `contains` via
+`get` would allocate a temporary Option on each hit. Insertion/removal use the
+boolean traversal to update size without retaining a value just to test presence.
+
+The public API remains the boundary. Set continues to delegate to Map. Key/value
+iteration uses the same traversal and has unspecified order; the collection
+smoke test now normalizes printed order, while regression/property tests check
+positional alignment and uniqueness. Existing generic structural equality and
+hashing still apply; this does not introduce extensional collection equality or
+change the documented exclusion of NaN keys (including aggregates).
+
+The design experiment in PR #445 initially allocated an array for every full
+hash, including singletons. That almost doubled steady-state storage. Testing
+inline singleton leaves at both widths, on the same 10,000-Int-key construction
+workload, gives:
+
+| Layout | Requested build bytes | Live bytes after build |
+|---|---:|---:|
+| Previous flat Map | 1,850,177,560 | 650,768 |
+| Inline bitmap16 | 6,698,408 | 739,880 |
+| Inline bitmap32 (selected) | 8,380,824 | 653,296 |
+
+Width 32 sacrifices some cumulative allocation traffic versus 16 for a smaller
+live footprint, and the earlier comparison also favoured width 32 for lookup.
+The selected layout's build traffic is about 221 times smaller than flat Map,
+while this workload's live storage rises by 2,528 bytes (about 0.4%). It is not
+packed CHAMP and makes no claim about an unmeasured packed representation.
+
+Five-sample uninstrumented medians of the final inline layouts (10,000 keys,
+local construction; lookup includes 100,000 hits and 100,000 misses plus
+validation) confirm the tradeoff. The same flat-Map executables from PR #445
+were retimed separately, without concurrent validation jobs:
+
+| Layout / key | Build ms | Lookup ms | Mixed ms | Delete ms |
+|---|---:|---:|---:|---:|
+| Flat / Int | 547.48 | 15.09 | 1279.18 | 621.69 |
+| Inline16 / Int | 9.16 | 29.64 | 19.60 | 13.65 |
+| Inline32 / Int | 13.59 | 24.83 | 20.12 | 12.40 |
+| Flat / String | 742.37 | 26.55 | 1769.97 | 808.23 |
+| Inline16 / String | 11.81 | 40.01 | 19.85 | 16.04 |
+| Inline32 / String | 15.12 | 35.31 | 21.64 | 15.73 |
+
+These are local workload timings, not portable guarantees or primitive latency:
+mixed/deletion phases also validate results and retain the original snapshot.
+Flat lookup remains faster (the Int workload is about 1.6 times faster than
+inline32); the trie trades pointer traversal for bounded persistent updates.
+The inline32 choice is therefore a storage/lookup balance among trie layouts,
+not a claim that every operation improves. Five-sample Ref/history workloads
+also passed semantic assertions at both widths.
+
+The production Map, measured with PR #445's driver/native malloc/free tracker
+and the source-built compiler, requests 654,376 bytes building 1,000 integer
+entries versus 8,380,824 at 10,000 (~12.8 times for ten times as many keys).
+For 1,000 entries, Ref-held construction requests 670,376 bytes and retained
+history 694,760. Retaining every intermediate version has a 672,816-byte peak
+in the complete build/lookup/mixed/delete workload. Snapshots still own their
+shared paths until released. After deleting all entries and releasing snapshots,
+the empty-map/driver wrappers retain only 40 bytes, independent of input size;
+the previous 10,000-key flat case retained 250,632 bytes of empty-map storage.
+All Int/String production profile cases return to zero tracked live bytes after
+scope exit. These are requested workload bytes, not RSS or allocator residency.
+
+The permanent 10,000-key allocation fixture includes 1,000 replacements and
+1,000 removals while retaining a snapshot: 95,127 allocations / 9,706,776 bytes,
+with a 12 MB ceiling. The shared `contains` fixture improves from seven total
+allocations to two, with no per-lookup allocation. Public-API properties compare
+random updates and retained snapshots against an independent array model. Real
+complete-hash collisions and long shared prefixes are constructed by inverting
+the reversible word mixer, then verified against Plum's public hash operation;
+future hash changes cannot silently turn the collision test into a noncollision.
+Resource-valued maps separately verify snapshot lifetime and eventual cleanup.
+
+A compatibility check exposed an over-broad equality-helper discovery rule:
+matching any aggregate requested equality for every payload, even closures.
+That made previously valid closure-valued Map insertion fail after moving values
+into trie leaves. Pattern emission only destructures aggregates and uses inline
+numeric or runtime string comparisons. Equality discovery now traverses match
+scrutinees, guards and bodies without requesting aggregate equality just for
+matching. Explicit equality still collects its transitive helpers. Closure-valued
+maps with captured resources and nested literal patterns have dedicated tests;
+independently built maps exercise actual structural equality and hashing.
+
+Compiler memory is checked independently: this representation also changes the
+Maps used inside the compiler. Final emission/checking measured 124/44 MiB
+(previous main 123/43), within unchanged 128/64 MiB gates. Removing unnecessary
+pattern-triggered equality helpers reduced emission from the intermediate
+126 MiB. Application allocation savings do not justify relaxing compiler-memory
+ceilings.

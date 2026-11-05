@@ -21,7 +21,7 @@ An empty map.
 ## `let Map.insert (m: Map[K, V]) (k: K) (v: V): Map[K, V]`
 
 A NEW map with `k` set to `v`, replacing any previous value. The
-original is unchanged.
+original is unchanged. Only the affected trie path is rebuilt.
 
 ## `let Map.get (m: Map[K, V]) (k: K): Option[V]`
 
@@ -41,7 +41,7 @@ How many entries.
 
 ## `let Map.keys (m: Map[K, V]): Array[K]`
 
-Every key, in no particular order — buckets, not insertion order.
+Every key, in no particular order.
 
 ## `let Map.values (m: Map[K, V]): Array[V]`
 

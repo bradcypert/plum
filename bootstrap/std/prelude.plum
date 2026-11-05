@@ -1309,8 +1309,18 @@ pub let assert_ne[T] (a: T) (b: T): Unit =
 
 // --- Collections: Map and Set ---
 
-/// One key and value stored in a map bucket.
+/// One key and value stored in a map collision bucket.
 pub struct MapEntry[K, V] { key: K, value: V }
+
+// Single entries live directly in leaves. Only equal complete hashes need
+// a collision array. Branch arrays are bounded by the bitmap's 32 slots.
+enum MapNode[K, V] {
+    MapEmpty,
+    MapLeaf(Int, K, V),
+    MapCollision(Int, Array[MapEntry[K, V]]),
+    MapBranch(Int, Array[MapNode[K, V]]),
+}
+
 /// A hash map from `K` to `V`.
 ///
 /// PERSISTENT: `Map.insert` returns a new map and leaves the original
@@ -1318,94 +1328,171 @@ pub struct MapEntry[K, V] { key: K, value: V }
 /// need `Eq` and `Hash`. Equal keys hash identically.
 /// NaN is not a supported key, including inside aggregates, because
 /// IEEE equality makes it unequal to itself. References use identity.
-pub struct Map[K, V] { buckets: Array[Array[MapEntry[K, V]]], size: Int }
-
-let MAP_INITIAL_BUCKETS: Int = 8
-let MAP_LOAD_FACTOR_NUM: Int = 3
-let MAP_LOAD_FACTOR_DEN: Int = 4
-
-let map_make_buckets[K, V] (n: Int): Array[Array[MapEntry[K, V]]] = {
-    let mut buckets = [];
-    for i in 0..n { buckets = buckets.push([]); };
-    buckets
-}
+pub struct Map[K, V] { root: MapNode[K, V], size: Int }
 
 let value_hash[T: Hash] (x: T): Int = x.hash()
-
-let map_bucket_index[K: Hash] (k: K) (bucket_count: Int): Int = value_hash(k) % bucket_count
-
+let map_bit (hash: Int) (shift: Int): Int = 1 << (Int.shr_logical(hash, shift) & 31)
+let map_rank (bits: Int) (bit: Int): Int = Int.count_ones(bits & (bit - 1))
 let map_bucket_find_index[K: Eq, V] (bucket: Array[MapEntry[K, V]]) (k: K) (i: Int): Int =
     if i >= bucket.len() { -1 }
     else if bucket[i].key == k { i }
     else { map_bucket_find_index(bucket, k, i + 1) }
 
-/// An empty map.
-pub let Map.new[K, V] (): Map[K, V] = Map { buckets: map_make_buckets(MAP_INITIAL_BUCKETS), size: 0 }
-
-let map_rehash[K: Hash, V] (m: Map[K, V]) (new_bucket_count: Int): Map[K, V] = {
-    let mut new_buckets = map_make_buckets(new_bucket_count);
-    for bucket in m.buckets {
-        for entry in bucket {
-            let idx = map_bucket_index(entry.key, new_bucket_count);
-            new_buckets = new_buckets.set(idx, new_buckets[idx].push(entry));
-        }
-    };
-    Map { buckets: new_buckets, size: m.size }
+// Joining distinct complete hashes must diverge before all hash bits are
+// consumed. Keeping this separate also handles a collision node as a child.
+let map_join[K, V] (a: MapNode[K, V]) (ah: Int) (b: MapNode[K, V]) (bh: Int) (shift: Int): MapNode[K, V] = {
+    let abit = map_bit(ah, shift);
+    let bbit = map_bit(bh, shift);
+    if abit == bbit { MapBranch(abit, [map_join(a, ah, b, bh, shift + 5)]) }
+    else if abit < bbit { MapBranch(abit | bbit, [a, b]) }
+    else { MapBranch(abit | bbit, [b, a]) }
 }
 
-/// A NEW map with `k` set to `v`, replacing any previous value. The
-/// original is unchanged.
-pub let Map.insert[K: Eq + Hash, V] (m: Map[K, V]) (k: K) (v: V): Map[K, V] = {
-    let idx = map_bucket_index(k, m.buckets.len());
-    let bucket = m.buckets[idx];
-    let existing_i = map_bucket_find_index(bucket, k, 0);
-    let inserted = if existing_i >= 0 {
-        Map { buckets: m.buckets.set(idx, bucket.set(existing_i, MapEntry { key: k, value: v })), size: m.size }
-    } else {
-        Map { buckets: m.buckets.set(idx, bucket.push(MapEntry { key: k, value: v })), size: m.size + 1 }
+let map_child_insert[K, V] (children: Array[MapNode[K, V]]) (at: Int) (child: MapNode[K, V]): Array[MapNode[K, V]] = {
+    let mut out = [];
+    for i in 0..children.len() {
+        if i == at { out = out.push(child); };
+        out = out.push(children[i]);
     };
-    if inserted.size * MAP_LOAD_FACTOR_DEN > inserted.buckets.len() * MAP_LOAD_FACTOR_NUM {
-        map_rehash(inserted, inserted.buckets.len() * 2)
-    } else {
-        inserted
-    }
+    if at == children.len() { out = out.push(child); };
+    out
+}
+
+let map_node_get[K: Eq, V] (node: MapNode[K, V]) (hash: Int) (key: K) (shift: Int): Option[V] = match node {
+    MapEmpty => None,
+    MapLeaf(h, k, v) => if h == hash && k == key { Some(v) } else { None },
+    MapCollision(h, entries) => if h != hash { None } else {
+        let i = map_bucket_find_index(entries, key, 0);
+        if i < 0 { None } else { Some(entries[i].value) }
+    },
+    MapBranch(bits, children) => {
+        let bit = map_bit(hash, shift);
+        if (bits & bit) == 0 { None }
+        else { map_node_get(children[map_rank(bits, bit)], hash, key, shift + 5) }
+    },
+}
+
+// Presence checks must not allocate an Option or retain a stored value.
+let map_node_contains[K: Eq, V] (node: MapNode[K, V]) (hash: Int) (key: K) (shift: Int): Bool = match node {
+    MapEmpty => false,
+    MapLeaf(h, k, _) => h == hash && k == key,
+    MapCollision(h, entries) => h == hash && map_bucket_find_index(entries, key, 0) >= 0,
+    MapBranch(bits, children) => {
+        let bit = map_bit(hash, shift);
+        (bits & bit) != 0 && map_node_contains(children[map_rank(bits, bit)], hash, key, shift + 5)
+    },
+}
+
+let map_node_put[K: Eq, V] (node: MapNode[K, V]) (hash: Int) (key: K) (value: V) (shift: Int): MapNode[K, V] = match node {
+    MapEmpty => MapLeaf(hash, key, value),
+    MapLeaf(h, k, v) => if h != hash { map_join(node, h, MapLeaf(hash, key, value), hash, shift) }
+        else if k == key { MapLeaf(hash, key, value) }
+        else { MapCollision(hash, [MapEntry { key: k, value: v }, MapEntry { key: key, value: value }]) },
+    MapCollision(h, entries) => if h != hash { map_join(node, h, MapLeaf(hash, key, value), hash, shift) }
+        else {
+            let i = map_bucket_find_index(entries, key, 0);
+            let entry = MapEntry { key: key, value: value };
+            MapCollision(hash, if i < 0 { entries.push(entry) } else { entries.set(i, entry) })
+        },
+    MapBranch(bits, children) => {
+        let bit = map_bit(hash, shift);
+        let i = map_rank(bits, bit);
+        if (bits & bit) == 0 { MapBranch(bits | bit, map_child_insert(children, i, MapLeaf(hash, key, value))) }
+        else { MapBranch(bits, children.set(i, map_node_put(children[i], hash, key, value, shift + 5))) }
+    },
+}
+
+// Branches encode their depth implicitly: only a leaf or collision node can
+// be lifted through a singleton branch without changing the routing shift.
+let map_node_remove[K: Eq, V] (node: MapNode[K, V]) (hash: Int) (key: K) (shift: Int): MapNode[K, V] = match node {
+    MapEmpty => node,
+    MapLeaf(h, k, _) => if h == hash && k == key { MapEmpty } else { node },
+    MapCollision(h, entries) => if h != hash { node } else {
+        let i = map_bucket_find_index(entries, key, 0);
+        if i < 0 { node } else {
+            let rest = entries.remove(i);
+            if rest.len() == 1 { MapLeaf(h, rest[0].key, rest[0].value) }
+            else { MapCollision(h, rest) }
+        }
+    },
+    MapBranch(bits, children) => {
+        let bit = map_bit(hash, shift);
+        if (bits & bit) == 0 { node } else {
+            let i = map_rank(bits, bit);
+            let child = map_node_remove(children[i], hash, key, shift + 5);
+            let rest = match child { MapEmpty => children.remove(i), _ => children.set(i, child) };
+            let new_bits = match child { MapEmpty => bits & ~bit, _ => bits };
+            if rest.len() == 0 { MapEmpty }
+            else if rest.len() == 1 { match rest[0] {
+                MapLeaf(_, _, _) => rest[0], MapCollision(_, _) => rest[0], _ => MapBranch(new_bits, rest),
+            } } else { MapBranch(new_bits, rest) }
+        }
+    },
+}
+
+/// An empty map.
+pub let Map.new[K, V] (): Map[K, V] = Map { root: MapEmpty, size: 0 }
+
+/// A NEW map with `k` set to `v`, replacing any previous value. The
+/// original is unchanged. Only the affected trie path is rebuilt.
+pub let Map.insert[K: Eq + Hash, V] (m: Map[K, V]) (k: K) (v: V): Map[K, V] = {
+    let hash = value_hash(k);
+    let added = if map_node_contains(m.root, hash, k, 0) { 0 } else { 1 };
+    Map { root: map_node_put(m.root, hash, k, v, 0), size: m.size + added }
 }
 
 /// The value for `k`, or `None`.
-pub let Map.get[K: Eq + Hash, V] (m: Map[K, V]) (k: K): Option[V] = {
-    let bucket = m.buckets[map_bucket_index(k, m.buckets.len())];
-    let i = map_bucket_find_index(bucket, k, 0);
-    if i >= 0 { Some(bucket[i].value) } else { None }
-}
+pub let Map.get[K: Eq + Hash, V] (m: Map[K, V]) (k: K): Option[V] = map_node_get(m.root, value_hash(k), k, 0)
 
 /// Whether `k` has a value.
 pub let Map.contains[K: Eq + Hash, V] (m: Map[K, V]) (k: K): Bool =
-    map_bucket_find_index(m.buckets[map_bucket_index(k, m.buckets.len())], k, 0) >= 0
+    map_node_contains(m.root, value_hash(k), k, 0)
 
 /// A new map without `k`. Removing an absent key is not an error.
 pub let Map.remove[K: Eq + Hash, V] (m: Map[K, V]) (k: K): Map[K, V] = {
-    let idx = map_bucket_index(k, m.buckets.len());
-    let bucket = m.buckets[idx];
-    let i = map_bucket_find_index(bucket, k, 0);
-    if i >= 0 { Map { buckets: m.buckets.set(idx, bucket.remove(i)), size: m.size - 1 } } else { m }
+    let hash = value_hash(k);
+    if map_node_contains(m.root, hash, k, 0) {
+        Map { root: map_node_remove(m.root, hash, k, 0), size: m.size - 1 }
+    } else { m }
 }
 
 /// How many entries.
 pub let Map.len[K, V] (m: Map[K, V]): Int = m.size
 
-/// Every key, in no particular order — buckets, not insertion order.
-pub let Map.keys[K, V] (m: Map[K, V]): Array[K] = {
-    let mut acc = [];
-    for bucket in m.buckets { for entry in bucket { acc = acc.push(entry.key); } };
-    acc
+let map_node_keys[K, V] (node: MapNode[K, V]) (acc: Array[K]): Array[K] = match node {
+    MapEmpty => acc,
+    MapLeaf(_, k, _) => acc.push(k),
+    MapCollision(_, entries) => {
+        let mut out = acc;
+        for entry in entries { out = out.push(entry.key); };
+        out
+    },
+    MapBranch(_, children) => {
+        let mut out = acc;
+        for child in children { out = map_node_keys(child, out); };
+        out
+    },
+}
+let map_node_values[K, V] (node: MapNode[K, V]) (acc: Array[V]): Array[V] = match node {
+    MapEmpty => acc,
+    MapLeaf(_, _, v) => acc.push(v),
+    MapCollision(_, entries) => {
+        let mut out = acc;
+        for entry in entries { out = out.push(entry.value); };
+        out
+    },
+    MapBranch(_, children) => {
+        let mut out = acc;
+        for child in children { out = map_node_values(child, out); };
+        out
+    },
 }
 
+/// Every key, in no particular order.
+pub let Map.keys[K, V] (m: Map[K, V]): Array[K] = map_node_keys(m.root, [])
+
 /// Every value, in the same order as `Map.keys`.
-pub let Map.values[K, V] (m: Map[K, V]): Array[V] = {
-    let mut acc = [];
-    for bucket in m.buckets { for entry in bucket { acc = acc.push(entry.value); } };
-    acc
-}
+pub let Map.values[K, V] (m: Map[K, V]): Array[V] = map_node_values(m.root, [])
 
 let map_from_arrays_acc[K: Eq + Hash, V] (keys: Array[K]) (values: Array[V]) (i: Int) (acc: Map[K, V]): Map[K, V] =
     if i >= keys.len() || i >= values.len() { acc } else { map_from_arrays_acc(keys, values, i + 1, Map.insert(acc, keys[i], values[i])) }
