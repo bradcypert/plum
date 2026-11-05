@@ -1869,3 +1869,43 @@ pub let test_string_index_of (): Unit = {
         };
     }
 }
+
+// Public-API model: updates against an independent array, including retained
+// versions and real full-hash collisions. No compiler-private helpers.
+pub let test_map_persistent_updates (): Unit = {
+    let keys = [0, -3592346752865808038, 7849046083877192578, -586861493372274958,
+        1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12];
+    assert_eq(keys[0].hash(), keys[1].hash());
+    assert_eq(keys[2].hash(), keys[3].hash());
+    for seed in 1..11 {
+        let mut m: Map[Int, Int] = Map.new(());
+        let mut model: Array[Option[Int]] = [];
+        for k in keys { model = model.push(None); };
+        let mut versions: Array[Map[Int, Int]] = [];
+        let mut models: Array[Array[Option[Int]]] = [];
+        let mut state = seed;
+        for step in 0..160 {
+            state = next_seed(state);
+            let i = rand_between(state, 0, keys.len() - 1);
+            if step % 17 == 0 { versions = versions.push(m); models = models.push(model); };
+            if step % 3 == 0 { m = Map.remove(m, keys[i]); model = model.set(i, None); }
+            else { m = Map.insert(m, keys[i], step); model = model.set(i, Some(step)); };
+            let mut size = 0;
+            for j in 0..keys.len() {
+                assert_eq(Map.get(m, keys[j]), model[j]);
+                let present = match model[j] { None => false, Some(_) => true };
+                assert_eq(Map.contains(m, keys[j]), present);
+                if present { size = size + 1; };
+            };
+            assert_eq(Map.len(m), size);
+            let ks = Map.keys(m);
+            let vs = Map.values(m);
+            assert_eq(ks.len(), size); assert_eq(vs.len(), size);
+            assert_eq(Set.len(Set.from_array(ks)), size);
+            for j in 0..size { assert_eq(Map.get(m, ks[j]), Some(vs[j])); };
+        };
+        for i in 0..versions.len() { for j in 0..keys.len() {
+            assert_eq(Map.get(versions[i], keys[j]), models[i][j]);
+        }; };
+    }
+}

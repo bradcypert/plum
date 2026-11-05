@@ -48,7 +48,7 @@ Stops the program if the two are equal, printing them.
 
 ## `struct MapEntry`
 
-One key and value stored in a map bucket.
+One key and value stored in a map collision bucket.
 
 ## `struct JsonEntry`
 

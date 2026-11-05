@@ -1,0 +1,27 @@
+extern "C" {
+    fn map_resource_open() -> Int;
+    fn map_resource_close(value: Int);
+    fn map_resource_live() -> Int;
+}
+handle Resource { on_drop: map_resource_close }
+let acquire (): Resource = unsafe { Resource.from_raw(map_resource_open()) }
+let live (): Int = unsafe { map_resource_live() }
+let exercise (): Unit = {
+    let mut m: Map[Int, Resource] = Map.new(());
+    for i in 0..64 { m = Map.insert(m, i, acquire()); };
+    let snapshot = m;
+    let holder = ref(m);
+    for i in 0..64 {
+        assert(Map.contains(holder.get(), i));
+        holder.set(Map.remove(holder.get(), i));
+    };
+    assert_eq(Map.len(holder.get()), 0);
+    assert_eq(Map.len(snapshot), 64);
+    assert_eq(live(), 64);
+    for i in 0..64 {
+        match Map.get(snapshot, i) {
+            Some(r) => assert_eq(unsafe { r.raw() }, i + 1), None => assert(false),
+        };
+    };
+}
+let main (): Unit = { exercise(()); assert_eq(live(), 0); println("map resources ok"); }

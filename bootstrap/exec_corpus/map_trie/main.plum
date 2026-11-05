@@ -1,0 +1,61 @@
+// Inverting the two reversible word-mixer rounds supplies real complete-hash
+// collisions (the final sign-bit mask identifies these pairs). Verify the
+// hashes here so a future hashing change cannot silently weaken this test.
+let main (): Unit = {
+    let a = 0;
+    let b = -3592346752865808038;
+    let deep = 7849046083877192578;
+    assert_eq(a.hash(), b.hash());
+    assert_eq(a.hash(), 0);
+    assert_eq(deep.hash(), 1152921504606846976);
+    let keys = [a, b, deep, -586861493372274958, -6625778522637806968, 2831618103098661130,
+        1991620495841089180, -5038139845957174836, -6086893701949170222, -3487469807577879104];
+    let mut m: Map[Int, String] = Map.new(());
+    for i in 0..keys.len() { m = Map.insert(m, keys[i], i.to_string()); };
+    let old = m;
+    assert_eq(Map.len(m), keys.len());
+    for i in 0..keys.len() { assert_eq(Map.get(m, keys[i]), Some(i.to_string())); };
+    m = Map.insert(m, b, "replacement");
+    assert_eq(Map.len(m), keys.len());
+    assert_eq(Map.get(old, b), Some("1"));
+    assert_eq(Map.get(m, b), Some("replacement"));
+    // Collision -> leaf, deep singleton branches, and absent removal.
+    m = Map.remove(m, a);
+    assert_eq(Map.get(m, b), Some("replacement"));
+    assert_eq(Map.len(Map.remove(m, a)), keys.len() - 1);
+    let snapshot = m;
+    for k in keys { m = Map.remove(m, k); };
+    assert_eq(Map.len(m), 0);
+    assert_eq(Map.keys(m), []);
+    assert_eq(Map.values(m), []);
+    assert_eq(Map.get(snapshot, b), Some("replacement"));
+    assert_eq(Map.get(old, a), Some("0"));
+    m = Map.insert(m, deep, "again");
+    assert_eq(Map.get(m, deep), Some("again"));
+    // Dense branches and different insertion orders; order is unspecified,
+    // but keys and values must enumerate matching positions.
+    let mut dense: Map[Int, String] = Map.new(());
+    for i in 0..1024 { dense = Map.insert(dense, i, i.to_string()); };
+    let ks = Map.keys(dense);
+    let vs = Map.values(dense);
+    assert_eq(ks.len(), 1024);
+    assert_eq(vs.len(), ks.len());
+    for i in 0..ks.len() { assert_eq(Map.get(dense, ks[i]), Some(vs[i])); };
+    let holder = ref(dense);
+    for i in 0..1024 { holder.set(Map.remove(holder.get(), i)); };
+    assert_eq(Map.len(holder.get()), 0);
+    assert_eq(Map.len(dense), 1024);
+    let floats = Map.insert(Map.new(()), -0.0, "zero");
+    assert_eq(Map.len(Map.insert(floats, 0.0, "new")), 1);
+    assert_eq(Map.get(floats, 0.0), Some("zero"));
+    let set = Set.from_array(keys);
+    assert_eq(Set.len(set), keys.len());
+    assert_eq(Set.len(Set.difference(set, Set.from_array([a, b]))), keys.len() - 2);
+    assert_eq(Set.len(Set.intersection(set, Set.from_array([a, b]))), 2);
+    assert_eq(Set.len(Set.union(set, Set.from_array([a, b]))), keys.len());
+    // Preserve generic structural equality and hashing for shared values.
+    assert_eq(old, old);
+    assert_eq(old.hash(), old.hash());
+    assert_ne(old, snapshot);
+    println("map trie ok");
+}
