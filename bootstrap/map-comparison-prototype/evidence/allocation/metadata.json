@@ -1,0 +1,18 @@
+{
+  "compiler": "/tmp/plum-map-comparison-compiler",
+  "compiler_sha256": "ca666251d290a4f348c393c87c746e6afd93d027c1cb88f0869eb60280b19f92",
+  "revision": "044c0b29b739c4d740ada974f994a2bc2770ed96",
+  "platform": "Linux-7.2.11-arch1-1-x86_64-with-glibc2.44",
+  "quick": false,
+  "sanitize": false,
+  "source_sha256": {
+    "baseline.plum": "cd6418c9b53f7f58cbd45d9e2f8f8cee0926a47809c0f6b1ce95c4c07e1871fc",
+    "patricia.plum": "d79f737691a3ee6b03df5d5c988517fc3c7586b948c3f0864e4c53349fd60cfc",
+    "bitmap.plum": "3178720aa4775bd3b831fcdb7eb4faced728bc43c9694c99281936f7c47bc016",
+    "rbtree.plum": "f131e067d6d1cbdd9e810d0fc0ea8424b70db49e255b4bafcb669cd8e2b40799",
+    "driver.plum": "049733dc8a3dc884c87ab54a3828c567059e0f163870cdfc2ff063ac6da4b046",
+    "run.py": "fa39620d3b88d85542c0e43e0501374753295f53c048c1f5bcc8d42c7359a51c",
+    "metrics.c": "d41ed387832b3fd619a12ae5eb8750fc1c6141fc5e7ae81a832710ec4d0d2d6a",
+    "adapter.plum": "791d4608c23f1c534a7529334a40804345a29c467dd3dd662a11d0970fd6788f"
+  }
+}

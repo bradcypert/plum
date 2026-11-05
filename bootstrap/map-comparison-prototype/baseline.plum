@@ -1,0 +1,6 @@
+// THROWAWAY adapter for unchanged public Map operations.
+struct Node { map: Map[KEY, VALUE] }
+let empty (): Node = Node { map: Map.new(()) }
+let put (t: Node) (k: KEY) (v: VALUE): Node = Node { map: Map.insert(t.map, k, v) }
+let get (t: Node) (k: KEY): Option[VALUE] = Map.get(t.map, k)
+let remove (t: Node) (k: KEY): Node = Node { map: Map.remove(t.map, k) }

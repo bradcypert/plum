@@ -1,0 +1,43 @@
+// THROWAWAY: binary Patricia trie. Cached hash keys; fixed-size enum nodes.
+enum Node { Empty, Leaf(Int, Int, Array[Entry]), Branch(Int, Int, Node, Node) }
+let empty (): Node = Empty
+let prefix (h: Int) (bit: Int): Int = h & ~(bit | (bit - 1))
+let top_bit (x: Int): Int = top_bit_acc(x, 1)
+let top_bit_acc (x: Int) (b: Int): Int =
+    if x <= 1 { b } else { top_bit_acc(Int.shr_logical(x, 1), b << 1) }
+let join (h: Int) (a: Node) (other: Int) (b: Node): Node = {
+    let bit = top_bit(h ^ other);
+    let p = prefix(h, bit);
+    if (h & bit) == 0 { Branch(p, bit, a, b) } else { Branch(p, bit, b, a) }
+}
+let tree_put (t: Node) (k: Int) (v: Array[Entry]): Node = insert(t, k, k, v)
+let insert (t: Node) (h: Int) (k: Int) (v: Array[Entry]): Node = match t {
+    Empty => Leaf(h, k, v),
+    Leaf(old, key, value) => if old == h {
+        // Equal routing hashes replace the collision bucket.
+        assert_eq(key, k); Leaf(h, k, v)
+    } else { join(h, Leaf(h, k, v), old, t) },
+    Branch(p, bit, l, r) => if prefix(h, bit) != p {
+        join(h, Leaf(h, k, v), p, t)
+    } else if (h & bit) == 0 { Branch(p, bit, insert(l, h, k, v), r) }
+    else { Branch(p, bit, l, insert(r, h, k, v)) },
+}
+let tree_get (t: Node) (k: Int): Array[Entry] = lookup(t, k, k)
+let lookup (t: Node) (h: Int) (k: Int): Array[Entry] = match t {
+    Empty => [],
+    Leaf(old, key, value) => if key == k { value } else { [] },
+    Branch(p, bit, l, r) => if prefix(h, bit) != p { [] }
+        else if (h & bit) == 0 { lookup(l, h, k) } else { lookup(r, h, k) },
+}
+let tree_remove (t: Node) (h: Int): Node = match t {
+    Empty => t,
+    Leaf(old, _, _) => if old == h { Empty } else { t },
+    Branch(p, bit, l, r) => if prefix(h, bit) != p { t }
+        else if (h & bit) == 0 {
+            let child = tree_remove(l, h);
+            match child { Empty => r, _ => Branch(p, bit, child, r) }
+        } else {
+            let child = tree_remove(r, h);
+            match child { Empty => l, _ => Branch(p, bit, l, child) }
+        },
+}

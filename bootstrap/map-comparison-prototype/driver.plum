@@ -1,0 +1,53 @@
+extern "C" { fn proto_config(which: Int) -> Int; fn proto_mark(phase: Int); }
+let current (m: Node) (holder: Ref[Node]) (mode: Int): Node = if mode == 1 { holder.get() } else { m }
+let workload (n: Int) (mode: Int): Node = {
+    let mut m = empty(());
+    let holder = ref(empty(()));
+    let mut versions: Array[Node] = [];
+    unsafe { proto_mark(0); };
+    for i in 0..n {
+        if mode == 1 { holder.set(put(holder.get(), make_key(i), make_value(i))); }
+        else { if mode == 2 { versions = versions.push(m); }; m = put(m, make_key(i), make_value(i)); };
+    };
+    unsafe { proto_mark(1); };
+    for pass in 0..10 { for i in 0..n {
+        assert_eq(get(current(m, holder, mode), make_key(i)), Some(make_value(i)));
+        assert_eq(get(current(m, holder, mode), make_key(i + n)), None);
+    }; };
+    unsafe { proto_mark(2); };
+    let snapshot = current(m, holder, mode);
+    for i in 0..n {
+        if mode == 1 {
+            holder.set(remove(holder.get(), make_key(i)));
+            assert_eq(get(holder.get(), make_key(i)), None);
+            holder.set(put(holder.get(), make_key(i), make_value(i + n)));
+        } else {
+            m = remove(m, make_key(i));
+            assert_eq(get(m, make_key(i)), None);
+            m = put(m, make_key(i), make_value(i + n));
+        };
+    };
+    unsafe { proto_mark(3); };
+    for i in 0..n {
+        assert_eq(get(snapshot, make_key(i)), Some(make_value(i)));
+        assert_eq(get(current(m, holder, mode), make_key(i)), Some(make_value(i + n)));
+    };
+    for i in 0..n {
+        if mode == 1 { holder.set(remove(holder.get(), make_key(i))); holder.set(remove(holder.get(), make_key(i))); }
+        else { m = remove(m, make_key(i)); m = remove(m, make_key(i)); };
+    };
+    for i in 0..n { assert_eq(get(current(m, holder, mode), make_key(i)), None); };
+    unsafe { proto_mark(4); };
+    for i in 0..n { assert_eq(get(snapshot, make_key(i)), Some(make_value(i))); };
+    if mode == 2 { for i in 0..n {
+        assert_eq(get(versions[i], make_key(i)), None);
+        if i > 0 { assert_eq(get(versions[i], make_key(i - 1)), Some(make_value(i - 1))); };
+    }; };
+    current(m, holder, mode)
+}
+let retained_empty (): Unit = {
+    let deleted = workload(unsafe { proto_config(0) }, unsafe { proto_config(1) });
+    unsafe { proto_mark(5); };
+    assert_eq(get(deleted, make_key(0)), None);
+}
+let main (): Unit = { retained_empty(()); unsafe { proto_mark(6); }; }

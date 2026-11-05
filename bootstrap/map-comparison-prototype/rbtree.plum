@@ -1,0 +1,69 @@
+// THROWAWAY: left-leaning red-black tree over cached hashes.
+enum Node { Empty, Tree(Bool, Node, Int, Array[Entry], Node) }
+let empty (): Node = Empty
+let red (t: Node): Bool = match t { Tree(c, _, _, _, _) => c, _ => false }
+let left (t: Node): Node = match t { Tree(_, l, _, _, _) => l, _ => Empty }
+let paint (t: Node) (c: Bool): Node = match t { Tree(_, l, k, v, r) => Tree(c, l, k, v, r), _ => t }
+let rot_left (t: Node): Node = match t {
+    Tree(c, a, k, v, Tree(_, b, q, w, d)) => Tree(c, Tree(true, a, k, v, b), q, w, d), _ => t,
+}
+let rot_right (t: Node): Node = match t {
+    Tree(c, Tree(_, a, q, w, b), k, v, d) => Tree(c, a, q, w, Tree(true, b, k, v, d)), _ => t,
+}
+let flip (t: Node): Node = match t {
+    Tree(c, l, k, v, r) => Tree(!c, paint(l, !red(l)), k, v, paint(r, !red(r))), _ => t,
+}
+let fix (t: Node): Node = {
+    let a = match t { Tree(_, _, _, _, r) => if red(r) { rot_left(t) } else { t }, _ => t };
+    let b = if red(left(a)) && red(left(left(a))) { rot_right(a) } else { a };
+    match b { Tree(_, l, _, _, r) => if red(l) && red(r) { flip(b) } else { b }, _ => b }
+}
+let tree_put (t: Node) (k: Int) (v: Array[Entry]): Node = paint(insert(t, k, v), false)
+let insert (t: Node) (k: Int) (v: Array[Entry]): Node = match t {
+    Empty => Tree(true, Empty, k, v, Empty),
+    Tree(c, l, old, w, r) => fix(if k < old { Tree(c, insert(l, k, v), old, w, r) }
+        else if k > old { Tree(c, l, old, w, insert(r, k, v)) } else { Tree(c, l, k, v, r) }),
+}
+let tree_get (t: Node) (k: Int): Array[Entry] = match t {
+    Empty => [], Tree(_, l, old, v, r) => if k < old { tree_get(l, k) }
+        else if k > old { tree_get(r, k) } else { v },
+}
+let move_left (t: Node): Node = {
+    let a = flip(t);
+    match a { Tree(c, l, k, v, r) => if red(left(r)) {
+        flip(rot_left(Tree(c, l, k, v, rot_right(r))))
+    } else { a }, _ => a }
+}
+let move_right (t: Node): Node = {
+    let a = flip(t);
+    if red(left(left(a))) { flip(rot_right(a)) } else { a }
+}
+let minimum (t: Node): Node = match t { Tree(_, Empty, _, _, _) => t, Tree(_, l, _, _, _) => minimum(l), _ => t }
+let erase_min (t: Node): Node = match t {
+    Tree(_, Empty, _, _, _) => Empty,
+    Tree(_, l, _, _, _) => {
+        let a = if !red(l) && !red(left(l)) { move_left(t) } else { t };
+        match a { Tree(c, ll, k, v, r) => fix(Tree(c, erase_min(ll), k, v, r)), _ => a }
+    }, _ => t,
+}
+let erase (t: Node) (k: Int): Node = match t {
+    Empty => Empty,
+    Tree(_, l, old, _, _) => if k < old {
+        let a = if !red(l) && !red(left(l)) { move_left(t) } else { t };
+        match a { Tree(c, ll, q, v, r) => fix(Tree(c, erase(ll, k), q, v, r)), _ => a }
+    } else {
+        let a = if red(l) { rot_right(t) } else { t };
+        match a { Tree(_, _, q, _, Empty) if k == q => Empty,
+            Tree(_, _, _, _, r) => {
+                let b = if !red(r) && !red(left(r)) { move_right(a) } else { a };
+                match b { Tree(c, ll, q, v, rr) => if k == q {
+                    match minimum(rr) { Tree(_, _, mk, mv, _) => fix(Tree(c, ll, mk, mv, erase_min(rr))), _ => Empty }
+                } else { fix(Tree(c, ll, q, v, erase(rr, k))) }, _ => b }
+            }, _ => a,
+        }
+    },
+}
+let tree_remove (t: Node) (k: Int): Node = if tree_get(t, k).len() == 0 { t } else {
+    let a = match t { Tree(_, l, _, _, r) => if !red(l) && !red(r) { paint(t, true) } else { t }, _ => t };
+    paint(erase(a, k), false)
+}

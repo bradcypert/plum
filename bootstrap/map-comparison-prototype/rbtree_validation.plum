@@ -1,0 +1,33 @@
+// Independent invariants: ordering, black height, red adjacency and leaning.
+let height (t: Node) (lo: Int) (hi: Int): Int = match t {
+    Empty => 1,
+    Tree(c, l, k, _, r) => {
+        assert(k > lo && k < hi);
+        assert(!red(r));
+        if c { assert(!red(l)); };
+        let a = height(l, lo, k);
+        assert_eq(a, height(r, k, hi));
+        a + (if c { 0 } else { 1 })
+    },
+}
+let main (): Unit = {
+    let mut t = empty(());
+    let mut expected: Array[Option[VALUE]] = [];
+    for i in 0..97 { expected = expected.push(None); };
+    for step in 0..2000 {
+        let i = (step * 37) % 97;
+        if step % 5 < 2 {
+            t = remove(t, make_key(i)); expected = expected.set(i, None);
+        } else {
+            t = put(t, make_key(i), make_value(step)); expected = expected.set(i, Some(make_value(step)));
+        };
+        assert(!red(t));
+        assert(height(t, -1, 9223372036854775807) > 0);
+        for j in 0..97 { assert_eq(get(t, make_key(j)), expected[j]); };
+    };
+    for i in 0..97 {
+        t = remove(t, make_key(i));
+        assert(!red(t)); assert(height(t, -1, 9223372036854775807) > 0);
+    };
+    match t { Empty => (), _ => assert(false) };
+}

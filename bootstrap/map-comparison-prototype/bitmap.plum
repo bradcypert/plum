@@ -1,0 +1,57 @@
+// THROWAWAY: compact bitmap HAMT, not packed CHAMP.
+enum Node { Empty, Leaf(Int, Int, Array[Entry]), Branch(Int, Array[Node]) }
+let empty (): Node = Empty
+let rank (bits: Int) (bit: Int): Int = Int.count_ones(bits & (bit - 1))
+let splice (xs: Array[Node]) (i: Int) (v: Node): Array[Node] = {
+    let mut out = [];
+    for j in 0..xs.len() { if j == i { out = out.push(v); }; out = out.push(xs[j]); };
+    if i == xs.len() { out = out.push(v); };
+    out
+}
+let tree_put (t: Node) (k: Int) (v: Array[Entry]): Node = insert(t, k, k, v, 0)
+let insert (t: Node) (h: Int) (k: Int) (v: Array[Entry]) (shift: Int): Node = match t {
+    Empty => Leaf(h, k, v),
+    Leaf(old, key, value) => if old == h {
+        assert_eq(key, k); Leaf(h, k, v)
+    } else {
+        let a = Int.shr_logical(old, shift) & MASK;
+        let b = Int.shr_logical(h, shift) & MASK;
+        if a == b { Branch(1 << a, [insert(t, h, k, v, shift + BITS)]) }
+        else if a < b { Branch((1 << a) | (1 << b), [t, Leaf(h, k, v)]) }
+        else { Branch((1 << a) | (1 << b), [Leaf(h, k, v), t]) }
+    },
+    Branch(bits, children) => {
+        let bit = 1 << (Int.shr_logical(h, shift) & MASK);
+        let i = rank(bits, bit);
+        if (bits & bit) == 0 { Branch(bits | bit, splice(children, i, Leaf(h, k, v))) }
+        else { Branch(bits, children.set(i, insert(children[i], h, k, v, shift + BITS))) }
+    },
+}
+let tree_get (t: Node) (k: Int): Array[Entry] = lookup(t, k, k, 0)
+let lookup (t: Node) (h: Int) (k: Int) (shift: Int): Array[Entry] = match t {
+    Empty => [],
+    Leaf(old, key, value) => if key == k { value } else { [] },
+    Branch(bits, children) => {
+        let bit = 1 << (Int.shr_logical(h, shift) & MASK);
+        if (bits & bit) == 0 { [] }
+        else { lookup(children[rank(bits, bit)], h, k, shift + BITS) }
+    },
+}
+let tree_remove (t: Node) (h: Int): Node = erase(t, h, 0)
+let erase (t: Node) (h: Int) (shift: Int): Node = match t {
+    Empty => t,
+    Leaf(old, _, _) => if old == h { Empty } else { t },
+    Branch(bits, children) => {
+        let bit = 1 << (Int.shr_logical(h, shift) & MASK);
+        if (bits & bit) == 0 { t } else {
+            let i = rank(bits, bit);
+            let child = erase(children[i], h, shift + BITS);
+            let rest = match child { Empty => children.remove(i), _ => children.set(i, child) };
+            let new_bits = match child { Empty => bits & ~bit, _ => bits };
+            if rest.len() == 0 { Empty }
+            else if rest.len() == 1 { match rest[0] {
+                Leaf(_, _, _) => rest[0], _ => Branch(new_bits, rest),
+            } } else { Branch(new_bits, rest) }
+        }
+    },
+}

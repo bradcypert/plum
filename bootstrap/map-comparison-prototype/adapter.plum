@@ -1,0 +1,27 @@
+// THROWAWAY: hash routing and collision buckets share one public contract.
+struct Entry { key: KEY, value: VALUE }
+let put (t: Node) (k: KEY) (v: VALUE): Node = {
+    let h = key_hash(k);
+    let mut entries = tree_get(t, h);
+    let mut found = false;
+    for i in 0..entries.len() {
+        if entries[i].key == k { entries = entries.set(i, Entry { key: k, value: v }); found = true; };
+    };
+    if !found { entries = entries.push(Entry { key: k, value: v }); };
+    tree_put(t, h, entries)
+}
+let get (t: Node) (k: KEY): Option[VALUE] = {
+    let mut result = None;
+    for entry in tree_get(t, key_hash(k)) { if entry.key == k { result = Some(entry.value); }; };
+    result
+}
+let remove (t: Node) (k: KEY): Node = {
+    let h = key_hash(k);
+    let entries = tree_get(t, h);
+    let mut found = -1;
+    for i in 0..entries.len() { if entries[i].key == k { found = i; }; };
+    if found < 0 { t } else {
+        let rest = entries.remove(found);
+        if rest.len() == 0 { tree_remove(t, h) } else { tree_put(t, h, rest) }
+    }
+}
