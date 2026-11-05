@@ -1,0 +1,5 @@
+struct Cell { n: Int, a: Int, b: Int, c: Int }
+struct Pair { child: Cell }
+let make (n: Int): Pair = Pair { child: Cell { n: n, a: n, b: n, c: n } }
+let replace (p: Pair) (n: Int): Cell = match p { Pair(child) => Cell { n: n, a: n, b: n, c: n } }
+let main (): Unit = assert_eq(replace(make(1), 7).n, 7)

@@ -179,6 +179,7 @@ def check(compiler):
                 "textDocument": {"uri": uri(a)}, "position": {"line": 0, "character": 0}}) == []
             assert len(client.notifications) == before
             client.notify("didClose", unwritable)
+            client.request("textDocument/formatting")  # Finish diagnostics before changing the project tree.
             # Copy preserves links, but source discovery must refuse this
             # absolute dangling link. Windows may not allow symlinks.
             link = project / "dangling"
@@ -240,6 +241,7 @@ def check_roots(compiler):
             assert target and target["uri"] == uri(dep), target
             client.notify("didClose", dep)
             client.notify("didClose", source)
+            client.request("textDocument/formatting")  # Drain closes before changing dependency files.
             # Transitive external roots are rebound inside the snapshot too.
             transitive = base / "transitive"
             (transitive / "leaf").mkdir(parents=True)
@@ -252,6 +254,7 @@ def check_roots(compiler):
             hover = client.query("hover", source, text, "value", 1)
             assert hover and "String" in hover["contents"]["value"], hover
             client.notify("didClose", leaf)
+            client.request("textDocument/formatting")
             dep.write_text('pub let answer (): Int = 1\n')
             # Replacing several copied inodes must not retain obsolete
             # identities that could be recycled for another buffer's target.
@@ -262,12 +265,19 @@ def check_roots(compiler):
                 live = 'let buffer%d (): Int = %d\n' % (index, index + 1)
                 extra.write_text(disk)
                 overlays.append((extra, live, disk))
+            # Prepare disk state before notifications start snapshot workers.
+            for extra, live, _ in overlays:
                 client.notify("didOpen", extra, live)
             extra, live, disk = overlays[-1]
             assert client.query("hover", extra, live, "buffer11") is not None
             for extra, live, disk in overlays:
                 assert extra.read_text() == disk
                 client.notify("didClose", extra)
+            # Notifications have no response: closing one buffer may still
+            # be reading another during project diagnostics. Wait for all
+            # closes before unlinking files (Windows refuses open files).
+            client.request("textDocument/formatting")
+            for extra, _, _ in overlays:
                 extra.unlink()
             # Invalid manifests are isolated in the worker, not the server.
             manifest.write_text('Package {')
@@ -318,6 +328,7 @@ def check_roots(compiler):
                 client.notify("didChange", alias, live.replace('"live"', '"different"'))
                 assert client.query("hover", physical, live, "value", 1) is None
                 client.notify("didClose", alias)
+                client.request("textDocument/formatting")
                 # The policy applies to both buffer overlays and discovery.
                 manifest.write_text('Package { name: "app", symlinks: "reject" }')
                 assert client.query("hover", physical, live, "value", 1) is None
@@ -326,6 +337,7 @@ def check_roots(compiler):
                 assert client.query("hover", physical, live, "value", 1) is not None
                 assert not physical.exists(), "overlay modified original dangling target"
                 client.notify("didClose", physical)
+                client.request("textDocument/formatting")
                 alias.unlink()
             assert dep.read_text() == 'pub let answer (): Int = 1\n'
             assert client.request("shutdown") is None

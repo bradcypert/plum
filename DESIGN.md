@@ -21729,3 +21729,61 @@ within the unchanged 128/64 MiB limits. Seed-to-source equivalence and the
 self-hosting fixed point pass without regenerating the seed. This separates
 application allocation improvements from compiler memory overhead; CI remains
 the check for other platforms.
+
+### Releasing dead pattern bindings (#442)
+
+Releasing a match's defensive owner does not release the separate references
+introduced by its pattern. `Fork(a, b) => if pass { update(tree) } else { ... }`
+therefore kept both children shared on the forwarding path even after #443.
+The existing liveness module now plans `TReleaseBefore(names, body)` at
+successful arm entry, selected `if` branches, and block statement boundaries.
+It uses the same source-expression read analysis as reset placement. A failed
+guard has no continuation for that arm's bindings; its false edge uses the
+same annotation, without changing guard evaluation count or temporary cleanup.
+
+Emission releases and nulls eligible frame slots before evaluating the body,
+forwarding tail position and pending cleanup. Ordinary cleanup can safely see
+those null slots. The annotation participates in borrow invalidation and read
+analysis; released names are excluded from later constructor candidates while
+lexical scope stays intact. It is transparent to assignment's payload-preserving
+`Array.push` transfer, including resource-containing arrays.
+
+Concrete slot types remain codegen's responsibility, as with consuming reads.
+Handles, erased closures, and aggregates containing them retain the existing
+observable lifetime policy. Raw CStr pins, source assignment/shadowing conflicts,
+operand boundaries, loops, and closure frames remain conservative. We compared
+selective pattern materialization and a general ownership IR: delayed retains
+would introduce a second branch planner and miss guard/condition last uses;
+BindingIds and a control-flow ownership IR would broaden the representation
+change without being required for this case.
+
+Early release must also preserve storage reuse. A wrapper can own a child
+larger than itself; a later constructor may reuse the child even though the
+wrapper's reset token is too small. The planner therefore leaves dead bindings
+available when the remaining local path contains a potentially reusable
+constructor. Branch descent still releases bindings on constructor-free paths.
+This deliberately sacrifices some optimization precision instead of duplicating
+layout analysis. The storage regression stays at two allocations / 56 bytes;
+unconditional early release would increase it to three / 96.
+
+The mixed forwarding/rebuilding regression now requests 33 allocations /
+1,056 bytes instead of 289 / 9,248. All 32 updates reuse the initial 33 nodes.
+Four independent guard, condition, block-join, and nested-pattern workloads
+request 132 allocations / 4,224 bytes in total, with no allocations during
+updates. A resource-array replacement after a binding's last use requests
+1,034 allocations / 48,976 bytes; hiding `push` behind the new annotation
+would have restored quadratic copying (2,049 / 8,437,776). The byte ceiling
+checks this integration, not merely allocation counts.
+
+These are cumulative allocation/copy savings, not a claim about peak live
+memory or allocator RSS. Shared snapshots still require copied paths. The
+unchanged bounded map prototypes retain the #443 results: flat Map requests
+25,068,560 bytes for a 1,000-key local build, Patricia 95,952, bitmap16 452,200,
+bitmap32 590,456, and red-black 671,488. Native tracking still reaches zero
+live bytes after each scope; Int and String variants pass AddressSanitizer.
+#281 remains open for collision/deletion/snapshot/Ref representation comparisons.
+
+The local Linux compiler-memory gate measures 123 MiB for emission and 43 MiB
+for checking, within unchanged 128/64 MiB limits (the preceding change measured
+122/43). Self-hosting, source-discovery scaling, and allocation gates remain
+independent requirements: application savings must not hide compiler overhead.

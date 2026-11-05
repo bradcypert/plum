@@ -71,7 +71,21 @@ let resource_array (): Unit = {
     assert_eq(live(), 3)
 }
 
+// An erased closure may own a resource. A dead pattern binding must keep
+// its existing function-scoped lifetime even on a branch that never calls it.
+let pattern_capture (skip: Bool): Unit = {
+    let result = match capture() {
+        f => if skip { 0 } else { f() },
+    };
+    assert(result >= 0);
+    assert_eq(live(), 1)
+}
+
 let main (): Unit = {
+    pattern_capture(true);
+    assert_eq(live(), 0);
+    pattern_capture(false);
+    assert_eq(live(), 0);
     resource_array();
     assert_eq(live(), 0);
     exercise(false);

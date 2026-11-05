@@ -1,0 +1,118 @@
+enum Tree { Leaf(String), Fork(Tree, Tree) }
+let leaf (n: Int): Tree = Leaf(n.to_string())
+let build (n: Int): Tree = if n == 0 { leaf(n) } else { Fork(build(n - 1), leaf(n)) }
+let size (t: Tree): Int = match t { Leaf(s) => s.len(), Fork(a, b) => size(a) + size(b) }
+let bump (t: Tree): Tree = match t {
+    Leaf(s) => Leaf(s.concat("!")),
+    Fork(a, b) => Fork(bump(a), b),
+}
+let forward (t: Tree) (pass: Bool): Tree = match t {
+    Leaf(s) => if pass { bump(t) } else { Leaf(s.concat("!")) },
+    Fork(a, b) => if pass { bump(t) } else { Fork(bump(a), b) },
+}
+let condition (t: Tree): Tree = match t {
+    Leaf(s) => if s.len() > 0 { bump(t) } else { Leaf(s) },
+    Fork(a, b) => if size(a) > 0 { bump(t) } else { Fork(a, b) },
+}
+let guarded (t: Tree): Tree = match t {
+    Leaf(s) if s.len() < 0 => t,
+    Leaf(s) if s.len() > 0 => bump(t),
+    Fork(a, _) if size(a) < 0 => t,
+    Fork(a, b) if size(a) > 0 => bump(t),
+    _ => t,
+}
+let sequence (t: Tree) (flag: Bool): Tree = match t {
+    Fork(a, b) => {
+        if flag { assert(size(a) > 0); } else { assert(size(b) > 0); };
+        assert(size(b) > 0);
+        bump(t)
+    },
+    Leaf(s) => { assert(s.len() > 0); bump(t) },
+}
+let nested (t: Tree) (pass: Bool): Tree = match t {
+    Fork(Fork(a, b), c) => if pass { bump(t) } else { Fork(Fork(bump(a), b), c) },
+    _ => bump(t),
+}
+enum Choice { Left(Tree), Right(Tree) }
+let alternatives (c: Choice) (pass: Bool): Int = match c {
+    Left(a) | Right(a) if size(a) > 0 => if pass { 9 } else { size(a) },
+    _ => 0,
+}
+let escaped (t: Tree): () -> Int = match t {
+    Fork(a, b) => { let f = || size(a); assert(size(b) > 0); f },
+    Leaf(s) => || s.len(),
+}
+let cstr (t: Tree): Int = match t {
+    Leaf(s) => unsafe {
+        let raw = s.as_cstr();
+        let n = s.len();
+        assert_eq(raw.as_string().len(), n);
+        n
+    },
+    _ => 0,
+}
+let shadow (t: Tree): Tree = match t {
+    Fork(a, b) => { let a = leaf(8); if size(b) > 0 { bump(t) } else { Fork(a, b) } },
+    Leaf(s) => { let s = "shadow"; Leaf(s) },
+}
+let assigned (t: Tree): Tree = match t {
+    Fork(a, b) => { a = leaf(8); if size(b) > 0 { bump(t) } else { Fork(a, b) } },
+    _ => bump(t),
+}
+let borrowed (t: Tree) (pass: Bool): Bool = match t {
+    Fork(a, b) => a == if pass { bump(t) } else { b },
+    Leaf(s) => s == if pass { "other" } else { s },
+}
+let looped (t: Tree): Int = match t {
+    Fork(a, b) => { let mut n = 0; for i in 0..3 { n = n + size(a); }; n + size(b) },
+    Leaf(s) => s.len(),
+}
+let countdown (t: Tree) (n: Int): Tree = match t {
+    Fork(a, b) => if n == 0 { Fork(a, b) } else { countdown(t, n - 1) },
+    Leaf(s) => if n == 0 { Leaf(s) } else { countdown(t, n - 1) },
+}
+let failed_guard_cstr (): Int = unsafe {
+    let raw = ref("".as_cstr());
+    match Some(123.to_string()) {
+        Some(s) if { raw.set(s.as_cstr()); false } => 1,
+        _ => 0,
+    };
+    assert_eq(raw.get().as_string(), "123");
+    raw.get().as_string().len()
+}
+let failed_guard_capture (t: Tree): Int = {
+    let saved = ref(|| 0);
+    match t {
+        Fork(a, _) if { saved.set(|| size(a)); false } => 1,
+        _ => 0,
+    };
+    saved.get()()
+}
+let main (): Unit = {
+    let snapshot = build(4);
+    assert_eq(size(forward(snapshot, true)), 6);
+    assert_eq(size(snapshot), 5);
+    assert_eq(size(forward(build(4), false)), 6);
+    assert_eq(size(condition(build(4))), 6);
+    assert_eq(size(guarded(build(4))), 6);
+    assert_eq(size(sequence(build(4), true)), 6);
+    assert_eq(size(sequence(build(4), false)), 6);
+    assert_eq(size(nested(build(4), true)), 6);
+    assert_eq(size(nested(build(4), false)), 6);
+    assert_eq(alternatives(Left(build(4)), true), 9);
+    assert_eq(alternatives(Right(build(4)), false), 5);
+    let f = escaped(build(4));
+    assert_eq(f(), 4);
+    assert_eq(f(), 4);
+    assert_eq(cstr(leaf(123)), 3);
+    assert_eq(failed_guard_cstr(), 3);
+    assert_eq(failed_guard_capture(build(4)), 4);
+    assert_eq(size(shadow(build(4))), 6);
+    assert_eq(size(assigned(build(4))), 6);
+    assert(!borrowed(build(4), true));
+    assert(borrowed(leaf(123), false));
+    assert_eq(looped(build(4)), 13);
+    assert_eq(size(countdown(build(4), 1000)), 5);
+    for i in 0..8 { assert_eq(size(forward(build(4), i < 4)), 6); };
+    println("pattern ownership ok");
+}

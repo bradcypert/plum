@@ -1,0 +1,49 @@
+enum Tree { Leaf(Int), Fork(Tree, Tree) }
+let build (depth: Int): Tree =
+    if depth == 0 { Leaf(depth + 1) } else { Fork(build(depth - 1), Leaf(depth + 1)) }
+let update (tree: Tree) (depth: Int): Tree = match tree {
+    Leaf(value) => if value < 0 { tree } else { Leaf(value + 1) },
+    Fork(left, right) => if depth < 0 { tree } else { Fork(update(left, depth - 1), right) },
+}
+let sum (tree: Tree): Int = match tree {
+    Leaf(value) => value,
+    Fork(left, right) => sum(left) + sum(right),
+}
+let guarded (tree: Tree): Tree = match tree {
+    Fork(a, b) if sum(a) < 0 => Fork(a, b),
+    Fork(a, _) if sum(a) > 0 => update(tree, 16),
+    Leaf(v) if v < 0 => Leaf(v),
+    _ => update(tree, 16),
+}
+let condition (tree: Tree): Tree = match tree {
+    Fork(a, b) => if sum(a) > 0 { update(tree, 16) } else { Fork(a, b) },
+    Leaf(v) => if v > 0 { update(tree, 16) } else { Leaf(v) },
+}
+let sequence (tree: Tree) (flag: Bool): Tree = match tree {
+    Fork(a, b) => {
+        if flag { assert(sum(a) > 0); } else { assert(sum(b) > 0); };
+        assert(sum(b) > 0);
+        update(tree, 16)
+    },
+    Leaf(v) => { assert(v > 0); update(tree, 16) },
+}
+let nested (tree: Tree): Tree = match tree {
+    Fork(Fork(a, b), c) => if sum(a) > 0 { update(tree, 16) } else { Fork(Fork(a, b), c) },
+    _ => update(tree, 16),
+}
+let main (): Unit = {
+    let mut a = build(16);
+    let mut b = build(16);
+    let mut c = build(16);
+    let mut d = build(16);
+    for i in 0..32 {
+        a = guarded(a);
+        b = condition(b);
+        c = sequence(c, i < 16);
+        d = nested(d);
+    };
+    assert_eq(sum(a), 185);
+    assert_eq(sum(b), 185);
+    assert_eq(sum(c), 185);
+    assert_eq(sum(d), 185);
+}
