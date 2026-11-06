@@ -44,7 +44,7 @@ let cg_pat_safe_words (n: Int) (acc: String): String =
     if n <= 0 { acc }
     else { cg_pat_safe_words(n - 1, if acc == "" { "ptr @plum_pat_safe" } else { acc.concat(", ptr @plum_pat_safe") }) }
 
-pub let cg_runtime (unit: Unit): String = cg_lines([
+pub let cg_runtime (heap: Bool): String = cg_lines([
     "; --- Stage 5 runtime (self-hosted backend) ---",
     "declare ptr @malloc(i64)",
     "declare i32 @printf(ptr, ...)",
@@ -109,6 +109,7 @@ pub let cg_runtime (unit: Unit): String = cg_lines([
     "declare i32 @memcmp(ptr, ptr, i64)",
     "declare void @exit(i32)",
     "declare void @free(ptr)",
+    if heap { "declare ptr @plum_heap_alloc(i64)\ndeclare void @plum_heap_free(ptr)" } else { "" },
     "declare i64 @malloc_usable_size(ptr)",
     "declare ptr @getenv(ptr)",
     "declare i32 @dprintf(i32, ptr, ...)",
@@ -285,11 +286,18 @@ pub let cg_runtime (unit: Unit): String = cg_lines([
     "  ret void",
     "}",
     "",
+    "; All generated frees use this boundary, including untracked native buffers.",
+    "define void @plum_free(ptr %p) alwaysinline {",
+    "entry:",
+    "  call void @".concat(if heap { "plum_heap_free" } else { "free" }).concat("(ptr %p)"),
+    "  ret void",
+    "}",
+    "",
     "define ptr @plum_alloc(i64 %size) {",
     "entry:",
     "  %pn = atomicrmw add ptr @plum_n_alloc, i64 1 monotonic",
     "  %pb = atomicrmw add ptr @plum_b_alloc, i64 %size monotonic",
-    "  %cell = call ptr @malloc(i64 %size)",
+    "  %cell = call ptr @".concat(if heap { "plum_heap_alloc" } else { "malloc" }).concat("(i64 %size)"),
     "  store i64 1, ptr %cell",
     "  ret ptr %cell",
     "}",
@@ -373,7 +381,7 @@ pub let cg_runtime (unit: Unit): String = cg_lines([
     "  %relp = getelementptr i8, ptr %p, i64 16",
     "  %rel = load ptr, ptr %relp",
     "  call void %rel(ptr %p)",
-    "  call void @free(ptr %p)",
+    "  call void @plum_free(ptr %p)",
     "  ret void",
     "}",
     "",
@@ -396,7 +404,7 @@ pub let cg_runtime (unit: Unit): String = cg_lines([
     "alive:",
     "  ret void",
     "free:",
-    "  call void @free(ptr %p)",
+    "  call void @plum_free(ptr %p)",
     "  ret void",
     "}",
     "",
@@ -711,7 +719,7 @@ pub let cg_runtime (unit: Unit): String = cg_lines([
     // scratch buffer is dead the moment it returns. Leaving it
     // unfreed leaked 32 bytes per `.to_string()` call -- invisible in
     // a fixture, unbounded in a loop.
-    "  call void @free(ptr %buf)",
+    "  call void @plum_free(ptr %buf)",
     "  ret ptr %s",
     "}",
     "",
@@ -799,7 +807,7 @@ pub let cg_runtime (unit: Unit): String = cg_lines([
     "  %n32 = call i32 (ptr, i64, ptr, ...) @snprintf(ptr %buf, i64 512, ptr @.plum_fmt_fixed, i32 %dc, double %f)",
     "  %len = sext i32 %n32 to i64",
     "  %s = call ptr @plum_str_new(ptr %buf, i64 %len)",
-    "  call void @free(ptr %buf)",
+    "  call void @plum_free(ptr %buf)",
     "  ret ptr %s",
     "}",
     "",
@@ -812,7 +820,7 @@ pub let cg_runtime (unit: Unit): String = cg_lines([
     // scratch buffer is dead the moment it returns. Leaving it
     // unfreed leaked 32 bytes per `.to_string()` call -- invisible in
     // a fixture, unbounded in a loop.
-    "  call void @free(ptr %buf)",
+    "  call void @plum_free(ptr %buf)",
     "  ret ptr %s",
     "}",
     "",
@@ -1587,7 +1595,7 @@ pub let cg_runtime (unit: Unit): String = cg_lines([
     "  %cell = call ptr @plum_str_new(ptr %buf, i64 %size)",
     // Same as the `to_string` buffers: the cell owns a copy now. This
     // one leaked the WHOLE FILE on every read.
-    "  call void @free(ptr %buf)",
+    "  call void @plum_free(ptr %buf)",
     "  %out = call ptr @plum_array_new(i64 1)",
     "  %slot = getelementptr i8, ptr %out, i64 16",
     "  store ptr %cell, ptr %slot",
@@ -2484,7 +2492,7 @@ pub let cg_runtime (unit: Unit): String = cg_lines([
     "  %bytes = mul i64 %n, 8",
     "  %copied = call ptr @memcpy(ptr %newdata, ptr %olddata, i64 %bytes)",
     "  ; No element retain/release: ownership moves from the private old cell.",
-    "  call void @free(ptr %old)",
+    "  call void @plum_free(ptr %old)",
     "  store ptr %new, ptr %outp",
     "  store i64 %newcap, ptr %capp",
     "  br label %store",
