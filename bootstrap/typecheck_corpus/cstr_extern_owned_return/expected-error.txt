@@ -1,0 +1,1 @@
+self-hosted type checker: extern functions cannot return an owned CStr; return RawCStr and copy it while its native owner is alive

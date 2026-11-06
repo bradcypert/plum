@@ -38,14 +38,8 @@ needs its own `Net.close`.
 
 ## `let write (fd: Int) (data: String): Result[Int, String]`
 
-`len` MUST be bound BEFORE `.as_cstr()` runs. `.as_cstr()`
-decrements the string's refcount to produce its copy and FREES
-the original outright if that was the last reference, exactly
-what a direct `tcp_write(fd, "hello")` passes. Reading
-`data.len()` afterwards in the same argument list is a real
-use-after-free, and the real compiler found it the hard way:
-garbage bytes trailing the content on an actual socket, observed
-on the wire rather than theorized.
+Sends immutable text. CStr keeps its backing cell alive through the call.
+Native code borrows the bytes and must not retain or mutate them.
 
 ## `let read (fd: Int) (max_len: Int): String`
 
@@ -71,11 +65,6 @@ dropped connection is the difference between waiting and failing.
 `tcp_recv_n` returns a count and keeps the two apart.
 
 ## `let write_bytes (fd: Int) (data: Bytes): Result[Int, String]`
-
-`len` MUST be bound BEFORE `.as_cstr()` runs, for the same reason
-`write` above spells that out: the pointer is an interior one into
-the cell, and reading `.len()` afterwards in the same argument
-list is how that bug was found on the wire the first time.
 
 Binary-safe because `tcp_send` takes an explicit length and never
 calls `strlen`, so a NUL in the buffer is just another byte.

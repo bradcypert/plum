@@ -1,0 +1,115 @@
+extern "C" {
+    fn plum_heap_snapshot() -> Int;
+    fn plum_heap_snapshot_field(token: Int, field: Int) -> Int;
+    fn inspect(value: CStr) -> Int;
+    fn inspect_bytes(value: CStr, length: Int) -> Int;
+    fn inspect_pair(value: CStr, ignored: Int) -> Int;
+    fn native_suffix(value: CStr) -> RawCStr;
+    fn native_literal() -> RawCStr;
+    fn inspect_raw(value: RawCStr) -> Int;
+}
+struct Box { pointer: CStr }
+enum Choice { Empty, Value(CStr) }
+let made (n: Int): CStr = unsafe { "x".repeat(n).as_cstr() }
+let relay (pointer: CStr): Int = unsafe { inspect(pointer) }
+let forward (pointer: CStr): CStr = pointer
+let tail (n: Int) (pointer: CStr): Int =
+    if n == 0 { relay(pointer) } else { tail(n - 1, pointer) }
+let copied (pointer: CStr): String = unsafe { pointer.as_string() }
+let selected (left: Bool): CStr = unsafe {
+    if left { "x".repeat(32).as_cstr() } else { "y".repeat(64).as_cstr() }
+}
+let from_match (left: Bool): CStr = match if left { Some(made(32)) } else { None } {
+    Some(pointer) => pointer,
+    None => made(64),
+}
+let capture (): () -> CStr = { let pointer = made(32); || pointer }
+let memory_field (field: Int): Int = unsafe {
+    let token = plum_heap_snapshot();
+    if token == 0 { -1 } else { plum_heap_snapshot_field(token, field) }
+}
+let live (): Int = memory_field(3)
+let allocated (): Int = memory_field(0)
+let source_is_shared (): Unit = unsafe {
+    let mut text = "x".repeat(32);
+    let pointer = text.as_cstr();
+    text = text.concat("changed");
+    assert_eq(inspect(pointer), 32);
+    assert_eq(text.len(), 39);
+    assert_eq(inspect_pair(text.as_cstr(), { text = "y".repeat(128); 0 }), 39);
+    assert_eq(text.len(), 128)
+}
+let stored (): Unit = {
+    let pointer = made(32);
+    let same = pointer;
+    assert_eq(relay(pointer), 32);
+    assert_eq(relay(same), 32);
+    let box = Box { pointer: made(32) };
+    let values = [box.pointer, made(64)];
+    assert_eq(relay(values[0]), 32);
+    assert_eq(relay(values[1]), 64);
+    let mut holder = ref(made(32));
+    holder.set(made(64));
+    assert_eq(relay(holder.get()), 64);
+    let tuple = (made(32), made(64));
+    match tuple { (a, b) => { assert_eq(relay(a), 32); assert_eq(relay(b), 64) } };
+    match Value(made(32)) { Value(p) => assert_eq(relay(p), 32), Empty => assert(false) };
+    let closure = capture();
+    assert_eq(relay(closure()), 32);
+    assert_eq(relay(closure()), 32)
+}
+// Loop continuations conservatively account for later reads with the same
+// name. This can retain a local until overwrite/exit, but must stay bounded
+// and release it when the function returns.
+let bounded_locals (): Unit = {
+    let baseline = live();
+    for i in 0..256 {
+        let pointer = selected(i % 2 == 0);
+        assert_eq(relay(pointer), if i % 2 == 0 { 32 } else { 64 });
+        made(32);
+        assert(live() <= baseline + 128);
+    };
+    let pointer = made(32);
+    assert_eq(relay(pointer), 32)
+}
+let main (): Unit = {
+    assert_eq(unsafe { inspect("x".repeat(32).as_cstr()) }, 32);
+    assert_eq(unsafe { inspect_bytes(Bytes.from_array([65, 0, 66]).as_cstr(), 3) }, 1);
+    assert_eq(unsafe { "x".repeat(32).as_cstr().as_string() }, "x".repeat(32));
+    assert_eq(relay(forward(made(32))), 32);
+    assert_eq(relay(selected(true)), 32);
+    assert_eq(relay(selected(false)), 64);
+    assert_eq(relay(from_match(true)), 32);
+    assert_eq(relay(from_match(false)), 64);
+    assert_eq(copied(made(32)), "x".repeat(32));
+    assert_eq(tail(100000, made(32)), 32);
+    source_is_shared();
+    stored();
+    let before_locals = live();
+    bounded_locals();
+    assert_eq(live(), before_locals);
+    unsafe {
+        let owner = made(32);
+        let suffix = native_suffix(owner);
+        assert_eq(suffix.as_string(), "x".repeat(31));
+        // RawCStr does not retain its input. This later use proves the
+        // owner remains alive through the native alias's copy.
+        assert_eq(inspect(owner), 32);
+        assert_eq(native_literal().as_string(), "native");
+        assert_eq(inspect_raw(native_literal()), 6)
+    };
+    let baseline = live();
+    for i in 0..256 {
+        let pointer = selected(i % 2 == 0);
+        assert_eq(relay(pointer), if i % 2 == 0 { 32 } else { 64 });
+        assert_eq(relay(made(32)), 32);
+        assert_eq(live(), baseline);
+    };
+    // Neither a conversion nor a CStr-to-CStr transfer allocates a view.
+    let text = "x".repeat(32);
+    let before = allocated();
+    let converted = text.as_cstr();
+    assert_eq(allocated(), before);
+    assert_eq(relay(converted), 32);
+    println("owned CStr: storage, aliases, closures, tail calls and bounded memory")
+}

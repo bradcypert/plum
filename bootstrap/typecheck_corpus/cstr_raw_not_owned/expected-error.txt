@@ -1,0 +1,2 @@
+error: let pointer: declared type CStr doesn't match value type RawCStr (RawCStr != CStr)
+main.plum:2:30

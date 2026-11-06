@@ -1,0 +1,1 @@
+owned CStr: storage, aliases, closures, tail calls and bounded memory

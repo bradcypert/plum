@@ -1731,8 +1731,8 @@ extern "C" {
     // compiled by BOTH compilers, and only the self-hosted prelude has
     // a wrapper for it.
     fn process_run_inherit(program: CStr, joined: CStr, argc: Int) -> Int;
-    fn stdin_read_line() -> CStr;
-    fn stdin_read_n(n: Int) -> CStr;
+    fn stdin_read_line() -> RawCStr;
+    fn stdin_read_n(n: Int) -> RawCStr;
     fn stdout_write(s: CStr);
     fn stdout_flush();
 }

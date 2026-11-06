@@ -7,9 +7,9 @@ extern "C" {
     fn tcp_listen(port: Int) -> Int;
     fn tcp_accept(fd: Int) -> Int;
     fn tcp_send(fd: Int, buf: CStr, len: Int) -> Int;
-    fn tcp_recv(fd: Int, max_len: Int) -> CStr;
+    fn tcp_recv(fd: Int, max_len: Int) -> RawCStr;
     fn tcp_recv_n(fd: Int, max_len: Int) -> Int;
-    fn tcp_recv_data() -> CStr;
+    fn tcp_recv_data() -> RawCStr;
     fn tcp_close(fd: Int) -> Unit;
 }
 
@@ -48,14 +48,8 @@ pub let accept (fd: Int): Result[Int, String] = unsafe {
     if client < 0 { Err("Net.accept: accept failed") } else { Ok(client) }
 }
 
-/// `len` MUST be bound BEFORE `.as_cstr()` runs. `.as_cstr()`
-/// decrements the string's refcount to produce its copy and FREES
-/// the original outright if that was the last reference, exactly
-/// what a direct `tcp_write(fd, "hello")` passes. Reading
-/// `data.len()` afterwards in the same argument list is a real
-/// use-after-free, and the real compiler found it the hard way:
-/// garbage bytes trailing the content on an actual socket, observed
-/// on the wire rather than theorized.
+/// Sends immutable text. CStr keeps its backing cell alive through the call.
+/// Native code borrows the bytes and must not retain or mutate them.
 pub let write (fd: Int) (data: String): Result[Int, String] = unsafe {
     let len = data.len();
     let n = tcp_send(fd, data.as_cstr(), len);
@@ -99,11 +93,6 @@ pub let read_bytes (fd: Int) (max_len: Int): Result[Bytes, String] = unsafe {
     else { Ok(Bytes.from_cstr(tcp_recv_data(), n)) }
 }
 
-/// `len` MUST be bound BEFORE `.as_cstr()` runs, for the same reason
-/// `write` above spells that out: the pointer is an interior one into
-/// the cell, and reading `.len()` afterwards in the same argument
-/// list is how that bug was found on the wire the first time.
-///
 /// Binary-safe because `tcp_send` takes an explicit length and never
 /// calls `strlen`, so a NUL in the buffer is just another byte.
 pub let write_bytes (fd: Int) (data: Bytes): Result[Int, String] = unsafe {

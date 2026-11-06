@@ -1,13 +1,13 @@
 use shadow;
 
 extern "C" {
-    fn copy_test_data() -> CStr;
-    fn copy_test_null() -> CStr;
+    fn copy_test_data() -> RawCStr;
+    fn copy_test_null() -> RawCStr;
     fn copy_test_reuse();
 }
 
 // A wrapper makes the caller's trust decision explicit in its body.
-let copy_known_buffer (pointer: CStr): Bytes = unsafe { Bytes.from_cstr(pointer, 4) }
+let copy_known_buffer (pointer: RawCStr): Bytes = unsafe { Bytes.from_cstr(pointer, 4) }
 
 let main (): Unit = {
     let pointer = unsafe { copy_test_data() };

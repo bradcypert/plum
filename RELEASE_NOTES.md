@@ -3,6 +3,12 @@ correctness, editor tooling, filesystem safety, and Windows I/O.
 
 ## Compatibility and migration
 
+- **CStr now owns its backing storage.** String/Bytes `.as_cstr()` shares
+  the existing cell with normal Perceus ownership, making temporary, stored
+  and returned values valid without a copy or wrapper allocation. Change
+  native pointer return annotations from `CStr` to `RawCStr`; raw pointers
+  retain their explicitly unsafe native lifetime. `Bytes.from_cstr` accepts
+  RawCStr, and both pointer types require `unsafe` for `.as_string()`.
 - **JSON serialization is now fallible.** `json_stringify(value)` returns
   `Result[String, String]`. Handle `Ok(text)` before writing or sending JSON;
   `Err("non-finite JSON number")` rejects NaN and either infinity, including

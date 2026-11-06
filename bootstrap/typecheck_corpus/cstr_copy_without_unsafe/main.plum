@@ -1,0 +1,1 @@
+let main (): Unit = println("x".as_cstr().as_string())

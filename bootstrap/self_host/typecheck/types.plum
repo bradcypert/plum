@@ -12,8 +12,7 @@
 // ANNOTATION syntax, e.g. `TyPath`/`TyGeneric`) this module converts
 // FROM, not the same thing.
 //
-// **Deliberate v1 scope cut versus `plum_types::Type`**: no `CStr`
-// (FFI isn't supported by `interp/interp.plum` either) and no `Range`
+// **Deliberate v1 scope cut versus `plum_types::Type`**: no `Range`
 // (ditto — `for` loops are handled structurally by this checker, not
 // via a first-class range value). Everything else is present.
 
@@ -29,12 +28,11 @@ pub enum ITy {
     // use site — empty for non-generic, one entry per declared param
     // for a generic one, in declared order. Mirrors `Type::Struct`/
     // `Type::Enum` exactly.
-    // A raw C string -- a `char*` on its way into or out of an extern
-    // call, NOT a Plum `String`. Kept as its own type rather than an
-    // alias for `ITStr` precisely so the conversion has to be written:
-    // `.as_cstr()` one way, `.as_string()` the other. Mirrors
-    // `plum_types::Type::CStr` exactly, including that reasoning.
+    // An owned NUL-terminated byte view, sharing a String/Bytes cell.
+    // Native calls borrow its interior data pointer for the duration of a call.
     ITCStr,
+    // An unmanaged native pointer. Unlike CStr, this carries no Plum owner.
+    ITRawCStr,
     // A byte buffer, and the type `ITStr` is a constrained form of.
     //
     // The two share a cell layout exactly -- `{i64 rc, i64 len, bytes..,
@@ -160,6 +158,7 @@ let unify_non_var (a: ITy) (b: ITy): Result[Subst, String] =
         ITBool => match b { ITBool => Ok(subst_empty(())), _ => type_mismatch(a, b) },
         ITStr => match b { ITStr => Ok(subst_empty(())), _ => type_mismatch(a, b) },
         ITCStr => match b { ITCStr => Ok(subst_empty(())), _ => type_mismatch(a, b) },
+        ITRawCStr => match b { ITRawCStr => Ok(subst_empty(())), _ => type_mismatch(a, b) },
         // Does NOT unify with `ITStr`, despite the identical runtime
         // cell. That is the entire point of the type: a `Bytes` that
         // silently passed where a `String` was wanted would put the
@@ -257,7 +256,7 @@ let type_mismatch (a: ITy) (b: ITy): Result[Subst, String] = Err(render_ty(a).co
 
 pub let render_ty (ty: ITy): String =
     match ty {
-        ITInt => "Int", ITFloat => "Float", ITBool => "Bool", ITStr => "String", ITUnit => "Unit", ITCStr => "CStr",
+        ITInt => "Int", ITFloat => "Float", ITBool => "Bool", ITStr => "String", ITUnit => "Unit", ITCStr => "CStr", ITRawCStr => "RawCStr",
         ITBytes => "Bytes",
         ITVar(id) => "T".concat(id.to_string()),
         ITFunction(params, ret) => "(".concat(join_comma_ty(params)).concat(") -> ").concat(render_ty(ret)),

@@ -45,6 +45,19 @@ def main():
         run([compiler, 'test', fixtures / 'invalid_plum', '--sanitize=address'], fails=True, contains='heap-use-after-free')
         run([compiler, 'test', fixtures / 'clean', '--sanitize', 'address'], contains='1 passed; 0 failed')
 
+        # CStr is an owner, including through aggregates and tail calls. Track
+        # real allocations as well as leaks: conversions must not allocate a
+        # view, and repeated temporary borrows must restore live-byte baselines.
+        owned = root / 'bootstrap/exec_corpus/cstr_ownership'
+        for flags in [[], ['--release']]:
+            binary = Path(work) / ('cstr-owned' + str(len(flags)))
+            run([compiler, 'build', owned, '--sanitize=address', '--memory-stats', *flags, '-o', binary])
+            run([binary], contains='owned CStr: storage, aliases, closures, tail calls and bounded memory')
+        ir = run([compiler, 'emit-llvm', owned]).stdout
+        tail = re.search(r'define [^\n]*@plum_tail\([^\n]*\).*?\n}', ir, re.S)
+        if not tail or not re.search(r'musttail call [^\n]*@plum_tail\(', tail.group()):
+            raise RuntimeError('owned CStr forwarding lost its cyclic tail call')
+
         # IR and native-object cache identity includes instrumentation. Use
         # both mode transitions, then a real warm hit in each mode.
         for address, hit in [(False, False), (True, False), (True, True), (False, True)]:

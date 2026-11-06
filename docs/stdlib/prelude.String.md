@@ -222,6 +222,6 @@ Implemented by the compiler itself, so it has no Plum source to read.
 
 ## `let String.as_cstr (self: String): CStr`
 
-The string as a NUL-terminated pointer, for passing to an `extern` block's C functions. Only valid inside `unsafe`.
+An owned CStr sharing the string cell without copying bytes; native calls borrow its data pointer.
 
 Implemented by the compiler itself, so it has no Plum source to read.

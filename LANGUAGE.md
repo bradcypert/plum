@@ -645,15 +645,45 @@ let go (): Int = unsafe { strlen("hello".as_cstr()) }
 ```
 
 Extern calls are only allowed inside an `unsafe { }` block. The extern
-type surface is intentionally closed: `Int`/`Float`/`Bool`/`CStr`/a
-callback/a struct made of those: no raw pointers, no C-variadic
-functions, no extern global variables.
+type surface is intentionally closed: `Int`/`Float`/`Bool`/`CStr`/`RawCStr`/a
+callback/a qualifying struct. CStr is input-only. There is no general pointer
+arithmetic, no C-variadic functions, and no extern global variables.
 
-`.as_cstr()` goes `String -> CStr` (for passing Plum strings out to C);
-`.as_string()` goes the other way, `CStr -> String` (for turning a C
-function's returned string data (a socket's `tcp_recv`, say) into a
-real, usable Plum value). `CStr` otherwise has no operations of its
-own.
+`.as_cstr()` converts `String` or `Bytes` into an **owned CStr**, sharing
+the existing cell without copying bytes or allocating a wrapper. A CStr
+keeps its storage alive when stored, returned, captured, or passed through
+Plum calls. It follows ordinary Perceus reference counting, moves and drops.
+Creating a CStr is safe; an extern call still requires `unsafe`.
+
+The native marshaller passes the cell's data pointer to C and retains the
+owner through the call. C must not free, mutate, or retain that pointer
+beyond the owner's lifetime. Shared String/Bytes storage is immutable;
+CStr is not permission to write into it. Binary calls need an explicit
+length; embedded NUL bytes are preserved, while C string operations stop
+at the first NUL.
+
+Native functions return **RawCStr**, an unmanaged `char*`, rather than
+CStr. RawCStr does not retain or free native storage. The caller must
+honor its native lifetime, including invalidation by subsequent calls.
+It can also be passed to an extern parameter declared RawCStr, without
+conversion. CStr and RawCStr are distinct types and do not coerce.
+
+```plum fragment
+extern "C" { fn greeting() -> RawCStr; }
+let copied_greeting (): String = unsafe { greeting().as_string() }
+```
+
+Both CStr and RawCStr support `.as_string()` inside `unsafe`: it copies
+through the first NUL into a fresh String. The bytes must be valid UTF-8;
+a RawCStr must also remain readable through its NUL terminator. For binary
+native results, `unsafe { Bytes.from_cstr(raw, length) }` copies exactly
+the supplied readable length, including embedded NUL. Copy before the
+native owner invalidates or frees the pointer. If a native return aliases
+a CStr input, keep that input owner alive through the copy, with an explicit
+later use if necessary; returning RawCStr does not transfer that owner.
+For example, use `let copy = raw.as_string(); inspect(owner); copy` inside
+`unsafe`, where `inspect` borrows the original CStr. A lexical binding alone
+does not promise to defeat last-use release.
 
 ### Where the C goes
 

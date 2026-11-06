@@ -23,7 +23,7 @@ extern "C" {
     fn tls_connect(host: CStr, port: Int) -> Int;
     fn tls_send(handle: Int, buf: CStr, len: Int) -> Int;
     fn tls_recv_n(handle: Int, max_len: Int) -> Int;
-    fn tls_recv_data() -> CStr;
+    fn tls_recv_data() -> RawCStr;
     fn tls_close(handle: Int) -> Unit;
 }
 
