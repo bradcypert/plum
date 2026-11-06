@@ -1,0 +1,5 @@
+extern "C" { fn counter_check() -> Int; }
+let main (): Unit = {
+    assert_eq(unsafe { counter_check() }, 1);
+    println("runtime counters are exact after joined workers")
+}

@@ -1,0 +1,72 @@
+{
+  "platform": "Linux-7.2.11-arch1-1-x86_64-with-glibc2.44",
+  "samples": 3,
+  "harness_sha256": "41c92d243b28343a51c8994885c55cefc1af9ddab6f7417dd0f655e122d70e62",
+  "revision": "539658d33b33ed95c28b99ba986978e71f022a0a",
+  "binaries": {
+    "before": {
+      "path": "/tmp/plum-rebinding-ci",
+      "sha256": "a09c4ff9b30e0aaf94e9240b41c770d59e34e2ccd125acdb67b1d1884c1b5fe9"
+    },
+    "after": {
+      "path": "/tmp/plum-stats-ci",
+      "sha256": "ec02a8219066fcdeebe8f6cbcab5e7775d047802653172c03d97b298272940b9"
+    }
+  },
+  "heap_binaries": {},
+  "input_sha256": {
+    "bootstrap/exec_corpus/collections/main.plum": "e0cf9a9060b774547adc0032a2465aac09e78a8884b2a5e94d899b43e4032f79",
+    "bootstrap/properties/main.plum": "b2ce476c1d8dea1ee025df67a0fd9745b2acaab867e373d8e6b44c9c004a0a52",
+    "bootstrap/self_host/buildcache/buildcache.plum": "9cc2c28620e13cc551916539e2b3f66645b81715192a49efc0460ce6760b0d12",
+    "bootstrap/self_host/buildcache/native.plum": "e18f698932a6aa0792237b144202d77ea9e64e82c3b94b4c23945c9bfbad0ff2",
+    "bootstrap/self_host/codegen/codegen.plum": "add86c83a093de6ed318fd4a1d190ab54bd6615c26e030e87f34ca9f42d8fcfd",
+    "bootstrap/self_host/codegen/hash.plum": "fa9519c6c9708af59f19635c88a310894e378b37baf6b8e8382f43698a5b2cfa",
+    "bootstrap/self_host/codegen/prelude.plum": "edef1f2285c7c7556942ed52dd2b8066e5b3462ad1cad8e9b482ba3aaf3376ec",
+    "bootstrap/self_host/codegen/runtime.plum": "a651111bcd687f4b78f76bd808f9e8b33ed9de33d692b800c159007981da6f73",
+    "bootstrap/self_host/codegen/stdlib.plum": "43bf642a890f1f32b0b2ab9135c0ad8ad2b7697d012517fb5d3d413a509ecb9a",
+    "bootstrap/self_host/fmt/fmt.plum": "46c46714ee904924e788a70fe84fdf56fc88a98391fa284ce84f5d6cd3ff5e62",
+    "bootstrap/self_host/highlight/highlight.plum": "dd9fba51c46d7dba4cecceec8afd1a42e2ba200a9b46dadf58d1e294e6ab7568",
+    "bootstrap/self_host/lexer/lexer.plum": "e59decd4cbe5a2561d5f1a2baa2b42087f6d5dbac1cc4ef2d1273c629855bbff",
+    "bootstrap/self_host/lsp/lsp.plum": "54c80d01204a45970c4af896abfec6865e65107b84f4f712e145217b4216150a",
+    "bootstrap/self_host/lsp_diagnostics.plum": "4d2920d3c8cd0168808a724e8eeb983904a3c300dd878c94fd8c0d4683371af5",
+    "bootstrap/self_host/main.plum": "c452a37c57df74ab2a2da63a67752469172b3acb2aa3483c911aedec3984eafd",
+    "bootstrap/self_host/parser/parser.plum": "366169b61f05b86b5ceb6edeaabd65d9e5bb3d6b5535227e9a059d4cb86a43a6",
+    "bootstrap/self_host/paths.plum": "fef5e5886d8d76cdd352d36b3b7cce4cc33492c7578a5d56cc6cf1771229f686",
+    "bootstrap/self_host/pkg/fetch.plum": "2efbd101e883531e766414be938f5970c831957d262ab3852415d233ef5fa82b",
+    "bootstrap/self_host/pkg/pkg.plum": "5f42f8c1e75712e214b655f6f90a633758bb92073a8e97373545bdfae52de79c",
+    "bootstrap/self_host/shims/shims.plum": "726fbe4dbff66c68d2a3fdfaf3df4f8b5877b2c1b04dcd09d40f0ace378524d8",
+    "bootstrap/self_host/snapshot.plum": "485c58e01ac801a0438522b39d14cb38bade4aa530797c549d8645e433cd48fa",
+    "bootstrap/self_host/treefs/treefs.plum": "6fbb16d77cb534bd55cdc7ec0236302dda9a006e99489b660f49e606bff74b7a",
+    "bootstrap/self_host/typecheck/context.plum": "d518f38f26596ee43720b6861b5ae6beac95d15f596f71a0e2f53f5f0b73f804",
+    "bootstrap/self_host/typecheck/infer.plum": "ca23875e3154784b1651c73820821ca39e9b81f67635dd1e8001984da4ec40cd",
+    "bootstrap/self_host/typecheck/patterns.plum": "ffe739322c487bac4b42f63b89bbd273fa647b17fd15cfa112c2a71d9669a012",
+    "bootstrap/self_host/typecheck/texpr.plum": "4476c6af72bb18f1446f1a8b0d15d1376c3d82dac04f459a242dbce72e1b31a4",
+    "bootstrap/self_host/typecheck/types.plum": "85530545b43dedcccfdc7c51fe8f46816ed536d9116f0c0a48b4538448cc6412"
+  },
+  "cases": {
+    "check-compiler": [
+      "check",
+      "bootstrap/self_host"
+    ],
+    "emit-compiler": [
+      "emit-llvm",
+      "bootstrap/self_host",
+      "--release"
+    ],
+    "build-compiler": [
+      "build",
+      "bootstrap/self_host",
+      "--release"
+    ]
+  },
+  "comparison": {
+    "before_source_revision": "eaa66c737bcb365da9402d891c3e562adf54ebef (compiler inputs unchanged by profiling-only merge 539658d)",
+    "after_source_revision": "539658d33b33ed95c28b99ba986978e71f022a0a plus #270 counter fix and refreshed seed; input hashes above",
+    "before_build": "previous checked-in seed executable -> build bootstrap/self_host (default debug compiler)",
+    "after_build": "source-built compiler -> gen-seed -> from-seed -> build bootstrap/self_host (default debug compiler)",
+    "before_seed_sha256": "4ee04a2c885a0d8ee1f6c986f06ad58b1b9c40a13deb1acafdb6c025eead8526",
+    "after_seed_sha256": "95ce92208cd24ca0ad7a2a118fae9cdd7cbe031b4d04ba656308e9e496e37447",
+    "runtime_stats": "enabled for every measured invocation; counters are also collected when the exit dump is disabled",
+    "scope": "net effect of shipping the refreshed seed and atomic counters, including generated runtime changes seen by Clang"
+  }
+}
