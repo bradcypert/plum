@@ -1,0 +1,113 @@
+use Os;
+use NativeBuffer;
+use Memory;
+
+let buffer (capacity: Int): NativeBuffer.Buffer = match NativeBuffer.create(capacity) {
+    Ok(b) => b, Err(e) => { panic_raw(e); buffer(0) },
+}
+let open_read (path: String): File = match Os.open(path, Mode.Read) {
+    Ok(f) => f, Err(e) => { panic_raw(e); open_read(path) },
+}
+let copied (b: NativeBuffer.Buffer): Bytes = match NativeBuffer.copy_out(b) {
+    Ok(bytes) => bytes, Err(e) => { panic_raw(e); Bytes.empty() },
+}
+let live (): (Int, Int) = match NativeBuffer.snapshot() {
+    Some(s) => (s.live_buffers, s.live_capacity), None => (-1, -1),
+}
+let heap_live (): Int = match Memory.snapshot() { Some(s) => s.live_bytes, None => -1 }
+let requests (): Int = match NativeBuffer.snapshot() { Some(s) => s.allocations, None => -1 }
+
+let exercise (path: String): Unit = {
+    let f = open_read(path);
+    let b = buffer(3);
+    let zero = buffer(0);
+    let before_reads = requests();
+    assert(f.read_into(zero).is_err());
+    assert(f.seek(0, Seek.Current) == Ok(0));
+    assert(f.read_into(b) == Ok(3));
+    let saved = copied(b);
+    assert_eq(saved.to_hex(), "4100ff");
+    assert_eq(NativeBuffer.length(b), 3);
+    assert(f.read_into(b) == Ok(1));
+    assert_eq(copied(b).to_hex(), "42");
+    assert_eq(saved.to_hex(), "4100ff");
+    assert(f.read_into(b) == Ok(0));
+    assert_eq(NativeBuffer.length(b), 0);
+    assert_eq(requests(), before_reads);
+
+    assert(f.seek(0, Seek.Start) == Ok(0));
+    assert(NativeBuffer.copy_in(b, Bytes.from_array([9, 8])) == Ok(()));
+    let alias = b;
+    assert(unsafe { NativeBuffer.with_mut(b, |ignored_pointer, ignored_capacity| {
+        assert(f.read_into(alias).is_err());
+        assert(f.seek(0, Seek.Current) == Ok(0));
+        // A private-buffer read is independent even on this thread/file.
+        match f.read(1) { Ok(bytes) => assert_eq(bytes.to_hex(), "41"), Err(e) => panic_raw(e) };
+        Ok(2)
+    }) } == Ok(2));
+    assert_eq(copied(alias).to_hex(), "0908");
+    if before_reads >= 0 { assert_eq(requests(), before_reads + 1); };
+    assert(f.read_into(alias) == Ok(3));
+    assert_eq(copied(b).to_hex(), "00ff42");
+    assert_eq(saved.to_hex(), "4100ff");
+
+    // Reuse one buffer with a different stream; streams/cursors stay separate.
+    let other = open_read(path);
+    assert(other.read_into(b) == Ok(3));
+    assert_eq(copied(b).to_hex(), "4100ff");
+    assert(f.seek(0, Seek.Current) == Ok(4));
+    assert(other.close() == Ok(()));
+    assert(other.read_into(b).is_err());
+    assert_eq(NativeBuffer.length(b), 0);
+    assert(copied(b).is_empty());
+    assert(other.close() == Ok(()));
+    match other.read(3) { Err(e) => assert_eq(e, "File.read: read failed"), Ok(_) => assert(false) };
+}
+
+let worker (path: String): Unit = {
+    // Automatic File and NativeBuffer cleanup at function exit; no native
+    // teardown or explicit close can conceal retained per-thread scratch.
+    let f = open_read(path);
+    match f.read(32) { Ok(bytes) => assert_eq(bytes.to_hex(), "4100ff42"), Err(e) => panic_raw(e) };
+    assert(f.seek(0, Seek.Start) == Ok(0));
+    let b = buffer(32);
+    assert(f.read_into(b) == Ok(4));
+    assert_eq(copied(b).to_hex(), "4100ff42");
+    assert(f.read_into(b) == Ok(0));
+}
+let workers (path: String): Unit = {
+    let a = spawn { worker(path) };
+    let b = spawn { worker(path) };
+    let c = spawn { worker(path) };
+    let d = spawn { worker(path) };
+    a.join(); b.join(); c.join(); d.join()
+}
+let exercise_write_error (path: String): Unit = match Os.open(path, Mode.Write) {
+    Err(e) => panic_raw(e),
+    Ok(f) => {
+        let b = buffer(8);
+        assert(NativeBuffer.copy_in(b, Bytes.from_array([1, 2])) == Ok(()));
+        assert(f.read_into(b).is_err());
+        assert_eq(NativeBuffer.length(b), 0);
+        assert(f.close() == Ok(()))
+    },
+}
+let main (): Unit = match Os.temp_dir() {
+    Err(e) => panic_raw(e),
+    Ok(root) => {
+        let path = root.concat("/binary");
+        assert(Os.write_bytes(path, Bytes.from_array([65, 0, 255, 66])) == Ok(()));
+        let baseline = live();
+        let heap_baseline = heap_live();
+        for i in 0..8 {
+            exercise(path);
+            workers(path);
+            assert(live() == baseline);
+            assert_eq(heap_live(), heap_baseline)
+        };
+        exercise_write_error(root.concat("/write-only"));
+        assert(live() == baseline);
+        assert(Os.remove_tree(root) == Ok(()));
+        println("file buffers: reusable binary reads, independent copies, busy aliases, errors and worker cleanup")
+    },
+}

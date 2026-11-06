@@ -1,3 +1,5 @@
+use NativeBuffer;
+
 /// Filesystem and self-location. These replaced shelling out to
 /// `mktemp -d`, `rm -rf`, `rm -f`, `cp -r` and `mkdir`, and reading
 /// `/proc/self/exe`. See `native_stdlib/os_shim.c`.
@@ -228,8 +230,7 @@ extern "C" {
     fn file_open(path: CStr, mode: Int) -> Int;
     fn file_close(h: Int);
     fn file_close_checked(h: Int) -> Int;
-    fn file_read_n(h: Int, max_len: Int) -> Int;
-    fn file_read_data() -> RawCStr;
+    fn file_read_into(h: Int, data: RawCStr, capacity: Int) -> Int;
     fn file_write(h: Int, buf: CStr, len: Int) -> Int;
     fn file_seek(h: Int, offset: Int, whence: Int) -> Int;
     fn file_flush(h: Int) -> Int;
@@ -269,10 +270,28 @@ pub let open (path: String) (mode: Mode): Result[File, String] = unsafe {
 /// "nothing left" from "something broke".
 /// `max_len` must be positive; zero or negative sizes return `Err`
 /// without consuming input, even at end of file.
-pub let File.read (f: File) (max_len: Int): Result[Bytes, String] = unsafe {
-    let n = file_read_n(File.raw(f), max_len);
-    if n < 0 { Err("File.read: read failed") }
-    else { Ok(Bytes.from_cstr(file_read_data(), n)) }
+/// Uses private native storage and copies out before release. Use read_into
+/// with a retained NativeBuffer to reuse capacity across reads.
+pub let File.read (f: File) (max_len: Int): Result[Bytes, String] =
+    if max_len <= 0 { Err("File.read: read failed") }
+    else { match NativeBuffer.create(max_len) {
+        Err(_) => Err("File.read: read failed"),
+        Ok(buffer) => match f.read_into(buffer) {
+            Err(_) => Err("File.read: read failed"), Ok(_) => NativeBuffer.copy_out(buffer),
+        },
+    } }
+
+/// Receive up to the writable capacity of a reusable owned native buffer.
+/// Positive capacity is required; Ok(0) means EOF. Read/closed-file errors
+/// discard contents. A conflicting lease returns Err without consuming
+/// input or changing contents. Copies made before another read stay immutable.
+/// Concurrent operations on one file are serialized by its slot, while
+/// NativeBuffer rejects concurrent/reentrant byte access through aliases.
+pub let File.read_into (f: File) (buffer: NativeBuffer.Buffer): Result[Int, String] = unsafe {
+    NativeBuffer.with_mut(buffer, |pointer, cap| {
+        let n = unsafe { file_read_into(File.raw(f), pointer, cap) };
+        if n < 0 { Err("File.read_into: read failed or capacity is not positive") } else { Ok(n) }
+    })
 }
 
 /// `len` MUST be bound BEFORE `.as_cstr()` runs, the same ordering

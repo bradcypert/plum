@@ -1,10 +1,7 @@
 // Streaming file I/O, behind Plum's `handle` type (issues #16 and #9).
 //
-// Same ABI conventions as its neighbours (see `net_shim.c`'s header for
-// the general pattern): every function takes and returns only
-// `long long` (Plum `Int`) or `const char *` (Plum `CStr`), because
-// Plum's extern surface has no raw pointers, no out-parameters and no
-// multi-value return.
+// Reads borrow caller-owned NativeBuffer storage for one operation. Byte
+// counts cross the ABI separately from pointers; binary data needs no NUL.
 //
 // --- Why a SLOT TABLE and not a cast pointer ---
 //
@@ -35,8 +32,8 @@
 // operation, including fclose. Locking just lookup would leave a FILE *
 // vulnerable to concurrent close. Separate slots can perform I/O in
 // parallel; allocation skips reserved slots without waiting on their
-// I/O locks. Concurrent operations on one file are serialized. The read
-// buffer remains thread-local, independent of the slot's lifetime.
+// I/O locks. Concurrent operations on one file are serialized. Buffer
+// ownership and lease cleanup are independent of the file-slot mutex.
 
 #if defined(__APPLE__)
 #define _DARWIN_C_SOURCE 1
@@ -61,12 +58,6 @@
 #include <sys/types.h>
 // Fail at build time if the toolchain disables large-file support.
 _Static_assert(sizeof(off_t) >= sizeof(long long), "File.seek requires 64-bit off_t");
-#endif
-
-#if defined(_MSC_VER)
-#define PLUM_TLS __declspec(thread)
-#else
-#define PLUM_TLS _Thread_local
 #endif
 
 #define PLUM_MAX_FILES 256
@@ -178,56 +169,23 @@ void file_close(long long h) {
 
 // --- Reading ---
 //
-// Split across two calls for the same reason `tcp_recv_n`/
-// `tcp_recv_data` are: a `CStr` return cannot carry a length, so a
-// single-call read would have to NUL-terminate and the caller would have
-// to `strlen` -- which truncates any file containing a zero byte, i.e.
-// every file this API exists to read.
-//
-// Three outcomes, kept apart:
+// Caller owns the destination and keeps an exclusive lease through this
+// call. No read allocation survives the operation or a worker's exit.
+// Three outcomes, kept apart for positive capacity:
 //   > 0   that many bytes are in the buffer
 //   = 0   end of file
 //   < 0   a read error
-static PLUM_TLS char *read_buf = NULL;
-static PLUM_TLS size_t read_cap = 0;
-
-static int read_ensure(size_t need) {
-    if (read_cap >= need) return 1;
-    size_t next = read_cap ? read_cap : 4096;
-    while (next < need) {
-        if (next > SIZE_MAX / 2) { next = need; break; }
-        next *= 2;
-    }
-    char *bigger = (char *)realloc(read_buf, next);
-    if (bigger == NULL) return 0;
-    read_buf = bigger;
-    read_cap = next;
-    return 1;
-}
-
-long long file_read_n(long long h, long long max_len) {
+long long file_read_into(long long h, unsigned char *data, long long capacity) {
     // Only a positive request can report zero bytes as end of file.
-    if (max_len <= 0 || (uintmax_t)max_len >= SIZE_MAX) return -1;
+    if (!data || capacity <= 0 || (uintmax_t)capacity > SIZE_MAX) return -1;
     PlumFileSlot *slot = slot_lock(h);
     if (slot == NULL) return -1;
-    long long result = -1;
-    if (read_ensure((size_t)max_len + 1)) {
-        size_t got = fread(read_buf, 1, (size_t)max_len, slot->stream);
-        if (got != 0 || !ferror(slot->stream)) {
-            read_buf[got] = '\0';
-            result = (long long)got;
-        }
-    }
+    size_t got = fread(data, 1, (size_t)capacity, slot->stream);
+    // Preserve short-read behavior: deliver any prefix first, then report
+    // a stream error when a subsequent operation cannot return bytes.
+    long long result = got != 0 || !ferror(slot->stream) ? (long long)got : -1;
     pthread_mutex_unlock(&slot->lock);
     return result;
-}
-
-// The bytes `file_read_n` just read. Valid until the next read on this
-// thread, and meaningful only with the count that call returned -- the
-// buffer is not NUL-delimited data, and reading it with `strlen` is the
-// bug this pair exists to avoid.
-const char *file_read_data(void) {
-    return read_buf ? read_buf : "";
 }
 
 // Bytes written, or -1. A short write is possible under real POSIX

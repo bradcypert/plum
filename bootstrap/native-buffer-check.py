@@ -24,11 +24,23 @@ def main():
                 raise RuntimeError(f'{args}: exit {r.returncode}\n{r.stdout[-5000:]}\n{r.stderr[-9000:]}')
             return r
 
-        fixture = root / 'bootstrap/exec_corpus/native_buffer'
-        for index, flags in enumerate([[], ['--release'], ['--memory-stats'], ['--release', '--memory-stats']]):
-            binary = work / ('owned' + str(index))
-            run([compiler, 'build', fixture, '--sanitize=address', *flags, '-o', binary])
-            run([binary], contains='native buffers: bounded text/binary edits, aliases, leases, copies and cleanup')
+        for name in ['native_buffer', 'file_buffers']:
+            fixture = root / 'bootstrap/exec_corpus' / name
+            expected = (fixture / 'expected.txt').read_text()
+            for index, flags in enumerate([[], ['--release'], ['--memory-stats'], ['--release', '--memory-stats']]):
+                binary = work / (name + str(index))
+                run([compiler, 'build', fixture, '--sanitize=address', *flags, '-o', binary])
+                result = run([binary])
+                if result.stdout != expected:
+                    raise RuntimeError(f'{name}: unexpected output: {result.stdout!r}')
+
+        # File identity/close races use caller-owned stack storage. No test
+        # teardown frees hidden shim buffers: the production adapter owns none.
+        files = work / 'files'
+        run(['clang', '-O1', '-g', '-Wall', '-Wextra', '-Werror', '-pthread',
+             '-fsanitize=address,undefined', '-fno-sanitize-recover=all',
+             root / 'bootstrap/file-handle-test.c', '-o', files])
+        run([files, work / 'file-data'], contains='native file handles: ok')
         escaped = work / 'escaped'
         run([compiler, 'build', root / 'bootstrap/sanitizer_corpus/native_buffer_escape',
              '--sanitize=address', '--memory-stats', '-o', escaped])
@@ -118,7 +130,7 @@ void observe_cleanup(void) { if (atexit(verify)) abort(); }
         r = run([binary], fails=True, contains='native buffer panic cleanup: zero live buffers/capacity')
         if 'ERROR: AddressSanitizer' in r.stderr or 'LeakSanitizer' in r.stderr:
             raise RuntimeError('panic cleanup has a sanitizer finding:\n' + r.stderr)
-    print('native-buffer-check: ownership, bounds, leases, counters, TCP/TLS worker exit, escape detection and panic cleanup passed')
+    print('native-buffer-check: ownership, bounds, leases, counters, file/TCP/TLS worker exit, escape detection and panic cleanup passed')
 
 
 if __name__ == '__main__':

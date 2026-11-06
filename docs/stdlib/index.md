@@ -147,6 +147,7 @@ Every declaration, linked to the page that documents it.
 
 - [`handle File`](Os.File.md#File)
 - [`let File.read (f: File) (max_len: Int): Result[Bytes, String]`](Os.File.md#File.read)
+- [`let File.read_into (f: File) (buffer: NativeBuffer.Buffer): Result[Int, String]`](Os.File.md#File.read_into)
 - [`let File.write (f: File) (data: Bytes): Result[Int, String]`](Os.File.md#File.write)
 - [`let File.seek (f: File) (offset: Int) (from: Seek): Result[Int, String]`](Os.File.md#File.seek)
 - [`let File.flush (f: File): Result[Unit, String]`](Os.File.md#File.flush)

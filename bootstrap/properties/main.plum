@@ -4,6 +4,7 @@ use Encoding;
 use Url;
 use Path;
 use Json;
+use NativeBuffer;
 
 // Property tests: invariants that must hold for MANY inputs, checked
 // against values generated here rather than against answers recorded
@@ -1941,4 +1942,45 @@ pub let test_split_pieces (): Unit = {
             assert_eq(String.split(text, separator), split_reference(text, separator));
         };
     }
+}
+
+// Partitioning a binary stream at any positive capacity must reconstruct
+// exactly the original payload, including empty files and arbitrary bytes.
+// Exercise only public APIs; one native buffer is reused through EOF.
+let file_partition (path: String) (payload: Bytes) (capacity: Int): Unit =
+    match Os.open(path, Mode.Read) {
+        Err(e) => panic_raw(e),
+        Ok(f) => match NativeBuffer.create(capacity) {
+            Err(e) => panic_raw(e),
+            Ok(buffer) => {
+                let mut result = Bytes.empty();
+                let mut eof = false;
+                for step in 0..(payload.len() + 1) {
+                    if !eof {
+                        let n = match f.read_into(buffer) { Ok(n) => n, Err(e) => { panic_raw(e); -1 } };
+                        assert(n >= 0 && n <= capacity);
+                        let part = match NativeBuffer.copy_out(buffer) { Ok(b) => b, Err(e) => { panic_raw(e); Bytes.empty() } };
+                        assert_eq(part.len(), n);
+                        if n == 0 { eof = true; } else { result = result.concat(part); };
+                    };
+                };
+                assert(eof);
+                check_eq("file read partition", payload.to_hex().concat(" / ").concat(capacity.to_string()),
+                    result.to_hex(), payload.to_hex())
+            },
+        },
+    }
+
+pub let test_file_read_partitions (): Unit = match Os.temp_dir() {
+    Err(e) => panic_raw(e),
+    Ok(root) => {
+        let path = root.concat("/partition.bin");
+        for seed in 0..100 {
+            let payload = if seed == 0 { Bytes.empty() }
+                else { Bytes.from_array([0, 255, 13, 10]).concat(rand_bytes(next_seed(seed), rand_between(seed, 0, 60))) };
+            assert(Os.write_bytes(path, payload) == Ok(()));
+            for capacity in [1, 2, 3, 7, 16, 65] { file_partition(path, payload, capacity); };
+        };
+        assert(Os.remove_tree(root) == Ok(()))
+    },
 }

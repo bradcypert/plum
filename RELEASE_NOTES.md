@@ -3,6 +3,13 @@ correctness, editor tooling, filesystem safety, and Windows I/O.
 
 ## Compatibility and migration
 
+- **Streaming file reads use owned native buffers.** `File.read` keeps its
+  independent Bytes result and positive-size requirement, releasing private
+  capacity after each call. Use `File.read_into` with a retained `NativeBuffer`
+  to reuse storage. Short-lived file-reading workers no longer retain scratch
+  allocations. The internal `file_read_n`/`file_read_data` ABI is replaced by
+  caller-owned `file_read_into`.
+
 - **Owned native buffers support bounded mutable FFI.** `NativeBuffer` provides
   scoped text/binary edits, copies, growth and separate optional capacity
   diagnostics. Text edits return an independent validated String while the

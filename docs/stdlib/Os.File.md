@@ -23,6 +23,17 @@ for the same reason: a reader looping until the end needs to tell
 "nothing left" from "something broke".
 `max_len` must be positive; zero or negative sizes return `Err`
 without consuming input, even at end of file.
+Uses private native storage and copies out before release. Use read_into
+with a retained NativeBuffer to reuse capacity across reads.
+
+## `let File.read_into (f: File) (buffer: NativeBuffer.Buffer): Result[Int, String]`
+
+Receive up to the writable capacity of a reusable owned native buffer.
+Positive capacity is required; Ok(0) means EOF. Read/closed-file errors
+discard contents. A conflicting lease returns Err without consuming
+input or changing contents. Copies made before another read stay immutable.
+Concurrent operations on one file are serialized by its slot, while
+NativeBuffer rejects concurrent/reentrant byte access through aliases.
 
 ## `let File.write (f: File) (data: Bytes): Result[Int, String]`
 

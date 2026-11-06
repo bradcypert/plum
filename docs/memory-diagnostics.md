@@ -17,6 +17,13 @@ unrelated libraries/GPU allocations. Both snapshots are coherent individually,
 but two calls are not an atomic combined measurement. See the
 [native buffer contract and reuse example](native-buffers.md).
 
+Streaming file and TCP/TLS reads use this owned storage rather than retained
+thread-local scratch. Convenience reads allocate private capacity and copy out;
+`File.read_into` and `Net.read_into` let callers retain and reuse capacity. Native
+live capacity should return to baseline after joined reading workers release
+their buffers. This removes retention while making the remaining native payload
+visible under --memory-stats; it does not eliminate per-read managed output copies.
+
 RawCStr carries no owner and its native storage is excluded from these counts.
 An outstanding raw pointer cannot prevent release or reuse: copy while its
 native owner is valid. See [the FFI contract](../LANGUAGE.md#ffi).
