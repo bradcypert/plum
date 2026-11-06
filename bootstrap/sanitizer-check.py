@@ -98,6 +98,8 @@ def main():
         ]))
         broken.chmod(0o755)
         run([runner, '--plum', broken, fixtures / 'clean'], fails=True, contains='leak detection preflight failed')
+        run([sys.executable, root / 'bootstrap/native-buffer-check.py', compiler],
+            contains='escape detection and panic cleanup passed')
     print('sanitizer-check: generated/native access failures, leaks, clean ownership, symbols, cache isolation and fail-closed runner passed')
 
 

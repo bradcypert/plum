@@ -9,11 +9,16 @@ extern "C" {
     fn http_test_allocated_bytes() -> Int;
     fn http_test_large_body() -> RawCStr;
 }
-let test_tcp_read (fd: Int) (max_len: Int): Result[Bytes, String] = unsafe {
-    let n = http_test_recv_n(fd, max_len);
-    if n < 0 { Err("Net.read_bytes: recv failed") }
-    else { Ok(Bytes.from_cstr(http_test_recv_data(), n)) }
-}
+let test_tcp_read (fd: Int) (max_len: Int): Result[Bytes, String] =
+    match NativeBuffer.create(max_len) {
+        Err(e) => Err(e),
+        Ok(buffer) => match unsafe { NativeBuffer.with_mut(buffer, |pointer, cap| {
+            let n = unsafe { http_test_recv_into(fd, pointer, cap) };
+            if n < 0 { Err("Net.read_bytes: recv failed") } else { Ok(n) }
+        }) } {
+            Err(e) => Err(e), Ok(_) => NativeBuffer.copy_out(buffer),
+        },
+    }
 let test_tcp_write (fd: Int) (data: Bytes): Result[Int, String] = unsafe {
     let nbytes = data.len();
     let n = http_test_send(fd, data.as_cstr(), nbytes);

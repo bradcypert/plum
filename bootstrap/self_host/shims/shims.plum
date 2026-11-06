@@ -1394,6 +1394,16 @@ pub let shim_files (): Array[ShimFile] = [
         compile: false,
     },
     ShimFile {
+        name: "native_buffer.h",
+        source: @embed_file("../../../native_stdlib/native_buffer.h"),
+        compile: false,
+    },
+    ShimFile {
+        name: "native_buffer_shim.c",
+        source: @embed_file("../../../native_stdlib/native_buffer_shim.c"),
+        compile: true,
+    },
+    ShimFile {
         name: "net_shim.c",
         source: @embed_file("../../../native_stdlib/net_shim.c"),
         compile: true,

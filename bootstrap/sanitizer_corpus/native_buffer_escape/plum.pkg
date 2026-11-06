@@ -1,0 +1,1 @@
+Package { name: "native_buffer_escape", native_deps: [] }

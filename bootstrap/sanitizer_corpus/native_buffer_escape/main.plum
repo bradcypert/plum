@@ -1,0 +1,13 @@
+use NativeBuffer;
+extern "C" { fn null_pointer() -> RawCStr; fn inspect_raw(pointer: RawCStr) -> Int; }
+// Intentionally violate with_mut's unsafe no-retention contract. A RawCStr
+// cannot silently keep its native resource alive after the lease/owner ends.
+let escape (): RawCStr = unsafe {
+    let pointer = ref(null_pointer());
+    match NativeBuffer.create(32) {
+        Err(e) => panic_raw(e),
+        Ok(buffer) => { NativeBuffer.with_mut(buffer, |p, cap| { pointer.set(p); Ok(0) }); () },
+    };
+    pointer.get()
+}
+let main (): Unit = println(unsafe { inspect_raw(escape()) })

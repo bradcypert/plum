@@ -1784,14 +1784,32 @@ let find_global_in_module (globals: Array[GlobalDef]) (module_name: String) (nam
 let qualified_fn_ref (p2: Program2) (env: TyEnv) (base: parser.PExpr) (name: String): Option[FnSig] =
     match base {
         EIdent(ns, _) =>
-            if !is_capitalized_name(ns) { None }
-            else if Option.is_some(tyenv_lookup(env, ns)) { None }
+            if Option.is_some(tyenv_lookup(env, ns)) || Option.is_some(find_global_def(p2, ns)) { None }
             else {
                 let qualified = ns.concat(".").concat(name);
-                match find_sig(p2, qualified) { Some(sig) => Some(sig), None => builtin_sig(qualified) }
+                match find_sig(p2, qualified) {
+                    Some(sig) => Some(sig),
+                    None => match builtin_sig(qualified) {
+                        Some(sig) => Some(sig), None => qualified_module_fn_ref(p2, env, base, name),
+                    },
+                }
             },
-        _ => None,
+        _ => qualified_module_fn_ref(p2, env, base, name),
     }
+
+// Reuse call-position module/alias resolution and visibility checks for
+// function values. This also routes unsafe module functions through the
+// same obligation check as every other partial application.
+let qualified_module_fn_ref (p2: Program2) (env: TyEnv) (base: parser.PExpr) (name: String): Option[FnSig] = {
+    let path = match base { EIdent(ns, _) => Some(ns), _ => module_path_of(p2, env, base) };
+    match path {
+        None => None,
+        Some(ns) => match find_module_sig(p2, ns, name) {
+            None => None,
+            Some(sig) => { check_visible(p2, sig, sig.module, name); Some(sig) },
+        },
+    }
+}
 
 let infer_field_read (p2: Program2) (state: FreshState) (env: TyEnv) (acc: Subst) (base: parser.PExpr) (name: String): InferResult = {
     let r = infer_expr(p2, state, env, acc, base);
@@ -2535,7 +2553,7 @@ let infer_partial_call (p2: Program2) (state: FreshState) (env: TyEnv) (acc: Sub
     // Ordinary function types cannot preserve an unsafe-call obligation.
     // Do not erase it through eta expansion or partial application, even
     // when the function value is constructed inside an unsafe block.
-    if is_unsafe_buffer_copy(sig) {
+    if sig.is_extern || is_explicit_unsafe_call(sig) {
         fail_tc("'${sig.name}' cannot be used as a function value or partially applied; call it with all arguments inside an 'unsafe' block")
     };
     let fr = fresh_list(state, sig.generics.len());
@@ -2587,16 +2605,17 @@ let partial_param_refs (names: Array[String]) (tys: Array[ITy]) (i: Int) (acc: A
     if i >= names.len() { acc }
     else { partial_param_refs(names, tys, i + 1, acc.push(TExpr { ty: tys[i], node: TIdent(names[i]) })) }
 
-// These are Plum functions, not extern declarations: retain ordinary
-// code generation and the public wrapper's nonpositive-length behavior.
-// Key on the resolved prelude identity so user functions with the same
-// spelling do not acquire a compiler-imposed contract.
-let is_unsafe_buffer_copy (sig: FnSig): Bool =
-    sig.module == parser.PRELUDE_MODULE() &&
-        (sig.name == "Bytes.from_cstr" || sig.name == "bytes_from_cstr_raw")
+// These are ordinary Plum functions whose unsafe-call obligation cannot
+// be erased by function-value construction or partial application. Keep
+// ordinary code generation; key on resolved standard-library identity so
+// user functions with the same spelling retain their own contract.
+let is_explicit_unsafe_call (sig: FnSig): Bool =
+    (sig.module == parser.PRELUDE_MODULE() &&
+        (sig.name == "Bytes.from_cstr" || sig.name == "bytes_from_cstr_raw")) ||
+        (sig.module == "NativeBuffer" && (sig.name == "with_mut" || sig.name == "with_text"))
 
 let infer_fn_call (p2: Program2) (state: FreshState) (env: TyEnv) (acc: Subst) (sig: FnSig) (args: Array[parser.PExpr]): InferResult = {
-    if is_unsafe_buffer_copy(sig) && !UNSAFE.get() {
+    if is_explicit_unsafe_call(sig) && !UNSAFE.get() {
         fail_tc("calling '${sig.name}' requires an 'unsafe' block")
     };
     if sig.is_extern {

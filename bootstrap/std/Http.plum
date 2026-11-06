@@ -1,3 +1,5 @@
+use NativeBuffer;
+
 /// One header. `name` is as it appeared on the wire; header names are
 /// case-insensitive in HTTP, so compare with care.
 pub struct Header { pub name: String, pub value: String }
@@ -22,8 +24,7 @@ pub struct RequestHead { pub method: String, pub path: String, pub headers: Arra
 extern "C" {
     fn tls_connect(host: CStr, port: Int) -> Int;
     fn tls_send(handle: Int, buf: CStr, len: Int) -> Int;
-    fn tls_recv_n(handle: Int, max_len: Int) -> Int;
-    fn tls_recv_data() -> RawCStr;
+    fn tls_recv_into(handle: Int, data: RawCStr, capacity: Int) -> Int;
     fn tls_close(handle: Int) -> Unit;
 }
 
@@ -31,10 +32,15 @@ extern "C" {
 // and errors have identical meanings for plain TCP and TLS.
 let http_read (fd: Int) (secure: Int) (max_len: Int): Result[Bytes, String] =
     if secure == 0 { Net.read_bytes(fd, max_len) }
-    else { unsafe {
-        let n = tls_recv_n(fd, max_len);
-        if n < 0 { Err("https client: read failed") }
-        else { Ok(Bytes.from_cstr(tls_recv_data(), n)) }
+    else if max_len <= 0 { Err("https client: read capacity must be positive") }
+    else { match NativeBuffer.create(max_len) {
+        Err(e) => Err(e),
+        Ok(buffer) => match unsafe { NativeBuffer.with_mut(buffer, |pointer, cap| {
+            let n = unsafe { tls_recv_into(fd, pointer, cap) };
+            if n < 0 { Err("https client: read failed") } else { Ok(n) }
+        }) } {
+            Err(e) => Err(e), Ok(_) => NativeBuffer.copy_out(buffer),
+        },
     } }
 
 let http_write (fd: Int) (secure: Int) (data: Bytes): Result[Int, String] =

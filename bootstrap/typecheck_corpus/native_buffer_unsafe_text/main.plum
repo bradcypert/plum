@@ -1,0 +1,2 @@
+use NativeBuffer;
+let main (): Unit = match NativeBuffer.create(4) { Err(_) => (), Ok(b) => { NativeBuffer.with_text(b, |pointer, cap| Ok(())); () } }
