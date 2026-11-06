@@ -1,0 +1,44 @@
+#!/usr/bin/env python3
+"""Build and run a native Plum project with ASan and verified leak detection."""
+import argparse
+import os
+from pathlib import Path
+import subprocess
+import sys
+import tempfile
+
+
+def main():
+    ap = argparse.ArgumentParser(description=__doc__)
+    ap.add_argument('--plum', default=os.environ.get('PLUM', './sh'))
+    ap.add_argument('--release', action='store_true')
+    ap.add_argument('project')
+    ap.add_argument('args', nargs=argparse.REMAINDER)
+    args = ap.parse_args()
+    compiler = str(Path(args.plum).resolve())
+    root = Path(__file__).resolve().parent
+    env = dict(os.environ)
+    # Later duplicate sanitizer settings win. Requested diagnostics must not
+    # silently become a passing run through ambient exitcode/detection options.
+    env['ASAN_OPTIONS'] = env.get('ASAN_OPTIONS', '') + ':detect_leaks=1:leak_check_at_exit=1:halt_on_error=1:symbolize=1:exitcode=1'
+    env['LSAN_OPTIONS'] = env.get('LSAN_OPTIONS', '') + ':exitcode=23'
+    flags = ['--sanitize', 'address'] + (['--release'] if args.release else [])
+    with tempfile.TemporaryDirectory(prefix='plum-sanitize-') as work:
+        probe = str(Path(work) / 'leak-probe')
+        subprocess.run([compiler, 'build', str(root / 'sanitizer_corpus/leak'), *flags, '-o', probe], check=True, env=env, timeout=300, stdout=subprocess.DEVNULL)
+        result = subprocess.run([probe], capture_output=True, env=env, timeout=60)
+        if result.returncode == 0 or b'LeakSanitizer: detected memory leaks' not in result.stderr:
+            sys.stderr.buffer.write(result.stdout + result.stderr)
+            sys.exit('sanitize-run: leak detection preflight failed; no diagnostics were disabled')
+        binary = str(Path(work) / 'program')
+        subprocess.run([compiler, 'build', args.project, *flags, '-o', binary], check=True, env=env, timeout=300, stdout=subprocess.DEVNULL)
+        child_args = args.args[1:] if args.args[:1] == ["--"] else args.args
+        result = subprocess.run([binary, *child_args], env=env)
+        return result.returncode if result.returncode >= 0 else 128 - result.returncode
+
+
+if __name__ == '__main__':
+    try:
+        sys.exit(main())
+    except (OSError, subprocess.SubprocessError) as error:
+        sys.exit(f'sanitize-run: {error}')

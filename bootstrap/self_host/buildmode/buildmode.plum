@@ -1,0 +1,54 @@
+// One policy shared by generation, native compilation/linking and caching.
+pub struct Options { pub release: Bool, pub trace: Bool, pub address: Bool }
+
+pub let defaults (unit: Unit): Options = Options { release: false, trace: false, address: false }
+
+pub let parse (argv: Array[String]): Result[Options, String] = parse_at(argv, 2, defaults(()))
+
+let parse_at (argv: Array[String]) (i: Int) (mode: Options): Result[Options, String] =
+    if i >= argv.len() || argv[i] == "--" { Ok(mode) }
+    else if argv[i] == "--release" { parse_at(argv, i + 1, Options { release: true, trace: mode.trace, address: mode.address }) }
+    else if argv[i] == "--trace" { parse_at(argv, i + 1, Options { release: mode.release, trace: true, address: mode.address }) }
+    else if argv[i] == "--sanitize" {
+        if i + 1 >= argv.len() { Err("--sanitize requires a value: address") }
+        else { parse_sanitizer(argv, i + 2, mode, argv[i + 1]) }
+    } else if argv[i].starts_with("--sanitize=") {
+        parse_sanitizer(argv, i + 1, mode, argv[i].slice(11, argv[i].len()))
+    } else { parse_at(argv, i + 1, mode) }
+
+let parse_sanitizer (argv: Array[String]) (next: Int) (mode: Options) (name: String): Result[Options, String] =
+    if name == "address" { parse_at(argv, next, Options { release: mode.release, trace: mode.trace, address: true }) }
+    else { Err("unsupported sanitizer '${name}'; expected address") }
+
+pub let validate (mode: Options) (platform: String) (native: Bool): String =
+    if !mode.address { "" }
+    else if !native { "--sanitize address currently requires a native target" }
+    else if platform != "linux" && platform != "macos" { "--sanitize address currently supports native Linux and macOS builds" }
+    else { "" }
+
+pub let symbols (mode: Options): Bool = !mode.release || mode.address
+
+// -Og retains tail-call elimination, unlike -O0. Sanitized release builds
+// keep -O2 and add symbols; sanitizing must not silently disable tail calls.
+pub let compile_flags (mode: Options): Array[String] = {
+    let optimization = if mode.release { ["-O2"] } else { ["-Og", "-g"] };
+    if mode.address {
+        Array.concat(optimization, ["-g", "-fsanitize=address", "-fno-omit-frame-pointer"])
+    } else { optimization }
+}
+
+pub let link_flags (mode: Options): Array[String] = if mode.address { ["-fsanitize=address"] } else { [] }
+
+pub let cache_key (mode: Options): String =
+    mode.release.to_string().concat(":").concat(mode.trace.to_string()).concat(":").concat(mode.address.to_string())
+
+// Compiler switches are consumed before --; all subsequent tokens are the
+// child's, including switches with the same spelling as compiler options.
+pub let run_arguments (argv: Array[String]): Array[String] = run_at(argv, 2, [])
+
+let run_at (argv: Array[String]) (i: Int) (out: Array[String]): Array[String] =
+    if i >= argv.len() { out }
+    else if argv[i] == "--" { Array.concat(out, Array.slice(argv, i + 1, argv.len())) }
+    else if argv[i] == "--sanitize" { run_at(argv, i + 2, out) }
+    else if argv[i] == "--release" || argv[i] == "--trace" || argv[i].starts_with("--sanitize=") { run_at(argv, i + 1, out) }
+    else { run_at(argv, i + 1, out.push(argv[i])) }
