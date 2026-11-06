@@ -37,7 +37,7 @@ def main():
         # rather than only testing native malloc/free interceptors.
         for flags in [[], ['--release']]:
             result = run([build('invalid_plum', *flags)], fails=True, contains='heap-use-after-free')
-            if not re.search(r'invalid_plum/main\.plum:\d+', result.stderr):
+            if not re.search(r'\bin plum_main\b[^\n]*\bmain\.plum:\d+', result.stderr):
                 raise RuntimeError('generated Plum failure has no symbolized source line:\n' + result.stderr)
         run([build('invalid_native')], fails=True, contains='heap-buffer-overflow')
         run([build('leak')], fails=True, contains='LeakSanitizer: detected memory leaks')
