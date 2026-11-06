@@ -1,0 +1,1 @@
+successive replacements preserve aliases, borrows and resource lifetimes
