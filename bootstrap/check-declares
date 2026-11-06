@@ -16,9 +16,26 @@ rt="bootstrap/self_host/codegen/runtime.plum"
 cg="bootstrap/self_host/codegen/codegen.plum"
 fail=0
 
+# Some runtime call targets are selected by build policy rather than written
+# as one literal template line. Check their rendered consumers too, so source
+# grep cannot mistake a wired allocator boundary for an unused declaration.
+plum="${1:-${PLUM:-./sh}}"
+work="$(mktemp -d -t plum-declares-XXXXXX)"
+trap 'rm -rf "$work"' EXIT
+printf 'let main (): Unit = ()\n' > "$work/main.plum"
+"$plum" emit-llvm "$work" > "$work/plain.ll"
+"$plum" emit-llvm "$work" --memory-stats > "$work/tracked.ll"
+for ir in "$work/plain.ll" "$work/tracked.ll"; do
+    if ! head -n 1 "$ir" | grep -q '^;'; then
+        echo "check-declares: could not emit runtime inventory" >&2
+        head -n 5 "$ir" >&2
+        exit 1
+    fi
+done
+
 for sym in $(grep -oE 'declare [^@]*@[a-zA-Z_][a-zA-Z0-9_]*\(' "$rt" \
              | grep -oE '@[a-zA-Z_][a-zA-Z0-9_]*\(' | tr -d '@(' | sort -u); do
-    if [ "$(grep -oE "call [^@]*@$sym\(" "$rt" "$cg" 2>/dev/null | wc -l)" -eq 0 ]; then
+    if ! grep -qE "call [^@]*@$sym\(" "$rt" "$cg" "$work/plain.ll" "$work/tracked.ll"; then
         printf 'FAIL  @%s is declared but never called\n' "$sym"
         fail=$((fail + 1))
     fi

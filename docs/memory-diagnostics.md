@@ -68,11 +68,89 @@ an LSan leak. Sanitizers also change allocator behavior, timing and RSS, so do
 not compare their footprint directly with ordinary-build performance baselines.
 
 `PLUM_RT_STATS` reports cumulative allocation traffic, including freed cells.
-It does not report live/peak retained bytes. The approved next stage is opt-in
-Plum-cell lifetime tracking and coherent snapshots; see the
-[delivery plan](memory-diagnostics-plan.md). Perceus ownership, last-owner release,
-and in-place reuse remain the production memory model. This sanitizer stage
-adds no per-cell accounting metadata to ordinary builds.
+Use `--memory-stats` for live/peak requested Plum-cell bytes and coherent snapshots:
+
+```sh
+plum build project --memory-stats -o /tmp/project-memory
+plum run project --memory-stats
+plum build project --memory-stats --sanitize address -o /tmp/project-both
+```
+
+When linking `emit-llvm --memory-stats` output manually, compile the embedded
+native memory shim with `-DPLUM_HEAP_STATS`; build/run/test supply that flag
+automatically. A mismatched native shim fails to link rather than silently
+disabling requested tracking. Combined sanitizer output also needs the matching
+Clang sanitizer compile/link flags.
+
+```plum
+use Memory;
+let main (): Unit = match Memory.snapshot() {
+    None => println("build with --memory-stats to enable snapshots"),
+    Some(s) => println("live requested bytes: ${s.live_bytes}; peak: ${s.peak_bytes}"),
+}
+```
+
+`Memory.snapshot()` returns `Option[Memory.Snapshot]`. None means tracking was
+not compiled in; zero is a valid measured value and is not the disabled signal.
+Fields are cumulative `allocations`/`allocated_bytes`, current
+`live_allocations`/`live_bytes`, and process-lifetime
+`peak_allocations`/`peak_bytes`. `Memory.delta(before, after)` subtracts traffic
+and live values from two snapshots in the same process. Live deltas can be
+negative; peak counters are independent maxima and are never reset by reads.
+
+Snapshots freeze all fields under the registry mutex, then release the mutex
+before constructing public Plum records. The snapshot record and Some wrapper
+are ordinary owned cells allocated after capture. Retaining a previous snapshot
+changes later live totals. To check a bounded workload, keep observer state equal;
+for example, a helper that returns just `s.live_bytes` drops its snapshot before
+the caller starts the workload. Snapshot traffic itself increases cumulative totals.
+
+## What the heap numbers include
+
+- Dynamically allocated Plum cells: strings, arrays, structs/enums, closures,
+  refs and resource-handle cells. Include requested headers, string terminators
+  and explicit retained array capacity, even when logical length is smaller.
+- Track one cell until its final storage release. Aliases add references, not
+  allocations. Perceus in-place reuse keeps the original requested size even
+  when allocator rounding allows a larger logical payload. Growing by allocating
+  a replacement counts its actual overlap with the old cell toward peak.
+- Exclude allocator rounding/metadata, immortal constants, native scratch buffers,
+  task/channel infrastructure, file/network resources, external libraries and GPU
+  memory. A handle's small Plum cell is included; its native resource is not.
+- Native producers of managed cells must use the cell boundary declared in
+  `memory_shim.h`. Release owned children before final `plum_free`; direct libc
+  free of a tracked cell bypasses accounting and is unsupported. Untracked native
+  malloc pointers can pass through `plum_free` without being charged as Plum cells.
+
+Allocation and free events linearize at registry insertion/removal. Snapshots
+therefore describe tracked cells at one instrumentation point, rather than an
+instantaneous allocator/RSS measurement. Legacy cumulative atomics have their own
+individual observation points and do not promise a coherent multi-field snapshot.
+
+## Diagnostic overhead and limits
+
+Ordinary builds allocate directly through malloc and inline the release boundary;
+they contain no tracking table, mutex or thread-local snapshot metadata. Diagnostic
+builds acquire one shared mutex per allocation, free and snapshot. The address
+registry uses roughly 16 bytes per slot on supported 64-bit targets, grows with
+maximum concurrent live cells, and retains that capacity after a burst. Tombstone
+compaction avoids unbounded growth from bounded allocation/free churn. Frozen
+snapshots add a small fixed thread-local copy. Registry storage is excluded from
+reported payload bytes and can still contribute to RSS after live payload drops.
+Metadata/counter failures abort with a diagnostic rather than silently undercount.
+
+Registry keys encode addresses so the diagnostic index does not become an LSan
+root that hides otherwise unreachable tracked cells. Combined tracking/ASan tests
+include an intentionally leaked Plum cell to verify this boundary. This encoding
+is diagnostic bookkeeping, not ownership or a replacement allocator. No cell
+layout, pointer offset or allocator-usable-size contract changes.
+
+Useful categories/source attribution are deferred until construction and cross-type
+reuse have a complete retagging contract; aggregate totals do not guess a cell's
+current type from its original allocation. Cumulative traffic, live requested bytes,
+peak requested bytes and OS RSS answer different questions. A nonzero live snapshot
+alone is not a leak verdict. See the [delivery plan](memory-diagnostics-plan.md).
+Perceus ownership and in-place reuse remain the production memory model.
 
 References: [Clang ASan](https://clang.llvm.org/docs/AddressSanitizer.html),
 [Clang LSan](https://clang.llvm.org/docs/LeakSanitizer.html), and

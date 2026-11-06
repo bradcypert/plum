@@ -66,6 +66,7 @@ let cg_std_source (name: String): String =
     else if name == "Path" { cg_path_src(()) }
     else if name == "Json" { cg_json_src(()) }
     else if name == "Terminal" { cg_terminal_src(()) }
+    else if name == "Memory" { @embed_file("../../std/Memory.plum") }
     else { { cg_fail("no source for stdlib module ".concat(name)); "" } }
 
 // The items a program's `use` declarations actually ask for, stamped

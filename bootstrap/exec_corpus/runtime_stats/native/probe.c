@@ -10,6 +10,7 @@
 extern _Atomic int64_t plum_n_alloc, plum_b_alloc;
 extern _Atomic int64_t plum_n_str, plum_n_concat, plum_n_array;
 extern void *plum_alloc(int64_t);
+extern void plum_free(void *);
 extern void *plum_str_new(const char *, int64_t);
 extern void *plum_alloc_str(int64_t);
 extern void *plum_str_concat(void *, void *);
@@ -41,7 +42,7 @@ static void *work(void *barrier) {
         void *joined = plum_str_concat(a, b);
         void *exact = plum_array_new(1);
         void *capacity = plum_array_new_cap(1, 3);
-        free(capacity); free(exact); free(joined); free(b); free(a); free(raw);
+        plum_free(capacity); plum_free(exact); plum_free(joined); plum_free(b); plum_free(a); plum_free(raw);
     }
     return NULL;
 }

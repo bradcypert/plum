@@ -1,0 +1,2 @@
+extern "C" { fn lose_tracked_cell(); }
+let main (): Unit = unsafe { lose_tracked_cell() }

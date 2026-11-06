@@ -696,6 +696,9 @@ let cg_tail_pop (p: CgProgram) (tail: Bool): String =
 // than the finished module.
 pub struct DbgFile { pub path: String, pub id: Int, pub starts: Array[Int] }
 
+let HEAP_STATS: Ref[Bool] = ref(false)
+pub let set_heap_stats (on: Bool): Unit = HEAP_STATS.set(on)
+
 let DEBUG_INFO: Ref[Bool] = ref(false)
 
 pub let set_debug_info (on: Bool): Unit = DEBUG_INFO.set(on)
@@ -3940,7 +3943,7 @@ let cg_task_join (p: CgProgram) (env: Array[CgSlot]) (n: Int) (task: typecheck.T
             .concat(cg_handle_load(cg_reg(t.n + 2), t.val))
             .concat("  ").concat(box).concat(" = call ptr @thread_join(i64 ").concat(cg_reg(t.n + 2)).concat(")\n")
             .concat("  ").concat(v).concat(" = load ").concat(lty).concat(", ptr ").concat(box).concat("\n")
-            .concat("  call void @free(ptr ").concat(box).concat(")\n")
+            .concat("  call void @plum_free(ptr ").concat(box).concat(")\n")
             .concat(cg_dec(cg_concrete(p, typecheck.texpr_ty(p.subst, task)), t.val)),
         allocas: t.allocas, releases: t.releases, globals: t.globals, val: v, ty: ret, n: t.n + 3,
     }
@@ -4005,7 +4008,7 @@ let cg_channel_send (p: CgProgram) (env: Array[CgSlot]) (n: Int) (ch: typecheck.
             .concat("  store ").concat(lty).concat(" ").concat(x.val).concat(", ptr ").concat(box).concat("\n")
             .concat(cg_handle_load(cg_reg(x.n + 1), c.val))
             .concat("  ${sent} = call i64 @channel_send(i64 ").concat(cg_reg(x.n + 1)).concat(", ptr ").concat(box).concat(")\n")
-            .concat(cg_thread_check(sent, "i64", "0", cleanup.concat("  call void @free(ptr ${box})\n"), 2))
+            .concat(cg_thread_check(sent, "i64", "0", cleanup.concat("  call void @plum_free(ptr ${box})\n"), 2))
             .concat(cg_dec(cg_concrete(p, typecheck.texpr_ty(p.subst, ch)), c.val))
             .concat("  ${result} = call ptr @plum_alloc(i64 ${cg_enum_cell_size(p, parser.qualify_type(parser.PRELUDE_MODULE(), "Result"))})\n")
             .concat("  ${result}_tag = getelementptr i8, ptr ${result}, i64 8\n")
@@ -4014,7 +4017,7 @@ let cg_channel_send (p: CgProgram) (env: Array[CgSlot]) (n: Int) (ch: typecheck.
             .concat("  br i1 ${result}_ok, label %${label}_ok, label %${label}_err\n")
             .concat("${label}_ok:\n  store i64 ${ok}, ptr ${result}_tag\n  store i64 0, ptr ${result}_payload\n  br label %${label}_done\n")
             .concat("${label}_err:\n  store i64 ${err}, ptr ${result}_tag\n  store ${lty} ${x.val}, ptr ${result}_payload\n")
-            .concat("  call void @free(ptr ${box})\n  br label %${label}_done\n${label}_done:\n"),
+            .concat("  call void @plum_free(ptr ${box})\n  br label %${label}_done\n${label}_done:\n"),
         allocas: c.allocas.concat(x.allocas), releases: c.releases.concat(x.releases), globals: c.globals.concat(x.globals),
         val: result, ty: CgEnum(parser.qualify_type(parser.PRELUDE_MODULE(), "Result")), n: x.n + 4,
     }
@@ -4035,7 +4038,7 @@ let cg_channel_option (p: CgProgram) (n: Int) (box: String) (elem: typecheck.ITy
         .concat("${label}_some:\n  store i64 ${some}, ptr ${v}_tag\n")
         .concat("  ${v}_value = load ${lty}, ptr ${box}\n")
         .concat("  ${v}_payload = getelementptr i8, ptr ${v}, i64 16\n")
-        .concat("  store ${lty} ${v}_value, ptr ${v}_payload\n  call void @free(ptr ${box})\n")
+        .concat("  store ${lty} ${v}_value, ptr ${v}_payload\n  call void @plum_free(ptr ${box})\n")
         .concat("  br label %${label}_done\n${label}_none:\n  store i64 ${none}, ptr ${v}_tag\n")
         .concat("  br label %${label}_done\n${label}_done:\n");
     Emit { code: code, allocas: "", releases: "", globals: "", val: v, ty: CgEnum(parser.qualify_type(parser.PRELUDE_MODULE(), "Option")), n: n + 1 }
@@ -4964,7 +4967,7 @@ let cg_reuse_token (c: ReuseCand) (want: Int) (n: Int): ReuseEmit = {
         cell: cell, n: n + 6 }
 }
 let cg_token_release (slot: String) (suffix: String): String =
-    "  ${slot}${suffix} = load ptr, ptr ${slot}\n  call void @free(ptr ${slot}${suffix})\n  store ptr null, ptr ${slot}\n"
+    "  ${slot}${suffix} = load ptr, ptr ${slot}\n  call void @plum_free(ptr ${slot}${suffix})\n  store ptr null, ptr ${slot}\n"
 
 let cg_match_release_before (p: CgProgram) (env: Array[CgSlot]) (n: Int) (token: String) (body: typecheck.TExpr) (tail: Bool) (pending: String): Emit =
     match cg_lookup(env, token.concat("owner")) {
@@ -7054,7 +7057,7 @@ let cg_rel_head (t: typecheck.ITy): String =
         .concat("  br i1 %dead, label %free, label %alive\n")
         .concat("alive:\n  ret void\nfree:\n")
 
-let cg_rel_tail (unit: Unit): String = "  call void @free(ptr %p)\n  ret void\n}\n\n"
+let cg_rel_tail (unit: Unit): String = "  call void @plum_free(ptr %p)\n  ret void\n}\n\n"
 
 // The three the compiler builds itself. Each carries an ELEMENT type,
 // which is why the paths below index `args[0]` -- a user handle has no
@@ -7126,7 +7129,7 @@ let cg_emit_user_handle_rel (p: CgProgram) (t: typecheck.ITy) (name: String): St
         .concat("drop:\n")
         .concat("  call void @").concat(typecheck.ctx_handle_on_drop(p.ctx, name)).concat("(i64 %h)\n")
         .concat("  br label %freecell\nfreecell:\n")
-        .concat("  call void @free(ptr %p)\n")
+        .concat("  call void @plum_free(ptr %p)\n")
         .concat("  ret void\n}\n\n")
 
 let cg_emit_handle_rel (p: CgProgram) (t: typecheck.ITy) (name: String) (elem: typecheck.ITy): String = {
@@ -7148,7 +7151,7 @@ let cg_emit_handle_rel (p: CgProgram) (t: typecheck.ITy) (name: String) (elem: t
         .concat("  %hp = getelementptr i8, ptr %p, i64 8\n")
         .concat("  %h = load i64, ptr %hp\n")
         .concat(cg_handle_release_call(name, rel))
-        .concat("  call void @free(ptr %p)\n")
+        .concat("  call void @plum_free(ptr %p)\n")
         .concat("  ret void\n}\n\n")
 }
 
@@ -7431,7 +7434,7 @@ let cg_extern_decl_list (fns: Array[parser.ExternFnNode]) (i: Int) (acc: String)
 // keeps running into, and the reason `cg_std_modules` derives from
 // `std_module_names` instead of repeating it.
 let cg_runtime_declared (): Array[String] =
-    cg_declared_names(String.lines(cg_runtime(())), 0, [])
+    cg_declared_names(String.lines(cg_runtime(HEAP_STATS.get())), 0, [])
 
 let cg_declared_names (lines: Array[String]) (i: Int) (acc: Array[String]): Array[String] =
     if i >= lines.len() { acc }
@@ -7579,7 +7582,7 @@ pub let cg_emit_program_entry (program0: parser.ProgramNode) (entry: String): St
     buildcache.finish("debug metadata", metadata_time);
     let join_time = buildcache.start(());
     let result = Array.concat_all([
-        cg_runtime(()),
+        cg_runtime(HEAP_STATS.get()),
         cg_emit_extern_decls(program.items, 0, ""),
         helpers,
         gl.slots,
