@@ -1,0 +1,1 @@
+Package { name: "memory_stats", native_deps: [] }

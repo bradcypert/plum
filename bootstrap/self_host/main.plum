@@ -2415,6 +2415,7 @@ let usage (): Unit = {
     println("                      Tail recursion still runs in constant stack space.");
     println("  --release           optimise (-O2). The default is a DEBUG build:");
     println("                      -Og -g, which keeps frames and debug information.");
+    println("  --memory-stats      opt-in live/peak Plum-cell snapshots via use Memory.");
     println("  --sanitize address  ASan instrumentation and symbols (native Linux/macOS).");
     println("                      Supported by build, run, test and emit-llvm; -- ends options.");
     println("  --target <triple>   build for another platform, e.g. aarch64-linux-musl.");
@@ -3352,6 +3353,7 @@ let build_options (argv: Array[String]) (target: String): buildmode.Options = {
 // Apply generation policy for every entry point, including file emission and
 // test dispatchers. Instrument the complete module so helpers are covered too.
 let emit_program (program: parser.ProgramNode) (entry: String) (mode: buildmode.Options): String = {
+    codegen.set_heap_stats(mode.heap);
     codegen.set_debug_frames(mode.trace);
     codegen.set_debug_info(buildmode.symbols(mode));
     let ir = codegen.cg_emit_program_entry(program, entry);

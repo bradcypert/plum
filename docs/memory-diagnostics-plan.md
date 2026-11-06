@@ -6,7 +6,7 @@ Goal: distinguish allocation churn, retained Plum memory, peak requested heap, a
 
 ## Chosen design and alternatives
 
-Use a compile-time opt-in address registry for Plum heap diagnostics. Keep ordinary cell layout and native pointer ABI. Implement sanitizer support first, then the registry and public snapshots.
+Use a compile-time opt-in address registry for Plum heap diagnostics. Keep ordinary cell layout and native pointer ABI. Sanitizer support is in #456. The next PR implements the registry and public snapshots, stacked on that build policy.
 
 | Approach | Benefit | Cost / limitation |
 | --- | --- | --- |
@@ -30,11 +30,11 @@ Perceus determines ownership and reuse. These instrumentation choices measure th
 
 ## Coherent snapshots
 
-The registry owns its cumulative successful allocation count/bytes, current live count/requested bytes, and peak live count/requested bytes. One mutex protects table changes and all snapshot fields. A snapshot copies all fields at one instrumentation point. Allocation and release events linearize at registry insert/remove; this describes tracked cells rather than instantaneous physical allocator residency.
+The registry owns its cumulative successful allocation count/bytes, current live count/requested bytes, and peak live count/requested bytes. One mutex protects table changes and all snapshot fields. A snapshot copies all fields at one instrumentation point into thread-local native storage; the standard library reads that frozen copy before constructing public Plum values. Registry keys encode addresses to avoid becoming conservative LSan roots. Allocation and release events linearize at registry insert/remove; this describes tracked cells rather than instantaneous physical allocator residency.
 
 Never hold the registry mutex while invoking destructors, callbacks, or allocating Plum objects. Registry storage uses native allocation and is excluded from payload totals. Failure to grow metadata aborts with a fixed diagnostic instead of silently undercounting.
 
-Proposed public shape: Memory.snapshot() returns an optional snapshot (None if the program was built without diagnostics). Fields are cumulative allocations/requested bytes, live allocations/requested bytes, and peak live allocations/requested bytes. Deltas compare two snapshots from the same process. Peaks are process-lifetime high-water marks and are never reset by a snapshot. Treat API names as provisional until checking existing standard-library conventions.
+Public shape: Memory.snapshot() returns an optional snapshot (None if the program was built without diagnostics). Fields are cumulative allocations/requested bytes, live allocations/requested bytes, and peak live allocations/requested bytes. Deltas compare two snapshots from the same process. Peaks are process-lifetime high-water marks and are never reset by a snapshot. Snapshot and Delta records expose these values through the Memory standard-library module.
 
 Take the native snapshot before constructing its public Plum record; document the observer allocation that record introduces. Tests must keep equal observer state at both baseline points. Do not hide snapshot records from ordinary ownership accounting.
 
