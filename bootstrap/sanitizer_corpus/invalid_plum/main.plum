@@ -1,0 +1,7 @@
+extern "C" { fn invalidate(bytes: CStr); }
+let main (): Unit = {
+    let value = "payload".repeat(32);
+    unsafe { invalidate(value.as_cstr()) };
+    println(value.len().to_string())
+}
+let test_invalid (): Unit = main()
