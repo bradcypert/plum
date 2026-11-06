@@ -3494,7 +3494,11 @@ let run_project (argv: Array[String]): Unit = {
             if err != "" { fail_cmd(err) }
             else {
                 let args = buildmode.run_arguments(argv);
-                let code = unsafe { process_run_inherit(out.as_cstr(), tab_join(args, 0, "").as_cstr(), args.len()) };
+                // CStr borrows bytes; keep the joined String owned through
+                // the native call instead of borrowing a temporary expression.
+                let joined = tab_join(args, 0, "");
+                let count = args.len();
+                let code = unsafe { process_run_inherit(out.as_cstr(), joined.as_cstr(), count) };
                 let cleaned = Os.remove_tree(dir);
                 // The child's exit code is this process's exit code, so
                 // `plum run` composes in a shell the way anything else
