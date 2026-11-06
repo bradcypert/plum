@@ -75,3 +75,6 @@ hashes, platform, input hashes, revision and commands. Raw stdout/stderr and
 per-run JSON preserve phase timings, generated IR sizes and output digests.
 Results, caches and build outputs use the output directory; compiler scratch
 uses its normal temporary area. Build outputs are validated before accepting a sample. Rerun with the same input checkout to compare results.
+
+Recorded comparisons: [Map migration #446](map-446/REPORT.md) and
+[atomic allocation counters #270](counters-270/REPORT.md).

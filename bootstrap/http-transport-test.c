@@ -1,6 +1,7 @@
 /* Deterministic fault injection for Http's count-based transport boundary.
  * Only net-smoke's test copy of Http binds these symbols. */
 #include <string.h>
+#include <stdatomic.h>
 
 static unsigned char input[131072], output[131072];
 static long long input_len, input_pos, output_len, split_at, write_limit;
@@ -55,8 +56,10 @@ long long http_test_largest_read(void) { return largest_read; }
 
 /* Allocation volume is sampled before function exit. This distinguishes
  * sharing an outgoing payload from building a second whole-message copy. */
-extern long long plum_b_alloc;
-long long http_test_allocated_bytes(void) { return plum_b_alloc; }
+extern _Atomic long long plum_b_alloc;
+long long http_test_allocated_bytes(void) {
+    return atomic_load_explicit(&plum_b_alloc, memory_order_relaxed);
+}
 const char *http_test_large_body(void) {
     memset(input, 'a', 65536);
     return (const char *)input;
