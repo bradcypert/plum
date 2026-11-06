@@ -109,26 +109,17 @@ long long tls_send(long long handle, const char *buf, long long len) {
     return done;
 }
 
-static _Thread_local unsigned char *tls_buf;
-static _Thread_local size_t tls_cap;
-
-long long tls_recv_n(long long handle, long long max_len) {
+// Caller-owned storage replaces thread-local scratch. Mbed TLS writes at
+// most capacity bytes; the returned count is authoritative, including NULs.
+long long tls_recv_into(long long handle, unsigned char *data, long long capacity) {
     plum_tls *t = (plum_tls *)(intptr_t)handle;
-    if (t == NULL || max_len < 0) return -1;
-    size_t need = (size_t)max_len + 1;
-    if (tls_cap < need) {
-        unsigned char *p = (unsigned char *)realloc(tls_buf, need);
-        if (p == NULL) return -1;
-        tls_buf = p; tls_cap = need;
-    }
+    if (!t || !data || capacity <= 0 || (uint64_t)capacity > SIZE_MAX) return -1;
     int n;
-    do { n = mbedtls_ssl_read(&t->ssl, tls_buf, (size_t)max_len); }
+    do { n = mbedtls_ssl_read(&t->ssl, data, (size_t)capacity); }
     while (n == MBEDTLS_ERR_SSL_WANT_READ || n == MBEDTLS_ERR_SSL_WANT_WRITE);
     if (n == MBEDTLS_ERR_SSL_PEER_CLOSE_NOTIFY || n == 0) return 0;
     return n < 0 ? -1 : n;
 }
-
-const char *tls_recv_data(void) { return tls_buf ? (const char *)tls_buf : ""; }
 
 void tls_close(long long handle) {
     plum_tls *t = (plum_tls *)(intptr_t)handle;

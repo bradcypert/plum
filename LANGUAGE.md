@@ -644,7 +644,9 @@ extern "C" {
 let go (): Int = unsafe { strlen("hello".as_cstr()) }
 ```
 
-Extern calls are only allowed inside an `unsafe { }` block. The extern
+Extern calls are only allowed inside an `unsafe { }` block. Extern
+functions require all arguments at the call site; they cannot be used as
+ordinary function values or partially applied. The extern
 type surface is intentionally closed: `Int`/`Float`/`Bool`/`CStr`/`RawCStr`/a
 callback/a qualifying struct. CStr is input-only. There is no general pointer
 arithmetic, no C-variadic functions, and no extern global variables.
@@ -684,6 +686,13 @@ later use if necessary; returning RawCStr does not transfer that owner.
 For example, use `let copy = raw.as_string(); inspect(owner); copy` inside
 `unsafe`, where `inspect` borrows the original CStr. A lexical binding alone
 does not promise to defeat last-use release.
+
+For C APIs that write into storage, use the owned `NativeBuffer` helper.
+Its scoped leases keep the address stable and reject conflicting alias access.
+Text edits return an owned, UTF-8-validated String before ending the lease;
+binary operations keep an explicit readable length and writable capacity.
+See the [native-buffer contract and reusable widget adapter](docs/native-buffers.md).
+CStr remains an immutable input view, not permission to write shared Plum cells.
 
 ### Where the C goes
 

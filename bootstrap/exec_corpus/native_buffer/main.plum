@@ -1,0 +1,118 @@
+use NativeBuffer;
+use Memory;
+extern "C" {
+    fn edit_text(data: RawCStr, capacity: Int) -> Int;
+    fn fill_binary(data: RawCStr, capacity: Int) -> Int;
+    fn no_terminator(data: RawCStr, capacity: Int) -> Int;
+    fn last_terminator(data: RawCStr, capacity: Int) -> Int;
+    fn invalid_utf8(data: RawCStr, capacity: Int) -> Int;
+}
+let buffer (capacity: Int): NativeBuffer.Buffer = match NativeBuffer.create(capacity) {
+    Ok(value) => value, Err(e) => { panic_raw(e); buffer(0) },
+}
+let expect_ok (result: Result[Unit, String]): Unit = match result { Ok(_) => (), Err(e) => panic_raw(e) }
+let expect_error[T] (result: Result[T, String]): Unit = match result { Err(_) => (), Ok(_) => assert(false) }
+let bytes (b: NativeBuffer.Buffer): Bytes = match NativeBuffer.copy_out(b) {
+    Ok(value) => value, Err(e) => { panic_raw(e); Bytes.empty() },
+}
+let text (b: NativeBuffer.Buffer): String = match NativeBuffer.text(b) {
+    Ok(value) => value, Err(e) => { panic_raw(e); "" },
+}
+let heap_live (): Int = match Memory.snapshot() { Some(s) => s.live_bytes, None => -1 }
+let live (): Int = match NativeBuffer.snapshot() { Some(s) => s.live_capacity, None => -1 }
+let live_buffers (): Int = match NativeBuffer.snapshot() { Some(s) => s.live_buffers, None => -1 }
+let traffic (): Int = match NativeBuffer.snapshot() { Some(s) => s.allocations, None => -1 }
+let exercise (): Unit = {
+    let zero = buffer(0);
+    expect_ok(NativeBuffer.copy_in(zero, Bytes.empty()));
+    assert_eq(bytes(zero).len(), 0);
+    assert_eq(unsafe { NativeBuffer.with_mut(zero, |ignored_pointer, ignored_capacity| Ok(0)) }, Ok(0));
+    let called = ref(false);
+    expect_error(unsafe { NativeBuffer.with_text(zero, |ignored_pointer, ignored_capacity| { called.set(true); Ok(()) }) });
+    assert(!called.get());
+    expect_error(NativeBuffer.create(-1));
+    let b = buffer(4);
+    let get_capacity = NativeBuffer.capacity;
+    assert_eq(get_capacity(b), 4);
+    let original = "hé";
+    expect_ok(NativeBuffer.copy_in(b, original.as_bytes()));
+    let saved = bytes(b);
+    let copied_text = match unsafe { NativeBuffer.with_text(b, |pointer, cap| Ok(unsafe { edit_text(pointer, cap) })) } {
+        Ok((status, value)) => { assert_eq(status, 7); value },
+        Err(e) => { panic_raw(e); "" },
+    };
+    assert(unsafe { NativeBuffer.with_text(b, |pointer, cap| Ok(unsafe { edit_text(pointer, cap) })) } == Ok((7, "hé")));
+    assert_eq(text(b), "hé");
+    assert_eq(NativeBuffer.length(b), 3);
+    assert(saved == original.as_bytes());
+    expect_error(NativeBuffer.copy_in(b, "does not fit".as_bytes()));
+    assert_eq(text(b), "hé");
+    assert_eq(unsafe { NativeBuffer.with_mut(b, |pointer, cap| Ok(unsafe { fill_binary(pointer, cap) })) }, Ok(3));
+    assert_eq(bytes(b).to_hex(), "410042");
+    assert_eq(copied_text, "hé");
+    assert_eq(text(b).len(), 3);
+    assert_eq(original, "hé");
+    assert_eq(saved.to_hex(), "68c3a9");
+    expect_error(unsafe { NativeBuffer.with_mut(b, |pointer, cap| {
+        unsafe { fill_binary(pointer, cap) };
+        Err("callback failed")
+    }) });
+    assert_eq(NativeBuffer.length(b), 0);
+    assert_eq(bytes(b).len(), 0);
+    expect_error(unsafe { NativeBuffer.with_mut(b, |ignored_pointer, cap| Ok(cap + 1)) });
+    assert_eq(NativeBuffer.length(b), 0);
+    expect_error(unsafe { NativeBuffer.with_text(b, |pointer, cap| Ok(unsafe { no_terminator(pointer, cap) })) });
+    assert_eq(NativeBuffer.length(b), 0);
+    assert(unsafe { NativeBuffer.with_text(b, |pointer, cap| Ok(unsafe { last_terminator(pointer, cap) })) } == Ok((9, "xxx")));
+    assert_eq(text(b), "xxx");
+    expect_ok(NativeBuffer.reserve(b, 8));
+    assert_eq(NativeBuffer.capacity(b), 8);
+    assert_eq(text(b), "xxx");
+    expect_ok(NativeBuffer.reserve(b, 1));
+    assert_eq(NativeBuffer.capacity(b), 8);
+    expect_error(NativeBuffer.reserve(b, -1));
+    let other = buffer(4);
+    let alias = b;
+    assert(unsafe { NativeBuffer.with_text(b, |pointer, cap| {
+        expect_error(NativeBuffer.copy_out(alias));
+        expect_error(NativeBuffer.copy_in(alias, Bytes.empty()));
+        expect_error(NativeBuffer.reserve(alias, 100));
+        expect_error(unsafe { NativeBuffer.with_mut(alias, |ignored_pointer, ignored_capacity| Ok(0)) });
+        assert(unsafe { NativeBuffer.with_text(other, |p, c| Ok(unsafe { edit_text(p, c) })) } == Ok((7, "hé")));
+        Ok(unsafe { edit_text(pointer, cap) })
+    }) } == Ok((7, "hé")));
+    assert_eq(text(other), "hé");
+    assert(unsafe { NativeBuffer.with_text(b, |pointer, cap| {
+        unsafe { edit_text(pointer, cap) };
+        Ok("owned-result".repeat(4))
+    }) } == Ok(("owned-result".repeat(4), "hé")));
+    assert_eq(text(b), "hé");
+    assert_eq(unsafe { NativeBuffer.with_mut(b, |pointer, cap| Ok(unsafe { invalid_utf8(pointer, cap) })) }, Ok(1));
+    expect_error(NativeBuffer.text(b));
+    let before_failed_result = live();
+    expect_error(unsafe { NativeBuffer.with_text(b, |pointer, cap| Ok(buffer(4))) });
+    assert_eq(live(), before_failed_result);
+    assert_eq(NativeBuffer.length(b), 0);
+    let exact = buffer(3);
+    expect_ok(NativeBuffer.copy_in(exact, "abc".as_bytes()));
+    assert(bytes(exact) == "abc".as_bytes());
+    expect_error(unsafe { NativeBuffer.with_text(exact, |ignored_pointer, ignored_capacity| Ok(())) });
+    assert(bytes(exact) == "abc".as_bytes());
+    expect_ok(NativeBuffer.reserve(exact, 4));
+    assert(unsafe { NativeBuffer.with_text(exact, |pointer, cap| Ok(unsafe { edit_text(pointer, cap) })) } == Ok((7, "hé")));
+    assert_eq(text(exact), "hé")
+}
+let main (): Unit = {
+    let baseline = live();
+    let count_baseline = live_buffers();
+    let heap_baseline = heap_live();
+    let before = traffic();
+    for i in 0..8 {
+        exercise();
+        assert_eq(live(), baseline);
+        assert_eq(live_buffers(), count_baseline);
+        assert_eq(heap_live(), heap_baseline);
+    };
+    if before >= 0 { assert(traffic() > before); };
+    println("native buffers: bounded text/binary edits, aliases, leases, copies and cleanup")
+}

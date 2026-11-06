@@ -75,6 +75,7 @@ PLUM
 mkdir -p "$work/netbin"
 cat > "$work/netbin/main.plum" <<'PLUM'
 use Net;
+use NativeBuffer;
 let payload (): Bytes = Bytes.from_array([0, 255, 10, 13, 128, 65, 0, 66])
 
 let main (): Unit = match Net.listen_on(18735) {
@@ -98,14 +99,23 @@ let main (): Unit = match Net.listen_on(18735) {
             Err(e) => println("connect: ".concat(e)),
             Ok(fd) => {
                 match Net.write_bytes(fd, payload()) { Ok(_) => (), Err(_) => () };
-                let reply = match Net.read_bytes(fd, 1024) { Ok(b) => b, Err(_) => Bytes.empty() };
-                println(acceptor.join());
-                println(reply.to_hex());
-                println((reply == payload()).to_string());
-                println(match Net.read_bytes(fd, 1024) {
-                    Ok(b) => b.is_empty().to_string(),
-                    Err(e) => "eof was an error: ".concat(e),
-                });
+                match NativeBuffer.create(1024) {
+                    Err(e) => panic_raw(e),
+                    Ok(buffer) => {
+                        let reply = match Net.read_into(fd, buffer) {
+                            Err(_) => Bytes.empty(),
+                            Ok(_) => match NativeBuffer.copy_out(buffer) { Ok(b) => b, Err(_) => Bytes.empty() },
+                        };
+                        println(acceptor.join());
+                        println(reply.to_hex());
+                        println((reply == payload()).to_string());
+                        println(match Net.read_into(fd, buffer) {
+                            Ok(n) => (n == 0 && NativeBuffer.length(buffer) == 0).to_string(),
+                            Err(e) => "eof was an error: ".concat(e),
+                        });
+                        assert(Result.is_err(Net.read_bytes(fd, 0)));
+                    },
+                };
                 Net.close(fd)
             },
         };
@@ -495,8 +505,7 @@ cp bootstrap/http-transport-test.c "$work/httptransports/native/peer.c"
     printf 'use Net;\nuse Url;\n'
     sed -e 's/Net.read_bytes(/test_tcp_read(/g' \
         -e 's/Net.write_bytes(/test_tcp_write(/g' \
-        -e 's/tls_recv_n/http_test_recv_n/g' \
-        -e 's/tls_recv_data/http_test_recv_data/g' \
+        -e 's/tls_recv_into/http_test_recv_into/g' \
         -e 's/tls_send/http_test_send/g' bootstrap/std/Http.plum
     cat bootstrap/http-transport-test.plum
 } > "$work/httptransports/main.plum"

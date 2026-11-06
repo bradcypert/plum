@@ -3,6 +3,15 @@ correctness, editor tooling, filesystem safety, and Windows I/O.
 
 ## Compatibility and migration
 
+- **Owned native buffers support bounded mutable FFI.** `NativeBuffer` provides
+  scoped text/binary edits, copies, growth and separate optional capacity
+  diagnostics. Text edits return an independent validated String while the
+  lease is still held. TCP/TLS reads now use caller-owned receive storage;
+  `Net.read_into` permits capacity reuse and worker exit leaves no receive
+  scratch allocation. Internal native receive functions use `*_recv_into`
+  instead of pointer/count scratch APIs. `Net.read_bytes` requires positive
+  capacity; zero is an error rather than an EOF signal.
+
 - **CStr now owns its backing storage.** String/Bytes `.as_cstr()` shares
   the existing cell with normal Perceus ownership, making temporary, stored
   and returned values valid without a copy or wrapper allocation. Change

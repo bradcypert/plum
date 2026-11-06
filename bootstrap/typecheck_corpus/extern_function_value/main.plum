@@ -1,0 +1,2 @@
+extern "C" { fn inspect(value: Int) -> Int; }
+let main (): Unit = unsafe { let call = inspect; () }

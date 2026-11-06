@@ -42,6 +42,7 @@ let cg_std_needs (name: String): Array[String] =
     // in turn needs `Encoding` -- which `cg_close_needs` closes over,
     // so this does not have to name it.
     if name == "Http" { ["Net", "Url"] }
+    else if name == "Net" { ["NativeBuffer"] }
     // `Url` percent-encodes and percent-decodes query values, and does
     // it by CALLING `Encoding` rather than carrying a second encoder --
     // the thing #26 was split out to avoid.
@@ -57,8 +58,8 @@ let cg_std_needs (name: String): Array[String] =
 let cg_std_source (name: String): String =
     if name == "Time" { cg_time_src(()) }
     else if name == "Os" { cg_os_src(()) }
-    else if name == "Net" { cg_net_src(()) }
-    else if name == "Http" { cg_http_src(()) }
+    else if name == "Net" { @embed_file("../../std/Net.plum") }
+    else if name == "Http" { @embed_file("../../std/Http.plum") }
     else if name == "Process" { cg_process_src(()) }
     else if name == "Encoding" { cg_encoding_src(()) }
     else if name == "Crypto" { cg_crypto_src(()) }
@@ -67,6 +68,7 @@ let cg_std_source (name: String): String =
     else if name == "Json" { cg_json_src(()) }
     else if name == "Terminal" { cg_terminal_src(()) }
     else if name == "Memory" { @embed_file("../../std/Memory.plum") }
+    else if name == "NativeBuffer" { @embed_file("../../std/NativeBuffer.plum") }
     else { { cg_fail("no source for stdlib module ".concat(name)); "" } }
 
 // The items a program's `use` declarations actually ask for, stamped
@@ -132,127 +134,6 @@ let cg_parse_std (name: String) (src: String): Array[parser.ItemNode] = {
     parser.set_source_context(saved, "", [], []);
     items
 }
-
-// --- The `Net` module ---
-//
-// The six TCP calls, unprefixed: `tcp_connect_to` was named that way
-// because it lived in a flat prelude and had nothing else to
-// distinguish it. The module supplies the prefix now, so
-// `Net.connect_to` says the same thing without saying "tcp" twice.
-let cg_net_src (): String = Array.join([
-    "/// TCP sockets, over `native_stdlib/net_shim.c`. Plain `Result`",
-    "/// wrapping around a sentinel `-1`: a raw BSD sockets call crossing",
-    "/// the shim does not preserve an `errno`, so each failure carries a",
-    "/// fixed message saying WHAT failed rather than why.",
-    "extern \"C\" {",
-    "    fn tcp_connect(host: CStr, port: Int) -> Int;",
-    "    fn tcp_listen(port: Int) -> Int;",
-    "    fn tcp_accept(fd: Int) -> Int;",
-    "    fn tcp_send(fd: Int, buf: CStr, len: Int) -> Int;",
-    "    fn tcp_recv(fd: Int, max_len: Int) -> RawCStr;",
-    "    fn tcp_recv_n(fd: Int, max_len: Int) -> Int;",
-    "    fn tcp_recv_data() -> RawCStr;",
-    "    fn tcp_close(fd: Int) -> Unit;",
-    "}",
-    "",
-    "/// Opens a TCP connection. The `Int` is a socket, for `Net.read`,",
-    "/// `Net.write` and `Net.close`.",
-    "///",
-    "/// `host` may be a name or an address; resolution happens here, so a",
-    "/// DNS failure and a refused connection are both `Err` with a message",
-    "/// saying which.",
-    "///",
-    "/// **Blocking, and never closed for you.** There is no timeout, and no",
-    "/// handle type — a socket outlives every scope until `Net.close` is",
-    "/// called, so a connection opened in a loop and dropped is a leak the",
-    "/// language will not catch.",
-    "pub let connect_to (host: String) (port: Int): Result[Int, String] = unsafe {",
-    "    let fd = tcp_connect(host.as_cstr(), port);",
-    "    if fd < 0 { Err(\"Net.connect_to: could not connect to \".concat(host).concat(\":\").concat(port.to_string())) } else { Ok(fd) }",
-    "}",
-    "",
-    "/// Binds and listens on a port, returning a socket to `accept` on.",
-    "///",
-    "/// Binds all interfaces. `Err` when the port is already in use or is",
-    "/// one this process may not have — under 1024 usually needs privilege.",
-    "pub let listen_on (port: Int): Result[Int, String] = unsafe {",
-    "    let fd = tcp_listen(port);",
-    "    if fd < 0 { Err(\"Net.listen_on: could not listen on port \".concat(port.to_string())) } else { Ok(fd) }",
-    "}",
-    "",
-    "/// Waits for a connection and returns a socket for it.",
-    "///",
-    "/// Blocks until a client arrives. The listening socket stays open for",
-    "/// the next `accept`; the returned one is a separate connection and",
-    "/// needs its own `Net.close`.",
-    "pub let accept (fd: Int): Result[Int, String] = unsafe {",
-    "    let client = tcp_accept(fd);",
-    "    if client < 0 { Err(\"Net.accept: accept failed\") } else { Ok(client) }",
-    "}",
-    "",
-    "/// Sends immutable text. CStr keeps its backing cell alive through the call.",
-    "/// Native code borrows the bytes and must not retain or mutate them.",
-    "pub let write (fd: Int) (data: String): Result[Int, String] = unsafe {",
-    "    let len = data.len();",
-    "    let n = tcp_send(fd, data.as_cstr(), len);",
-    "    if n < 0 { Err(\"Net.write: send failed\") } else { Ok(n) }",
-    "}",
-    "",
-    "/// \"\" on BOTH a clean peer close and a hard socket error. The",
-    "/// distinction is not preserved in v1, and either way \"stop",
-    "/// reading\" is the right response, and an empty String already",
-    "/// signals to a caller looping until end of stream.",
-    "pub let read (fd: Int) (max_len: Int): String = unsafe { tcp_recv(fd, max_len).as_string() }",
-    "",
-    "// --- Binary-safe TCP ---",
-    "//",
-    "// `read`/`write` above keep their exact contracts and stay the",
-    "// convenience for line-oriented protocols. These are the pair to",
-    "// reach for when the payload is not text.",
-    "//",
-    "// `Net.read` cannot be made binary-safe without changing what it",
-    "// means: it returns a `String`, which is a promise the bytes decode",
-    "// as UTF-8, and arbitrary socket traffic does not keep it. The fix",
-    "// is a function with a different RETURN TYPE, not a quieter version",
-    "// of this one.",
-    "",
-    "/// Three outcomes, and the middle one is why this exists as a",
-    "/// `Result[Bytes, _]` rather than just `Bytes`:",
-    "///",
-    "///   Ok(bytes)  with a non-empty buffer: data",
-    "///   Ok(empty)  the peer closed cleanly: end of stream",
-    "///   Err(..)    a real socket error",
-    "///",
-    "/// `Net.read` collapses the last two into `\"\"`, a documented v1",
-    "/// trade that a text protocol can live with because either answer",
-    "/// means \"stop reading\". A length-framed binary protocol cannot: an",
-    "/// empty read mid-stream is an ordinary event, and telling it from a",
-    "/// dropped connection is the difference between waiting and failing.",
-    "/// `tcp_recv_n` returns a count and keeps the two apart.",
-    "pub let read_bytes (fd: Int) (max_len: Int): Result[Bytes, String] = unsafe {",
-    "    let n = tcp_recv_n(fd, max_len);",
-    "    if n < 0 { Err(\"Net.read_bytes: recv failed\") }",
-    "    else { Ok(Bytes.from_cstr(tcp_recv_data(), n)) }",
-    "}",
-    "",
-    "/// Binary-safe because `tcp_send` takes an explicit length and never",
-    "/// calls `strlen`, so a NUL in the buffer is just another byte.",
-    "pub let write_bytes (fd: Int) (data: Bytes): Result[Int, String] = unsafe {",
-    "    let len = data.len();",
-    "    let n = tcp_send(fd, data.as_cstr(), len);",
-    "    if n < 0 { Err(\"Net.write_bytes: send failed\") } else { Ok(n) }",
-    "}",
-    "",
-    "/// Closes a socket. Closing one twice, or closing a number that was",
-    "/// never a socket, does nothing rather than failing.",
-    "pub let close (fd: Int): Unit = unsafe { tcp_close(fd); () }",
-    "",
-], "\n")
-
-// Embed the authoritative Plum sources at compiler-build time. An installed
-// compiler needs no source files beside it, and fixes cannot drift from a
-// second quoted copy of these modules. Dependencies are in cg_std_needs.
-let cg_http_src (): String = @embed_file("../../std/Http.plum")
 
 // --- The `Os` module ---
 //

@@ -31,14 +31,10 @@ long long http_test_recv(long long fd, long long max_len) {
     input_pos += n;
     return n;
 }
-/* The native API returns the START of its last chunk, not the next byte. */
-static long long last_n;
-long long http_test_recv_n(long long fd, long long max_len) {
-    last_n = http_test_recv(fd, max_len);
-    return last_n;
-}
-const char *http_test_recv_data(void) {
-    return (const char *)input + input_pos - (last_n > 0 ? last_n : 0);
+long long http_test_recv_into(long long fd, unsigned char *data, long long capacity) {
+    long long n = http_test_recv(fd, capacity);
+    if (n > 0) memcpy(data, input + input_pos - n, (size_t)n);
+    return n;
 }
 long long http_test_send(long long fd, const char *p, long long len) {
     (void)fd;

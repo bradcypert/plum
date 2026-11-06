@@ -1,3 +1,5 @@
+use NativeBuffer;
+
 /// TCP sockets, over `native_stdlib/net_shim.c`. Plain `Result`
 /// wrapping around a sentinel `-1`: a raw BSD sockets call crossing
 /// the shim does not preserve an `errno`, so each failure carries a
@@ -7,9 +9,7 @@ extern "C" {
     fn tcp_listen(port: Int) -> Int;
     fn tcp_accept(fd: Int) -> Int;
     fn tcp_send(fd: Int, buf: CStr, len: Int) -> Int;
-    fn tcp_recv(fd: Int, max_len: Int) -> RawCStr;
-    fn tcp_recv_n(fd: Int, max_len: Int) -> Int;
-    fn tcp_recv_data() -> RawCStr;
+    fn tcp_recv_into(fd: Int, data: RawCStr, capacity: Int) -> Int;
     fn tcp_close(fd: Int) -> Unit;
 }
 
@@ -59,8 +59,12 @@ pub let write (fd: Int) (data: String): Result[Int, String] = unsafe {
 /// "" on BOTH a clean peer close and a hard socket error. The
 /// distinction is not preserved in v1, and either way "stop
 /// reading" is the right response, and an empty String already
-/// signals to a caller looping until end of stream.
-pub let read (fd: Int) (max_len: Int): String = unsafe { tcp_recv(fd, max_len).as_string() }
+/// signals to a caller looping until end of stream. Bytes are checked as
+/// UTF-8; invalid text also returns empty. max_len must be positive.
+pub let read (fd: Int) (max_len: Int): String =
+    match read_bytes(fd, max_len) {
+        Err(_) => "", Ok(bytes) => match bytes.as_string() { Ok(text) => text, Err(_) => "" },
+    }
 
 // --- Binary-safe TCP ---
 //
@@ -86,11 +90,26 @@ pub let read (fd: Int) (max_len: Int): String = unsafe { tcp_recv(fd, max_len).a
 /// means "stop reading". A length-framed binary protocol cannot: an
 /// empty read mid-stream is an ordinary event, and telling it from a
 /// dropped connection is the difference between waiting and failing.
-/// `tcp_recv_n` returns a count and keeps the two apart.
-pub let read_bytes (fd: Int) (max_len: Int): Result[Bytes, String] = unsafe {
-    let n = tcp_recv_n(fd, max_len);
-    if n < 0 { Err("Net.read_bytes: recv failed") }
-    else { Ok(Bytes.from_cstr(tcp_recv_data(), n)) }
+/// Receives into private owned native storage and copies out before release.
+/// max_len must be positive; a zero-size request is an error, not peer EOF.
+/// Use read_into with a retained NativeBuffer to reuse receive capacity.
+pub let read_bytes (fd: Int) (max_len: Int): Result[Bytes, String] =
+    if max_len <= 0 { Err("Net.read_bytes: max_len must be positive") }
+    else { match NativeBuffer.create(max_len) {
+        Err(e) => Err(e),
+        Ok(buffer) => match read_into(fd, buffer) {
+            Err(_) => Err("Net.read_bytes: recv failed"), Ok(_) => NativeBuffer.copy_out(buffer),
+        },
+    } }
+
+/// Receive into a reusable owned native buffer and return the committed count.
+/// Positive capacity is required. Ok(0) means peer EOF; Err discards contents.
+/// NativeBuffer's exclusive lease rejects concurrent/reentrant alias access.
+pub let read_into (fd: Int) (buffer: NativeBuffer.Buffer): Result[Int, String] = unsafe {
+    NativeBuffer.with_mut(buffer, |pointer, cap| {
+        let n = unsafe { tcp_recv_into(fd, pointer, cap) };
+        if n < 0 { Err("Net.read_into: recv failed or capacity is not positive") } else { Ok(n) }
+    })
 }
 
 /// Binary-safe because `tcp_send` takes an explicit length and never

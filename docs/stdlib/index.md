@@ -76,6 +76,21 @@ Every declaration, linked to the page that documents it.
 - [`let snapshot (): Option[Snapshot]`](Memory.md#snapshot)
 - [`let delta (before: Snapshot) (after: Snapshot): Delta`](Memory.md#delta)
 
+## [NativeBuffer](NativeBuffer.md)
+
+- [`handle Buffer`](NativeBuffer.md#Buffer)
+- [`let create (capacity: Int): Result[Buffer, String]`](NativeBuffer.md#create)
+- [`let length (buffer: Buffer): Int`](NativeBuffer.md#length)
+- [`let capacity (buffer: Buffer): Int`](NativeBuffer.md#capacity)
+- [`let reserve (buffer: Buffer) (capacity: Int): Result[Unit, String]`](NativeBuffer.md#reserve)
+- [`let copy_in (buffer: Buffer) (bytes: Bytes): Result[Unit, String]`](NativeBuffer.md#copy_in)
+- [`let copy_out (buffer: Buffer): Result[Bytes, String]`](NativeBuffer.md#copy_out)
+- [`let text (buffer: Buffer): Result[String, String]`](NativeBuffer.md#text)
+- [`let with_mut (buffer: Buffer) (operation: (RawCStr, Int) -> Result[Int, String]): Result[Int, String]`](NativeBuffer.md#with_mut)
+- [`let with_text (buffer: Buffer) (operation: (RawCStr, Int) -> Result[T, String]): Result[(T, String), String]`](NativeBuffer.md#with_text)
+- [`struct Snapshot`](NativeBuffer.md#Snapshot)
+- [`let snapshot (): Option[Snapshot]`](NativeBuffer.md#snapshot)
+
 ## [Net](Net.md)
 
 - [`let connect_to (host: String) (port: Int): Result[Int, String]`](Net.md#connect_to)
@@ -84,6 +99,7 @@ Every declaration, linked to the page that documents it.
 - [`let write (fd: Int) (data: String): Result[Int, String]`](Net.md#write)
 - [`let read (fd: Int) (max_len: Int): String`](Net.md#read)
 - [`let read_bytes (fd: Int) (max_len: Int): Result[Bytes, String]`](Net.md#read_bytes)
+- [`let read_into (fd: Int) (buffer: NativeBuffer.Buffer): Result[Int, String]`](Net.md#read_into)
 - [`let write_bytes (fd: Int) (data: Bytes): Result[Int, String]`](Net.md#write_bytes)
 - [`let close (fd: Int): Unit`](Net.md#close)
 

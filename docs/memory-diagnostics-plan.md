@@ -6,7 +6,7 @@ Goal: distinguish allocation churn, retained Plum memory, peak requested heap, a
 
 ## Chosen design and alternatives
 
-Use a compile-time opt-in address registry for Plum heap diagnostics. Keep ordinary cell layout and native pointer ABI. Sanitizer support is in #456. The next PR implements the registry and public snapshots, stacked on that build policy.
+Use a compile-time opt-in address registry for Plum heap diagnostics. Keep ordinary cell layout and native pointer ABI. Sanitizer support and the registry/public snapshots shipped together in #459; #460 fixed the temporary CStr ownership issue. All six acceptance criteria are complete, and #437 is closed. Allocation attribution is tracked separately in #461.
 
 | Approach | Benefit | Cost / limitation |
 | --- | --- | --- |

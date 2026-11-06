@@ -9,6 +9,14 @@ Dropping the last owner releases the cell through the normal allocator path.
 The compiler's existing conservative loop analysis can retain a local until
 overwrite or function cleanup; repeated conversions must remain bounded, and
 completed function calls must restore the caller's live-byte baseline.
+NativeBuffer.snapshot provides a separate optional ledger for NativeBuffer
+payload requests, live/peak resource counts and requested capacity. Its handle
+and lease cells remain in Memory.snapshot; payload, native metadata and allocator
+rounding do not. NativeBuffer counts only storage owned by that helper, not
+unrelated libraries/GPU allocations. Both snapshots are coherent individually,
+but two calls are not an atomic combined measurement. See the
+[native buffer contract and reuse example](native-buffers.md).
+
 RawCStr carries no owner and its native storage is excluded from these counts.
 An outstanding raw pointer cannot prevent release or reuse: copy while its
 native owner is valid. See [the FFI contract](../LANGUAGE.md#ffi).
