@@ -1,0 +1,57 @@
+extern "C" {
+    fn plum_heap_snapshot() -> Int;
+    fn plum_heap_snapshot_field(token: Int, field: Int) -> Int;
+}
+
+/// One coherent view of tracked Plum cells, before allocating this record.
+/// Bytes include requested headers, terminators and explicit capacity; they
+/// exclude allocator rounding, registry storage, native buffers and GPU memory.
+/// Reuse keeps the cell's original request. Peaks are process-lifetime maxima.
+pub struct Snapshot {
+    pub allocations: Int,
+    pub allocated_bytes: Int,
+    pub live_allocations: Int,
+    pub live_bytes: Int,
+    pub peak_allocations: Int,
+    pub peak_bytes: Int,
+}
+
+/// Allocation traffic and changes in live cells between two snapshots.
+/// Live differences may be negative. Peaks are maxima, not additive traffic.
+pub struct Delta {
+    pub allocations: Int,
+    pub allocated_bytes: Int,
+    pub live_allocations: Int,
+    pub live_bytes: Int,
+}
+
+/// Capture tracked cells at one point. Returns None without --memory-stats.
+/// The snapshot record/Some wrapper are ordinary owned allocations made after
+/// capture; retaining them affects later snapshots. Keep observer state equal
+/// when checking a workload's baseline. This measures requested Plum-cell bytes,
+/// not RSS or all native allocations, and a nonzero live value is not a leak verdict.
+pub let snapshot (): Option[Snapshot] = unsafe {
+    let token = plum_heap_snapshot();
+    if token == 0 { None }
+    else {
+        // Read the thread's frozen native copy before constructing Plum values.
+        // The native calls do not allocate Plum cells or invoke user callbacks.
+        let allocations = plum_heap_snapshot_field(token, 0);
+        let allocated_bytes = plum_heap_snapshot_field(token, 1);
+        let live_allocations = plum_heap_snapshot_field(token, 2);
+        let live_bytes = plum_heap_snapshot_field(token, 3);
+        let peak_allocations = plum_heap_snapshot_field(token, 4);
+        let peak_bytes = plum_heap_snapshot_field(token, 5);
+        Some(Snapshot { allocations: allocations, allocated_bytes: allocated_bytes,
+            live_allocations: live_allocations, live_bytes: live_bytes,
+            peak_allocations: peak_allocations, peak_bytes: peak_bytes })
+    }
+}
+
+/// Subtract an earlier snapshot from a later one in the same process.
+pub let delta (before: Snapshot) (after: Snapshot): Delta = Delta {
+    allocations: after.allocations - before.allocations,
+    allocated_bytes: after.allocated_bytes - before.allocated_bytes,
+    live_allocations: after.live_allocations - before.live_allocations,
+    live_bytes: after.live_bytes - before.live_bytes,
+}

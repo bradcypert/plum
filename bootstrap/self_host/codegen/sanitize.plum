@@ -1,0 +1,15 @@
+// Clang's -fsanitize flag links the runtime but does not opt arbitrary LLVM
+// functions into address checks. Cover runtime helpers and synthesized
+// destructors as well as source functions, including their frame pointers.
+pub let cg_sanitize_address (ir: String): String = {
+    let mut out: Array[String] = [];
+    for line in ir.split("\n") {
+        if line.starts_with("define ") {
+            let attributes = " sanitize_address \"frame-pointer\"=\"all\"";
+            let at = match String.index_of(line, " !dbg ") { Some(n) => n, None => line.len() - 2 };
+            if !line.ends_with(" {") { cg_fail("unexpected LLVM function header during address instrumentation") };
+            out = out.push(line.slice(0, at).concat(attributes).concat(line.slice(at, line.len())));
+        } else { out = out.push(line); }
+    };
+    Array.join(out, "\n")
+}

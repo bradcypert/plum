@@ -128,6 +128,10 @@ jobs:
         run: ./bootstrap/check-declares
       - name: compiler internals preserve native object compilation
         run: ./bootstrap/self-test ./sh.real
+      - name: sanitizers cover generated code, native code, leaks and cache transitions
+        run: python3 ./bootstrap/sanitizer-check.py ./sh.real
+      - name: opt-in memory snapshots preserve ownership, reuse and concurrency
+        run: python3 ./bootstrap/memory-stats-check.py ./sh.real
       - name: plum test really runs tests
         run: ./bootstrap/test-smoke
       - name: lexer diagnostics preserve source locations
@@ -419,6 +423,11 @@ jobs:
         run: ./bootstrap/self-test ./sh.real
       - name: debug builds carry Plum line information
         run: ./bootstrap/debug-info-check
+      - name: sanitizer builds preserve Mach-O symbols and verified leak detection
+        run: |
+          brew list llvm >/dev/null 2>&1 || brew install llvm
+          PATH="$(brew --prefix llvm)/bin:$PATH" python3 ./bootstrap/sanitizer-check.py ./sh.real
+          PATH="$(brew --prefix llvm)/bin:$PATH" python3 ./bootstrap/memory-stats-check.py ./sh.real
 
       # The language server is the one feature that was BROKEN on macOS
       # and fixed blind: it re-invokes the compiler through
@@ -758,6 +767,8 @@ jobs:
         run: python3 bootstrap/winsock-init-check
       - name: task and channel failures preserve ownership
         run: ./bootstrap/thread-smoke ./sh.real
+      - name: opt-in memory snapshots preserve ownership and native threads
+        run: python3 ./bootstrap/memory-stats-check.py ./sh.real
       - name: declared native dependencies preserve TLS compatibility
         env:
           PLUM_CI_TIMINGS: "1"

@@ -69,6 +69,13 @@ Every declaration, linked to the page that documents it.
 - [`let decode (d: Decoder[T]) (v: JsonValue): Result[T, String]`](Json.md#decode)
 - [`let decode_string (d: Decoder[T]) (text: String): Result[T, String]`](Json.md#decode_string)
 
+## [Memory](Memory.md)
+
+- [`struct Snapshot`](Memory.md#Snapshot)
+- [`struct Delta`](Memory.md#Delta)
+- [`let snapshot (): Option[Snapshot]`](Memory.md#snapshot)
+- [`let delta (before: Snapshot) (after: Snapshot): Delta`](Memory.md#delta)
+
 ## [Net](Net.md)
 
 - [`let connect_to (host: String) (port: Int): Result[Int, String]`](Net.md#connect_to)

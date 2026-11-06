@@ -65,6 +65,7 @@ use pkg;
 use Path;
 use Encoding;
 use buildcache;
+use buildmode;
 
 // `query <project> <path> <line> <col>` -- what is the type of the
 // identifier at that position?
@@ -2414,6 +2415,9 @@ let usage (): Unit = {
     println("                      Tail recursion still runs in constant stack space.");
     println("  --release           optimise (-O2). The default is a DEBUG build:");
     println("                      -Og -g, which keeps frames and debug information.");
+    println("  --memory-stats      opt-in live/peak Plum-cell snapshots via use Memory.");
+    println("  --sanitize address  ASan instrumentation and symbols (native Linux/macOS).");
+    println("                      Supported by build, run, test and emit-llvm; -- ends options.");
     println("  --target <triple>   build for another platform, e.g. aarch64-linux-musl.");
     println("                      Needs a C compiler that can link for it: set PLUM_CC,");
     println("                      e.g. PLUM_CC=\"zig cc\". Plum ships no sysroot.");
@@ -2555,14 +2559,13 @@ let run_tests (bin: String) (names: Array[String]) (i: Int) (acc: TestRun): Test
 // failure and cannot report the rest. That was the original reason for
 // the design and it is unchanged -- only the child is different, an
 // argument to a compiled binary rather than an interpreter invocation.
-let compile_and_run_tests (dir: String) (program: parser.ProgramNode) (names: Array[String]) (release: Bool) (trace: Bool): TestRun =
+let compile_and_run_tests (dir: String) (program: parser.ProgramNode) (names: Array[String]) (mode: buildmode.Options): TestRun =
     match Os.temp_dir() {
         Err(e) => TestRun { failed: 1, detail: "could not create a scratch directory: ".concat(e) },
         Ok(scratch) => {
             let bin = scratch.concat("/tests");
             let ll = bin.concat(".ll");
-            codegen.set_debug_frames(trace);
-            let ir = codegen.cg_emit_program_entry(program, "__plum_test_main");
+            let ir = emit_program(program, "__plum_test_main", mode);
             let outcome = match Os.write_file(ll, ir) {
                 Err(e) => TestRun { failed: 1, detail: "could not write test IR: ".concat(e) },
                 Ok(_) => {
@@ -2571,15 +2574,9 @@ let compile_and_run_tests (dir: String) (program: parser.ProgramNode) (names: Ar
                     let written = write_shims(scratch, needs_tls(ir, native.tls));
                     if written.err != "" { TestRun { failed: 1, detail: written.err } } else {
                         let cfiles = written.files;
-                        // Native, for the same reason `run` is: each test
-                        // runs as a child of this binary.
-                        let argv = Array.concat(Array.concat(Array.concat(cc_prefix_args(), Array.concat(cc_mode_args(release), ["-Wno-override-module", ll, "-I", scratch, "-I", scratch.concat("/mbedtls/include"), "-I", scratch.concat("/mbedtls/library")])), cfiles),
-                        Array.concat(extra, Array.concat(platform_libs(native_target()), ["-o", bin])));
-                        match run_process(cc_program(), argv) {
-                            Err(e) => TestRun { failed: 1, detail: "could not link tests: ".concat(e) },
-                            Ok(r) => if r.exit_code == 0 { run_tests(bin, names, 0, TestRun { failed: 0, detail: "" }) }
-                            else { TestRun { failed: 1, detail: "could not link tests:\n".concat(r.stderr) } },
-                        }
+                        let err = link_ir_uncached(ll, cfiles, bin, extra, scratch, native_target(), mode);
+                        if err == "" { run_tests(bin, names, 0, TestRun { failed: 0, detail: "" }) }
+                        else { TestRun { failed: 1, detail: "could not link tests:\n".concat(err) } }
                     }
                 },
             };
@@ -2588,7 +2585,7 @@ let compile_and_run_tests (dir: String) (program: parser.ProgramNode) (names: Ar
         },
     }
 
-let cmd_test (dir: String) (release: Bool) (trace: Bool): Unit = {
+let cmd_test (dir: String) (mode: buildmode.Options): Unit = {
     let items = collect_project(dir);
     let names = discover_tests(items, 0, []);
     let src = test_dispatcher_src(names);
@@ -2600,7 +2597,7 @@ let cmd_test (dir: String) (release: Bool) (trace: Bool): Unit = {
     // every call to a prelude function, `assert_eq` first among them.
     // The same note `emit-llvm` already carries, for the same reason.
     println("running ${names.len()} tests");
-    let run = compile_and_run_tests(dir, program, names, release, trace);
+    let run = compile_and_run_tests(dir, program, names, mode);
     println("");
     if run.failed == 0 {
         println("test result: ok. ${names.len()} passed; 0 failed");
@@ -2928,9 +2925,9 @@ let compile_objs (srcs: Array[String]) (i: Int) (scratch: String) (flags: Array[
         }
     }
 
-let compile_two_phase (srcs: Array[String]) (out: String) (extra: Array[String]) (scratch: String) (target: String) (release: Bool): String = {
+let compile_two_phase (srcs: Array[String]) (out: String) (extra: Array[String]) (scratch: String) (target: String) (mode: buildmode.Options): String = {
     let shim_dir = if srcs.len() > 1 { Path.dirname(srcs[1]) } else { scratch };
-    let flags = Array.concat(target_args(target), Array.concat(cc_mode_args(release), ["-Wno-override-module", "-I", shim_dir, "-I", shim_dir.concat("/mbedtls/include"), "-I", shim_dir.concat("/mbedtls/library")]));
+    let flags = Array.concat(target_args(target), Array.concat(buildmode.compile_flags(mode), ["-Wno-override-module", "-I", shim_dir, "-I", shim_dir.concat("/mbedtls/include"), "-I", shim_dir.concat("/mbedtls/library")]));
     // Project/dependency C inputs need the same includes and persistent
     // objects as embedded sources. Leaving C in the final link both loses
     // its header search paths and lets Clang delete its debug-map objects.
@@ -2939,7 +2936,7 @@ let compile_two_phase (srcs: Array[String]) (out: String) (extra: Array[String])
     let built = compile_objs(Array.concat(srcs, cs), 0, scratch, flags, []);
     if built.err != "" { built.err }
     else {
-        let argv = Array.concat(Array.concat(Array.concat(Array.concat(cc_prefix_args(), target_args(target)), built.objs), linked),
+        let argv = Array.concat(Array.concat(Array.concat(Array.concat(cc_prefix_args(), Array.concat(target_args(target), buildmode.link_flags(mode))), built.objs), linked),
             Array.concat(platform_libs(target), ["-o", out]));
         match run_process(cc_program(), argv) {
             Err(e) => "build failed: ".concat(e),
@@ -2971,7 +2968,7 @@ pub let test_two_phase_native_headers (): Unit = {
     let ll = Path.join(scratch, "main.ll");
     assert(Result.is_ok(Os.write_file(ll, "declare i32 @native_fixture()\ndefine i32 @main() {\n  %r = call i32 @native_fixture()\n  ret i32 %r\n}\n")));
     let out = Path.join(scratch, "native-test.exe");
-    assert_eq(compile_two_phase([ll], out, [c, "-lm"], scratch, native_target(), false), "");
+    assert_eq(compile_two_phase([ll], out, [c, "-lm"], scratch, native_target(), buildmode.defaults(())), "");
     let ran = run_process(out, []);
     assert(match ran { Ok(r) => r.exit_code == 7, Err(_) => false });
     if Os.platform(()) == "macos" {
@@ -2998,17 +2995,17 @@ let run_dsymutil (out: String): Unit =
 // every lookup: the captured input includes system headers, search-path
 // shadowing and time-dependent macros. Compile THAT snapshot, never reread
 // the original source after computing its key.
-let compile_cached_objects (ll: String) (cfiles: Array[String]) (out: String) (extra: Array[String]) (scratch: String) (target: String) (release: Bool): String = {
+let compile_cached_objects (ll: String) (cfiles: Array[String]) (out: String) (extra: Array[String]) (scratch: String) (target: String) (mode: buildmode.Options): String = {
     let tool_time = buildcache.start(());
     let fingerprint = buildcache.native_fingerprint(());
     buildcache.finish("native toolchain fingerprint", tool_time);
     let integrated = if Os.platform(()) == "windows" { ["-fintegrated-cc1"] } else { [] };
-    let flags = Array.concat(integrated, Array.concat(target_args(target), Array.concat(cc_mode_args(release), ["-Wno-override-module"])));
+    let flags = Array.concat(integrated, Array.concat(target_args(target), Array.concat(buildmode.compile_flags(mode), ["-Wno-override-module"])));
     let shim_dir = if cfiles.len() == 0 { scratch } else { Path.dirname(cfiles[0]) };
     let includes = ["-I", shim_dir, "-I", shim_dir.concat("/mbedtls/include"), "-I", shim_dir.concat("/mbedtls/library")];
     if fingerprint == "" {
         buildcache.diagnostic("objects bypass: unsupported driver or loader");
-        link_ir_uncached(ll, cfiles, out, extra, scratch, target, release)
+        link_ir_uncached(ll, cfiles, out, extra, scratch, target, mode)
     } else {
         let cs = Array.filter(extra, |p| p.ends_with(".c"));
         let linked = Array.filter(extra, |p| !p.ends_with(".c"));
@@ -3017,16 +3014,20 @@ let compile_cached_objects (ll: String) (cfiles: Array[String]) (out: String) (e
         let built = cached_object_loop(program, srcs, 0, scratch, flags, includes, fingerprint, []);
         if built.err == "uncertified native cache invocation" {
             buildcache.diagnostic("objects bypass: uncertified compiler configuration");
-            link_ir_uncached(ll, cfiles, out, extra, scratch, target, release)
+            link_ir_uncached(ll, cfiles, out, extra, scratch, target, mode)
         } else if built.err != "" { built.err.concat("\nIR left at ${ll}") }
         else {
             let link_time = buildcache.start(());
-            let argv = Array.concat(Array.concat(Array.concat(cc_prefix_args(), target_args(target)), built.objs),
+            let argv = Array.concat(Array.concat(Array.concat(cc_prefix_args(), Array.concat(target_args(target), buildmode.link_flags(mode))), built.objs),
                 Array.concat(linked, Array.concat(platform_libs(target), ["-o", out])));
             let result = match run_process(cc_program(), argv) {
                 Err(e) => "build failed: ${e}",
                 Ok(r) => if r.exit_code != 0 { "${cc_program()} failed to link (exit ${r.exit_code.to_string()}):\n${r.stderr}" }
-                    else { let removed = Os.remove_file(ll); "" },
+                    else {
+                        if buildmode.symbols(mode) && target_os(target) == "macos" { run_dsymutil(out) };
+                        let removed = Os.remove_file(ll);
+                        ""
+                    },
             };
             buildcache.finish("link", link_time);
             result
@@ -3034,11 +3035,11 @@ let compile_cached_objects (ll: String) (cfiles: Array[String]) (out: String) (e
     }
 }
 
-let link_ir_uncached (ll: String) (cfiles: Array[String]) (out: String) (extra: Array[String]) (scratch: String) (target: String) (release: Bool): String = {
-    if !release && target_os(target) == "macos" { compile_two_phase(Array.concat([ll], cfiles), out, extra, scratch, target, release) }
+let link_ir_uncached (ll: String) (cfiles: Array[String]) (out: String) (extra: Array[String]) (scratch: String) (target: String) (mode: buildmode.Options): String = {
+    if buildmode.symbols(mode) && target_os(target) == "macos" { compile_two_phase(Array.concat([ll], cfiles), out, extra, scratch, target, mode) }
     else {
         let shim_dir = if cfiles.len() == 0 { scratch } else { Path.dirname(cfiles[0]) };
-        let base = Array.concat(target_args(target), Array.concat(cc_mode_args(release), ["-Wno-override-module", ll, "-I", shim_dir, "-I", shim_dir.concat("/mbedtls/include"), "-I", shim_dir.concat("/mbedtls/library")]));
+        let base = Array.concat(target_args(target), Array.concat(buildmode.compile_flags(mode), ["-Wno-override-module", ll, "-I", shim_dir, "-I", shim_dir.concat("/mbedtls/include"), "-I", shim_dir.concat("/mbedtls/library")]));
         let argv = Array.concat(Array.concat(Array.concat(cc_prefix_args(), base), cfiles),
             Array.concat(extra, Array.concat(platform_libs(target), ["-o", out])));
         let t = buildcache.start(());
@@ -3337,73 +3338,36 @@ let write_shims_acc (files: Array[shims.ShimFile]) (dir: String) (tls: Bool) (i:
     }
 
 // --- Build modes ---
-//
-// `plum build` is a DEBUG build unless told otherwise. A debug binary
-// keeps its frames and carries debug information; `--release` is the
-// optimised one.
-//
-// Debug is the default because the cost of guessing wrong runs one way.
-// A person who wanted the fast binary and got the debuggable one has a
-// slow program and a flag to learn. A person who wanted to debug and
-// got the optimised one has inlined frames, no line information, and
-// nothing to tell them why -- and this compiler produced only that,
-// with no way to ask for anything else, until 2026-09-01.
-//
-// `-g` alone gives a debugger the C shims and not much else: the
-// emitted IR carries no `!dbg` metadata yet, so there is no Plum line
-// information for it to read. What the debug build DOES buy immediately
-// is frames that still exist, which is the half a stack trace needs.
-//
-// `-Og`, not `-O0`, and the difference is not a preference. This
-// backend emits no `musttail`, so a tail-recursive function is a real
-// call chain in the IR and stays one unless the C compiler turns it
-// into a loop. `-O0` does not, and
-//
-//     let count (n: Int) (acc: Int): Int =
-//         if n == 0 { acc } else { count(n - 1, acc + n) }
-//
-// segfaults at three million deep in a `-O0` build and returns in an
-// `-O2` one. Making debug the default with `-O0` would have introduced
-// that crash into every default build -- for a language whose README
-// promises tail calls run in constant stack space.
-//
-// `-Og` is "optimise for debugging experience": it keeps the debug
-// information and does the sibling-call transform. Measured, all with
-// `-g`: `-O0` crashes, `-Og` and `-O1` return, and all three carry
-// DWARF. `bootstrap/check-build-modes` runs that program in BOTH modes
-// so this cannot regress quietly.
-let cc_mode_args (release: Bool): Array[String] =
-    if release { ["-O2"] } else { ["-Og", "-g"] }
+// buildmode owns validation, optimization, instrumentation, symbols and cache
+// identity. Generation and every native path consume the same policy.
+let build_options (argv: Array[String]) (target: String): buildmode.Options = {
+    let mode = match buildmode.parse(argv) {
+        Ok(mode) => mode,
+        Err(e) => { fail_cmd(e); buildmode.defaults(()) },
+    };
+    let bad = buildmode.validate(mode, target_os(target), target == native_target());
+    if bad != "" { fail_cmd(bad) };
+    mode
+}
 
-// `--release` anywhere in the argument list. A flag, not a manifest
-// key: a Plum project is a directory with no configuration file, and
-// adding one to hold a single boolean would be the tail wagging the
-// dog.
-pub let wants_release (argv: Array[String]): Bool = Array.contains(argv, "--release")
+// Apply generation policy for every entry point, including file emission and
+// test dispatchers. Instrument the complete module so helpers are covered too.
+let emit_program (program: parser.ProgramNode) (entry: String) (mode: buildmode.Options): String = {
+    codegen.set_heap_stats(mode.heap);
+    codegen.set_debug_frames(mode.trace);
+    codegen.set_debug_info(buildmode.symbols(mode));
+    let ir = codegen.cg_emit_program_entry(program, entry);
+    if mode.address { codegen.cg_sanitize_address(ir) } else { ir }
+}
 
-// `--trace`: a stack trace when the program dies.
-//
-// A flag rather than part of the debug build, because a shadow call
-// stack costs a push and a pop per call. It does NOT cost tail-call
-// elimination any more: the pop is paid per PATH, and a self-call in
-// tail position pops before calling rather than after returning, so
-// nothing sits between that call and the `ret`. DESIGN.md's "Traces
-// AND tail calls" entry has the measurements, `cg_expr_t` in
-// `codegen/codegen.plum` the emission, and `native_stdlib/io_shim.c`
-// the runtime.
-pub let wants_trace (argv: Array[String]): Bool = Array.contains(argv, "--trace")
-
-let compile_project (dir: String) (out: String) (extra: Array[String]) (target: String) (release: Bool) (trace: Bool): String =
-    compile_prepared(dir, out, NativeBuild { args: extra, tls: extra.len() > 0 }, target, release, trace, prepare_inputs(dir), false)
-
-let compile_prepared (dir: String) (out: String) (native: NativeBuild) (target: String) (release: Bool) (trace: Bool) (inputs: BuildInputs) (cached: Bool): String = {
+let compile_prepared (dir: String) (out: String) (native: NativeBuild) (target: String) (mode: buildmode.Options) (inputs: BuildInputs) (cached: Bool): String = {
     let bad = target_error(target);
     if bad != "" { bad }
     else {
         match Os.temp_dir() {
             Err(e) => "build failed: ".concat(e),
             Ok(scratch) => {
-                let err = compile_with_scratch(dir, out, native, scratch, target, release, trace, inputs, cached);
+                let err = compile_with_scratch(dir, out, native, scratch, target, mode, inputs, cached);
                 if cached && buildcache.enabled(()) { buildcache.prune(()) } else { () };
                 let cleaned = Os.remove_tree(scratch);
                 err
@@ -3412,17 +3376,11 @@ let compile_prepared (dir: String) (out: String) (native: NativeBuild) (target: 
     }
 }
 
-let compile_with_scratch (dir: String) (out: String) (native: NativeBuild) (scratch: String) (target: String) (release: Bool) (trace: Bool) (inputs: BuildInputs) (cached: Bool): String = {
+let compile_with_scratch (dir: String) (out: String) (native: NativeBuild) (scratch: String) (target: String) (mode: buildmode.Options) (inputs: BuildInputs) (cached: Bool): String = {
     let extra = native.args;
     let ll = out.concat(".ll");
-    // Debug builds carry the shadow call stack; release builds do not.
-    codegen.set_debug_frames(trace);
-    // DWARF line tables, so a debugger and a profiler can name Plum
-    // lines. A DEBUG build only: `--release` is compiled without `-g`
-    // and has nothing to read them.
-    codegen.set_debug_info(!release);
     let key_time = buildcache.start(());
-    let key = if cached && buildcache.enabled(()) { ir_input_key(dir, inputs, release, trace) } else { "" };
+    let key = if cached && buildcache.enabled(()) { ir_input_key(dir, inputs, mode) } else { "" };
     let hit = if key == "" { None } else { buildcache.load_ir(key) };
     buildcache.finish("IR lookup", key_time);
     let ir = match hit {
@@ -3433,7 +3391,7 @@ let compile_with_scratch (dir: String) (out: String) (native: NativeBuild) (scra
             let t = buildcache.start(());
             let program = parser.ProgramNode { items: parse_source_files(inputs.files, 0, []) };
             buildcache.finish("lex/parse", t);
-            codegen.cg_emit_program(program)
+            emit_program(program, "main", mode)
         },
     };
     match Os.write_file(ll, ir) {
@@ -3444,7 +3402,7 @@ let compile_with_scratch (dir: String) (out: String) (native: NativeBuild) (scra
                 // Check captured bytes against the live tree and rediscover
                 // file membership before publishing. Concurrent edits yield
                 // an uncached build, never an artifact under the old key.
-                if buildcache.sources_unchanged(()) && buildcache.unchanged(reads) && ir_input_key(dir, prepare_inputs(dir), release, trace) == key {
+                if buildcache.sources_unchanged(()) && buildcache.unchanged(reads) && ir_input_key(dir, prepare_inputs(dir), mode) == key {
                     buildcache.store("ir", key, ll, reads)
                 } else { buildcache.diagnostic("inputs changed; IR not stored") }
             } else { () };
@@ -3464,8 +3422,8 @@ let compile_with_scratch (dir: String) (out: String) (native: NativeBuild) (scra
             else {
                 let cfiles = written.files;
                 let err = if cached && key != "" && buildcache.env("PLUM_NO_OBJECT_CACHE") != "1" {
-                    compile_cached_objects(ll, cfiles, out, extra, scratch, target, release)
-                } else { link_ir_uncached(ll, cfiles, out, extra, scratch, target, release) };
+                    compile_cached_objects(ll, cfiles, out, extra, scratch, target, mode)
+                } else { link_ir_uncached(ll, cfiles, out, extra, scratch, target, mode) };
                 if err != "" && shim_dir != scratch {
                     // A concurrent cleaner may remove generated inputs.
                     // Retry from private scratch; real source/link errors
@@ -3473,7 +3431,7 @@ let compile_with_scratch (dir: String) (out: String) (native: NativeBuild) (scra
                     buildcache.diagnostic("native cache unavailable; retrying uncached");
                     let fresh = write_shims(scratch, needs_tls(ir, native.tls));
                     if fresh.err != "" { "build failed: ${fresh.err}" }
-                    else { link_ir_uncached(ll, fresh.files, out, extra, scratch, target, release) }
+                    else { link_ir_uncached(ll, fresh.files, out, extra, scratch, target, mode) }
                 } else { err }
             }
         },
@@ -3495,7 +3453,7 @@ let build_project (argv: Array[String]): Unit = {
     let target = match find_flag_value(argv, "--target", 0) { Some(t) => t, None => native_target() };
     let out = output_path(argv, target);
     let inputs = prepare_inputs(argv[1]);
-    let err = compile_prepared(argv[1], out, link_args_resolved(argv, argv[1], target, inputs.deps), target, wants_release(argv), wants_trace(argv), inputs, false);
+    let err = compile_prepared(argv[1], out, link_args_resolved(argv, argv[1], target, inputs.deps), target, build_options(argv, target), inputs, false);
     if err == "" { println("wrote ".concat(out)) } else { fail_cmd(err) }
 }
 
@@ -3534,11 +3492,15 @@ let run_project (argv: Array[String]): Unit = {
             // looks like `--target` after the project directory is one
             // of the PROGRAM's own arguments, not ours.
             let inputs = prepare_inputs(argv[1]);
-            let err = compile_prepared(argv[1], out, link_args_resolved(argv, argv[1], native_target(), inputs.deps), native_target(), wants_release(argv), wants_trace(argv), inputs, true);
+            let err = compile_prepared(argv[1], out, link_args_resolved(argv, argv[1], native_target(), inputs.deps), native_target(), build_options(argv, native_target()), inputs, true);
             if err != "" { fail_cmd(err) }
             else {
-                let args = Array.slice(argv, 2, argv.len());
-                let code = unsafe { process_run_inherit(out.as_cstr(), tab_join(args, 0, "").as_cstr(), args.len()) };
+                let args = buildmode.run_arguments(argv);
+                // CStr borrows bytes; keep the joined String owned through
+                // the native call instead of borrowing a temporary expression.
+                let joined = tab_join(args, 0, "");
+                let count = args.len();
+                let code = unsafe { process_run_inherit(out.as_cstr(), joined.as_cstr(), count) };
                 let cleaned = Os.remove_tree(dir);
                 // The child's exit code is this process's exit code, so
                 // `plum run` composes in a shell the way anything else
@@ -3944,12 +3906,12 @@ let manifest_input (dir: String): String = {
     }
 }
 
-let ir_input_key (dir: String) (inputs: BuildInputs) (release: Bool) (trace: Bool): String = {
+let ir_input_key (dir: String) (inputs: BuildInputs) (mode: buildmode.Options): String = {
     let compiler = buildcache.compiler_hash(());
     let cwd = Result.unwrap_or(Os.cwd(()), "");
     if compiler == "" || cwd == "" { "" }
     else {
-        let mut parts = ["plum-ir-v1", buildcache.frame(compiler), buildcache.frame(cwd), buildcache.frame(dir), release.to_string(), trace.to_string(), buildcache.frame(manifest_input(source_project_root(dir)))];
+        let mut parts = ["plum-ir-v2", buildcache.frame(compiler), buildcache.frame(cwd), buildcache.frame(dir), buildmode.cache_key(mode), buildcache.frame(manifest_input(source_project_root(dir)))];
         let mut valid = true;
         for d in inputs.deps {
             parts = parts.push("D");
@@ -4444,16 +4406,14 @@ let main (): Unit = {
         typecheck.check_program(codegen.cg_with_prelude(parser.ProgramNode { items: collect_project(argv[1]) }));
         println("ok");
     } else if argv[0] == "test" && Result.unwrap_or(Os.is_directory(argv[1]), false) {
-        cmd_test(argv[1], wants_release(argv), wants_trace(argv));
+        cmd_test(argv[1], build_options(argv, native_target()));
     } else if argv[0] == "build" && Result.unwrap_or(Os.is_directory(argv[1]), false) {
         build_project(argv);
     } else if argv[0] == "emit-llvm" && Result.unwrap_or(Os.is_directory(argv[1]), false) {
         // Same directory loading `check` and `run` use. A real Plum
         // project is several modules, so a backend that only accepted
         // one file could never compile one.
-        codegen.set_debug_frames(wants_trace(argv));
-        codegen.set_debug_info(!wants_release(argv));
-        println(codegen.cg_emit_program(parser.ProgramNode { items: collect_project(argv[1]) }));
+        println(emit_program(parser.ProgramNode { items: collect_project(argv[1]) }, "main", build_options(argv, native_target())));
     } else if argv[0] == "fmt" {
         cmd_fmt(argv);
     } else if argv[0] == "spans" {
@@ -4516,7 +4476,7 @@ let main (): Unit = {
                     // `builtin_sig` table. That hazard is gone: `check`
                     // prepends the prelude too now, and the table with
                     // it. See DESIGN.md's "One prelude, not two".
-                    println(codegen.cg_emit_program(parser.parse_program(lexed0.tokens)));
+                    println(emit_program(parser.parse_program(lexed0.tokens), "main", build_options(argv, native_target())));
                 } else if argv[0] == "run" {
                     // A single FILE runs the same way a project does --
                     // compiled. `collect_project` accepts either, so

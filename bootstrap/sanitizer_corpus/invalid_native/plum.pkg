@@ -1,0 +1,1 @@
+Package { name: "invalid_native", native_deps: [] }
