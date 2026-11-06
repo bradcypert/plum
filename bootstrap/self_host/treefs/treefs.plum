@@ -3,18 +3,18 @@ use Os;
 // Owned compiler filesystem primitives. Paths are interpreted beneath a held
 // root; consumers retain logical names for diagnostics, never for reopening.
 extern "C" {
-    fn plum_tree_last_error() -> CStr;
+    fn plum_tree_last_error() -> RawCStr;
     fn plum_tree_child_kind(root: Int, name: CStr) -> Int;
-    fn plum_cache_temp(root: CStr) -> CStr;
+    fn plum_cache_temp(root: CStr) -> RawCStr;
     fn plum_tree_entry_size(entry: Int) -> Int;
     fn plum_tree_text_open(entry: Int) -> Int;
     fn plum_tree_text_size(text: Int) -> Int;
-    fn plum_tree_text_data(text: Int) -> CStr;
+    fn plum_tree_text_data(text: Int) -> RawCStr;
     fn plum_tree_text_close(text: Int) -> Unit;
     fn plum_tree_seen_open() -> Int;
     fn plum_tree_seen_find(seen: Int, identity: CStr) -> Int;
     fn plum_tree_seen_add(seen: Int, identity: CStr, path: CStr) -> Int;
-    fn plum_tree_seen_previous(seen: Int) -> CStr;
+    fn plum_tree_seen_previous(seen: Int) -> RawCStr;
     fn plum_tree_seen_close(seen: Int) -> Unit;
     fn plum_tree_write(root: Int, relative: CStr, reject_links: Int, expected: CStr, bytes: CStr, size: Int) -> Int;
     fn plum_tree_root_open(path: CStr) -> Int;
@@ -22,17 +22,17 @@ extern "C" {
     fn plum_tree_entry_close(entry: Int) -> Unit;
     fn plum_tree_validate_link(root: Int, relative: CStr) -> Int;
     fn plum_tree_entry_kind(entry: Int) -> Int;
-    fn plum_tree_entry_identity(entry: Int) -> CStr;
-    fn plum_tree_file_hash(entry: Int, relative: CStr, version: Int) -> CStr;
+    fn plum_tree_entry_identity(entry: Int) -> RawCStr;
+    fn plum_tree_file_hash(entry: Int, relative: CStr, version: Int) -> RawCStr;
     fn plum_tree_dir_open(entry: Int) -> Int;
     fn plum_tree_dir_open_mode(entry: Int, read_links: Int) -> Int;
     fn plum_tree_dir_next(dir: Int) -> Int;
-    fn plum_tree_dir_name(dir: Int) -> CStr;
-    fn plum_tree_dir_link(dir: Int) -> CStr;
+    fn plum_tree_dir_name(dir: Int) -> RawCStr;
+    fn plum_tree_dir_link(dir: Int) -> RawCStr;
     fn plum_tree_dir_close(dir: Int) -> Unit;
     fn plum_tree_hash_open() -> Int;
     fn plum_tree_hash_update(hash: Int, bytes: CStr, size: Int) -> Int;
-    fn plum_tree_hash_finish(hash: Int) -> CStr;
+    fn plum_tree_hash_finish(hash: Int) -> RawCStr;
     fn plum_tree_hash_close(hash: Int) -> Unit;
 }
 

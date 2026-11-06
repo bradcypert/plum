@@ -439,7 +439,7 @@ with tempfile.TemporaryDirectory(prefix="plum-cache-check-") as tmp:
     high.mkdir()
     (low / "cache_value.h").write_text('#define CACHE_WORD "low"\n')
     (native / "word.c").write_text('#include <cache_value.h>\nconst char *cache_word(void) { return CACHE_WORD; }\n')
-    src.write_text('extern "C" { fn cache_word() -> CStr; }\nlet main (): Unit = unsafe { println(cache_word().as_string()) }\n')
+    src.write_text('extern "C" { fn cache_word() -> RawCStr; }\nlet main (): Unit = unsafe { println(cache_word().as_string()) }\n')
     include_env = {"CPATH": os.pathsep.join([str(high), str(low)])}
     run("low\n", "miss", overlay=include_env)
     run("low\n", "hit", overlay=include_env)

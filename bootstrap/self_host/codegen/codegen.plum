@@ -85,10 +85,12 @@ pub enum CgTy {
     CgBool,
     CgUnit,
     CgStr,
-    // A raw `char*`. Distinct from `CgStr` because it is NOT a
-    // refcounted Plum cell: nothing increments it, releases it, or reads
-    // a length header off it.
+    // CStr owns the same cell as String/Bytes. Only native marshalling
+    // derives its interior pointer; normal Plum ownership governs its lifetime.
     CgCStr,
+    // Unmanaged pointer received from native code, with an explicit unsafe
+    // lifetime/copy contract. Never reference-count or read a Plum header.
+    CgRawCStr,
     // A byte buffer. Structurally IDENTICAL to `CgStr` -- the same
     // refcounted `{rc, len, bytes.., NUL}` cell, so it shares
     // `@plum_str_eq`, `@plum_rel_str` and every allocation path -- and a
@@ -151,6 +153,7 @@ let cg_llvm_ty (t: CgTy): String =
         CgUnit => "i1",
         CgStr => "ptr",
         CgCStr => "ptr",
+        CgRawCStr => "ptr",
         CgBytes => "ptr",
         CgStruct(_) => "ptr",
         CgEnum(_) => "ptr",
@@ -169,6 +172,7 @@ let cg_ty_name (t: CgTy): String =
         CgUnit => "Unit",
         CgStr => "String",
         CgCStr => "CStr",
+        CgRawCStr => "RawCStr",
         CgBytes => "Bytes",
         CgStruct(name) => name,
         CgEnum(name) => name,
@@ -378,6 +382,7 @@ let cg_ity_mangle (t: typecheck.ITy): String =
         ITBool => "Bool",
         ITStr => "Str",
         ITCStr => "CStr",
+        ITRawCStr => "RawCStr",
         ITBytes => "Bytes",
         ITUnit => "Unit",
         // A declared type's name is QUALIFIED (`inner.P`,
@@ -1430,6 +1435,7 @@ let cg_of_ity (t: typecheck.ITy): CgTy =
         ITBool => CgBool,
         ITStr => CgStr,
         ITCStr => CgCStr,
+        ITRawCStr => CgRawCStr,
         ITBytes => CgBytes,
         ITUnit => CgUnit,
         // A `Task` is a bare handle from `thread_spawn` -- an `Int`'s
@@ -2465,15 +2471,6 @@ let lv_unreplace (ctx: LvCtx) (names: Array[String]): LvCtx =
 let lv_rest (xs: Array[typecheck.TExpr]) (from: Int) (acc: Array[typecheck.TExpr]): Array[typecheck.TExpr] =
     if from >= xs.len() { acc } else { lv_rest(xs, from + 1, acc.push(xs[from])) }
 
-// Raw CStr pointers can outlive their conversion expression. Keep every
-// source binding in such an expression alive under the existing scope rules.
-let lv_cstr_pins (e: typecheck.TExpr) (inside: Bool) (acc: Array[String]): Array[String] = {
-    let next = match e.node { TIdent(v) => if inside { acc.push(v) } else { acc }, _ => acc };
-    let pin = inside || match e.node { TAsCStr(_) => true, _ => false };
-    lv_cstr_children(typecheck.t_children(e), pin, 0, next)
-}
-let lv_cstr_children (xs: Array[typecheck.TExpr]) (inside: Bool) (i: Int) (acc: Array[String]): Array[String] =
-    if i >= xs.len() { acc } else { lv_cstr_children(xs, inside, i + 1, lv_cstr_pins(xs[i], inside, acc)) }
 let lv_tokens (scope: Array[String]) (i: Int) (acc: Array[String]): Array[String] =
     if i < 0 { acc }
     else { lv_tokens(scope, i - 1, if scope[i].starts_with("<reset:") { acc.push(scope[i]) } else { acc }) }
@@ -2732,7 +2729,7 @@ let lv_node (ctx: LvCtx) (node: typecheck.TNode): typecheck.TNode =
         // in `cg_movable_params` (that is computed for the enclosing
         // function), so the interlock that stops `Some(x)` recycling
         // `x`'s own cell into itself is this, and only this.
-        TClosure(ps, body) => TClosure(ps, lv_expr(LvCtx { exprs: [body], names: lv_cstr_pins(body, false, []), writes: [], scope: lv_cat_names([], ps, 0), replaced: [] }, body)),
+        TClosure(ps, body) => TClosure(ps, lv_expr(LvCtx { exprs: [body], names: [], writes: [], scope: lv_cat_names([], ps, 0), replaced: [] }, body)),
         // `spawn` runs its block on another thread, at a time nothing
         // here orders. Everything it touches stays live.
         TSpawn(a) => TSpawn(lv_expr(lv_with(ctx, [a]), a)),
@@ -2815,7 +2812,7 @@ let lv_arms (ctx: LvCtx) (arms: Array[typecheck.TArm]) (i: Int) (acc: Array[type
 // On failure, this arm's bindings have no continuation at all. Express that
 // edge with the same release instruction as successful-body frontiers. The
 // guard is evaluated exactly once, and its existing temporary cleanup stays
-// with the match emitter. CStr pins and resource restrictions still apply.
+// with the match emitter. Resource restrictions still apply.
 let lv_release_guard (names: Array[String]) (guard: Option[typecheck.TExpr]): Option[typecheck.TExpr] =
     if Array.is_empty(names) { guard } else { match guard {
         None => None,
@@ -2937,7 +2934,7 @@ let lv_pat_names (pat: typecheck.TPattern) (acc: Array[String]): Array[String] =
 // empty: whatever the body's last expression reads, nothing reads
 // afterwards.
 let lv_fn (params: Array[typecheck.TParam]) (body: typecheck.TExpr): typecheck.TExpr =
-    lv_expr(LvCtx { exprs: [], names: lv_cstr_pins(body, false, []), writes: [], scope: lv_param_names(params, 0, []), replaced: [] }, body)
+    lv_expr(LvCtx { exprs: [], names: [], writes: [], scope: lv_param_names(params, 0, []), replaced: [] }, body)
 
 let lv_param_names (params: Array[typecheck.TParam]) (i: Int) (acc: Array[String]): Array[String] =
     if i >= params.len() { acc } else { lv_param_names(params, i + 1, acc.push(params[i].name)) }
@@ -3335,6 +3332,7 @@ let cg_to_string (p: CgProgram) (env: Array[CgSlot]) (n: Int) (base: typecheck.T
         // rendering it means deciding who owns the copy. `.as_string()`
         // is that decision, written explicitly.
         CgCStr => { cg_fail(".to_string() on a CStr isn't supported -- use .as_string()"); cg_unit_emit(b.n) },
+        CgRawCStr => { cg_fail(".to_string() on a RawCStr isn't supported -- use .as_string()"); cg_unit_emit(b.n) },
         // Rejected by `reject_unrenderable` before this can be reached;
         // kept in step with it so the backend can never be the one that
         // decides bytes have a text form.
@@ -3823,8 +3821,8 @@ let cg_extern_call (p: CgProgram) (env: Array[CgSlot]) (n: Int) (name: String) (
 
 struct MarshalEmit { code: String, vals: Array[String], n: Int }
 
-// One operand per argument, in C's spelling. Only `Bool` differs, and
-// it differs in both directions -- see `cg_c_ty`.
+// One operand per argument in C's spelling: widen Bool, unwrap CStr
+// owners to their data pointer, and pass unmanaged RawCStr through unchanged.
 let cg_marshal_args (p: CgProgram) (args: Array[typecheck.TExpr]) (vals: Array[String]) (i: Int) (n: Int) (code: String) (acc: Array[String]): MarshalEmit =
     if i >= args.len() || i >= vals.len() { MarshalEmit { code: code, vals: acc, n: n } }
     else {
@@ -3834,6 +3832,11 @@ let cg_marshal_args (p: CgProgram) (args: Array[typecheck.TExpr]) (vals: Array[S
             cg_marshal_args(p, args, vals, i + 1, n + 1,
                 code.concat("  ").concat(w).concat(" = zext i1 ").concat(cg_arg_val(vals[i])).concat(" to i32\n"),
                 acc.push("i32 ".concat(w)))
+        } else if cg_ty_eq(ty, CgCStr) {
+            let w = cg_reg(n);
+            cg_marshal_args(p, args, vals, i + 1, n + 1,
+                code.concat("  ${w} = getelementptr i8, ptr ${cg_arg_val(vals[i])}, i64 16\n"),
+                acc.push("ptr ${w}"))
         } else { cg_marshal_args(p, args, vals, i + 1, n, code, acc.push(vals[i])) }
     }
 
@@ -3844,17 +3847,14 @@ let cg_arg_val (operand: String): String = {
     parts[parts.len() - 1]
 }
 
-// `s.as_cstr()` -- the bytes of a string cell, which the runtime always
-// keeps NUL-terminated (see runtime.plum's own note on why every string
-// carries a trailing NUL the length never counts). So this is a pointer
-// adjustment, not a copy, and the result BORROWS from the string: it
-// stays valid exactly as long as that cell does.
+// Retag an OWNED String/Bytes reference. No wrapper allocation or byte copy:
+// CStr participates in the same Perceus moves, duplicates and drops as its
+// source. The backing cell stays alive even when this value is stored/returned.
 let cg_as_cstr (p: CgProgram) (env: Array[CgSlot]) (n: Int) (inner: typecheck.TExpr): Emit = {
-    let b = cg_borrow(p, env, n, inner);
-    let reg = cg_reg(b.n);
+    let b = cg_expr(p, env, n, inner);
     Emit {
-        code: b.code.concat("  ").concat(reg).concat(" = getelementptr i8, ptr ").concat(b.val).concat(", i64 16\n").concat(b.drop),
-        allocas: b.allocas, releases: b.releases, globals: b.globals, val: reg, ty: CgCStr, n: b.n + 1,
+        code: b.code, allocas: b.allocas, releases: b.releases, globals: b.globals,
+        val: b.val, ty: CgCStr, n: b.n,
     }
 }
 
@@ -3863,10 +3863,15 @@ let cg_as_cstr (p: CgProgram) (env: Array[CgSlot]) (n: Int) (inner: typecheck.TE
 // static buffer, a stack temporary, or freed on the next call.
 let cg_as_string (p: CgProgram) (env: Array[CgSlot]) (n: Int) (inner: typecheck.TExpr): Emit = {
     let b = cg_expr(p, env, n, inner);
-    let reg = cg_reg(b.n);
+    let managed = cg_ty_eq(b.ty, CgCStr);
+    let data = cg_reg(b.n);
+    let reg = cg_reg(b.n + 1);
+    let pointer = if managed { data } else { b.val };
     Emit {
-        code: b.code.concat("  ").concat(reg).concat(" = call ptr @plum_cstr_to_string(ptr ").concat(b.val).concat(")\n"),
-        allocas: b.allocas, releases: b.releases, globals: b.globals, val: reg, ty: CgStr, n: b.n + 1,
+        code: b.code.concat(if managed { "  ${data} = getelementptr i8, ptr ${b.val}, i64 16\n" } else { "" })
+            .concat("  ${reg} = call ptr @plum_cstr_to_string(ptr ${pointer})\n")
+            .concat(if managed { cg_dec(ITCStr, b.val) } else { "" }),
+        allocas: b.allocas, releases: b.releases, globals: b.globals, val: reg, ty: CgStr, n: b.n + 2,
     }
 }
 
@@ -5581,6 +5586,7 @@ let cg_zero_of (t: CgTy): String =
         CgUnit => "0",
         CgStr => "null",
         CgCStr => "null",
+        CgRawCStr => "null",
         CgBytes => "null",
         CgStruct(_) => "null",
         CgEnum(_) => "null",
@@ -6175,7 +6181,7 @@ let cg_eq_sym (t: typecheck.ITy): String = "@plum_eq_".concat(cg_ity_mangle(t))
 // Is this type compared by VALUE inline, or does it need a function?
 let cg_eq_is_primitive (t: typecheck.ITy): Bool =
     match t {
-        ITInt => true, ITFloat => true, ITBool => true, ITUnit => true, ITStr => true, ITCStr => true,
+        ITInt => true, ITFloat => true, ITBool => true, ITUnit => true, ITStr => true, ITCStr => true, ITRawCStr => true,
         // Compared by the same length-then-`memcmp` the runtime already
         // does for a String, so it needs no generated function.
         ITBytes => true,
@@ -6316,6 +6322,7 @@ let cg_render_val (owner: typecheck.ITy) (t: typecheck.ITy) (val: String) (n: In
         // Unreachable in practice: `.to_string()` on a `CStr` is
         // rejected in `cg_to_string`, so nothing gets this far with one.
         ITCStr => StrEmit { code: "", consts: cg_sfmt_const(owner, n, "<cstr>"), val: cg_sfmt_sym(owner, n), n: n + 1 },
+        ITRawCStr => StrEmit { code: "", consts: cg_sfmt_const(owner, n, "<raw-cstr>"), val: cg_sfmt_sym(owner, n), n: n + 1 },
         // Unreachable for the same reason as `ITCStr` above: rejected in
         // `cg_to_string`, and before that by the checker. Present so a
         // `Bytes` nested inside a struct being rendered has a defined
@@ -6799,14 +6806,10 @@ let cg_rc_enabled (unit: Unit): Bool = true
 let cg_is_heap (t: CgTy): Bool =
     match t {
         CgInt => false, CgFloat => false, CgBool => false, CgUnit => false,
-        // NOT heap: a `CStr` is a borrowed `char*`, owned by whatever
-        // produced it -- a string cell that outlives the call, or the C
-        // side. Nothing here increments or frees one.
-        CgCStr => false,
+        // CStr shares String/Bytes ownership. RawCStr belongs to native code.
+        CgCStr => true,
+        CgRawCStr => false,
         CgHandle(_) => true,
-        // Heap, unlike `CgCStr` above and for the opposite reason: a
-        // `Bytes` IS a refcounted cell -- the same one a `String` is --
-        // so it is incremented, released and freed like any other.
         CgBytes => true,
         CgStr => true, CgStruct(_) => true, CgEnum(_) => true, CgArray(_) => true, CgClosure(_, _) => true, CgRef(_) => true,
         CgTuple(_) => true,
@@ -6933,7 +6936,7 @@ let cg_dec (t: typecheck.ITy) (val: String): String =
 let cg_rel_sym (t: typecheck.ITy): String =
     // A `Bytes` owns nothing either, and its cell is a string cell, so
     // it releases through the same runtime function.
-    match t { ITStr => "@plum_rel_str", ITBytes => "@plum_rel_str", _ => "@plum_rel_".concat(cg_ity_mangle(t)) }
+    match t { ITStr => "@plum_rel_str", ITBytes => "@plum_rel_str", ITCStr => "@plum_rel_str", _ => "@plum_rel_".concat(cg_ity_mangle(t)) }
 
 // Types needing a generated release function, transitively. Same
 // `seen`-guarded closure as `cg_eq_close`, and terminating for the same
@@ -6941,7 +6944,7 @@ let cg_rel_sym (t: typecheck.ITy): String =
 let cg_rel_close (p: CgProgram) (t: typecheck.ITy) (acc: Array[typecheck.ITy]): Array[typecheck.ITy] =
     if !cg_rc_enabled(()) { acc }
     else if !cg_is_heap(cg_of_ity(t)) { acc }
-    else if match t { ITStr => true, ITBytes => true, _ => false } { acc }
+    else if match t { ITStr => true, ITBytes => true, ITCStr => true, _ => false } { acc }
     else if cg_type_seen(REL_TYPES, t) { acc }
     else {
         match t {
@@ -7491,8 +7494,9 @@ let cg_of_ann (t: parser.Ty): CgTy =
             else if name == "Float" { CgFloat }
             else if name == "Bool" { CgBool }
             else if name == "CStr" { CgCStr }
+            else if name == "RawCStr" { CgRawCStr }
             else if name == "Unit" { CgUnit }
-            else { { cg_fail("extern declarations can only use Int/Float/Bool/CStr/Unit, found ".concat(name)); CgInt } }
+            else { { cg_fail("extern declarations can only use Int/Float/Bool/CStr/RawCStr/Unit, found ".concat(name)); CgInt } }
         },
         _ => { cg_fail("extern declarations can only use simple types"); CgInt },
     }

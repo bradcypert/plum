@@ -6,13 +6,13 @@ use Time;
 use treefs;
 
 extern "C" {
-    fn plum_cache_hash_text(text: CStr, size: Int) -> CStr;
-    fn plum_cache_hash_file(path: CStr) -> CStr;
-    fn plum_cache_hash_file_hex(path: CStr) -> CStr;
+    fn plum_cache_hash_text(text: CStr, size: Int) -> RawCStr;
+    fn plum_cache_hash_file(path: CStr) -> RawCStr;
+    fn plum_cache_hash_file_hex(path: CStr) -> RawCStr;
     fn plum_cache_copy(src: CStr, dst: CStr, digest: CStr) -> Int;
-    fn plum_cache_temp(root: CStr) -> CStr;
+    fn plum_cache_temp(root: CStr) -> RawCStr;
     fn plum_cache_prune(root: CStr, limit: Int) -> Int;
-    fn plum_cache_tool(name: CStr) -> CStr;
+    fn plum_cache_tool(name: CStr) -> RawCStr;
 }
 
 pub let hash (text: String): String = unsafe { plum_cache_hash_text(text.as_cstr(), text.len()).as_string() }

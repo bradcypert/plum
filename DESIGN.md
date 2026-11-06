@@ -5,6 +5,38 @@ behind them. See `VISION.md` for the short pitch. This document exists so
 future discussion doesn't have to re-derive reasoning that's already been
 worked through.
 
+## CStr ownership in the self-hosted compiler — Decided
+
+CStr is an owned view of a String/Bytes cell. The view is a retagged owner,
+not a separately allocated wrapper: existing Perceus duplication, moves,
+aggregate ownership and releases apply. Only native marshalling derives the
+interior `char*`; an extern call borrows it and the caller releases its argument
+reference afterward. Plum calls transfer ownership normally, including tail
+calls. This replaces source-name pinning and avoids a separate lifetime system
+for temporary expressions.
+
+Native results use RawCStr, a distinct unmanaged pointer. A native return cannot
+manufacture an owned CStr, and a returned raw pointer does not inherit the owners
+of its inputs. Copying raw text/binary data is explicit and unsafe; ownership,
+mutation and retention of native buffers remain separate contracts (#439).
+This supersedes historical CStr lowering descriptions below. The current
+interface and migration are documented in [LANGUAGE.md](LANGUAGE.md#ffi).
+
+We considered scoped temporary owners, explicit named owners, an inline
+pointer/owner pair, and a boxed view. Scoped owners require escape tracking and
+post-call cleanup that can prevent tail calls; named owners shift the problem
+to callers. A pair widens values and aggregates, while a box adds an allocation
+per conversion. Reusing the existing cell handles storage and returns with no
+view allocation or width change. Native pointers stay visibly unmanaged rather
+than hiding nullable ownership inside CStr. Keeping backing storage alive can
+prevent uniqueness-based updates and increase retained bytes; those are explicit
+aliasing costs, measured by the memory diagnostics tests.
+
+This applies the owned/borrowed resource distinction in the
+[Perceus paper, §3.2](https://www.microsoft.com/en-us/research/wp-content/uploads/2020/11/perceus-tr-v4.pdf).
+The CStr/RawCStr interface is a Plum design choice, not a foreign-pointer policy
+specified by the paper.
+
 Status markers: **Decided** (working assumption, revisit only with a
 concrete reason), **Leaning** (recommended direction, not yet exercised
 against real code), **Open** (genuinely unresolved).

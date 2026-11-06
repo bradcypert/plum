@@ -521,6 +521,7 @@ let resolve_named (ctx: TyContext) (viewer: String) (in_scope: Array[String]) (n
     else if name == "Bool" { check_type_arity(name, 0, args.len()); ITBool }
     else if name == "String" { check_type_arity(name, 0, args.len()); ITStr }
     else if name == "CStr" { check_type_arity(name, 0, args.len()); ITCStr }
+    else if name == "RawCStr" { check_type_arity(name, 0, args.len()); ITRawCStr }
     else if name == "Bytes" { check_type_arity(name, 0, args.len()); ITBytes }
     else if name == "Unit" { check_type_arity(name, 0, args.len()); ITUnit }
     else if name == "Array" { check_type_arity(name, 1, args.len()); ITStruct("Array", args) }

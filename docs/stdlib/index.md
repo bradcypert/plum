@@ -319,7 +319,7 @@ Every declaration, linked to the page that documents it.
 - [`let Bytes.concat (a: Bytes) (b: Bytes): Bytes`](prelude.Bytes.md#Bytes.concat)
 - [`let Bytes.at (b: Bytes) (i: Int): Option[Int]`](prelude.Bytes.md#Bytes.at)
 - [`let Bytes.from_array (xs: Array[Int]): Bytes`](prelude.Bytes.md#Bytes.from_array)
-- [`let Bytes.from_cstr (c: CStr) (len: Int): Bytes`](prelude.Bytes.md#Bytes.from_cstr)
+- [`let Bytes.from_cstr (c: RawCStr) (len: Int): Bytes`](prelude.Bytes.md#Bytes.from_cstr)
 - [`let Bytes.to_array (b: Bytes): Array[Int]`](prelude.Bytes.md#Bytes.to_array)
 - [`let Bytes.to_hex (b: Bytes): String`](prelude.Bytes.md#Bytes.to_hex)
 - [`let Bytes.as_cstr (self: Bytes): CStr`](prelude.Bytes.md#Bytes.as_cstr)
@@ -406,6 +406,10 @@ Every declaration, linked to the page that documents it.
 - [`let Option.map (o: Option[T]) (f: (T) -> U): Option[U]`](prelude.Option.md#Option.map)
 - [`let Option.and_then (o: Option[T]) (f: (T) -> Option[U]): Option[U]`](prelude.Option.md#Option.and_then)
 - [`let Option.ok_or (o: Option[T]) (err: E): Result[T, E]`](prelude.Option.md#Option.ok_or)
+
+### [prelude.RawCStr](prelude.RawCStr.md)
+
+- [`let RawCStr.as_string (self: RawCStr): String`](prelude.RawCStr.md#RawCStr.as_string)
 
 ### [prelude.Receiver](prelude.Receiver.md)
 

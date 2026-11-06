@@ -4,7 +4,7 @@ extern "C" {
     fn plum_cache_safe_ast(ast: CStr) -> Int;
     fn plum_cache_safe_ir(ir: CStr) -> Int;
     fn plum_cache_safe_c_ir(ir: CStr) -> Int;
-    fn plum_cache_windows_fingerprint(tool: CStr) -> CStr;
+    fn plum_cache_windows_fingerprint(tool: CStr) -> RawCStr;
 }
 
 pub let safe_ast (ast: String): Bool = unsafe { plum_cache_safe_ast(ast.as_cstr()) == 1 }

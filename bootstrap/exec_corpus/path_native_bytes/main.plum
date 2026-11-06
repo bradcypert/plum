@@ -1,8 +1,8 @@
 use Path;
 
 extern "C" {
-    fn native_path_bytes() -> CStr;
-    fn native_path_leaf() -> CStr;
+    fn native_path_bytes() -> RawCStr;
+    fn native_path_leaf() -> RawCStr;
 }
 
 let main (): Unit = {

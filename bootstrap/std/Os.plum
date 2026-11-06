@@ -14,7 +14,7 @@ let os_rename_file_raw (from: String) (to: String): Int = 0
 let os_remove_tree_raw (path: String): Int = 0
 let os_copy_tree_raw (src: String) (dst: String): Int = 0
 let os_platform_raw (ignored: Bool): String = ""
-extern "C" { fn plum_tree_last_error() -> CStr; }
+extern "C" { fn plum_tree_last_error() -> RawCStr; }
 
 /// Which platform this program is running on: "linux", "macos" or
 /// "windows". Compiled in, not detected at runtime; a binary
@@ -229,7 +229,7 @@ extern "C" {
     fn file_close(h: Int);
     fn file_close_checked(h: Int) -> Int;
     fn file_read_n(h: Int, max_len: Int) -> Int;
-    fn file_read_data() -> CStr;
+    fn file_read_data() -> RawCStr;
     fn file_write(h: Int, buf: CStr, len: Int) -> Int;
     fn file_seek(h: Int, offset: Int, whence: Int) -> Int;
     fn file_flush(h: Int) -> Int;
@@ -366,11 +366,11 @@ pub let run_process (program: String) (args: Array[String]): Result[ProcessResul
 // the rest was reachable only through the private C shims the
 // language server uses.
 extern "C" {
-    fn os_cwd() -> CStr;
+    fn os_cwd() -> RawCStr;
     fn os_chdir(path: CStr) -> Int;
     fn stdin_read_owned(max: Int, timeout_nanos: Int, line: Int) -> Int;
     fn stdin_result_len(result: Int) -> Int;
-    fn stdin_result_data(result: Int) -> CStr;
+    fn stdin_result_data(result: Int) -> RawCStr;
     fn stdin_result_release(result: Int);
     fn stderr_write(s: CStr) -> Unit;
 }
@@ -564,7 +564,7 @@ let path_is_dir_raw (path: String): Int = 0
 extern "C" {
     fn dir_open(path: CStr) -> Int;
     fn dir_next_size(handle: Int) -> Int;
-    fn dir_entry_data(handle: Int) -> CStr;
+    fn dir_entry_data(handle: Int) -> RawCStr;
     fn dir_close(handle: Int) -> Unit;
 }
 

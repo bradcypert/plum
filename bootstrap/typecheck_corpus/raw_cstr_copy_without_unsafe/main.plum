@@ -1,0 +1,2 @@
+extern "C" { fn source() -> RawCStr; }
+let main (): Unit = { let pointer = unsafe { source() }; println(pointer.as_string()) }

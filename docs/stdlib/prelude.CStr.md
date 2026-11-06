@@ -6,6 +6,6 @@ Part of [`prelude`](prelude.md).
 
 ## `let CStr.as_string (self: CStr): String`
 
-A NUL-terminated C pointer copied into a Plum string. Only valid inside `unsafe`, and the pointer must really be NUL-terminated.
+Copy bytes through the first NUL into a String. Requires unsafe and valid UTF-8.
 
 Implemented by the compiler itself, so it has no Plum source to read.

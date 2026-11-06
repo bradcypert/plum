@@ -16,7 +16,7 @@ extern "C" {
     fn shim_scale(x: Float, f: Float) -> Float;
     fn shim_is_even(n: Int) -> Bool;
     fn shim_strlen(s: CStr) -> Int;
-    fn shim_greeting() -> CStr;
+    fn shim_greeting() -> RawCStr;
     fn shim_noop();
     fn shim_returns_two() -> Bool;
     fn shim_takes_bool(b: Bool) -> Int;

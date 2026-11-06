@@ -4,10 +4,10 @@ extern "C" {
     fn http_test_reset(split: Int, limit: Int, fail_read: Int, stop_write: Int) -> Unit;
     fn http_test_input(data: CStr, len: Int) -> Unit;
     fn http_test_written() -> Int;
-    fn http_test_output() -> CStr;
+    fn http_test_output() -> RawCStr;
     fn http_test_largest_read() -> Int;
     fn http_test_allocated_bytes() -> Int;
-    fn http_test_large_body() -> CStr;
+    fn http_test_large_body() -> RawCStr;
 }
 let test_tcp_read (fd: Int) (max_len: Int): Result[Bytes, String] = unsafe {
     let n = http_test_recv_n(fd, max_len);

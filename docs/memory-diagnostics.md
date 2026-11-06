@@ -1,5 +1,18 @@
 # Sanitizer builds and memory measurements
 
+CStr shares an existing String/Bytes cell and owns a reference to it. Creating
+or transferring a CStr allocates no wrapper or byte copy. Its backing cell
+remains live until the last owner is dropped, and an outstanding CStr can
+prevent an alias from being updated in place. That retention and any resulting
+copy-on-write allocation are real costs, visible in live/peak cells and bytes.
+Dropping the last owner releases the cell through the normal allocator path.
+The compiler's existing conservative loop analysis can retain a local until
+overwrite or function cleanup; repeated conversions must remain bounded, and
+completed function calls must restore the caller's live-byte baseline.
+RawCStr carries no owner and its native storage is excluded from these counts.
+An outstanding raw pointer cannot prevent release or reuse: copy while its
+native owner is valid. See [the FFI contract](../LANGUAGE.md#ffi).
+
 Use a source-built compiler containing the sanitizer build mode. Native Linux
 and macOS are supported with a Clang toolchain and its sanitizer runtimes;
 Windows and cross-target sanitizer builds are explicitly rejected. On macOS,

@@ -66,7 +66,7 @@ in front of every literal buffer.
 Bytes from numbers. Values outside 0-255 are truncated to their
 low eight bits.
 
-## `let Bytes.from_cstr (c: CStr) (len: Int): Bytes`
+## `let Bytes.from_cstr (c: RawCStr) (len: Int): Bytes`
 
 Copies `len` bytes from a C pointer.
 
@@ -90,6 +90,6 @@ reads it back.
 
 ## `let Bytes.as_cstr (self: Bytes): CStr`
 
-The bytes as a NUL-terminated pointer, for passing to an `extern` block's C functions. Only valid inside `unsafe`.
+An owned CStr sharing the bytes cell without copying; binary native calls still require an explicit length.
 
 Implemented by the compiler itself, so it has no Plum source to read.

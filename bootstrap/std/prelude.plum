@@ -761,7 +761,7 @@ pub let Bytes.from_array (xs: Array[Int]): Bytes = bytes_from_array_raw(xs)
 /// The way back in from C, and the counterpart to `.as_cstr()`.
 ///
 /// Takes an explicit LENGTH, which is the whole difference from
-/// `CStr.as_string()`: that one stops at the first NUL because a
+/// `RawCStr.as_string()`: that one stops at the first NUL because a
 /// `char*` alone cannot say how long it is, and any C API returning
 /// bytes has to hand back a count separately. Given the count, this
 /// is binary-safe. Given a wrong one, it reads whatever is
@@ -770,7 +770,7 @@ pub let Bytes.from_array (xs: Array[Int]): Bytes = bytes_from_array_raw(xs)
 /// COPIES into a fresh cell. C buffers are routinely static, reused
 /// on the next call, or freed by the callee; the copy is what makes
 /// the result an ordinary owned Plum value.
-let bytes_from_cstr_raw (c: CStr) (len: Int): Bytes = unsafe { bytes_from_cstr_raw(c, len) }
+let bytes_from_cstr_raw (c: RawCStr) (len: Int): Bytes = unsafe { bytes_from_cstr_raw(c, len) }
 /// Copies `len` bytes from a C pointer.
 ///
 /// Requires an `unsafe` block and all arguments at the call site;
@@ -781,7 +781,7 @@ let bytes_from_cstr_raw (c: CStr) (len: Int): Bytes = unsafe { bytes_from_cstr_r
 /// Nonpositive lengths return empty bytes without reading `c`.
 /// The result owns a fresh copy, including any embedded NUL bytes;
 /// the source is neither retained nor freed.
-pub let Bytes.from_cstr (c: CStr) (len: Int): Bytes = unsafe {
+pub let Bytes.from_cstr (c: RawCStr) (len: Int): Bytes = unsafe {
     if len <= 0 { Bytes.empty() } else { bytes_from_cstr_raw(c, len) }
 }
 

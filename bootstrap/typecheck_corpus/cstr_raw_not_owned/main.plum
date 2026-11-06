@@ -1,0 +1,2 @@
+extern "C" { fn foreign() -> RawCStr; }
+let main (): Unit = unsafe { let pointer: CStr = foreign(); () }

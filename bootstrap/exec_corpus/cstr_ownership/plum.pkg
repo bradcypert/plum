@@ -1,0 +1,1 @@
+Package { name: "cstr_ownership", native_deps: [] }
