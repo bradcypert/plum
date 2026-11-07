@@ -1872,19 +1872,21 @@ let cg_if (p: CgProgram) (env: Array[CgSlot]) (n: Int) (cond: typecheck.TExpr) (
     };
     let res = cg_reg(e.n);
     let lty = cg_llvm_ty(ty);
-    let code = c.code
-        .concat("  br i1 ").concat(c.val).concat(", label %").concat(then_label).concat(", label %").concat(else_label).concat("\n")
-        .concat(then_label).concat(":\n")
-        .concat(t.code)
-        .concat("  store ").concat(lty).concat(" ").concat(t.val).concat(", ptr ").concat(slot).concat("\n")
-        .concat("  br label %").concat(end_label).concat("\n")
-        .concat(else_label).concat(":\n")
-        .concat(e.code)
-        .concat("  store ").concat(lty).concat(" ").concat(e.val).concat(", ptr ").concat(slot).concat("\n")
-        .concat("  br label %").concat(end_label).concat("\n")
-        .concat(end_label).concat(":\n")
-        .concat("  ").concat(res).concat(" = load ").concat(lty).concat(", ptr ").concat(slot).concat("\n");
-    Emit { code: code, allocas: "  ${slot} = alloca ${lty}\n${c.allocas}${t.allocas}${e.allocas}", releases: c.releases.concat(t.releases).concat(e.releases), globals: c.globals.concat(t.globals).concat(e.globals), val: res, ty: ty, n: e.n + 1 }
+    let code = cg_join_text([
+        c.code,
+        "  br i1 ", c.val, ", label %", then_label, ", label %", else_label, "\n",
+        then_label, ":\n",
+        t.code,
+        "  store ", lty, " ", t.val, ", ptr ", slot, "\n",
+        "  br label %", end_label, "\n",
+        else_label, ":\n",
+        e.code,
+        "  store ", lty, " ", e.val, ", ptr ", slot, "\n",
+        "  br label %", end_label, "\n",
+        end_label, ":\n",
+        "  ", res, " = load ", lty, ", ptr ", slot, "\n",
+    ]);
+    Emit { code: code, allocas: cg_join_text(["  ${slot} = alloca ${lty}\n", c.allocas, t.allocas, e.allocas]), releases: cg_join_text([c.releases, t.releases, e.releases]), globals: cg_join_text([c.globals, t.globals, e.globals]), val: res, ty: ty, n: e.n + 1 }
 }
 
 // --- for loops ---
@@ -5331,37 +5333,34 @@ let cg_match (p: CgProgram) (env: Array[CgSlot]) (n: Int) (scrutinee: typecheck.
     // leaves by a tail self-call never reaches the merge below, where
     // `sc.drop` is emitted, so it has to run it itself. PREPENDED, so
     // the innermost drop still goes first.
-    let a = cg_match_arms(p, inner, sc.n + 3, arms, 0, sc.val, sity, slot, lty, end_label, fail_label, "", "", "", "", tail, drop.concat(pending), if reset && !deferred { owner } else { "" }, if reserve { token } else { "" });
+    let a = cg_match_arms(p, inner, sc.n + 3, arms, 0, sc.val, sity, slot, lty, end_label, fail_label, [], [], [], [], tail, drop.concat(pending), if reset && !deferred { owner } else { "" }, if reserve { token } else { "" });
     let res = cg_reg(a.n);
-    let code = sc.code
-        .concat(if reset { "  store ptr ${sc.val}, ptr ${owner}\n" } else { "" })
-        .concat("  br label %").concat(cg_label(sc.n + 3)).concat("
-")
-        .concat(a.code)
-        .concat(fail_label).concat(":
-")
-        .concat("  store ").concat(lty).concat(" ").concat(cg_zero_of(body_ty)).concat(", ptr ").concat(slot).concat("
-")
+    let code = cg_join_text([
+        sc.code,
+        if reset { "  store ptr ${sc.val}, ptr ${owner}\n" } else { "" },
+        "  br label %", cg_label(sc.n + 3), "\n",
+        a.code,
+        fail_label, ":\n",
+        "  store ", lty, " ", cg_zero_of(body_ty), ", ptr ", slot, "\n",
         // This block RETURNS rather than aborting, so in tail position
         // it is a path like any other and owes its own pop. Unreachable
         // in a checked program -- the checker rejects a non-exhaustive
         // match -- but one instruction in a dead block is cheaper than
         // a caveat on "every path pops exactly once".
-        .concat(cg_tail_pop(p, tail))
-        .concat("  br label %").concat(end_label).concat("
-")
-        .concat(end_label).concat(":
-")
-        .concat("  ").concat(res).concat(" = load ").concat(lty).concat(", ptr ").concat(slot).concat("\n")
+        cg_tail_pop(p, tail),
+        "  br label %", end_label, "\n",
+        end_label, ":\n",
+        "  ", res, " = load ", lty, ", ptr ", slot, "\n",
         // The scrutinee was an owned temporary; the arms borrowed from
         // it and any bindings took their own references, so it is done.
-        .concat(drop);
+        drop,
+    ]);
     Emit {
         code: code,
-        allocas: "  ${slot} = alloca ${lty}\n${sc.allocas}${a.allocas}"
-            .concat(if reset { "  ${owner} = alloca ptr\n  store ptr null, ptr ${owner}\n" } else { "" })
-            .concat(if reserve { "  ${token} = alloca ptr\n  store ptr null, ptr ${token}\n" } else { "" }),
-        releases: sc.releases.concat(a.releases).concat(token_drop),
+        allocas: cg_join_text(["  ${slot} = alloca ${lty}\n", sc.allocas, a.allocas,
+            if reset { "  ${owner} = alloca ptr\n  store ptr null, ptr ${owner}\n" } else { "" },
+            if reserve { "  ${token} = alloca ptr\n  store ptr null, ptr ${token}\n" } else { "" }]),
+        releases: cg_join_text([sc.releases, a.releases, token_drop]),
         globals: sc.globals.concat(a.globals), val: res, ty: body_ty, n: a.n + 1,
     }
 }
@@ -5597,10 +5596,12 @@ let cg_arm_scoped (p: CgProgram) (sity: typecheck.ITy) (tail: Bool): Bool =
 // releases the pattern bindings and guard temporaries, then falls through.
 let cg_guard_fail_label (n: Int): String = "Lgf".concat(n.to_string())
 
+// Collect complete arm sections in discovery order. Owned array parameters
+// allow Perceus to reuse their storage; flatten only at the end of the match.
 struct ArmsEmit { code: String, allocas: String, releases: String, globals: String, n: Int }
 
-let cg_match_arms (p: CgProgram) (env: Array[CgSlot]) (n: Int) (arms: Array[typecheck.TArm]) (i: Int) (sval: String) (sity: typecheck.ITy) (slot: String) (lty: String) (end_label: String) (fail_label: String) (code: String) (allocas: String) (releases: String) (globals: String) (tail: Bool) (pending: String) (owner: String) (token: String): ArmsEmit =
-    if i >= arms.len() { ArmsEmit { code: code, allocas: allocas, releases: releases, globals: globals, n: n } }
+let cg_match_arms (p: CgProgram) (env: Array[CgSlot]) (n: Int) (arms: Array[typecheck.TArm]) (i: Int) (sval: String) (sity: typecheck.ITy) (slot: String) (lty: String) (end_label: String) (fail_label: String) (code: Array[String]) (allocas: Array[String]) (releases: Array[String]) (globals: Array[String]) (tail: Bool) (pending: String) (owner: String) (token: String): ArmsEmit =
+    if i >= arms.len() { ArmsEmit { code: cg_join_text(code), allocas: cg_join_text(allocas), releases: cg_join_text(releases), globals: cg_join_text(globals), n: n } }
     else {
         let test_label = cg_label(n);
         let pat = cg_pattern(p, env, n + 1, arms[i].pattern, sval, sity);
@@ -5613,19 +5614,17 @@ let cg_match_arms (p: CgProgram) (env: Array[CgSlot]) (n: Int) (arms: Array[type
                 // it, which is why the arm counter is threaded rather than
                 // derived.
                 let next_label = if i + 1 >= arms.len() { fail_label } else { cg_label(b.n) };
-                let this_code = test_label.concat(":
-")
-                    .concat(pat.code)
-                    .concat("  br i1 ").concat(pat.test).concat(", label %").concat(body_label).concat(", label %").concat(next_label).concat("
-")
-                    .concat(body_label).concat(":\n")
+                let this_code = cg_join_text([
+                    test_label, ":\n",
+                    pat.code,
+                    "  br i1 ", pat.test, ", label %", body_label, ", label %", next_label, "\n",
+                    body_label, ":\n",
                     // Only now is the arm known to match, so only now may its
                     // bindings be stored and take references.
-                    .concat(pat.binds)
-                    .concat(cg_match_reset(p, sity, owner, token, pat.n))
-                    .concat(b.code)
-                    .concat("  store ").concat(lty).concat(" ").concat(b.val).concat(", ptr ").concat(slot).concat("
-")
+                    pat.binds,
+                    cg_match_reset(p, sity, owner, token, pat.n),
+                    b.code,
+                    "  store ", lty, " ", b.val, ", ptr ", slot, "\n",
                     // An arm's BINDINGS are scoped to the arm, the same
                     // way a block's `let`s are scoped to the block --
                     // and this is the case that matters most in
@@ -5641,13 +5640,13 @@ let cg_match_arms (p: CgProgram) (env: Array[CgSlot]) (n: Int) (arms: Array[type
                     // `cg_block_ty` excludes it -- nothing may run after
                     // a `musttail`, so those releases are handed upward
                     // instead.
-                    .concat(if cg_arm_scoped(p, sity, tail) { pat.releases.concat(b.releases) } else { "" })
-                    .concat("  br label %").concat(end_label).concat("
-");
+                    if cg_arm_scoped(p, sity, tail) { pat.releases.concat(b.releases) } else { "" },
+                    "  br label %", end_label, "\n",
+                ]);
                 cg_match_arms(p, env, b.n, arms, i + 1, sval, sity, slot, lty, end_label, fail_label,
-                    code.concat(this_code), allocas.concat(pat.allocas).concat(b.allocas),
-                    if cg_arm_scoped(p, sity, tail) { releases } else { releases.concat(pat.releases).concat(b.releases) },
-                    globals.concat(pat.globals).concat(b.globals), tail, pending, owner, token)
+                    code.push(this_code), allocas.push(cg_join_text([pat.allocas, b.allocas])),
+                    if cg_arm_scoped(p, sity, tail) { releases } else { releases.push(cg_join_text([pat.releases, b.releases])) },
+                    globals.push(cg_join_text([pat.globals, b.globals])), tail, pending, owner, token)
             },
             // `Rect(a, b) if a.x == b.x => ..` — the tag matched, but the
             // arm still has to earn the body. This emitter used to drop
@@ -5675,18 +5674,17 @@ let cg_match_arms (p: CgProgram) (env: Array[CgSlot]) (n: Int) (arms: Array[type
                 // arm runs, so the body still follows it.
                 let b = cg_expr_t(p, pat.env, g.n + 1, arms[i].body, tail, pending);
                 let next_label = if i + 1 >= arms.len() { fail_label } else { cg_label(b.n) };
-                let this_code = test_label.concat(":
-")
-                    .concat(pat.code)
-                    .concat("  br i1 ").concat(pat.test).concat(", label %").concat(guard_label).concat(", label %").concat(next_label).concat("
-")
-                    .concat(guard_label).concat(":\n")
+                let this_code = cg_join_text([
+                    test_label, ":\n",
+                    pat.code,
+                    "  br i1 ", pat.test, ", label %", guard_label, ", label %", next_label, "\n",
+                    guard_label, ":\n",
                     // The guard READS the arm's bindings, so they have to
                     // be stored before it runs rather than in the body
                     // block. Both guard outcomes must release those slots
                     // when the arm owns its cleanup.
-                    .concat(pat.binds)
-                    .concat(g.code)
+                    pat.binds,
+                    g.code,
                     // A guarded arm has TWO ways out, and the bindings
                     // are already stored and incremented on both: the
                     // guard runs AFTER `pat.binds`, because it is
@@ -5700,27 +5698,25 @@ let cg_match_arms (p: CgProgram) (env: Array[CgSlot]) (n: Int) (arms: Array[type
                     // slot (`%s1_end`), and SSA names are unique across
                     // a whole function, not per block. `pat.n` is unique
                     // per arm, so it makes a safe suffix.
-                    .concat("  br i1 ").concat(g.val).concat(", label %").concat(body_label).concat(", label %")
-                    .concat(if cg_arm_scoped(p, sity, tail) { cg_guard_fail_label(pat.n) } else { next_label }).concat("
-")
-                    .concat(if cg_arm_scoped(p, sity, tail) {
+                    "  br i1 ", g.val, ", label %", body_label, ", label %",
+                    if cg_arm_scoped(p, sity, tail) { cg_guard_fail_label(pat.n) } else { next_label }, "\n",
+                    if cg_arm_scoped(p, sity, tail) {
                         cg_guard_fail_label(pat.n).concat(":\n")
                             .concat(String.replace(guarded_releases, "_end", "_end.g".concat(pat.n.to_string())))
                             .concat("  br label %").concat(next_label).concat("\n")
-                    } else { "" })
-                    .concat(body_label).concat(":\n")
-                    .concat(cg_match_reset(p, sity, owner, token, pat.n))
-                    .concat(b.code)
-                    .concat("  store ").concat(lty).concat(" ").concat(b.val).concat(", ptr ").concat(slot).concat("
-")
-                    .concat(if cg_arm_scoped(p, sity, tail) { guarded_releases.concat(b.releases) } else { "" })
-                    .concat("  br label %").concat(end_label).concat("
-");
+                    } else { "" },
+                    body_label, ":\n",
+                    cg_match_reset(p, sity, owner, token, pat.n),
+                    b.code,
+                    "  store ", lty, " ", b.val, ", ptr ", slot, "\n",
+                    if cg_arm_scoped(p, sity, tail) { guarded_releases.concat(b.releases) } else { "" },
+                    "  br label %", end_label, "\n",
+                ]);
                 cg_match_arms(p, env, b.n, arms, i + 1, sval, sity, slot, lty, end_label, fail_label,
-                    code.concat(this_code),
-                    allocas.concat(pat.allocas).concat(g.allocas).concat(b.allocas),
-                    if cg_arm_scoped(p, sity, tail) { releases } else { releases.concat(guarded_releases).concat(b.releases) },
-                    globals.concat(pat.globals).concat(g.globals).concat(b.globals), tail, pending, owner, token)
+                    code.push(this_code),
+                    allocas.push(cg_join_text([pat.allocas, g.allocas, b.allocas])),
+                    if cg_arm_scoped(p, sity, tail) { releases } else { releases.push(cg_join_text([guarded_releases, b.releases])) },
+                    globals.push(cg_join_text([pat.globals, g.globals, b.globals])), tail, pending, owner, token)
             },
         }
     }

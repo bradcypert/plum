@@ -1,0 +1,40 @@
+enum Choice { Text(String), Missing }
+
+let record (events: Ref[Array[String]]) (text: String): String = {
+    events.set(events.get().push(text));
+    text
+}
+
+let choose (events: Ref[Array[String]]) (input: Choice) (accept: Bool): String =
+    match input {
+        Text(s) if { record(events, "guard"); accept } => {
+            let suffix = if s == "α" { "\x00🙂" } else { "中" };
+            let finish = |text| text.concat(suffix);
+            record(events, finish(s))
+        },
+        Text(s) => record(events, s.concat("-fallback")),
+        Missing => record(events, "missing"),
+    }
+
+let bounce (n: Int) (value: String): String =
+    if n == 0 { value } else {
+        match n % 2 {
+            0 if n > 1 => bounce(n - 1, value),
+            _ => bounce(n - 1, value),
+        }
+    }
+
+let main (): Unit = {
+    let events: Ref[Array[String]] = ref([]);
+    assert_eq(choose(events, Text("α"), true), "α\x00🙂");
+    assert_eq(choose(events, Text("β"), false), "β-fallback");
+    assert_eq(choose(events, Text("x"), true), "x中");
+    assert_eq(choose(events, Missing, true), "missing");
+    let skipped = if false { record(events, "wrong") } else { "skipped" };
+    assert_eq(skipped, "skipped");
+    if false { record(events, "wrong"); };
+    if true { record(events, "unit"); };
+    assert_eq(events.get(), ["guard", "α\x00🙂", "guard", "β-fallback", "guard", "x中", "missing", "unit"]);
+    assert_eq(bounce(20000, "alive"), "alive");
+    println("branch emission preserves guards, sections, effects and tail calls")
+}
