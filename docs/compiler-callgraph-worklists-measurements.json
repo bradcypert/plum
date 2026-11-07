@@ -633,5 +633,6 @@
       "stdout_bytes": 32234073,
       "stdout_sha256": "6ee8bcbc9d6cc9736bb587808e9192f737f65bb92ce311737fdae3f4e1307f82"
     }
-  ]
+  ],
+  "wide_graph_method": "The same ordinary before/after binaries listed above process the same generated source files at each width, in debug and release. Each pair has identical IR hashes. These samples follow timing measurements."
 }
