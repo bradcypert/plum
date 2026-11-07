@@ -26,11 +26,11 @@ def main():
                     # first assignment, with a null old cell.
                     source += 'let made (): Array[String] = [\n' + values + '\n]\n'
                     source += 'let main (): Unit = { let xs = made(); '
-                    function = b'plum_made'
+                    function = b'plum.f..made.0.'
                     expected_call = b'call ptr @plum_array_new('
                 else:
                     source += 'let main (): Unit = { let mut xs = [identity("seed")];\nxs = [\n' + values + '\n];\n'
-                    function = b'plum_main'
+                    function = b'plum.f..main.0.'
                     expected_call = b'call ptr @plum_array_reuse('
                 source += f'assert_eq(xs.len(), {width}); println("ok") }}\n'
                 (project / 'main.plum').write_text(source)
@@ -40,7 +40,7 @@ def main():
                     if result.returncode:
                         sys.stderr.buffer.write(result.stdout + result.stderr)
                         raise RuntimeError(f'{kind} {width} {mode}: emission failed')
-                    body = re.search(rb'^define[^\n]*@' + function + rb'\([^\n]*\{(.*?)^\}',
+                    body = re.search(rb'^define[^\n]*@' + re.escape(function) + rb'\([^\n]*\{(.*?)^\}',
                                      result.stdout, re.M | re.S)
                     if body is None or expected_call not in body[1]:
                         raise RuntimeError(f'{kind} {width} {mode}: fixture did not exercise its literal path')

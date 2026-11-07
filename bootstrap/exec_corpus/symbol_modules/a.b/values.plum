@@ -1,0 +1,6 @@
+pub struct Value { pub number: Int }
+pub let LIMIT: Int = 12
+pub let value (): Int = 11
+pub let make (): Value = Value { number: value() }
+pub let limit (): Int = LIMIT
+pub let plus (n: Int): Int = n + value()

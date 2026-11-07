@@ -283,14 +283,15 @@ fi
 # The precise question -- does one address resolve to the right line --
 # where a tool that answers it exists.
 if command -v addr2line > /dev/null 2>&1 && [ -f "$work/p.bin" ]; then
-    addr="$(nm "$work/p.bin" 2>/dev/null | grep -E ' T plum_top$' | head -n 1 | awk '{print $1}')"
+    addr="$(nm "$work/p.bin" 2>/dev/null | grep -E ' T _?plum\.f\.\.top\.0\.$' | head -n 1 | awk '{print $1}')"
     if [ -z "$addr" ]; then
-        echo "  (skipped addr2line: no plum_top symbol -- stripped?)"
+        echo "FAIL: expected generated top symbol is missing" >&2
+        fail=1
     else
         line="$(addr2line -e "$work/p.bin" "0x$addr" 2>/dev/null)"
         case "$line" in
             *main.plum:2) ;;
-            *) echo "FAIL: addr2line puts plum_top at '$line', expected main.plum:2" >&2; fail=1 ;;
+            *) echo "FAIL: addr2line puts top at '$line', expected main.plum:2" >&2; fail=1 ;;
         esac
     fi
 fi

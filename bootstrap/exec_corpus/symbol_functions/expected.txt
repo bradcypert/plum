@@ -1,0 +1,1 @@
+specializations, associated functions and runtime helpers cannot collide with ordinary functions

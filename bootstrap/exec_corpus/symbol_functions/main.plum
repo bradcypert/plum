@@ -1,0 +1,19 @@
+struct Point { value: Int }
+
+let id[T] (value: T): T = value
+let id__Int (): String = "ordinary function"
+let Point.add (p: Point): Int = p.value + 1
+let Point_add (): Int = 41
+let str_eq (): Int = 42
+let rel_Point (): Int = 43
+
+let main (): Unit = {
+    assert_eq(id(12), 12);
+    assert_eq(id__Int(), "ordinary function");
+    assert_eq(Point { value: 4 }.add(), 5);
+    assert_eq(Point_add(), 41);
+    assert_eq(str_eq(), 42);
+    assert_eq(rel_Point(), 43);
+    assert("native string equality" == "native string equality");
+    println("specializations, associated functions and runtime helpers cannot collide with ordinary functions")
+}

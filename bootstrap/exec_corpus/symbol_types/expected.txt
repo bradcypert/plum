@@ -1,0 +1,1 @@
+nominal types and nested generic shapes have distinct equality, hash, render and release helpers

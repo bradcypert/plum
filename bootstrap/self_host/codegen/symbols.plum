@@ -1,0 +1,147 @@
+// Generated identities are separate from C extern names and runtime helpers.
+// A name atom contains ASCII letters/digits/underscore or $hh byte escapes;
+// '.' terminates an atom. Escaping '$' itself makes the encoding injective.
+// Type tags and list arities make the recursive type grammar unambiguous.
+let cg_symbol_byte_ok (b: Int): Bool =
+    (b >= 65 && b <= 90) || (b >= 97 && b <= 122) || (b >= 48 && b <= 57) || b == 95
+
+let CG_SYMBOL_HEX: Array[String] = ["0", "1", "2", "3", "4", "5", "6", "7", "8", "9", "a", "b", "c", "d", "e", "f"]
+
+let cg_symbol_atom (name: String): String = {
+    let bytes = name.as_bytes();
+    let values = bytes.to_array();
+    let mut start = 0;
+    let mut parts: Array[String] = [];
+    for i in 0..values.len() {
+        let b = values[i];
+        if !cg_symbol_byte_ok(b) {
+            if i > start { parts = parts.push(cg_symbol_ascii(bytes, start, i)); };
+            parts = parts.push("$").push(CG_SYMBOL_HEX[b / 16]).push(CG_SYMBOL_HEX[b % 16]);
+            start = i + 1;
+        };
+    };
+    if start == 0 { name }
+    else {
+        if start < values.len() { parts = parts.push(cg_symbol_ascii(bytes, start, values.len())); };
+        Array.concat_all(parts)
+    }
+}
+
+// Runs between escapes contain only ASCII, hence are valid UTF-8. Byte slicing
+// avoids String.slice's character array and cannot split a retained codepoint.
+let cg_symbol_ascii (bytes: Bytes) (start: Int) (end: Int): String =
+    match bytes.slice(start, end).as_string() {
+        Ok(text) => text,
+        Err(_) => { cg_fail("internal: non-ASCII symbol run"); "" },
+    }
+
+// The module and function/associated-function name are separate atoms. The
+// namespace cannot overlap plum_* runtime or generated type-helper symbols.
+let cg_sym (module_name: String) (name: String) (targs: Array[typecheck.ITy]): String =
+    Array.concat_all(["plum.f.", cg_symbol_atom(module_name), ".", cg_symbol_atom(name), ".", cg_symbol_types(targs)])
+
+let cg_type_symbol (family: String) (t: typecheck.ITy): String =
+    Array.concat_all(["@plum.h.", family, ".", cg_ity_mangle(t)])
+
+let cg_symbol_types (types: Array[typecheck.ITy]): String = {
+    if Array.is_empty(types) { "0." }
+    else {
+        let mut parts = [types.len().to_string(), "."];
+        for t in types { parts = parts.push(cg_ity_mangle(t)); };
+        Array.concat_all(parts)
+    }
+}
+
+// Prefix grammar: each primitive has one tag; nominal types carry an atom
+// and an arity, tuples/functions carry an arity, and Ref carries one type.
+// Unconstrained variables share Unit's identity, matching backend defaulting.
+let cg_ity_mangle (t: typecheck.ITy): String = match t {
+    ITInt => "i", ITFloat => "f", ITBool => "b", ITStr => "s",
+    ITCStr => "c", ITRawCStr => "p", ITBytes => "y", ITUnit => "u",
+    ITStruct(name, args) => Array.concat_all(["S", cg_symbol_atom(name), ".", cg_symbol_types(args)]),
+    ITEnum(name, args) => Array.concat_all(["E", cg_symbol_atom(name), ".", cg_symbol_types(args)]),
+    ITFunction(params, ret) => Array.concat_all(["F", cg_symbol_types(params), cg_ity_mangle(ret)]),
+    ITTuple(elems) => "T".concat(cg_symbol_types(elems)),
+    ITRef(inner) => "R".concat(cg_ity_mangle(inner)),
+    ITVar(_) => "u",
+    ITParam(name) => { cg_fail("internal: generic parameter ${name} was not substituted before mangling"); "" },
+}
+
+// Discovery compares types, not their rendered symbols. Preserve the backend's
+// sole defaulting equivalence (?n = Unit), sharing every already-concrete tree.
+let cg_type_identity (t: typecheck.ITy): typecheck.ITy =
+    if !cg_type_needs_default(t) { t }
+    else { match t {
+        ITVar(_) => ITUnit,
+        ITStruct(name, args) => ITStruct(name, Array.map(args, cg_type_identity)),
+        ITEnum(name, args) => ITEnum(name, Array.map(args, cg_type_identity)),
+        ITFunction(params, ret) => ITFunction(Array.map(params, cg_type_identity), cg_type_identity(ret)),
+        ITTuple(elems) => ITTuple(Array.map(elems, cg_type_identity)),
+        ITRef(inner) => ITRef(cg_type_identity(inner)),
+        _ => t,
+    } }
+
+let cg_type_needs_default (t: typecheck.ITy): Bool = match t {
+    ITVar(_) => true,
+    ITParam(name) => { cg_fail("internal: generic parameter ${name} was not substituted before mangling"); false },
+    ITStruct(_, args) => cg_types_need_default(args, 0),
+    ITEnum(_, args) => cg_types_need_default(args, 0),
+    ITFunction(params, ret) => cg_types_need_default(params, 0) || cg_type_needs_default(ret),
+    ITTuple(elems) => cg_types_need_default(elems, 0),
+    ITRef(inner) => cg_type_needs_default(inner),
+    _ => false,
+}
+
+let cg_types_need_default (types: Array[typecheck.ITy]) (i: Int): Bool =
+    i < types.len() && (cg_type_needs_default(types[i]) || cg_types_need_default(types, i + 1))
+
+let cg_type_args_equal (a: Array[typecheck.ITy]) (b: Array[typecheck.ITy]) (i: Int): Bool =
+    if a.len() != b.len() { false }
+    else if i >= a.len() { true }
+    else { cg_type_identity(a[i]) == cg_type_identity(b[i]) && cg_type_args_equal(a, b, i + 1) }
+
+pub let test_symbol_identities (): Unit = {
+    let names = ["", "a.b", "a_b", "a-b", "a$b", "$2e", ".", "é", "e", "\x00", "0", "Point.add", "Point_add"];
+    let mut seen: Map[String, String] = Map.new(());
+    for name in names {
+        let encoded = cg_symbol_atom(name);
+        assert(!seen.contains(encoded));
+        seen = seen.insert(encoded, name);
+        assert(!encoded.contains("."));
+    };
+    assert_eq(cg_symbol_atom("a.b"), "a$2eb");
+    assert_eq(cg_symbol_atom("$2e"), "$242e");
+    assert_eq(cg_symbol_atom("é"), "$c3$a9");
+    assert(cg_sym("a.b", "f", []) != cg_sym("a_b", "f", []));
+    assert(cg_sym("a", "b.f", []) != cg_sym("a.b", "f", []));
+    assert(cg_sym("", "id__Int", []) != cg_sym("", "id", [ITInt]));
+    assert(cg_sym("", "rel_Box_Int", []) != cg_rel_sym(ITStruct("Box", [ITInt])).replace("@", ""));
+    assert_eq(cg_ity_mangle(ITVar(17)), cg_ity_mangle(ITUnit));
+    assert_eq(cg_type_identity(ITStruct("Box", [ITRef(ITVar(17))])), ITStruct("Box", [ITRef(ITUnit)]));
+    assert(cg_inst_eq(CgInst { module: "", name: "id", targs: [ITVar(3)] },
+        CgInst { module: "", name: "id", targs: [ITUnit] }));
+    assert(!cg_inst_eq(CgInst { module: "a.b", name: "id", targs: [ITInt] },
+        CgInst { module: "a_b", name: "id", targs: [ITInt] }));
+
+    let leaves = [ITInt, ITFloat, ITBool, ITStr, ITCStr, ITRawCStr, ITBytes, ITUnit,
+        ITStruct("Int", []), ITEnum("Int", []), ITStruct("Box_Int", []),
+        ITStruct("a.b.Value", []), ITStruct("a_b.Value", [])];
+    let mut types = leaves;
+    for t in leaves {
+        types = types.push(ITStruct("Box", [t])).push(ITEnum("Box", [t]))
+            .push(ITTuple([t])).push(ITRef(t)).push(ITFunction([], t));
+        for u in leaves {
+            types = types.push(ITTuple([t, u])).push(ITFunction([t], u))
+                .push(ITStruct("Pair", [t, u]));
+        };
+    };
+    let mut keys: Map[String, Bool] = Map.new(());
+    for t in types {
+        let key = cg_ity_mangle(t);
+        assert(!keys.contains(key));
+        keys = keys.insert(key, true);
+        assert_eq(cg_type_identity(t), t);
+    };
+    assert(cg_ity_mangle(ITStruct("Pair", [ITStruct("Box", [ITInt]), ITStr]))
+        != cg_ity_mangle(ITStruct("Pair", [ITStruct("Box", []), ITStruct("Int_Str", [])])));
+}

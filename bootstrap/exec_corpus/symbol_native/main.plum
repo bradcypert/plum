@@ -1,0 +1,12 @@
+extern "C" {
+    fn plum_main() -> Int;
+    fn plum_rel_Ri() -> Int;
+}
+
+let main (): Unit = {
+    assert_eq(unsafe { plum_main() }, 73);
+    let owned = ref(11);
+    assert_eq(owned.get(), 11);
+    assert_eq(unsafe { plum_rel_Ri() }, 74);
+    println("C extern names retain their native spelling beside generated functions")
+}
