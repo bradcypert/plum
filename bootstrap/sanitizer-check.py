@@ -56,6 +56,9 @@ def main():
             trim = Path(work) / ('trim-owned' + str(len(flags)))
             run([compiler, 'build', root / 'bootstrap/exec_corpus/trim_unicode', '--sanitize=address', '--memory-stats', *flags, '-o', trim])
             run([trim], contains='directional trims share Unicode whitespace, preserve UTF-8/NULs and immutable aliases')
+            literal = Path(work) / ('literal-emission' + str(len(flags)))
+            run([compiler, 'build', root / 'bootstrap/exec_corpus/literal_emission', '--sanitize=address', '--memory-stats', *flags, '-o', literal])
+            run([literal], contains='literal emission preserves sections, order, aliases and reuse')
         ir = run([compiler, 'emit-llvm', owned]).stdout
         tail = re.search(r'define [^\n]*@plum_tail\([^\n]*\).*?\n}', ir, re.S)
         if not tail or not re.search(r'musttail call [^\n]*@plum_tail\(', tail.group()):

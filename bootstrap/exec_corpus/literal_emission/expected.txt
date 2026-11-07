@@ -1,0 +1,1 @@
+literal emission preserves sections, order, aliases and reuse

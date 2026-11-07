@@ -1,0 +1,38 @@
+let labeled (counter: Ref[Int]) (text: String): String = {
+    let n = counter.get();
+    counter.set(n + 1);
+    n.to_string().concat(":").concat(text)
+}
+
+let joined (a: String) (b: String) (c: String): String = a.concat("|").concat(b).concat("|").concat(c)
+
+let main (): Unit = {
+    let counter = ref(0);
+    let values = [
+        { let local = "α"; labeled(counter, local.concat("\x00x")) },
+        { let middle = labeled(counter, "中"); let finish = |s| s.concat("🙂"); finish(middle) },
+        { let inner = [labeled(counter, "tail")]; inner[0] },
+    ];
+    assert_eq(values[0], "0:α\x00x");
+    assert_eq(values[1], "1:中🙂");
+    assert_eq(values[2], "2:tail");
+    let tuple = ({ let local = "tuple-a"; labeled(counter, local) }, labeled(counter, "tuple-b"));
+    let (left, right) = tuple;
+    assert_eq(left, "3:tuple-a");
+    assert_eq(right, "4:tuple-b");
+    let mut reused = [labeled(counter, "old")];
+    let alias = reused;
+    reused = [labeled(counter, reused[0]), labeled(counter, "new")];
+    assert_eq(alias[0], "5:old");
+    assert_eq(reused[0], "6:5:old");
+    assert_eq(reused[1], "7:new");
+    reused = [labeled(counter, reused[1]), labeled(counter, "last")];
+    assert_eq(reused[0], "8:7:new");
+    assert_eq(reused[1], "9:last");
+    let called = joined(labeled(counter, "a"), { let local = "b"; labeled(counter, local) }, labeled(counter, "c"));
+    assert_eq(called, "10:a|11:b|12:c");
+    assert_eq(counter.get(), 13);
+    let empty: Array[String] = [];
+    assert_eq(empty.len(), 0);
+    println("literal emission preserves sections, order, aliases and reuse")
+}

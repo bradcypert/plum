@@ -3105,7 +3105,7 @@ let cg_fn_call_real (p: CgProgram) (env: Array[CgSlot]) (n: Int) (module_name: S
                 else if cg_has_fn_in(p, module_name, name, 0) { "@".concat(cg_sym(module_name, name, cg_concrete_list(p, targs, 0, []))) }
                 else { { cg_fail("prelude function ${name} has no implementation in this backend's runtime yet"); "@plum_missing" } },
         } };
-    let a = cg_args(p, env, n, args, 0, "", "", "", "", []);
+    let a = cg_args(p, env, n, args);
     let reg = cg_reg(a.n);
     // Symbol equality, so under monomorphization a call to a DIFFERENT
     // instantiation of the same generic function is correctly not a
@@ -3270,16 +3270,33 @@ struct ArgVals { code: String, allocas: String, releases: String, globals: Strin
 // the `<ty> <val>` operand list the call needs. No parameter types are
 // pushed down any more — a closure argument already carries its own
 // resolved type from the checker.
-let cg_args (p: CgProgram) (env: Array[CgSlot]) (n: Int) (args: Array[typecheck.TExpr]) (i: Int) (code: String) (allocas: String) (releases: String) (globals: String) (vals: Array[String]): ArgVals =
-    if i >= args.len() { ArgVals { code: code, allocas: allocas, releases: releases, globals: globals, vals: vals, n: n } }
-    else {
-        let r = cg_expr(p, env, n, args[i]);
-        cg_args(p, env, r.n, args, i + 1, code.concat(r.code), allocas.concat(r.allocas), releases.concat(r.releases), globals.concat(r.globals), vals.push(cg_llvm_ty(r.ty).concat(" ").concat(r.val)))
-    }
+let cg_args (p: CgProgram) (env: Array[CgSlot]) (n: Int) (args: Array[typecheck.TExpr]): ArgVals = {
+    let mut next = n;
+    let mut code: Array[String] = [];
+    let mut allocas: Array[String] = [];
+    let mut releases: Array[String] = [];
+    let mut globals: Array[String] = [];
+    let mut vals: Array[String] = [];
+    for i in 0..args.len() {
+        let r = cg_expr(p, env, next, args[i]);
+        if r.code != "" { code = code.push(r.code); };
+        if r.allocas != "" { allocas = allocas.push(r.allocas); };
+        if r.releases != "" { releases = releases.push(r.releases); };
+        if r.globals != "" { globals = globals.push(r.globals); };
+        vals = vals.push(cg_llvm_ty(r.ty).concat(" ").concat(r.val));
+        next = r.n;
+    };
+    ArgVals { code: cg_join_text(code), allocas: cg_join_text(allocas), releases: cg_join_text(releases),
+        globals: cg_join_text(globals), vals: vals, n: next }
+}
 
-let cg_join_commas (parts: Array[String]): String = cg_join_acc(parts, 1, if Array.is_empty(parts) { "" } else { parts[0] })
-let cg_join_acc (parts: Array[String]) (i: Int) (acc: String): String =
-    if i >= parts.len() { acc } else { cg_join_acc(parts, i + 1, acc.concat(", ").concat(parts[i])) }
+// Empty sections keep the shared empty constant; a single fragment already
+// owns the complete text. Wider sections copy each byte once at the join.
+let cg_join_text (parts: Array[String]): String =
+    if parts.len() == 0 { "" } else if parts.len() == 1 { parts[0] } else { Array.concat_all(parts) }
+
+let cg_join_commas (parts: Array[String]): String =
+    if parts.len() <= 1 { cg_join_text(parts) } else { parts.join(", ") }
 
 let cg_method_call (p: CgProgram) (env: Array[CgSlot]) (n: Int) (method_name: String) (base: typecheck.TExpr) (args: Array[typecheck.TExpr]) (ty: CgTy): Emit =
     if method_name == "hash" { cg_hash(p, env, n, base) }
@@ -3538,7 +3555,7 @@ let cg_len (p: CgProgram) (env: Array[CgSlot]) (n: Int) (base: typecheck.TExpr):
 let cg_array_lit (p: CgProgram) (env: Array[CgSlot]) (n: Int) (elems: Array[typecheck.TExpr]) (ty: CgTy): Emit = {
     let cell = cg_reg(n);
     let head = "  ${cell} = call ptr @plum_array_new(i64 ${elems.len()})\n";
-    let st = cg_array_store_elems(p, env, n + 1, cell, elems, 0, "", "", "", "");
+    let st = cg_store_literal_elems(p, env, n + 1, cell, elems, cg_array_elem_offset);
     Emit { code: head.concat(st.code), allocas: st.allocas, releases: st.releases, globals: st.globals, val: cell, ty: ty, n: st.n }
 }
 
@@ -3559,7 +3576,7 @@ let cg_array_lit_reuse (p: CgProgram) (env: Array[CgSlot]) (n: Int) (elems: Arra
     match cg_array_lit_cand(p, env, cands, 0) {
         None => cg_array_lit(p, env, n, elems, ty),
         Some(slot) => {
-            let a = cg_args(p, env, n, elems, 0, "", "", "", "", []);
+            let a = cg_args(p, env, n, elems);
             let old = cg_reg(a.n);
             let cell = cg_reg(a.n + 1);
             let same = cg_reg(a.n + 2);
@@ -3584,7 +3601,7 @@ let cg_array_lit_reuse (p: CgProgram) (env: Array[CgSlot]) (n: Int) (elems: Arra
                     .concat(cg_dec(cg_concrete(p, slot.ity), old))
                     .concat("  br label %").concat(ljoin).concat("\n")
                     .concat(ljoin).concat(":\n")
-                    .concat(cg_store_elem_vals(cell, a.vals, 0, "")),
+                    .concat(cg_store_elem_vals(cell, a.vals)),
                 allocas: a.allocas, releases: a.releases, globals: a.globals,
                 val: cell, ty: ty, n: a.n + 5,
             }
@@ -3598,14 +3615,15 @@ let cg_array_clear_call (p: CgProgram) (slot: CgSlot) (old: String): String =
         "  call void @plum_array_clear(ptr ${old}, ptr ${cg_rel_sym(cg_array_elem_ity(p, slot.ity))})\n"
     } else { "" }
 
-let cg_store_elem_vals (cell: String) (vals: Array[String]) (i: Int) (acc: String): String =
-    if i >= vals.len() { acc }
-    else {
+let cg_store_elem_vals (cell: String) (vals: Array[String]): String = {
+    let mut parts: Array[String] = [];
+    for i in 0..vals.len() {
         let ep = cell.concat("_e").concat(i.to_string());
-        cg_store_elem_vals(cell, vals, i + 1, acc
-            .concat("  ").concat(ep).concat(" = getelementptr i8, ptr ").concat(cell).concat(", i64 ").concat(cg_array_elem_offset(i).to_string()).concat("\n")
-            .concat("  store ").concat(vals[i]).concat(", ptr ").concat(ep).concat("\n"))
-    }
+        parts = parts.push("  ${ep} = getelementptr i8, ptr ${cell}, i64 ${cg_array_elem_offset(i)}\n"
+            .concat("  store ").concat(vals[i]).concat(", ptr ").concat(ep).concat("\n"));
+    };
+    cg_join_text(parts)
+}
 
 // An array slot the move analysis has not already claimed. Unlike
 // `cg_reuse_cand` there is no size test: `@plum_array_reuse` does that
@@ -3695,15 +3713,30 @@ let cg_calls_in_select (p: CgProgram) (arms: Array[typecheck.TSelectArm]) (i: In
         TSAElse => acc,
     })) }
 
-let cg_array_store_elems (p: CgProgram) (env: Array[CgSlot]) (n: Int) (cell: String) (elems: Array[typecheck.TExpr]) (i: Int) (code: String) (allocas: String) (releases: String) (globals: String): FieldsEmit =
-    if i >= elems.len() { FieldsEmit { code: code, allocas: allocas, releases: releases, globals: globals, n: n } }
-    else {
-        let r = cg_expr(p, env, n, elems[i]);
+// Array and tuple literals share this ordered store walk. Keep fragments in
+// uniquely owned arrays and join each section once, so wide literals never
+// copy the already emitted prefix. Layout remains in the offset functions.
+let cg_store_literal_elems (p: CgProgram) (env: Array[CgSlot]) (n: Int) (cell: String) (elems: Array[typecheck.TExpr]) (offset: (Int) -> Int): FieldsEmit = {
+    let mut next = n;
+    let mut code: Array[String] = [];
+    let mut allocas: Array[String] = [];
+    let mut releases: Array[String] = [];
+    let mut globals: Array[String] = [];
+    for i in 0..elems.len() {
+        let r = cg_expr(p, env, next, elems[i]);
         let ep = cg_reg(r.n);
-        let line = "  ${ep} = getelementptr i8, ptr ${cell}, i64 ${cg_array_elem_offset(i)}\n"
+        let line = "  ${ep} = getelementptr i8, ptr ${cell}, i64 ${offset(i)}\n"
             .concat("  store ").concat(cg_llvm_ty(r.ty)).concat(" ").concat(r.val).concat(", ptr ").concat(ep).concat("\n");
-        cg_array_store_elems(p, env, r.n + 1, cell, elems, i + 1, code.concat(r.code).concat(line), allocas.concat(r.allocas), releases.concat(r.releases), globals.concat(r.globals))
-    }
+        if r.code != "" { code = code.push(r.code); };
+        code = code.push(line);
+        if r.allocas != "" { allocas = allocas.push(r.allocas); };
+        if r.releases != "" { releases = releases.push(r.releases); };
+        if r.globals != "" { globals = globals.push(r.globals); };
+        next = r.n + 1;
+    };
+    FieldsEmit { code: cg_join_text(code), allocas: cg_join_text(allocas), releases: cg_join_text(releases),
+        globals: cg_join_text(globals), n: next }
+}
 
 // Indexing and mutation share the runtime bounds check. It returns the
 // array length so callers that copy the array can reuse it.
@@ -3800,7 +3833,7 @@ let cg_array_remove (p: CgProgram) (env: Array[CgSlot]) (n: Int) (base: typechec
 // call produce a value -- so nothing is assigned and the expression's
 // value is the usual Unit placeholder.
 let cg_extern_call (p: CgProgram) (env: Array[CgSlot]) (n: Int) (name: String) (args: Array[typecheck.TExpr]) (ret: CgTy): Emit = {
-    let a = cg_args(p, env, n, args, 0, "", "", "", "", []);
+    let a = cg_args(p, env, n, args);
     // Bool arguments widen to C's `int` before the call.
     let m = cg_marshal_args(p, args, a.vals, 0, a.n, "", []);
     let reg = cg_reg(m.n);
@@ -4293,7 +4326,7 @@ let cg_capture_stores (p: CgProgram) (env: Array[CgSlot]) (i: Int) (cell: String
 // back as the environment argument.
 let cg_call_closure_value (p: CgProgram) (env: Array[CgSlot]) (n: Int) (clo: Emit) (args: Array[typecheck.TExpr]): Emit = {
     let ret = cg_closure_ret(clo.ty);
-    let a = cg_args(p, env, clo.n, args, 0, "", "", "", "", []);
+    let a = cg_args(p, env, clo.n, args);
     let fp = cg_reg(a.n);
     let out = cg_reg(a.n + 1);
     let code = clo.code.concat(a.code)
@@ -4739,19 +4772,9 @@ let cg_array_fold (p: CgProgram) (env: Array[CgSlot]) (n: Int) (arr_e: typecheck
 let cg_tuple_lit (p: CgProgram) (env: Array[CgSlot]) (n: Int) (elems: Array[typecheck.TExpr]) (ty: CgTy): Emit = {
     let cell = cg_reg(n);
     let head = "  ${cell} = ${cg_fresh((8 + 8 * elems.len()).to_string(), cg_origin_record(()))}\n";
-    let f = cg_store_tuple(p, env, n + 1, cell, elems, 0, "", "", "", "");
+    let f = cg_store_literal_elems(p, env, n + 1, cell, elems, cg_field_offset);
     Emit { code: head.concat(f.code), allocas: f.allocas, releases: f.releases, globals: f.globals, val: cell, ty: ty, n: f.n }
 }
-
-let cg_store_tuple (p: CgProgram) (env: Array[CgSlot]) (n: Int) (cell: String) (elems: Array[typecheck.TExpr]) (i: Int) (code: String) (allocas: String) (releases: String) (globals: String): FieldsEmit =
-    if i >= elems.len() { FieldsEmit { code: code, allocas: allocas, releases: releases, globals: globals, n: n } }
-    else {
-        let r = cg_expr(p, env, n, elems[i]);
-        let fp = cg_reg(r.n);
-        let line = "  ${fp} = getelementptr i8, ptr ${cell}, i64 ${cg_field_offset(i)}\n"
-            .concat("  store ").concat(cg_llvm_ty(r.ty)).concat(" ").concat(r.val).concat(", ptr ").concat(fp).concat("\n");
-        cg_store_tuple(p, env, r.n + 1, cell, elems, i + 1, code.concat(r.code).concat(line), allocas.concat(r.allocas), releases.concat(r.releases), globals.concat(r.globals))
-    }
 
 // A struct literal: allocate the cell, then store each field at its
 // declared index. Fields are stored in DECLARATION order regardless of
@@ -5090,7 +5113,7 @@ let cg_variant_reuse (p: CgProgram) (env: Array[CgSlot]) (n: Int) (ename: String
     match cg_variant_of(p, ename, tag) {
         None => { cg_fail("internal: unknown variant reached codegen: ".concat(tag)); cg_unit_emit(n) },
         Some(v) => {
-            let a = cg_args(p, env, n, args, 0, "", "", "", "", []);
+            let a = cg_args(p, env, n, args);
             let want = cg_enum_cell_size(p, v.enum_name);
             match cg_first_reuse_cand(p, env, cands, 0, want) {
                 None => cg_variant_build(p, v, a),
@@ -5252,7 +5275,7 @@ let cg_field_read (p: CgProgram) (env: Array[CgSlot]) (n: Int) (base: typecheck.
 // enum's WIDEST variant, not this one — see `cg_payload_offset`.
 let cg_variant_call (p: CgProgram) (env: Array[CgSlot]) (n: Int) (ename: String) (tag: String) (args: Array[typecheck.TExpr]): Emit =
     match cg_variant_of(p, ename, tag) {
-        Some(v) => cg_variant_build(p, v, cg_args(p, env, n, args, 0, "", "", "", "", [])),
+        Some(v) => cg_variant_build(p, v, cg_args(p, env, n, args)),
         None => { cg_fail("internal: unknown variant reached codegen: ".concat(tag)); cg_unit_emit(n) },
     }
 
