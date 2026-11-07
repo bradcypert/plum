@@ -1,0 +1,101 @@
+// FIFO traversal in batches. The current batch is read without slicing;
+// newly discovered calls append to a separately owned array. At the end of a
+// batch that array becomes the next batch. Appends use Perceus array reuse.
+// Rotation consumes no fuel: fuel still counts every popped occurrence,
+// including duplicates and runtime calls, in exactly the original order.
+let cg_pending_push (pending: Array[CgInst]) (added: Array[CgInst]): Array[CgInst] = {
+    let mut out = pending;
+    for inst in added { out = out.push(inst); };
+    out
+}
+
+// A proved recursion cycle may elide its caller's frame; an acyclic call
+// preserves that frame for stack traces. The existing bounded search answers
+// false when it runs out of fuel, retaining the conservative frame policy.
+let CYCLE_FUEL: Int = 400
+
+let cg_reaches (p: CgProgram) (pending: Array[CgInst]) (target: String) (seen: Array[String]) (fuel: Int): Bool =
+    cg_reaches_batch(p, pending, 0, [], target, seen, fuel)
+
+let cg_reaches_batch (p: CgProgram) (batch: Array[CgInst]) (read: Int) (queued: Array[CgInst]) (target: String) (seen: Array[String]) (fuel: Int): Bool =
+    if read >= batch.len() {
+        if Array.is_empty(queued) { false }
+        else { cg_reaches_batch(p, queued, 0, [], target, seen, fuel) }
+    }
+    else if fuel > CYCLE_FUEL { false }
+    else {
+        let head = batch[read];
+        let s = cg_sym(head.module, head.name, head.targs);
+        if s == target { true }
+        else if Array.contains(seen, s) { cg_reaches_batch(p, batch, read + 1, queued, target, seen, fuel + 1) }
+        else if Option.is_some(cg_runtime_fn(head.name)) || head.name == "Array.concat" {
+            cg_reaches_batch(p, batch, read + 1, queued, target, seen.push(s), fuel + 1)
+        }
+        else { match cg_find_tfn(p, head.module, head.name, 0) {
+            None => cg_reaches_batch(p, batch, read + 1, queued, target, seen.push(s), fuel + 1),
+            Some(def) => {
+                let inner = CgProgram { fns: p.fns, globals: p.globals, ctx: p.ctx, enums: p.enums, subst: def.subst,
+                    generics: def.generics, targs: head.targs, movable: [], cur_sym: "", cur_frame: false, tail_rel: "", tail_ok: false, cur_proto: "", tail_observation: None, type_facts: p.type_facts };
+                cg_reaches_batch(p, batch, read + 1, cg_pending_push(queued, cg_calls_in(inner, def.body, [])), target, seen.push(s), fuel + 1)
+            },
+        } }
+    }
+
+// Follow concrete specializations until no calls remain. Keep the existing
+// 10,000-occurrence limit, including duplicates/runtime calls: changing queue
+// storage must not change either termination policy or its diagnostic.
+let cg_reachable (p: CgProgram) (pending: Array[CgInst]) (done: Array[CgInst]) (fuel: Int): Array[CgInst] =
+    cg_reachable_batch(p, pending, 0, [], done, fuel)
+
+let cg_reachable_batch (p: CgProgram) (batch: Array[CgInst]) (read: Int) (queued: Array[CgInst]) (done: Array[CgInst]) (fuel: Int): Array[CgInst] =
+    if read >= batch.len() {
+        if Array.is_empty(queued) { done }
+        else { cg_reachable_batch(p, queued, 0, [], done, fuel) }
+    }
+    else if fuel > 10000 { { cg_fail("monomorphization did not terminate after 10000 instantiations — polymorphic recursion?"); done } }
+    else {
+        let head = batch[read];
+        if Option.is_some(cg_runtime_fn(head.name)) || head.name == "Array.concat" { cg_reachable_batch(p, batch, read + 1, queued, done, fuel + 1) }
+        else if cg_inst_seen(done, head, 0) { cg_reachable_batch(p, batch, read + 1, queued, done, fuel + 1) }
+        else {
+            match cg_find_tfn(p, head.module, head.name, 0) {
+                None => if Option.is_some(cg_runtime_fn(head.name)) { cg_reachable_batch(p, batch, read + 1, queued, done, fuel + 1) } else {
+                    cg_fail("prelude function ${head.name} has no implementation in this backend's runtime yet");
+                    done
+                },
+                Some(def) => {
+                    let inner = CgProgram { fns: p.fns, globals: p.globals, ctx: p.ctx, enums: p.enums, subst: def.subst,
+                        generics: def.generics, targs: head.targs, movable: [], cur_sym: "", cur_frame: false, tail_rel: "", tail_ok: false, cur_proto: "", tail_observation: None, type_facts: p.type_facts };
+                    cg_reachable_batch(p, batch, read + 1, cg_pending_push(queued, cg_calls_in(inner, def.body, [])), done.push(head), fuel + 1)
+                },
+            }
+        }
+    }
+
+pub let test_callgraph_fifo_and_fuel (): Unit = {
+    let source = "extern \"C\" { fn touch(value: Int) -> Unit; }\nlet id[T] (value: T): T = value\nlet leaf (n: Int): Int = n\nlet left (n: Int): Int = leaf(n)\nlet right (n: Int): Int = { leaf(n); leaf(n) }\nlet G: Int = id(7)\nlet main (): Int = { left(1); right(2); id(\"s\"); left(3); unsafe { touch(1) }; 0 }\n";
+    let p = cg_build_program(parser.parse_program(lexer.tokenize(source)));
+    let main = CgInst { module: "", name: "main", targs: [] };
+    let roots = cg_global_roots(p, 0, [main]);
+    let reached = cg_reachable(p, roots, [], 0);
+    assert_eq(reached, [main, CgInst { module: "", name: "id", targs: [ITInt] },
+        CgInst { module: "", name: "left", targs: [] }, CgInst { module: "", name: "right", targs: [] },
+        CgInst { module: "", name: "id", targs: [ITStr] }, CgInst { module: "", name: "leaf", targs: [] }]);
+    let leaf = CgInst { module: "", name: "leaf", targs: [] };
+    assert_eq(cg_reachable(p, [leaf], [], 10000), [leaf]);
+    assert_eq(cg_reachable(p, [], reached, 10001), reached);
+
+    let cycle = cg_build_program(parser.parse_program(lexer.tokenize("let a (n: Int): Int = if n == 0 { 0 } else { b(n - 1) }\nlet b (n: Int): Int = a(n)\n")));
+    let a = CgInst { module: "", name: "a", targs: [] };
+    let b = CgInst { module: "", name: "b", targs: [] };
+    let target = cg_sym("", "a", []);
+    assert(cg_reaches(cycle, [b], target, [], CYCLE_FUEL - 1));
+    assert(cg_reaches(cycle, [a], target, [target], CYCLE_FUEL));
+    assert(!cg_reaches(cycle, [a], target, [], CYCLE_FUEL + 1));
+    assert(!cg_reaches(cycle, [], target, [], CYCLE_FUEL + 1));
+    assert(!cg_reaches(cycle, [b], cg_sym("", "absent", []), [], 0));
+    assert(!cg_reaches(cycle, [b, b, a], target, [cg_sym("", "b", [])], CYCLE_FUEL - 1));
+    let runtime = CgInst { module: "", name: "bytes_at_raw", targs: [] };
+    let concat = CgInst { module: "", name: "Array.concat", targs: [] };
+    assert(!cg_reaches(cycle, [runtime, concat, a], target, [], CYCLE_FUEL - 1));
+}

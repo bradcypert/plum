@@ -961,55 +961,6 @@ let cg_tail_site (unit: Unit): Int = {
     k
 }
 
-// --- Is this tail call part of a recursion CYCLE? ---
-//
-// A self-call always is. A call to a DIFFERENT function is one only if
-// that function can call back, directly or through others -- `ping`
-// tail-calling `pong` tail-calling `ping`.
-//
-// The distinction decides whether the caller's frame may be replaced,
-// and it is the same argument the self-call case makes. A cyclic tail
-// chain repeats without bound, so its frames are noise: collapsing
-// three million alternating `ping`/`pong` entries into one loses
-// nothing a reader wanted. An ACYCLIC tail call happens once, so its
-// frame is real information -- `middle` genuinely called `deepest` and
-// a trace should say so. Replacing frames there would quietly delete
-// every one-line delegation from every stack trace, which is a bad
-// trade for a feature that exists to produce stack traces.
-//
-// So only cyclic tail calls return early. Everything else keeps the
-// behaviour the per-path pop rule established.
-//
-// The search is FUEL-BOUNDED and gives up by answering "not cyclic",
-// which is the safe direction: a missed cycle keeps today's behaviour
-// for that call, while a false positive would delete a frame that
-// should have been kept. Real mutual recursion is two or three
-// functions, so the bound is generous relative to what it must find.
-let CYCLE_FUEL: Int = 400
-
-let cg_reaches (p: CgProgram) (pending: Array[CgInst]) (target: String) (seen: Array[String]) (fuel: Int): Bool =
-    if Array.is_empty(pending) || fuel > CYCLE_FUEL { false }
-    else {
-        let head = pending[0];
-        let rest = Array.slice(pending, 1, pending.len());
-        let s = cg_sym(head.module, head.name, head.targs);
-        if s == target { true }
-        else if Array.contains(seen, s) { cg_reaches(p, rest, target, seen, fuel + 1) }
-        // A runtime-implemented name has no Plum body to walk, so it
-        // cannot lead back to anything.
-        else if Option.is_some(cg_runtime_fn(head.name)) || head.name == "Array.concat" {
-            cg_reaches(p, rest, target, seen.push(s), fuel + 1)
-        }
-        else { match cg_find_tfn(p, head.module, head.name, 0) {
-            None => cg_reaches(p, rest, target, seen.push(s), fuel + 1),
-            Some(def) => {
-                let inner = CgProgram { fns: p.fns, globals: p.globals, ctx: p.ctx, enums: p.enums, subst: def.subst,
-                    generics: def.generics, targs: head.targs, movable: [], cur_sym: "", cur_frame: false, tail_rel: "", tail_ok: false, cur_proto: "", tail_observation: None, type_facts: p.type_facts };
-                cg_reaches(p, Array.concat(rest, cg_calls_in(inner, def.body, [])), target, seen.push(s), fuel + 1)
-            },
-        } }
-    }
-
 // Cache both outcomes for this caller specialization. A negative result
 // includes a fuel-exhausted search: replay must make the same conservative
 // decision without walking the graph again. Callee symbols include all
@@ -7674,42 +7625,6 @@ let cg_emit_globals (p: CgProgram) (i: Int) (n: Int) (slots: String) (body: Stri
             .concat("  store ").concat(cg_llvm_ty(ty)).concat(" ").concat(r.val).concat(", ptr ").concat(cg_global_slot(g.module, g.name)).concat("\n")
             .concat(r.releases);
         cg_emit_globals(p, i + 1, r.n, slots.concat(r.globals).concat(slot), body.concat(init))
-    }
-
-// Worklist closure: pop an instantiation, record it, and push every
-// instantiation its body calls. The `fuel` counter is not decoration —
-// POLYMORPHIC RECURSION (`f[T]` calling `f[Array[T]]`) generates
-// infinitely many specializations, and monomorphization is undecidable
-// in general for it. Plum's own generics can't express it today, so
-// this should never fire; if it ever does, it stops with an
-// explanation rather than looping until memory runs out.
-let cg_reachable (p: CgProgram) (pending: Array[CgInst]) (done: Array[CgInst]) (fuel: Int): Array[CgInst] =
-    if Array.is_empty(pending) { done }
-    else if fuel > 10000 { { cg_fail("monomorphization did not terminate after 10000 instantiations — polymorphic recursion?"); done } }
-    else {
-        let head = pending[0];
-        let rest = Array.slice(pending, 1, pending.len());
-        // A runtime-implemented name is already a symbol: it has no
-        // Plum body to walk, and emitting one would COLLIDE with the
-        // runtime's own definition. `read_file_bytes_raw` has a stub body in
-        // the prelude purely so the checker has a signature for it —
-        // this is what stops that stub from being compiled.
-        if Option.is_some(cg_runtime_fn(head.name)) || head.name == "Array.concat" { cg_reachable(p, rest, done, fuel + 1) }
-        else if cg_inst_seen(done, head, 0) { cg_reachable(p, rest, done, fuel + 1) }
-        else {
-            match cg_find_tfn(p, head.module, head.name, 0) {
-                // A runtime-implemented prelude function has no Plum
-                // body to walk or specialize — it is already a symbol.
-                None => if Option.is_some(cg_runtime_fn(head.name)) { cg_reachable(p, rest, done, fuel + 1) } else {
-                    cg_fail("prelude function ${head.name} has no implementation in this backend's runtime yet");
-                    done
-                },
-                Some(def) => {
-                    let inner = CgProgram { fns: p.fns, globals: p.globals, ctx: p.ctx, enums: p.enums, subst: def.subst, generics: def.generics, targs: head.targs, movable: [], cur_sym: "", cur_frame: false, tail_rel: "", tail_ok: false, cur_proto: "", tail_observation: None, type_facts: p.type_facts };
-                    cg_reachable(p, Array.concat(rest, cg_calls_in(inner, def.body, [])), done.push(head), fuel + 1)
-                },
-            }
-        }
     }
 
 // Every aggregate type compared with `==`/`!=` anywhere in the

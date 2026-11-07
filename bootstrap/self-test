@@ -62,7 +62,7 @@ fi
 # DISCOVERY regression, which is the failure that matters here: drop a
 # module from the walk and this harness reports 0/0 and passes, taking
 # the compiler's only platform-conditional coverage with it.
-floor=42
+floor=43
 passed="$(printf '%s' "$out" | grep -oE '[0-9]+ passed' | grep -oE '[0-9]+')"
 if [ -z "$passed" ] || [ "$passed" -lt "$floor" ]; then
     printf '%s\n' "$out" >&2

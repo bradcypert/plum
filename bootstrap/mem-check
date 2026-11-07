@@ -154,9 +154,10 @@ esac
 # and collecting literal/argument fragments to about 3.0 GB.
 # Program-scoped type facts further reduce this to about 2.4 GB.
 # Structural symbol identities bring it to about 2.2 GB on this input.
+# Batched callgraph worklists reduce it further to about 1.9 GB.
 # Keep an independent requested-byte budget: RSS alone
 # does not catch repeatedly copying either annotated text or metadata.
-check "$debug_emit_ceiling" 2500000000 "emit-llvm, whole compiler" emit-llvm bootstrap/self_host
+check "$debug_emit_ceiling" 2200000000 "emit-llvm, whole compiler" emit-llvm bootstrap/self_host
 
 # 40 MB on Linux with compact TLS embedding; 83 MB on that same pre-fix
 # compiler.
@@ -170,13 +171,15 @@ check "$check_ceiling" 0 "check, whole compiler" check bootstrap/self_host
 # Literal/argument fragments reduced it again to about 2.9 GB.
 # Memoizing complete resource/type queries brings it to about 2.2 GB.
 # Structural symbol identities bring it to about 2.0 GB.
-# Leave about 0.25 GB for growth while rejecting repeated type traversal.
+# Batched callgraph worklists bring it to about 1.7 GB.
+# Leave about 0.3 GB for growth while rejecting repeated type traversal.
 # Release mode also keeps debug line-attachment work out of this budget.
-check "$release_emit_ceiling" 2300000000 "release emit-llvm, whole compiler" emit-llvm bootstrap/self_host --release
+check "$release_emit_ceiling" 2000000000 "release emit-llvm, whole compiler" emit-llvm bootstrap/self_host --release
 
 # Exercise both allocation paths at several widths; a whole-compiler total
 # alone can hide a quadratic literal builder as the surrounding source grows.
 python3 "$root/bootstrap/emission-memory-check.py" "$plum" || fail=1
+python3 "$root/bootstrap/reachability-memory-check.py" "$plum" || fail=1
 
 [ $fail -ne 0 ] && exit 1
 echo "mem-check: the compiler stays within its memory ceilings"
