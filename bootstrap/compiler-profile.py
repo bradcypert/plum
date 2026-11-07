@@ -39,6 +39,7 @@ def main():
     cases = {
         'check-compiler': ['check', 'bootstrap/self_host'],
         'emit-compiler': ['emit-llvm', 'bootstrap/self_host', '--release'],
+        'emit-compiler-debug': ['emit-llvm', 'bootstrap/self_host'],
         'check-properties': ['check', 'bootstrap/properties'],
         'build-compiler': ['build', 'bootstrap/self_host', '--release'],
         'build-collections': ['build', 'bootstrap/exec_corpus/collections', '--release'],
@@ -48,7 +49,7 @@ def main():
         if unknown:
             ap.error(f'unknown workloads: {sorted(unknown)}')
         cases = {k: v for k, v in cases.items() if k in args.case}
-    inputs = sorted(p for folder in ['bootstrap/self_host', 'bootstrap/properties', 'bootstrap/exec_corpus/collections']
+    inputs = sorted(p for folder in ['bootstrap/self_host', 'bootstrap/std', 'bootstrap/properties', 'bootstrap/exec_corpus/collections']
                     for p in (root / folder).rglob('*') if p.is_file() and p.suffix in ('.plum', '.pkg', '.c'))
     metadata = {'platform': platform.platform(), 'samples': args.samples, 'harness_sha256': digest(__file__),
                 'revision': subprocess.check_output(['git', 'rev-parse', 'HEAD'], cwd=root, text=True).strip(),

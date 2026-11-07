@@ -617,6 +617,8 @@ pub let String.to_upper (s: String): String = s.to_upper()
 /// Lowercased. ASCII only — see `String.to_upper`.
 pub let String.to_lower (s: String): String = s.to_lower()
 /// Whitespace removed from both ends, including Unicode spaces.
+/// Unchanged input shares its owned storage; changed input copies only
+/// the retained UTF-8 bytes.
 pub let String.trim (s: String): String = s.trim()
 
 let bytes_of_str_raw (s: String): Bytes = bytes_of_str_raw(s)
@@ -974,17 +976,18 @@ pub let Array.zip[T, U] (a: Array[T]) (b: Array[U]): Array[Zipped[T, U]] = plum_
 
 // --- String trimming ---
 
-let plum__string_ws_prefix_len_acc (chars: Array[String]) (i: Int): Int =
-    if i >= chars.len() { i } else if String.is_ascii_ws(chars[i]) { plum__string_ws_prefix_len_acc(chars, i + 1) } else { i }
+let plum__string_trim_start_raw (s: String): String = ""
+let plum__string_trim_end_raw (s: String): String = ""
 
-/// Whitespace removed from the start.
-pub let String.trim_start (s: String): String = {
-    let chars = chars_of(s);
-    Array.concat_all(Array.drop(chars, plum__string_ws_prefix_len_acc(chars, 0)))
-}
+/// Whitespace removed from the start, using the same Unicode whitespace
+/// predicate as String.trim. Unchanged input shares its owned storage;
+/// changed input copies only the retained UTF-8 bytes.
+pub let String.trim_start (s: String): String = plum__string_trim_start_raw(s)
 
-/// Whitespace removed from the end.
-pub let String.trim_end (s: String): String = String.reverse(String.trim_start(String.reverse(s)))
+/// Whitespace removed from the end, using the same Unicode whitespace
+/// predicate as String.trim. Unchanged input shares its owned storage;
+/// changed input copies only the retained UTF-8 bytes.
+pub let String.trim_end (s: String): String = plum__string_trim_end_raw(s)
 
 /// Split on newlines.
 ///

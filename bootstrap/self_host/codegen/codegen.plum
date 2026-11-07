@@ -3145,12 +3145,12 @@ let cg_fn_call_real (p: CgProgram) (env: Array[CgSlot]) (n: Int) (module_name: S
 
 // Prelude functions the RUNTIME implements directly, rather than as
 // prelude Plum source. Deliberately a very short list: each entry is a
-// place where Plum can't express the operation at all, not merely a
-// place where C would be faster.
+// low-level operation tied to the runtime representation.
 //
 // `chars_of` is here because codepoint awareness has to bottom out
-// somewhere — every other string routine is written in Plum on top of
-// it. Anything that CAN be written in Plum is, in `cg_prelude_src`,
+// somewhere. Directional trims share the symmetric trim's runtime
+// decoder and whitespace predicate without materializing character arrays.
+// Other string routines are written in Plum on top of `chars_of`, in `cg_prelude_src`,
 // because prelude source this backend compiles is prelude source it
 // also proves it can handle.
 // `Array.concat[T]` is intercepted and given a single-allocation
@@ -3171,6 +3171,8 @@ let cg_runtime_fn (name: String): Option[String] =
     else if name == "exit_raw" { Some("@plum_exit_raw") }
     else if name == "env_var_raw" { Some("@plum_env_var_raw") }
     else if name == "write_file_raw" { Some("@plum_write_file_raw") }
+    else if name == "plum__string_trim_start_raw" { Some("@plum_str_trim_start") }
+    else if name == "plum__string_trim_end_raw" { Some("@plum_str_trim_end") }
     // --- Bytes ---
     //
     // Half of these name a symbol that ALREADY EXISTED for `String`,

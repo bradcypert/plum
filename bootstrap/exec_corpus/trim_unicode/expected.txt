@@ -1,0 +1,1 @@
+directional trims share Unicode whitespace, preserve UTF-8/NULs and immutable aliases

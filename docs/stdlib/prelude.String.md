@@ -159,6 +159,8 @@ Lowercased. ASCII only — see `String.to_upper`.
 ## `let String.trim (s: String): String`
 
 Whitespace removed from both ends, including Unicode spaces.
+Unchanged input shares its owned storage; changed input copies only
+the retained UTF-8 bytes.
 
 ## `let String.as_bytes (s: String): Bytes`
 
@@ -200,11 +202,15 @@ subnormal value or signed zero.
 
 ## `let String.trim_start (s: String): String`
 
-Whitespace removed from the start.
+Whitespace removed from the start, using the same Unicode whitespace
+predicate as String.trim. Unchanged input shares its owned storage;
+changed input copies only the retained UTF-8 bytes.
 
 ## `let String.trim_end (s: String): String`
 
-Whitespace removed from the end.
+Whitespace removed from the end, using the same Unicode whitespace
+predicate as String.trim. Unchanged input shares its owned storage;
+changed input copies only the retained UTF-8 bytes.
 
 ## `let String.lines (s: String): Array[String]`
 
