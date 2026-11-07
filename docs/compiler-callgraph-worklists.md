@@ -101,6 +101,37 @@ permitted occurrence, then checks that 10,001 calls retain the existing
 monomorphization diagnostic. Array elements avoid a deeply nested block AST.
 Both main and the changed compiler satisfy those boundary assertions.
 
+The full 391-fixture sanitizer corpus, 43 compiler units, 50 properties,
+670 formatting checks, seed gate, memory/debug-info checks and docs/shim checks
+pass. A tracked ASan/LSan compiler also emits the entire compiler without
+findings; its IR matches ordinary emission byte for byte.
+
+## Measurements
+
+Medians use decimal GB of requested bytes and MiB of peak RSS.
+[Raw samples and input/binary hashes](compiler-callgraph-worklists-measurements.json)
+include three measured rounds and the wide-graph comparison. Debug and release
+output hashes match across both compilers and all rounds on the same current
+source, including the new traversal and its unit.
+
+| Whole-compiler workload | Allocated GB before → after | Allocations before → after | Wall seconds before → after | Peak RSS MiB before → after |
+| --- | --- | --- | --- | --- |
+| Debug emit | 2.223 → 1.886 | 22,140,007 → 21,820,264 | 7.134 → 6.225 | 128.4 → 128.3 |
+| Release emit | 2.052 → 1.716 | 18,824,709 → 18,504,289 | 7.454 → 6.826 | 114.0 → 113.9 |
+| Check | 0.321 → 0.321 | 9,920,535 → 9,920,535 | 2.471 → 2.501 | 47.1 → 46.9 |
+
+Release traffic falls 16.4% (336 MB), debug traffic 15.2% (337 MB). Allocation
+counts fall only 1.7% and 1.4%: the gain removes large copies of pending arrays,
+rather than millions of tiny allocations. Checking uses neither traversal and
+has identical requested bytes and allocation counts.
+
+Timing is noisy: release ranges are 6.374–7.846 s before and 5.927–6.867 s after;
+debug ranges are 5.473–7.864 s before and 4.981–7.623 s after. Checking ranges
+overlap too. The emission medians improve, but these samples do not establish
+a reliable speedup. Peak RSS is essentially unchanged. This is an allocation
+traffic improvement, not a demonstrated retained-memory reduction. Repeated
+visited/lookup/body scans and branch/text composition remain separate costs.
+
 ## Reproduction
 
 Build main da13a511e30d30d207d6df12a8b7221c39cdb001 and this branch through their

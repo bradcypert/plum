@@ -167,6 +167,9 @@ retained-memory peak. The timing excludes Clang and does not establish an
 end-to-end native-build speedup. Reachability queue copying and cycle searches
 remain separate targets for a later profile.
 
+The next pass [batches pending callgraph work](compiler-callgraph-worklists.md)
+to remove repeated frontier copies while preserving discovery order and fuel.
+
 ## Reproduction
 
 Build merged-main ac6083ee749ef30659d915430d9ea6fc45ccc3f5 and this branch through
