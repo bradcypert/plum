@@ -2757,7 +2757,7 @@ pub let builtin_methods (): Array[BuiltinMethod] = [
     BuiltinMethod { recv: "String", name: "concat", detail: "concat(other: String): String", doc: "The two strings run together. Plum has no `+` for strings; this is the operation.", recv_ty: "String" },
     BuiltinMethod { recv: "String", name: "len", detail: "len(): Int", doc: "The length in BYTES, not characters. `String.char_len` counts characters.", recv_ty: "String" },
     BuiltinMethod { recv: "String", name: "split", detail: "split(sep: String): Array[String]", doc: "The string cut at each occurrence of `sep`. Splitting on the empty string gives one entry per character.", recv_ty: "String" },
-    BuiltinMethod { recv: "String", name: "trim", detail: "trim(): String", doc: "The string without leading or trailing ASCII whitespace.", recv_ty: "String" },
+    BuiltinMethod { recv: "String", name: "trim", detail: "trim(): String", doc: "The string without leading or trailing Unicode whitespace.", recv_ty: "String" },
     BuiltinMethod { recv: "String", name: "contains", detail: "contains(needle: String): Bool", doc: "Whether `needle` appears anywhere in the string. Byte-wise.", recv_ty: "String" },
     BuiltinMethod { recv: "String", name: "starts_with", detail: "starts_with(prefix: String): Bool", doc: "Whether the string begins with `prefix`. Byte-wise.", recv_ty: "String" },
     BuiltinMethod { recv: "String", name: "ends_with", detail: "ends_with(suffix: String): Bool", doc: "Whether the string ends with `suffix`. Byte-wise.", recv_ty: "String" },

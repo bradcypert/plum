@@ -1,0 +1,60 @@
+let temporary (direction: Int): String = {
+    let source = "é".repeat(64);
+    if direction == 0 { source.trim_start() }
+    else if direction == 1 { source.trim_end() }
+    else { source.trim() }
+}
+
+let ownership (): Unit = {
+    for direction in 0..3 { assert_eq(temporary(direction), "é".repeat(64)); };
+    let mut source = "é".repeat(64);
+    let pointer = source.as_cstr();
+    let alias = source.trim_end();
+    source = source.concat("changed");
+    assert_eq(alias, "é".repeat(64));
+    assert_eq(unsafe { pointer.as_string() }, alias);
+    assert_eq(source, alias.concat("changed"));
+    let mut padded = "\u{3000}".concat(alias).concat("\u{a0}");
+    let original = padded.as_cstr();
+    let trimmed = padded.trim();
+    padded = padded.concat("changed");
+    assert_eq(trimmed, alias);
+    assert_eq(unsafe { original.as_string() }, "\u{3000}".concat(alias).concat("\u{a0}"));
+    assert_eq(padded, "\u{3000}".concat(alias).concat("\u{a0}changed"))
+}
+
+let main (): Unit = {
+    let spaces = ["\t", "\n", "\u{b}", "\u{c}", "\r", " ", "\u{85}", "\u{a0}", "\u{1680}",
+        "\u{2000}", "\u{2001}", "\u{2002}", "\u{2003}", "\u{2004}", "\u{2005}",
+        "\u{2006}", "\u{2007}", "\u{2008}", "\u{2009}", "\u{200a}", "\u{2028}",
+        "\u{2029}", "\u{202f}", "\u{205f}", "\u{3000}"];
+    let text = "é中🙂\x00x";
+    for ws in spaces {
+        let source = ws.concat(text).concat(ws);
+        assert_eq(source.trim_start(), text.concat(ws));
+        assert_eq(source.trim_end(), ws.concat(text));
+        assert_eq(source.trim(), text);
+        assert_eq(source, ws.concat(text).concat(ws));
+        assert_eq(ws.trim_start(), "");
+        assert_eq(ws.trim_end(), "");
+    };
+    for keep in ["\x00", "\u{180e}", "\u{200b}", "\u{feff}", "🙂"] {
+        assert_eq(keep.trim_start(), keep);
+        assert_eq(keep.trim_end(), keep);
+        assert_eq(keep.trim(), keep);
+    };
+    assert_eq("".trim_start(), "");
+    assert_eq("".trim_end(), "");
+    let start = String.trim_start;
+    let end = String.trim_end;
+    assert_eq(start("\u{3000}x"), "x");
+    assert_eq(end("x\u{3000}"), "x");
+    ownership();
+    // The decoder uses constant stack space even for a long boundary.
+    let mut long = "\u{3000}";
+    for i in 0..19 { long = long.concat(long); };
+    assert_eq(long.trim_start(), "");
+    assert_eq(long.trim_end(), "");
+    assert_eq(long.trim(), "");
+    println("directional trims share Unicode whitespace, preserve UTF-8/NULs and immutable aliases")
+}

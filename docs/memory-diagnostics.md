@@ -9,6 +9,16 @@ Dropping the last owner releases the cell through the normal allocator path.
 The compiler's existing conservative loop analysis can retain a local until
 overwrite or function cleanup; repeated conversions must remain bounded, and
 completed function calls must restore the caller's live-byte baseline.
+
+String.trim, trim_start and trim_end scan UTF-8 boundaries with the same Unicode
+whitespace predicate. An unchanged result owns a reference to the original cell,
+avoiding a copy while retaining that cell's capacity until its last owner drops.
+It can also prevent an alias from being updated in place. A changed result copies
+only the retained bytes into independent storage; it does not keep a large input
+alive through an interior slice. This uses normal Perceus reference counting.
+The [compiler trim measurements](compiler-trim-measurements.md) distinguish the
+reduction in allocation traffic from peak RSS.
+
 NativeBuffer.snapshot provides a separate optional ledger for NativeBuffer
 payload requests, live/peak resource counts and requested capacity. Its handle
 and lease cells remain in Memory.snapshot; payload, native metadata and allocator

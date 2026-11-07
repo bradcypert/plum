@@ -1,0 +1,10 @@
+let main (): Unit = {
+    let source = String.repeat("x", 4096);
+    let mut total = 0;
+    for i in 0..1000 {
+        total = total + source.trim_start().len() + source.trim_end().len() + source.trim().len();
+    };
+    assert_eq(total, 12288000);
+    let trimmed = "\u{3000}".concat(source).concat("\u{a0}").trim();
+    assert_eq(trimmed, source)
+}

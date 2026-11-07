@@ -2023,3 +2023,31 @@ pub let test_memory_origin_conservation (): Unit = {
     if Option.is_none(Memory.by_origin()) { assert(Option.is_none(Memory.snapshot())); }
     else { for seed in 0..64 { origin_conservation(seed); }; }
 }
+
+// Known non-whitespace endpoints make the expected boundaries independent
+// of the scanner. Interior whitespace and NULs must survive all directions.
+pub let test_unicode_trim_boundaries (): Unit = {
+    let spaces = ["\t", "\n", "\u{b}", "\u{c}", "\r", " ", "\u{85}", "\u{a0}", "\u{1680}",
+        "\u{2000}", "\u{2001}", "\u{2002}", "\u{2003}", "\u{2004}", "\u{2005}",
+        "\u{2006}", "\u{2007}", "\u{2008}", "\u{2009}", "\u{200a}", "\u{2028}",
+        "\u{2029}", "\u{202f}", "\u{205f}", "\u{3000}"];
+    let alphabet = ["a", "\x00", "中", " ", "\n", "🙂"];
+    for seed in 0..250 {
+        let left = spaces[seed % spaces.len()].repeat(rand_between(seed, 0, 8));
+        let right = spaces[rand_between(next_seed(seed), 0, spaces.len() - 1)].repeat(rand_between(next_seed(seed), 0, 8));
+        let mut core = "é";
+        for i in 0..rand_between(seed, 0, 20) {
+            core = core.concat(alphabet[rand_between(next_seed(seed + i), 0, alphabet.len() - 1)]);
+        };
+        core = core.concat("🙂");
+        let source = left.concat(core).concat(right);
+        check_eq("trim start", seed.to_string(), source.trim_start(), core.concat(right));
+        check_eq("trim end", seed.to_string(), source.trim_end(), left.concat(core));
+        check_eq("trim both", seed.to_string(), source.trim(), core);
+        assert_eq(source.trim_start().trim_end(), source.trim());
+        assert_eq(source.trim_end().trim_start(), source.trim());
+        assert_eq(source.trim_start().trim_start(), source.trim_start());
+        assert_eq(source.trim_end().trim_end(), source.trim_end());
+        assert_eq(source, left.concat(core).concat(right));
+    }
+}

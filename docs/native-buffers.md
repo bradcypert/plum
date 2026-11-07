@@ -97,8 +97,10 @@ and panic cleanup, threaded TCP/TLS receives, native capacity returning to its
 baseline, and ASan/LSan. Diagnostic overhead and the per-read allocation tradeoff
 belong in the PR alongside compiler memory measurements.
 
-Streaming file-read scratch is removed by #462. Stdin reader-state
-synchronization remains #271.
+Streaming file-read scratch is removed by #462. Public stdin reads use the
+separate serialized reader and owned results shipped in #414, completing #271.
+Its retained pending buffer is outside NativeBuffer accounting. Legacy bootstrap
+stdin entry points keep their single-consumer contract.
 
 ## A reusable text-widget adapter
 
