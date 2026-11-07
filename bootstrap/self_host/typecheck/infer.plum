@@ -1501,14 +1501,14 @@ pub let first_handle_within (ctx: TyContext) (t: ITy) (seen: Array[String]): Opt
                 } }
             },
         ITEnum(name, args) => {
-                let inner = first_handle_in_list(ctx, args, seen, 0);
-                if Option.is_some(inner) { inner }
-                else if Array.contains(seen, name) { None }
-                else { match ctx_enum_tags(ctx, name) {
-                    Some(tags) => first_handle_in_variants(ctx, name, tags, args, seen.push(name), 0),
-                    None => None,
-                } }
-            },
+            let inner = first_handle_in_list(ctx, args, seen, 0);
+            if Option.is_some(inner) { inner }
+            else if Array.contains(seen, name) { None }
+            else { match ctx_enum_tags(ctx, name) {
+                Some(tags) => first_handle_in_variants(ctx, name, tags, args, seen.push(name), 0),
+                None => None,
+            } }
+        },
         ITTuple(elems) => first_handle_in_list(ctx, elems, seen, 0),
         ITRef(inner) => first_handle_within(ctx, inner, seen),
         _ => None,
@@ -1599,34 +1599,34 @@ let first_function_within (ctx: TyContext) (t: ITy) (seen: Array[String]): Optio
     match t {
         ITFunction(_, _) => Some(t),
         ITStruct(name, args) => {
-                let inner = first_function_in_list(ctx, args, seen, 0);
-                if Option.is_some(inner) { inner }
-                else if Array.contains(seen, name) { None }
-                else {
-                    // `Array`/`Ref` and friends are BUILTIN: they have
-                    // no declaration to read fields from, and asking
-                    // for one is an error rather than an empty answer.
-                    // Their element type is a type ARGUMENT, already
-                    // walked just above.
-                    match find_struct(ctx, name) {
-                        None => None,
-                        Some(_) => first_function_in_list(ctx,
+            let inner = first_function_in_list(ctx, args, seen, 0);
+            if Option.is_some(inner) { inner }
+            else if Array.contains(seen, name) { None }
+            else {
+                // `Array`/`Ref` and friends are BUILTIN: they have
+                // no declaration to read fields from, and asking
+                // for one is an error rather than an empty answer.
+                // Their element type is a type ARGUMENT, already
+                // walked just above.
+                match find_struct(ctx, name) {
+                    None => None,
+                    Some(_) => first_function_in_list(ctx,
                             Array.map(ctx_field_types(ctx, name), |ft| instantiate_template(ctx_struct_generics(ctx, name), args, ft)),
                             seen.push(name), 0),
-                    }
                 }
-            },
+            }
+        },
         ITEnum(name, args) => {
-                let inner = first_function_in_list(ctx, args, seen, 0);
-                if Option.is_some(inner) { inner }
-                else if Array.contains(seen, name) { None }
-                else {
-                    match ctx_enum_tags(ctx, name) {
-                        Some(tags) => first_function_in_variants(ctx, name, tags, args, seen.push(name), 0),
-                        None => None,
-                    }
+            let inner = first_function_in_list(ctx, args, seen, 0);
+            if Option.is_some(inner) { inner }
+            else if Array.contains(seen, name) { None }
+            else {
+                match ctx_enum_tags(ctx, name) {
+                    Some(tags) => first_function_in_variants(ctx, name, tags, args, seen.push(name), 0),
+                    None => None,
                 }
-            },
+            }
+        },
         ITTuple(elems) => first_function_in_list(ctx, elems, seen, 0),
         // Ref equality compares identity, so its value is not inspected.
         _ => None,
