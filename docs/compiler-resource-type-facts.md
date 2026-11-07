@@ -131,6 +131,10 @@ Sanitization, reachability and other text construction remain allocation costs
 outside this cache. Declaration-graph analysis remains an alternative if a new
 profile justifies that larger redesign.
 
+The next pass [separates structural identities from injective symbol
+rendering](compiler-symbol-identities.md), fixing #320 while reducing repeated
+name construction during discovery.
+
 CI run [537](https://github.com/bradcypert/plum/actions/runs/42381821874)
 passed both requested-byte budgets on Linux ARM64, x86-64 and macOS, but ARM64
 debug emission reached 131,340 KiB, exceeding the 128 MiB RSS guard by 268 KiB. The

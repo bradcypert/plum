@@ -29,6 +29,8 @@ because nominal and generic types share helpers.
 encoding and the backend's defaulted structural type identity. C externs and
 fixed runtime ABI names keep their existing spelling. Generated functions,
 type helpers, lifted closures and task entries have separate namespaces.
+The encoder consumes resolved identities; import-alias and source-discovery
+work tracked by #440/#321 remains separate.
 
 | Approach | Benefit | Cost / decision |
 | --- | --- | --- |
@@ -133,6 +135,37 @@ text and emission order match exactly; raw output intentionally differs because
 generated names have changed. Bootstrap checks additionally compare new-compiler
 stages byte for byte. Functional and sanitizer fixtures cover the collision
 cases where preserving old output would be incorrect.
+
+## Measurements
+
+Medians use decimal GB of requested allocation traffic and MiB of peak RSS.
+[Raw samples, input/binary hashes and normalized IR hashes](compiler-symbol-identities-measurements.json)
+record three measured rounds. Both ordinary binaries process the same changed
+source, including the new unit and identity module. The baseline is merged main
+ac6083e; the changed compiler is built through its refreshed seed.
+
+| Whole-compiler workload | Allocated GB before → after | Allocations before → after | Wall seconds before → after | Peak RSS MiB before → after |
+| --- | --- | --- | --- | --- |
+| Debug emit | 2.397 → 2.220 | 29,177,390 → 22,105,017 | 8.223 → 6.629 | 127.0 → 129.3 |
+| Release emit | 2.227 → 2.050 | 25,858,426 → 18,792,657 | 8.003 → 6.338 | 113.7 → 114.8 |
+| Check | 0.320 → 0.320 | 9,894,961 → 9,894,897 | 2.097 → 2.083 | 48.0 → 48.0 |
+
+Release traffic falls 7.9%, debug traffic 7.4%, saving about 176 MB per
+invocation. Allocation counts fall 27.3% and 24.2% respectively. Release
+emission takes 7.997–8.412 s before and 6.317–6.521 s after; debug emission
+takes 8.220–8.345 s before and 6.572–6.651 s after. The medians improve 20.8%
+and 19.4%. Checking has overlapping timing ranges; its tiny allocation change
+(64 allocations, about 1.7 KB) accompanies replacement of the old global
+character whitelist with the constant hex table.
+
+Emitted IR grows by 426,644 bytes in both modes (about 1.6% release, 1.3%
+debug) because symbol spellings change. The normalized instruction text and
+emission order match in both modes. Peak RSS rises about 1.1 MiB for release
+and 2.3 MiB for debug. This change improves identity correctness, transient
+allocation traffic and observed LLVM emission time; it does not improve the
+retained-memory peak. The timing excludes Clang and does not establish an
+end-to-end native-build speedup. Reachability queue copying and cycle searches
+remain separate targets for a later profile.
 
 ## Reproduction
 
