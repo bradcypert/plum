@@ -97,8 +97,8 @@ generic specializations, separate programs with identical type spelling and
 qualified-name collisions. The compiler-unit discovery floor increases to 41.
 
 Whole-compiler requested-byte limits tighten to 2.9 GB for debug emission and
-2.7 GB for release, retaining the existing platform RSS ceilings. The seed is
-regenerated and verified through the seed-to-source bootstrap path.
+2.7 GB for release. The seed is regenerated and verified through the
+seed-to-source bootstrap path.
 
 ## Measurements
 
@@ -130,6 +130,17 @@ neither RSS nor cumulative requested bytes measures the cache's exact live size.
 Sanitization, reachability and other text construction remain allocation costs
 outside this cache. Declaration-graph analysis remains an alternative if a new
 profile justifies that larger redesign.
+
+CI run [537](https://github.com/bradcypert/plum/actions/runs/42381821874)
+passed both requested-byte budgets on Linux ARM64, x86-64 and macOS, but ARM64
+debug emission reached 131,340 KiB, exceeding the 128 MiB RSS guard by 268 KiB. The
+previous merged PR already used 127 MiB there; x86-64 uses 127 MiB in this run.
+The guard now separates debug and release: Linux debug gets 144 MiB (about
+12% headroom above the ARM64 measurement), while release retains 128 MiB and
+checking 64 MiB. macOS retains its 192/192/80 MiB ceilings. Requested-byte
+budgets remain 2.9/2.7 GB. The cache's lifetime ends with function emission,
+before debug metadata assembly; this calibration does not claim a peak-memory
+improvement.
 
 ## Reproduction
 
