@@ -10,6 +10,7 @@ root = Path(__file__).resolve().parent.parent
 compiler = str(Path(sys.argv[1] if len(sys.argv) > 1 else './sh.real').resolve())
 fixture = root / 'bootstrap/exec_corpus/memory_stats'
 enabled = 'memory diagnostics enabled: bounded ownership, reuse, capacity and threaded snapshots pass\n'
+origin_enabled = 'memory origins: coherent provenance, reuse, growth, aliases, peaks and workers\n'
 
 
 def main():
@@ -25,11 +26,18 @@ def main():
             return r
 
         # The ordinary corpus independently asserts None/disabled behavior.
-        for flags in [[], ['--release']]:
-            binary = Path(work) / 'tracked.exe'
-            run([compiler, 'build', fixture, '--memory-stats', *flags, '-o', binary])
-            if run([binary]).stdout != enabled:
-                raise RuntimeError('incorrect tracked fixture output')
+        for source, expected in [(fixture, enabled), (root / 'bootstrap/exec_corpus/memory_origins', origin_enabled)]:
+            for flags in [[], ['--release']]:
+                binary = Path(work) / 'tracked.exe'
+                run([compiler, 'build', source, '--memory-stats', *flags, '-o', binary])
+                if run([binary]).stdout != expected:
+                    raise RuntimeError('incorrect tracked fixture output')
+        # Run the generated-input law with diagnostics actually enabled,
+        # alongside its disabled-mode check in the ordinary property gate.
+        props = run([compiler, 'test', root / 'bootstrap/properties', '--memory-stats'],
+                    contains='test_memory_origin_conservation ... ok')
+        if '0 failed' not in props.stdout:
+            raise RuntimeError('tracked properties failed:\n' + props.stdout + props.stderr)
         for tracking, hit in [(False, False), (True, False), (True, True), (False, True)]:
             flags = ['--memory-stats'] if tracking else []
             r = run([compiler, 'run', fixture, *flags])
@@ -39,8 +47,8 @@ def main():
         # No sanitizer fallback on unsupported platforms. Supported native
         # Linux/macOS must detect leaks even while the registry indexes cells.
         if sys.platform.startswith('linux') or sys.platform == 'darwin':
-            for name, fails, message in [('memory_stats', False, enabled), ('tracked_leak', True, 'LeakSanitizer: detected memory leaks')]:
-                source = fixture if name == 'memory_stats' else root / 'bootstrap/sanitizer_corpus/tracked_leak'
+            for name, fails, message in [('memory_stats', False, enabled), ('memory_origins', False, origin_enabled), ('tracked_leak', True, 'LeakSanitizer: detected memory leaks')]:
+                source = root / ('bootstrap/sanitizer_corpus' if fails else 'bootstrap/exec_corpus') / name
                 binary = Path(work) / (name + ".exe")
                 run([compiler, 'build', source, '--memory-stats', '--sanitize', 'address', '-o', binary])
                 run([binary], fails=fails, contains=message)
@@ -50,7 +58,9 @@ def main():
         tracked = run([compiler, 'emit-llvm', fixture, '--memory-stats']).stdout
         if 'call ptr @plum_heap_alloc' in plain or 'call ptr @plum_heap_alloc' not in tracked:
             raise RuntimeError('ordinary/tracked allocation boundaries were not separated')
-    print('memory-stats-check: bounded ownership, aliases, capacity/reuse, table churn, frozen/threaded snapshots, cache isolation and sanitizer coexistence passed')
+        if 'call ptr @plum_alloc(i64' in tracked or '@plum_alloc_origin' in plain:
+            raise RuntimeError('fresh generated cells bypass origin attribution or ordinary mode gained it')
+    print('memory-stats-check: bounded ownership, origins, aliases, capacity/reuse, table churn, coherent/frozen/threaded snapshots, tracked properties, cache isolation and sanitizer coexistence passed')
 
 
 if __name__ == '__main__':

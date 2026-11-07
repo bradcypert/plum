@@ -5,6 +5,7 @@ use Url;
 use Path;
 use Json;
 use NativeBuffer;
+use Memory;
 
 // Property tests: invariants that must hold for MANY inputs, checked
 // against values generated here rather than against answers recorded
@@ -1983,4 +1984,36 @@ pub let test_file_read_partitions (): Unit = match Os.temp_dir() {
         };
         assert(Os.remove_tree(root) == Ok(()))
     },
+}
+
+// Partition conservation is independent of the registry implementation:
+// rows and totals must describe the same capture despite observer allocations.
+let origin_conservation (seed: Int): Unit = {
+    let payload = rand_bytes(next_seed(seed), rand_between(seed, 0, 80));
+    let held = ref([payload, payload]);
+    match Memory.by_origin() {
+        None => assert(false),
+        Some(profile) => {
+            let mut count = 0;
+            let mut traffic = 0;
+            let mut live = 0;
+            let mut bytes = 0;
+            for row in profile.rows {
+                count = count + row.stats.allocations;
+                traffic = traffic + row.stats.allocated_bytes;
+                live = live + row.stats.live_allocations;
+                bytes = bytes + row.stats.live_bytes;
+                assert(row.stats.peak_bytes >= row.stats.live_bytes);
+            };
+            assert_eq(count, profile.total.allocations);
+            assert_eq(traffic, profile.total.allocated_bytes);
+            assert_eq(live, profile.total.live_allocations);
+            assert_eq(bytes, profile.total.live_bytes);
+        },
+    };
+    assert(held.get()[0] == payload)
+}
+pub let test_memory_origin_conservation (): Unit = {
+    if Option.is_none(Memory.by_origin()) { assert(Option.is_none(Memory.snapshot())); }
+    else { for seed in 0..64 { origin_conservation(seed); }; }
 }

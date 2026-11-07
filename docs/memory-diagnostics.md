@@ -160,10 +160,10 @@ individual observation points and do not promise a coherent multi-field snapshot
 Ordinary builds allocate directly through malloc and inline the release boundary;
 they contain no tracking table, mutex or thread-local snapshot metadata. Diagnostic
 builds acquire one shared mutex per allocation, free and snapshot. The address
-registry uses roughly 16 bytes per slot on supported 64-bit targets, grows with
+registry uses roughly 24 bytes per slot on supported 64-bit targets, grows with
 maximum concurrent live cells, and retains that capacity after a burst. Tombstone
 compaction avoids unbounded growth from bounded allocation/free churn. Frozen
-snapshots add a small fixed thread-local copy. Registry storage is excluded from
+snapshots add fixed thread-local copies of totals and eight origin rows. Registry storage is excluded from
 reported payload bytes and can still contribute to RSS after live payload drops.
 Metadata/counter failures abort with a diagnostic rather than silently undercount.
 
@@ -173,9 +173,48 @@ include an intentionally leaked Plum cell to verify this boundary. This encoding
 is diagnostic bookkeeping, not ownership or a replacement allocator. No cell
 layout, pointer offset or allocator-usable-size contract changes.
 
-Useful categories/source attribution are deferred until construction and cross-type
-reuse have a complete retagging contract; aggregate totals do not guess a cell's
-current type from its original allocation. Cumulative traffic, live requested bytes,
+`Memory.by_origin()` captures totals and eight original construction families
+together: unspecified/native, byte storage, array storage, record (including
+tuples), variant (including Option/Result), closure, ref and handle cells. All
+rows are included, even zero rows. A handle's native resource remains excluded.
+
+Origins describe the allocation's provenance, not current source-language types
+or source locations. Perceus cross-type reuse/reset keeps the original origin
+and request until final storage release. String/Bytes/CStr views share byte
+storage; creating another view does not reclassify or allocate a cell. Replacement
+growth receives its own origin/request and may overlap the old cell. Unannotated
+native cell producers remain in the unspecified row rather than disappearing.
+
+```plum
+use Memory;
+let main (): Unit = match Memory.by_origin() {
+    None => println("build with --memory-stats to enable origins"),
+    Some(profile) => {
+        for row in profile.rows {
+            println("${row.origin.to_string()}: ${row.stats.live_bytes} live requested bytes");
+        };
+    },
+}
+```
+
+`OriginSnapshot.total` and `rows` belong to the same registry capture. The sums
+of row traffic/live allocations and bytes equal that total, including while
+workers run. Row peaks are independent lifetime maxima and are **not additive**;
+their sum need not equal the process peak. Separate calls to snapshot/by_origin
+observe separate moments. Profile records, the array and Some wrapper allocate
+after capture and remain visible in later samples. Hoisted immortal origin-label
+constants stay excluded, as do other immortal values. Keep observer state equal
+when comparing live baselines.
+
+Attribution adds eight fixed counter rows, a fixed thread-local frozen copy
+and an origin in each registry slot (24 bytes versus the previous 16 on 64-bit
+targets). Ordinary builds have no registry/origin counters or per-cell metadata,
+and their generated allocations retain the existing malloc path. Exact source
+sites/call stacks and current-occupant categories are not reported by this profile;
+the [design comparison](memory-attribution-design.md) explains those separate
+contracts. No events are added to Perceus reuse paths.
+
+Cumulative traffic, live requested bytes,
 peak requested bytes and OS RSS answer different questions. A nonzero live snapshot
 alone is not a leak verdict. See the [delivery plan](memory-diagnostics-plan.md).
 Perceus ownership and in-place reuse remain the production memory model.

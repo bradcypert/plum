@@ -25,3 +25,35 @@ not RSS or all native allocations, and a nonzero live value is not a leak verdic
 ## `let delta (before: Snapshot) (after: Snapshot): Delta`
 
 Subtract an earlier snapshot from a later one in the same process.
+
+## `enum Origin`
+
+Physical construction family at the original allocation. This is NOT
+the current occupant's type or a source location. ByteStorage is shared
+by String/Bytes/CStr views; Record includes tuples, Variant includes
+Option/Result, and HandleCell includes task/channel endpoint cells.
+Unspecified covers native producers using the unannotated cell allocator.
+
+## `struct OriginStats`
+
+Traffic, live requested storage and independent lifetime peaks for one
+original construction family. Reuse/reset never changes this origin.
+
+## `struct OriginSnapshot`
+
+One coherent capture of totals and every origin, including zero rows.
+Row traffic/live counts and bytes sum to total. Row peaks are independent
+maxima and do not generally sum to the process peaks in total.
+
+## `let by_origin (): Option[OriginSnapshot]`
+
+Capture attribution by original construction family under --memory-stats,
+or None without diagnostics. The total and all eight rows freeze together
+before allocating the public profile. Its records/array/Some wrapper are
+ordinary tracked cells; retained observers affect later samples. Immortal
+constructor constants, including hoisted origin labels, remain excluded.
+A cell keeps its origin/request through aliases and Perceus cross-type
+reuse, including raw reset-token storage. Replacement growth is a fresh
+allocation with its own origin; final release retires the original charge.
+This measures storage provenance, not present value types or source sites.
+Separate snapshot/by_origin calls observe separate points in time.

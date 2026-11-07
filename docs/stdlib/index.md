@@ -75,6 +75,10 @@ Every declaration, linked to the page that documents it.
 - [`struct Delta`](Memory.md#Delta)
 - [`let snapshot (): Option[Snapshot]`](Memory.md#snapshot)
 - [`let delta (before: Snapshot) (after: Snapshot): Delta`](Memory.md#delta)
+- [`enum Origin`](Memory.md#Origin)
+- [`struct OriginStats`](Memory.md#OriginStats)
+- [`struct OriginSnapshot`](Memory.md#OriginSnapshot)
+- [`let by_origin (): Option[OriginSnapshot]`](Memory.md#by_origin)
 
 ## [NativeBuffer](NativeBuffer.md)
 

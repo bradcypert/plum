@@ -1,0 +1,95 @@
+use Memory;
+extern "C" {
+    fn check_origin_registry() -> Int;
+    fn origin_live(origin: Int) -> Int;
+    fn origin_allocations(origin: Int) -> Int;
+    fn origin_input() -> Int;
+}
+
+enum Envelope { Packed(Int, Int, Int) }
+struct Point { x: Int, y: Int }
+let into_record (s: Envelope) (expected_live: Int): Point = match s {
+    Packed(x, y, z) => {
+        // The last-use frontier has reset the unique envelope before this
+        // continuation. Its raw storage must still carry its original charge.
+        assert_eq(unsafe { origin_live(4) }, expected_live);
+        Point { x: x, y: y + z }
+    },
+}
+let cross_type (): Unit = unsafe {
+    let s = Packed(origin_input(), 2, 3);
+    let records = origin_allocations(3);
+    let variants = origin_live(4);
+    let point = into_record(s, variants);
+    // The record occupies the original variant's reset/reuse storage.
+    assert_eq(origin_allocations(3), records);
+    assert_eq(origin_live(4), variants);
+    assert_eq(point.x + point.y, 6)
+}
+let shared_cross_type (): Unit = unsafe {
+    let s = Packed(origin_input(), 2, 3);
+    let alias = s;
+    let records = origin_allocations(3);
+    let point = into_record(s, origin_live(4));
+    assert_eq(origin_allocations(3), records + 1);
+    assert_eq(match alias { Packed(x, y, z) => x + y + z }, point.x + point.y)
+}
+
+let consistent (profile: Memory.OriginSnapshot): Unit = {
+    assert_eq(profile.rows.len(), 8);
+    let mut allocations = 0;
+    let mut bytes = 0;
+    let mut live = 0;
+    let mut live_bytes = 0;
+    for row in profile.rows {
+        allocations = allocations + row.stats.allocations;
+        bytes = bytes + row.stats.allocated_bytes;
+        live = live + row.stats.live_allocations;
+        live_bytes = live_bytes + row.stats.live_bytes;
+        assert(row.stats.peak_allocations >= row.stats.live_allocations);
+        assert(row.stats.peak_bytes >= row.stats.live_bytes);
+    };
+    assert_eq(allocations, profile.total.allocations);
+    assert_eq(bytes, profile.total.allocated_bytes);
+    assert_eq(live, profile.total.live_allocations);
+    assert_eq(live_bytes, profile.total.live_bytes)
+}
+let live_bytes (): Int = match Memory.snapshot() { None => -1, Some(s) => s.live_bytes }
+let observe (): Unit = match Memory.by_origin() { None => assert(false), Some(s) => consistent(s) }
+let allocations (origin: Memory.Origin): Int = match Memory.by_origin() {
+    None => -1,
+    Some(profile) => {
+        let mut result = -1;
+        for row in profile.rows { if row.origin == origin { result = row.stats.allocations; }; };
+        result
+    },
+}
+let work (): Unit = {
+    let refs = allocations(Memory.Origin.RefCell);
+    let r = ref(3);
+    assert_eq(allocations(Memory.Origin.RefCell), refs + 1);
+    let closures = allocations(Memory.Origin.Closure);
+    let f = |x: Int| x + r.get();
+    assert_eq(allocations(Memory.Origin.Closure), closures + 1);
+    let a = [f(1), f(2)];
+    let handles = allocations(Memory.Origin.HandleCell);
+    let task = spawn { a[0] + a[1] };
+    assert_eq(allocations(Memory.Origin.HandleCell), handles + 1);
+    assert_eq(task.join(), 9);
+    let bytes = "hello".concat(r.get().to_string()).as_bytes();
+    let cstr = bytes.as_cstr();
+    assert_eq(unsafe { cstr.as_string() }, "hello3");
+    observe()
+}
+let main (): Unit = {
+    if Option.is_none(Memory.by_origin()) {
+        assert(Option.is_none(Memory.snapshot()));
+        println("memory origins disabled")
+    } else {
+        let baseline = live_bytes();
+        for i in 0..8 { cross_type(); shared_cross_type(); work(); observe(); assert_eq(live_bytes(), baseline); };
+        assert_eq(unsafe { check_origin_registry() }, 1);
+        observe();
+        println("memory origins: coherent provenance, reuse, growth, aliases, peaks and workers")
+    }
+}
