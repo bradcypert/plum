@@ -771,7 +771,7 @@ raise SystemExit(subprocess.call(["clang", *sys.argv[1:]]))
         c_program = '// source location fixture\n__attribute__((noinline)) long long native_location(void) { return 7; }\n'
         def check_locations(binary, plum_line, native_line):
             symbols = subprocess.check_output(["nm", str(binary)], text=True)
-            for name, path, line in (("plum_top", plum, plum_line),
+            for name, path, line in (("plum.f..top.0.", plum, plum_line),
                                      ("native_location", native, native_line)):
                 matches = [row.split()[0] for row in symbols.splitlines()
                            if row.split()[-1:] == [name]]

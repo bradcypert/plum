@@ -1,0 +1,22 @@
+struct Box[T] { value: T }
+struct Box_Int { value: String }
+struct Pair[A, B] { left: A, right: B }
+
+let main (): Unit = {
+    let boxed = Box { value: 7 };
+    let named = Box_Int { value: "named" };
+    assert(boxed == Box { value: 7 });
+    assert(named == Box_Int { value: "named" });
+    assert_eq(boxed.to_string(), "Box { value: 7 }");
+    assert_eq(named.to_string(), "Box_Int { value: \"named\" }");
+    let table = Map.new(()).insert(boxed, "generic");
+    assert_eq(table.get(boxed), Some("generic"));
+    assert("native string equality" == "native string equality");
+    let a = Pair { left: Box { value: 1 }, right: "two" };
+    let b = Pair { left: 1, right: Box { value: "two" } };
+    assert(a == a);
+    assert(b == b);
+    assert_eq(a.to_string(), "Pair { left: Box { value: 1 }, right: \"two\" }");
+    assert_eq(b.to_string(), "Pair { left: 1, right: Box { value: \"two\" } }");
+    println("nominal types and nested generic shapes have distinct equality, hash, render and release helpers")
+}

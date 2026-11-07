@@ -37,7 +37,7 @@ def main():
         # rather than only testing native malloc/free interceptors.
         for flags in [[], ['--release']]:
             result = run([build('invalid_plum', *flags)], fails=True, contains='heap-use-after-free')
-            if not re.search(r'\bin plum_main\b[^\n]*\bmain\.plum:\d+', result.stderr):
+            if not re.search(r'\bin plum\.f\.\.main\.0\.[^\n]*\bmain\.plum:\d+', result.stderr):
                 raise RuntimeError('generated Plum failure has no symbolized source line:\n' + result.stderr)
         run([build('invalid_native')], fails=True, contains='heap-buffer-overflow')
         run([build('leak')], fails=True, contains='LeakSanitizer: detected memory leaks')
@@ -60,13 +60,17 @@ def main():
             run([compiler, 'build', root / 'bootstrap/exec_corpus/literal_emission', '--sanitize=address', '--memory-stats', *flags, '-o', literal])
             run([literal], contains='literal emission preserves sections, order, aliases and reuse')
             for name, message in [('nested_resource_scope', 'nested resources close at scope exit'),
-                                  ('ref_payload_release', 'reference payload destructors are available')]:
+                                  ('ref_payload_release', 'reference payload destructors are available'),
+                                  ('symbol_modules', 'punctuation-distinct modules retain separate'),
+                                  ('symbol_types', 'nominal types and nested generic shapes'),
+                                  ('symbol_functions', 'specializations, associated functions and runtime helpers'),
+                                  ('symbol_native', 'C extern names retain their native spelling')]:
                 binary = Path(work) / (name + str(len(flags)))
                 run([compiler, 'build', root / 'bootstrap/exec_corpus' / name, '--sanitize=address', '--memory-stats', *flags, '-o', binary])
                 run([binary], contains=message)
         ir = run([compiler, 'emit-llvm', owned]).stdout
-        tail = re.search(r'define [^\n]*@plum_tail\([^\n]*\).*?\n}', ir, re.S)
-        if not tail or not re.search(r'musttail call [^\n]*@plum_tail\(', tail.group()):
+        tail = re.search(r'define [^\n]*@plum\.f\.\.tail\.0\.\([^\n]*\).*?\n}', ir, re.S)
+        if not tail or not re.search(r'musttail call [^\n]*@plum\.f\.\.tail\.0\.\(', tail.group()):
             raise RuntimeError('owned CStr forwarding lost its cyclic tail call')
 
         # IR and native-object cache identity includes instrumentation. Use

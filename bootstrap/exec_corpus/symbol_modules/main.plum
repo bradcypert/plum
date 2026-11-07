@@ -1,0 +1,23 @@
+use a.b;
+use a_b;
+
+let main (): Unit = {
+    assert_eq(b.value(), 11);
+    assert_eq(a_b.value(), "other");
+    assert_eq(b.limit(), 12);
+    assert_eq(a_b.limit(), 23);
+    let left = b.make();
+    let right = a_b.make();
+    assert(left == b.make());
+    assert(right == a_b.make());
+    assert_eq(left.to_string(), "a.b.Value { number: 11 }");
+    assert_eq(right.to_string(), "a_b.Value { text: \"other\" }");
+    let table = Map.new(()).insert(left, 1).insert(b.make(), 2);
+    assert_eq(table.len(), 1);
+    assert_eq(table.get(left), Some(2));
+    let other = Map.new(()).insert(right, 3);
+    assert_eq(other.get(right), Some(3));
+    let callback = b.plus;
+    assert_eq(callback(5), 16);
+    println("punctuation-distinct modules retain separate functions, globals and type helpers")
+}

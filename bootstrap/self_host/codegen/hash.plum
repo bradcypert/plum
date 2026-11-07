@@ -1,7 +1,7 @@
 // Structural hashing shares equality's reachable-type closure and layout
 // helpers. Hash helpers BORROW their operands and allocate no heap cells;
 // the method wrapper drops the owned receiver after the read completes.
-let cg_hash_sym (t: typecheck.ITy): String = "@plum_hash_".concat(cg_ity_mangle(t))
+let cg_hash_sym (t: typecheck.ITy): String = cg_type_symbol("hash", t)
 
 let cg_hash (p: CgProgram) (env: Array[CgSlot]) (n: Int) (base: typecheck.TExpr): Emit = {
     let b = cg_expr(p, env, n, base);

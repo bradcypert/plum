@@ -304,9 +304,6 @@ let cg_closure_code_offset (unit: Unit): Int = 8
 let cg_closure_rel_offset (unit: Unit): Int = 16
 let cg_capture_offset (index: Int): Int = 24 + 8 * index
 
-// A Plum name may contain a `.` (`Point.add`, an associated function),
-// which LLVM would accept only inside quotes; mangling keeps every
-// emitted symbol a plain identifier.
 // A global reference has the same module question as a function call,
 // and the same answer: the checker already resolved which global this
 // is, so recovering its module by name is enough.
@@ -315,29 +312,6 @@ let cg_global_module_acc (gs: Array[typecheck.TFn]) (name: String) (i: Int): Str
     if i >= gs.len() { "" } else if gs[i].name == name { gs[i].module } else { cg_global_module_acc(gs, name, i + 1) }
 
 let cg_global_slot (module_name: String) (name: String): String = "@g.".concat(cg_sym(module_name, name, []))
-
-// Everything that is not a letter, a digit or `_` becomes `_`. It used
-// to replace `.` alone, which was enough while every module name came
-// from a directory that happened to be a plain identifier -- and was
-// not enough for the prelude's own `<prelude>`, whose angle brackets
-// are not legal in an LLVM symbol. A directory named `my-mod` would
-// have hit the same wall.
-//
-// This is NOT injective (`a.b` and `a-b` mangle alike), which is
-// tolerable only because a module name still comes from a directory
-// and two sibling directories cannot differ by punctuation alone.
-let cg_mangle (name: String): String = "plum_".concat(cg_sanitize(name))
-
-// Anything that is not a letter, a digit or `_` becomes `_`. Every
-// name that reaches an LLVM symbol goes through here: module names,
-// which come from directories, and type names, which are qualified
-// with the module that declared them.
-pub let cg_sanitize (name: String): String =
-    Array.concat_all(Array.map(chars_of(name), |c| if cg_sym_char_ok(c) { c } else { "_" }))
-
-let CG_SYM_CHARS: Array[String] = chars_of("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_")
-
-let cg_sym_char_ok (c: String): Bool = Array.contains(CG_SYM_CHARS, c)
 
 // --- Monomorphization ---
 //
@@ -362,55 +336,8 @@ let cg_sym_char_ok (c: String): Bool = Array.contains(CG_SYM_CHARS, c)
 // the same name, and they must not share a symbol.
 pub struct CgInst { pub module: String, pub name: String, pub targs: Array[typecheck.ITy] }
 
-// A symbol name that is unique per instantiation. Monomorphic functions
-// keep their plain mangled name, so the entry point stays `@plum_main`
-// and the generated IR stays readable for the common case.
-// The module is part of the symbol. Without it `alpha.helper` and
-// `beta.helper` collide in LLVM — the checker would accept the program
-// and the backend would silently emit one function for both.
-let cg_sym (module_name: String) (name: String) (targs: Array[typecheck.ITy]): String = {
-    let base = if module_name == "" { cg_mangle(name) } else { cg_mangle(module_name.concat(".").concat(name)) };
-    if Array.is_empty(targs) { base } else { base.concat("__").concat(cg_targ_suffix(targs, 0, "")) }
-}
-
-let cg_targ_suffix (targs: Array[typecheck.ITy]) (i: Int) (acc: String): String =
-    if i >= targs.len() { acc }
-    else { cg_targ_suffix(targs, i + 1, if acc == "" { cg_ity_mangle(targs[i]) } else { acc.concat("_").concat(cg_ity_mangle(targs[i])) }) }
-
-// A type rendered as an identifier-safe string. It must be INJECTIVE
-// enough that two different types never collide, since a collision
-// would silently merge two specializations into one — so nested type
-// arguments are included rather than elided.
-let cg_ity_mangle (t: typecheck.ITy): String =
-    match t {
-        ITInt => "Int",
-        ITFloat => "Float",
-        ITBool => "Bool",
-        ITStr => "Str",
-        ITCStr => "CStr",
-        ITRawCStr => "RawCStr",
-        ITBytes => "Bytes",
-        ITUnit => "Unit",
-        // A declared type's name is QUALIFIED (`inner.P`,
-        // `<prelude>.Zipped`), and this feeds symbol names -- so it is
-        // sanitized here for the same reason `cg_mangle` sanitizes a
-        // module name. Without it a perfectly ordinary `Array.zip`
-        // emitted `@plum_rel_Array_<prelude>.Zipped_Int_Str`, which is
-        // not an LLVM identifier.
-        ITStruct(name, args) => if Array.is_empty(args) { cg_sanitize(name) } else { cg_sanitize(name).concat("_").concat(cg_targ_suffix(args, 0, "")) },
-        ITEnum(name, args) => if Array.is_empty(args) { cg_sanitize(name) } else { cg_sanitize(name).concat("_").concat(cg_targ_suffix(args, 0, "")) },
-        ITFunction(ptys, ret) => "fn".concat(cg_targ_suffix(ptys, 0, "")).concat("_to_").concat(cg_ity_mangle(ret)),
-        ITTuple(elems) => "tup".concat(cg_targ_suffix(elems, 0, "")),
-        ITRef(inner) => "Ref_".concat(cg_ity_mangle(inner)),
-        // An unconstrained type variable DEFAULTS, exactly as it does in
-        // `cg_of_ity` — and it must default to the same thing here, or
-        // a call site and its callee would disagree about the symbol.
-        ITVar(_) => "Unit",
-        ITParam(name) => { cg_fail("internal: generic parameter ${name} was not substituted before mangling"); "T" },
-    }
-
 let cg_inst_eq (a: CgInst) (b: CgInst): Bool =
-    a.module == b.module && a.name == b.name && cg_sym(a.module, a.name, a.targs) == cg_sym(b.module, b.name, b.targs)
+    a.module == b.module && a.name == b.name && cg_type_args_equal(a.targs, b.targs, 0)
 
 let cg_inst_seen (done: Array[CgInst]) (x: CgInst) (i: Int): Bool =
     if i >= done.len() { false } else if cg_inst_eq(done[i], x) { true } else { cg_inst_seen(done, x, i + 1) }
@@ -4023,7 +3950,7 @@ let cg_spawn (p: CgProgram) (env: Array[CgSlot]) (n: Int) (clo: typecheck.TExpr)
         _ => ITUnit,
     };
     let ret = cg_of_ity(ret_ity);
-    let entry = "@plum_task_entry".concat(c.n.to_string());
+    let entry = "@plum.task.".concat(c.n.to_string());
     let lty = cg_llvm_ty(ret);
     // The closure is the TASK's to release, and it is released here
     // rather than at `.join()` for the reason that a task nobody joins
@@ -4224,7 +4151,7 @@ let cg_closure (p: CgProgram) (env: Array[CgSlot]) (n: Int) (params: Array[Strin
     let param_tys = cg_closure_params(fn_ty);
     let param_itys = cg_closure_param_itys(fn_ity);
     if params.len() != param_tys.len() { cg_fail("closure takes ${params.len()} parameter(s) but its type says ${param_tys.len()}") };
-    let fn_name = "@plum_lambda".concat(n.to_string());
+    let fn_name = "@plum.l.".concat(n.to_string());
     // The lifted function's body is emitted against a FRESH environment
     // built from the captures and parameters, never the creation site's
     // slots directly — those are `alloca`s in a different function.
@@ -6286,7 +6213,7 @@ let cg_entry_named (entry_sym: String): String = cg_lines([
 // would have been quietly wrong for `Ident("a") == Ident("b")`, so it
 // isn't done that way.
 
-let cg_eq_sym (t: typecheck.ITy): String = "@plum_eq_".concat(cg_ity_mangle(t))
+let cg_eq_sym (t: typecheck.ITy): String = cg_type_symbol("eq", t)
 
 // Is this type compared by VALUE inline, or does it need a function?
 let cg_eq_is_primitive (t: typecheck.ITy): Bool =
@@ -6327,16 +6254,14 @@ let cg_eq_code (t: typecheck.ITy) (av: String) (bv: String) (n: Int): EqEmit = {
 // a `PExpr`) terminate — it needs exactly one function, which calls
 // itself.
 let HASH_TYPES: Ref[Array[typecheck.ITy]] = ref([])
-let HASH_SEEN: Ref[Map[String, Bool]] = ref(cg_empty_type_set(()))
-let EQ_TYPES: Ref[Map[String, Bool]] = ref(cg_empty_type_set(()))
-let REL_TYPES: Ref[Map[String, Bool]] = ref(cg_empty_type_set(()))
-let cg_empty_type_set (): Map[String, Bool] = Map.new(())
+let HASH_SEEN: Ref[Map[typecheck.ITy, Bool]] = ref(cg_empty_type_set(()))
+let EQ_TYPES: Ref[Map[typecheck.ITy, Bool]] = ref(cg_empty_type_set(()))
+let REL_TYPES: Ref[Map[typecheck.ITy, Bool]] = ref(cg_empty_type_set(()))
+let cg_empty_type_set (): Map[typecheck.ITy, Bool] = Map.new(())
 
-// Preserve the emitter's existing symbol identity and discovery order.
-// The old scan remangled every prior type AND the candidate on every
-// expression visit. A set computes the candidate's name once per visit.
-let cg_type_seen (table: Ref[Map[String, Bool]]) (t: typecheck.ITy): Bool = {
-    let key = cg_ity_mangle(t);
+// Preserve discovery order while keeping identity independent of rendering.
+let cg_type_seen (table: Ref[Map[typecheck.ITy, Bool]]) (t: typecheck.ITy): Bool = {
+    let key = cg_type_identity(t);
     let current = table.get();
     if current.contains(key) { true }
     else { table.set(current.insert(key, true)); false }
@@ -6347,7 +6272,7 @@ let cg_eq_close (p: CgProgram) (t: typecheck.ITy) (acc: Array[typecheck.ITy]): A
 
 // Hashing and equality share the layout walk, but keep separate reachable
 // sets so a comparison does not generate unused hash helpers or vice versa.
-let cg_structural_close (p: CgProgram) (t: typecheck.ITy) (acc: Array[typecheck.ITy]) (seen: Ref[Map[String, Bool]]): Array[typecheck.ITy] =
+let cg_structural_close (p: CgProgram) (t: typecheck.ITy) (acc: Array[typecheck.ITy]) (seen: Ref[Map[typecheck.ITy, Bool]]): Array[typecheck.ITy] =
     // A type with a handle ANYWHERE inside it gets no equality function,
     // not even a container's. The checker refuses `==` on exactly these
     // (`first_handle_within`), so nothing can call one -- and generating
@@ -6377,15 +6302,15 @@ let cg_structural_close (p: CgProgram) (t: typecheck.ITy) (acc: Array[typecheck.
     }
 
 let cg_ty_in (acc: Array[typecheck.ITy]) (t: typecheck.ITy) (i: Int): Bool =
-    cg_ty_name_in(acc, cg_ity_mangle(t), i)
+    cg_ty_name_in(acc, cg_type_identity(t), i)
 
-let cg_ty_name_in (acc: Array[typecheck.ITy]) (name: String) (i: Int): Bool =
-    if i >= acc.len() { false } else if cg_ity_mangle(acc[i]) == name { true } else { cg_ty_name_in(acc, name, i + 1) }
+let cg_ty_name_in (acc: Array[typecheck.ITy]) (key: typecheck.ITy) (i: Int): Bool =
+    if i >= acc.len() { false } else if cg_type_identity(acc[i]) == key { true } else { cg_ty_name_in(acc, key, i + 1) }
 
-let cg_structural_close_list (p: CgProgram) (ts: Array[typecheck.ITy]) (i: Int) (acc: Array[typecheck.ITy]) (seen: Ref[Map[String, Bool]]): Array[typecheck.ITy] =
+let cg_structural_close_list (p: CgProgram) (ts: Array[typecheck.ITy]) (i: Int) (acc: Array[typecheck.ITy]) (seen: Ref[Map[typecheck.ITy, Bool]]): Array[typecheck.ITy] =
     if i >= ts.len() { acc } else { cg_structural_close_list(p, ts, i + 1, cg_structural_close(p, ts[i], acc, seen), seen) }
 
-let cg_structural_close_variants (p: CgProgram) (vs: Array[CgVariant]) (args: Array[typecheck.ITy]) (i: Int) (acc: Array[typecheck.ITy]) (seen: Ref[Map[String, Bool]]): Array[typecheck.ITy] =
+let cg_structural_close_variants (p: CgProgram) (vs: Array[CgVariant]) (args: Array[typecheck.ITy]) (i: Int) (acc: Array[typecheck.ITy]) (seen: Ref[Map[typecheck.ITy, Bool]]): Array[typecheck.ITy] =
     if i >= vs.len() { acc }
     else {
         let payload = Array.map(typecheck.ctx_variant_payload(p.ctx, vs[i].enum_name, vs[i].name), |t| typecheck.instantiate_template(typecheck.ctx_variant_generics(p.ctx, vs[i].enum_name, vs[i].name), args, t));
@@ -6405,7 +6330,7 @@ let cg_structural_close_variants (p: CgProgram) (vs: Array[CgVariant]) (args: Ar
 // the real compiler's behaviour and it is deliberate -- the nested form
 // is a debug rendering, where an unquoted empty string would be
 // invisible.
-let cg_str_sym (t: typecheck.ITy): String = "@plum_str_".concat(cg_ity_mangle(t))
+let cg_str_sym (t: typecheck.ITy): String = cg_type_symbol("str", t)
 
 let cg_sfmt_sym (owner: typecheck.ITy) (i: Int): String =
     "@.sfmt_${cg_ity_mangle(owner)}_${i}"
@@ -7046,7 +6971,7 @@ let cg_dec (t: typecheck.ITy) (val: String): String =
 let cg_rel_sym (t: typecheck.ITy): String =
     // A `Bytes` owns nothing either, and its cell is a string cell, so
     // it releases through the same runtime function.
-    match t { ITStr => "@plum_rel_str", ITBytes => "@plum_rel_str", ITCStr => "@plum_rel_str", _ => "@plum_rel_".concat(cg_ity_mangle(t)) }
+    match t { ITStr => "@plum_rel_str", ITBytes => "@plum_rel_str", ITCStr => "@plum_rel_str", _ => cg_type_symbol("rel", t) }
 
 // Types needing a generated release function, transitively. Same
 // `seen`-guarded closure as `cg_eq_close`, and terminating for the same
@@ -7153,7 +7078,7 @@ let cg_enum_owns (p: CgProgram) (vs: Array[CgVariant]) (args: Array[typecheck.IT
     else if cg_variant_owns(p, vs[i], args) { true }
     else { cg_enum_owns(p, vs, args, i + 1) }
 
-let cg_relc_sym (t: typecheck.ITy): String = "@plum_relc_".concat(cg_ity_mangle(t))
+let cg_relc_sym (t: typecheck.ITy): String = cg_type_symbol("relc", t)
 
 // Every release function has the same shape: decrement, and on reaching
 // zero release the children and free the cell.
@@ -7304,7 +7229,7 @@ let cg_emit_rel_fn (p: CgProgram) (t: typecheck.ITy): String =
 // Channel wrappers use thread-local Plum counts over a synchronized queue.
 // Immutable containers containing them need fresh cells too. Ref and closure
 // values are opaque shared identities, rather than structural value copies.
-let cg_channel_copy_sym (t: typecheck.ITy): String = "@plum_channel_copy_".concat(cg_ity_mangle(t))
+let cg_channel_copy_sym (t: typecheck.ITy): String = cg_type_symbol("copy", t)
 
 let cg_contains_channel (p: CgProgram) (t: typecheck.ITy): Bool =
     Array.any(cg_channel_copy_types(p, t, []), |ty| match ty {

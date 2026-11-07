@@ -1,0 +1,5 @@
+pub struct Value { pub text: String }
+pub let LIMIT: Int = 23
+pub let value (): String = "other"
+pub let make (): Value = Value { text: value() }
+pub let limit (): Int = LIMIT

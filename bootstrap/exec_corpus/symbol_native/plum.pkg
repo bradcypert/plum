@@ -1,0 +1,1 @@
+Package { name: "symbol_native", native_deps: [] }
