@@ -1,0 +1,10 @@
+struct Payload { value: String }
+struct Holder { value: Option[Ref[Payload]] }
+
+let main (): Unit = {
+    let holder = Holder { value: None };
+    match holder.value {
+        None => println("reference payload destructors are available even for unconstructed variants"),
+        Some(_) => assert(false),
+    }
+}

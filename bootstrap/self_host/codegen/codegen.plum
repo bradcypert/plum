@@ -6996,6 +6996,7 @@ let cg_rel_close (p: CgProgram) (t: typecheck.ITy) (acc: Array[typecheck.ITy]): 
                         else { cg_rel_close_list(p, Array.map(typecheck.ctx_field_types(p.ctx, name), |ft| typecheck.instantiate_template(typecheck.ctx_struct_generics(p.ctx, name), args, ft)), 0, acc2) },
                     ITEnum(name, args) => cg_rel_close_variants(p, cg_find_enum(p, name).variants, args, 0, acc2),
                     ITTuple(elems) => cg_rel_close_list(p, elems, 0, acc2),
+                    ITRef(inner) => cg_rel_close(p, inner, acc2),
                     // A closure's captures are not visible from its
                     // type, so its cell cannot be walked structurally.
                     // Releasing one frees the cell and LEAKS whatever it

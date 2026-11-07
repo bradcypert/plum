@@ -1,0 +1,7 @@
+extern "C" { fn close(value: Int) -> Unit; }
+handle Native { on_drop: close }
+enum Shell[T] { Wrapped(T) }
+let main (): Unit = unsafe {
+    let value = Wrapped(Wrapped(Native.from_raw(0)));
+    println((value == value).to_string())
+}

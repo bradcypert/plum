@@ -1,0 +1,2 @@
+error: '==' is not supported for Array[Array[(T0) -> T0]]: it would have to compare (T0) -> T0, and a function has no meaningful equality
+main.plum:3:5

@@ -1,0 +1,2 @@
+error: '==' is not supported for Shell[Shell[Native]]: it would have to compare Native, and a handle has no meaningful equality
+main.plum:6:5

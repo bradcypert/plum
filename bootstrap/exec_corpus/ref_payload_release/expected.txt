@@ -1,0 +1,1 @@
+reference payload destructors are available even for unconstructed variants
