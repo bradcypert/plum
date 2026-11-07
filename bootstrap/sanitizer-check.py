@@ -59,6 +59,11 @@ def main():
             literal = Path(work) / ('literal-emission' + str(len(flags)))
             run([compiler, 'build', root / 'bootstrap/exec_corpus/literal_emission', '--sanitize=address', '--memory-stats', *flags, '-o', literal])
             run([literal], contains='literal emission preserves sections, order, aliases and reuse')
+            for name, message in [('nested_resource_scope', 'nested resources close at scope exit'),
+                                  ('ref_payload_release', 'reference payload destructors are available')]:
+                binary = Path(work) / (name + str(len(flags)))
+                run([compiler, 'build', root / 'bootstrap/exec_corpus' / name, '--sanitize=address', '--memory-stats', *flags, '-o', binary])
+                run([binary], contains=message)
         ir = run([compiler, 'emit-llvm', owned]).stdout
         tail = re.search(r'define [^\n]*@plum_tail\([^\n]*\).*?\n}', ir, re.S)
         if not tail or not re.search(r'musttail call [^\n]*@plum_tail\(', tail.group()):

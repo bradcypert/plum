@@ -1,0 +1,6 @@
+extern "C" { fn close(value: Int) -> Unit; }
+handle Native { on_drop: close }
+let main (): Unit = unsafe {
+    let value = Native.from_raw(0);
+    println(([[value]] == [[value]]).to_string())
+}

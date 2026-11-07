@@ -30,40 +30,25 @@
 # over the 83 MB the old compiler really used -- a threshold that misses
 # the regression it was written for is decoration.
 #
-# **The ceilings are PER PLATFORM**, because the platforms do not
-# measure the same thing. Re-measured 2026-09-09 from six consecutive
-# CI runs, after the macOS leg failed at exactly its ceiling:
+# RSS depends on the platform, allocator and workload size. After TLS
+# embedding and compiler growth, CI run 537 (2026-11-07) measured MiB:
 #
-#                emit-llvm       check        ceiling      headroom
-#   linux x86_64   75 MB        29 MB        128 / 64      1.7x / 2.2x
-#   linux arm64    74-75 MB     27 MB        128 / 64      1.7x / 2.4x
-#   macOS arm64    108-128 MB   40-46 MB     192 / 80      1.5x / 1.7x
+#                  debug emit    release emit    check
+#   linux x86_64      127             113           47
+#   linux arm64      128.3           113           45
+#   macOS arm64      166             142           59
 #
-# Two things that a single shared ceiling was hiding.
+# The prior merged PR already used 127 MiB on Linux ARM64. The old
+# 128 MiB debug ceiling left no growth margin: this run exceeded it by
+# 268 KiB. Allow 144 MiB for Linux debug emission (about 12% headroom),
+# while retaining 128 MiB for release and 64 MiB for checking. macOS
+# retains 192/192/80 MiB; its RSS has historically varied more widely.
+# Requested-byte budgets below independently reject repeated allocation
+# churn even when RSS stays flat. These RSS ceilings still reject the
+# historical 744 MiB emission and 83 MiB checking regressions on Linux.
 #
-# **macOS costs about 1.5x Linux**, not the ~20% the previous note
-# claimed. The likely reason -- not verified from here -- is the page
-# size: Apple Silicon uses 16 KB pages against Linux's 4 KB, and RSS
-# rounds up per region, so the two numbers are not comparable
-# quantities. A shared ceiling was therefore comparing different things
-# and calling the difference headroom.
-#
-# **macOS also VARIES by about 20 MB run to run**, where Linux does
-# not vary at all. Its previous 128 MB ceiling sat 0-16% above what the
-# runner actually used, so it was measuring the runner's mood: twelve
-# consecutive runs came in at 108, 108, 109, 110, 122, 123, 124, 125,
-# 126, 127 and finally 128, which failed. Nothing had regressed -- the
-# same compiler builds at 75 MB on Linux, and every release since
-# v0.0.20 measures within 4 MB of that.
-#
-# The new ceilings still catch what this exists for. The pre-fix
-# compiler used 744 MB to emit and 83 MB to check on Linux, so about
-# 1,100 MB and 124 MB scaled to macOS -- both far above 192 and 80.
-#
-# If a ceiling here fails, check the printed number against this table
-# BEFORE assuming a regression. A value inside these ranges on a
-# platform that varies is the guard being too tight, and the fix is to
-# re-measure rather than to raise it by a round number.
+# If a ceiling fails, compare actual allocation traffic, output size,
+# lifetimes and platform measurements before recalibrating it.
 #
 # The Windows job does not run this at all -- it is a separate job with
 # its own steps. The `resource` guard below is defensive rather than
@@ -107,7 +92,7 @@ fail=0
 # Re-measured on Linux x86_64 after embedded TLS (2026-09-30): 120 MB
 # to emit and 40 MB to check. Embedding files directly replaced the
 # per-line string arrays that had raised emission to 570 MB. The
-# existing 128/64 MB ceilings still pass; no guard increase is needed.
+# then-existing 128/64 MB ceilings passed that workload.
 compiler_usage() {
     python3 - "$@" <<'PY'
 import os, re, resource, shutil, subprocess, sys
@@ -157,8 +142,8 @@ echo "mem-check: peak RSS of the compiler alone (no clang in these)"
 # why they differ. `uname` rather than a build-time constant, because
 # the same checkout is run on all three.
 case "$(uname -s)" in
-    Darwin) emit_ceiling=196608; check_ceiling=81920 ;;
-    *)      emit_ceiling=131072; check_ceiling=65536 ;;
+    Darwin) debug_emit_ceiling=196608; release_emit_ceiling=196608; check_ceiling=81920 ;;
+    *)      debug_emit_ceiling=147456; release_emit_ceiling=131072; check_ceiling=65536 ;;
 esac
 
 # 120 MB on Linux with compact TLS embedding; 744 MB measured on the
@@ -167,9 +152,10 @@ esac
 # 38.4 GB to 6.7 GB; shared boundary trimming reduced it again from
 # 7.0 GB to 5.0 GB, retaining parsed handle names to about 3.7 GB,
 # and collecting literal/argument fragments to about 3.0 GB.
+# Program-scoped type facts further reduce this to about 2.4 GB.
 # Keep an independent requested-byte budget: RSS alone
 # does not catch repeatedly copying either annotated text or metadata.
-check "$emit_ceiling" 3500000000 "emit-llvm, whole compiler" emit-llvm bootstrap/self_host
+check "$debug_emit_ceiling" 2900000000 "emit-llvm, whole compiler" emit-llvm bootstrap/self_host
 
 # 40 MB on Linux with compact TLS embedding; 83 MB on that same pre-fix
 # compiler.
@@ -181,9 +167,10 @@ check "$check_ceiling" 0 "check, whole compiler" check bootstrap/self_host
 # Use the built-in requested-byte counter, not allocator-dependent timing.
 # Retaining parsed handle names further reduced this from 4.8 GB to 3.5 GB.
 # Literal/argument fragments reduced it again to about 2.9 GB.
-# Leave about 0.5 GB for growth while rejecting repeated name splitting.
+# Memoizing complete resource/type queries brings it to about 2.2 GB.
+# Leave about 0.5 GB for growth while rejecting repeated type traversal.
 # Release mode also keeps debug line-attachment work out of this budget.
-check "$emit_ceiling" 3300000000 "release emit-llvm, whole compiler" emit-llvm bootstrap/self_host --release
+check "$release_emit_ceiling" 2700000000 "release emit-llvm, whole compiler" emit-llvm bootstrap/self_host --release
 
 # Exercise both allocation paths at several widths; a whole-compiler total
 # alone can hide a quadratic literal builder as the surrounding source grows.

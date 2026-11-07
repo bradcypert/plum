@@ -1,0 +1,1 @@
+nested resources close at scope exit, escaping owners survive, and function refs compare by identity

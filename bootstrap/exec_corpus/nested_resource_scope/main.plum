@@ -1,0 +1,46 @@
+extern "C" {
+    fn nested_close(value: Int) -> Unit;
+    fn nested_closed() -> Int;
+}
+handle Resource { on_drop: nested_close }
+enum Shell[T] { Wrapped(T) }
+enum Tree[T] { Empty, Leaf(T), Branch(Array[Tree[T]]) }
+
+let make (value: Int): Resource = unsafe { Resource.from_raw(value) }
+let closed (): Int = unsafe { nested_closed() }
+
+let escape (): Unit = {
+    let escaped = {
+        let nested = [[make(3)]];
+        assert_eq(nested[0].len(), 1);
+        nested
+    };
+    assert_eq(closed(), 2);
+    assert_eq(escaped[0].len(), 1)
+}
+
+let main (): Unit = {
+    let first = {
+        let nested = [[make(1)]];
+        assert_eq(nested[0].len(), 1);
+        assert_eq(closed(), 0);
+        1
+    };
+    assert_eq(first, 1);
+    assert_eq(closed(), 1);
+    let second = {
+        let nested = Wrapped(Wrapped(make(2)));
+        match nested { Wrapped(Wrapped(_)) => assert_eq(closed(), 1) };
+        2
+    };
+    assert_eq(second, 2);
+    assert_eq(closed(), 2);
+    escape();
+    assert_eq(closed(), 3);
+    let plain: Tree[Int] = Branch([Leaf(1), Empty]);
+    assert(plain == Branch([Leaf(1), Empty]));
+    let callable = ref(|x: Int| x + 1);
+    assert(callable == callable);
+    assert((callable, 1) == (callable, 1));
+    println("nested resources close at scope exit, escaping owners survive, and function refs compare by identity")
+}

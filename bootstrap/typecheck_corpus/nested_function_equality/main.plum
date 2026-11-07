@@ -1,0 +1,4 @@
+let main (): Unit = {
+    let f = |x: Int| x;
+    println(([[f]] == [[f]]).to_string())
+}

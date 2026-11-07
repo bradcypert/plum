@@ -248,9 +248,15 @@ pub struct CgProgram { fns: Array[typecheck.TFn], globals: Array[typecheck.TFn],
     cur_proto: String,
     // Scoped to one named function specialization. The first emission
     // observes actual tail-call sites; only a cycle requires replay.
-    tail_observation: Option[Ref[TailObservation]] }
+    tail_observation: Option[Ref[TailObservation]],
+    // Completed root queries for this immutable declaration context. Function
+    // specializations share the cache; separate programs get fresh storage.
+    type_facts: Ref[Map[typecheck.ITy, CgTypeFacts]] }
 
 struct TailObservation { found: Bool, verdicts: Map[String, Bool] }
+struct CgTypeFacts { early_release: Bool, has_handle: Bool }
+
+let cg_empty_type_facts (): Map[typecheck.ITy, CgTypeFacts] = Map.new(())
 
 // --- Cell layouts ---
 //
@@ -432,6 +438,7 @@ pub let cg_build_program (program: parser.ProgramNode): CgProgram =
         tail_ok: false,
         cur_proto: "",
         tail_observation: None,
+        type_facts: ref(cg_empty_type_facts(())),
     }
 
 // `next_tag` runs across the whole program, so every variant in every
@@ -1070,7 +1077,7 @@ let cg_reaches (p: CgProgram) (pending: Array[CgInst]) (target: String) (seen: A
             None => cg_reaches(p, rest, target, seen.push(s), fuel + 1),
             Some(def) => {
                 let inner = CgProgram { fns: p.fns, globals: p.globals, ctx: p.ctx, enums: p.enums, subst: def.subst,
-                    generics: def.generics, targs: head.targs, movable: [], cur_sym: "", cur_frame: false, tail_rel: "", tail_ok: false, cur_proto: "", tail_observation: None };
+                    generics: def.generics, targs: head.targs, movable: [], cur_sym: "", cur_frame: false, tail_rel: "", tail_ok: false, cur_proto: "", tail_observation: None, type_facts: p.type_facts };
                 cg_reaches(p, Array.concat(rest, cg_calls_in(inner, def.body, [])), target, seen.push(s), fuel + 1)
             },
         } }
@@ -1111,7 +1118,7 @@ let cg_callee_proto (p: CgProgram) (module_name: String) (name: String) (targs: 
         None => None,
         Some(def) => {
             let inner = CgProgram { fns: p.fns, globals: p.globals, ctx: p.ctx, enums: p.enums, subst: def.subst,
-                generics: def.generics, targs: targs, movable: [], cur_sym: "", cur_frame: false, tail_rel: "", tail_ok: false, cur_proto: "", tail_observation: None };
+                generics: def.generics, targs: targs, movable: [], cur_sym: "", cur_frame: false, tail_rel: "", tail_ok: false, cur_proto: "", tail_observation: None, type_facts: p.type_facts };
             Some(cg_proto(cg_of_ity(cg_concrete(inner, def.ret)),
                 Array.map(def.params, |q| cg_of_ity(cg_concrete(inner, q.ty)))))
         },
@@ -1520,6 +1527,84 @@ let cg_ident (p: CgProgram) (env: Array[CgSlot]) (n: Int) (name: String) (ty: Cg
 // Preserve scoped finalization for resources and for any aggregate containing
 // closures/resources. Inspect type arguments before the recursion guard so
 // nested Array[Array[Resource]] cannot evade this check.
+// Cache only complete root queries, never results under a path-dependent
+// recursion guard. Structural keys distinguish all arguments and qualified
+// names, including names that currently mangle to the same LLVM spelling.
+let cg_cached_type_facts (p: CgProgram) (t: typecheck.ITy): CgTypeFacts = {
+    let current = p.type_facts.get();
+    match current.get(t) {
+        Some(facts) => facts,
+        None => {
+            let facts = CgTypeFacts { early_release: cg_early_release_safe(p, t, []),
+                has_handle: Option.is_some(typecheck.first_handle_within(p.ctx, t, [])) };
+            p.type_facts.set(current.insert(t, facts));
+            facts
+        },
+    }
+}
+
+let cg_composite_type (t: typecheck.ITy): Bool = match t {
+    ITStruct(_, _) => true, ITEnum(_, _) => true, ITTuple(_) => true, ITRef(_) => true,
+    _ => false,
+}
+
+let cg_can_release_early (p: CgProgram) (t: typecheck.ITy): Bool =
+    if cg_composite_type(t) { cg_cached_type_facts(p, t).early_release }
+    else { match t { ITFunction(_, _) => false, _ => true } }
+
+let cg_has_handle (p: CgProgram) (t: typecheck.ITy): Bool =
+    cg_composite_type(t) && cg_cached_type_facts(p, t).has_handle
+
+pub let test_program_type_facts (): Unit = {
+    let declarations = parser.parse_program(lexer.tokenize("extern \"C\" { fn close(value: Int) -> Unit; }\nhandle Resource { on_drop: close }\nstruct Box[T] { value: T }\nenum Tree[T] { Empty, Leaf(T), Branch(Array[Tree[T]]) }\n"));
+    let p = cg_build_program(declarations);
+    let mut plain = ITInt;
+    let mut resource = ITStruct("Resource", []);
+    let mut function = ITFunction([ITInt], ITInt);
+    for depth in 0..6 {
+        for repeat in 0..3 {
+            assert(cg_can_release_early(p, plain));
+            assert(!cg_has_handle(p, plain));
+            assert(!cg_can_release_early(p, resource));
+            assert(cg_has_handle(p, resource));
+            assert(!cg_can_release_early(p, function));
+            assert(!cg_has_handle(p, function));
+            for t in [plain, resource, function, ITTuple([plain, resource]),
+                ITRef(function), ITEnum("Tree", [plain]), ITEnum("Tree", [resource])] {
+                    assert_eq(cg_can_release_early(p, t), cg_early_release_safe(p, t, []));
+                    assert_eq(cg_has_handle(p, t), Option.is_some(typecheck.first_handle_within(p.ctx, t, [])));
+                };
+        };
+        plain = ITStruct("Box", [plain]);
+        resource = ITStruct("Box", [resource]);
+        function = ITStruct("Box", [function]);
+    };
+    let template = ITStruct("Box", [ITParam("T")]);
+    let ints = CgProgram { generics: ["T"], targs: [ITInt], ..p };
+    let handles = CgProgram { generics: ["T"], targs: [ITStruct("Resource", [])], ..p };
+    assert(cg_can_release_early(ints, cg_concrete(ints, template)));
+    assert(!cg_can_release_early(handles, cg_concrete(handles, template)));
+    assert(cg_has_handle(handles, cg_concrete(handles, template)));
+
+    // Identical type spelling in a different context must get a fresh answer.
+    let other = cg_build_program(parser.parse_program(lexer.tokenize("struct Resource { value: Int }\n")));
+    let same_name = ITStruct("Resource", []);
+    assert(cg_can_release_early(other, same_name));
+    assert(!cg_has_handle(other, same_name));
+    assert(!cg_can_release_early(p, same_name));
+    assert(cg_has_handle(p, same_name));
+
+    // Structural keys preserve punctuation and qualification independently
+    // of the LLVM symbol sanitizer (#320).
+    let left = parser.with_module(parser.parse_program(lexer.tokenize("pub struct Thing { value: Int }\n")).items, "a.b");
+    let right = parser.with_module(parser.parse_program(lexer.tokenize("extern \"C\" { fn close(value: Int) -> Unit; }\npub handle Thing { on_drop: close }\n")).items, "a_b");
+    let qualified = cg_build_program(parser.ProgramNode { items: left.concat(right) });
+    assert(!cg_has_handle(qualified, ITStruct("a.b.Thing", [])));
+    assert(cg_has_handle(qualified, ITStruct("a_b.Thing", [])));
+    assert(cg_can_release_early(qualified, ITStruct("a.b.Thing", [])));
+    assert(!cg_can_release_early(qualified, ITStruct("a_b.Thing", [])));
+}
+
 let cg_early_release_safe (p: CgProgram) (t: typecheck.ITy) (seen: Array[String]): Bool =
     match t {
         ITFunction(_, _) => false,
@@ -1553,7 +1638,7 @@ let cg_early_release_variants (p: CgProgram) (name: String) (tags: Array[String]
 let cg_move_ident (p: CgProgram) (env: Array[CgSlot]) (n: Int) (name: String) (ty: CgTy) (preserving: Bool): Emit =
     match cg_lookup(env, name) {
         Some(slot) => if cg_rc_enabled(()) && cg_is_heap(slot.ty)
-            && (preserving || cg_early_release_safe(p, cg_concrete(p, slot.ity), [])) {
+            && (preserving || cg_can_release_early(p, cg_concrete(p, slot.ity))) {
                 let reg = cg_reg(n);
                 Emit { code: "  ${reg} = load ptr, ptr ${slot.ptr}\n  store ptr null, ptr ${slot.ptr}\n",
                     allocas: "", releases: "", globals: "", val: reg, ty: slot.ty, n: n + 1 }
@@ -2092,7 +2177,7 @@ let cg_stmts_bind_handle (p: CgProgram) (stmts: Array[typecheck.TStmt]) (i: Int)
     else {
         match stmts[i] {
             TSLet(_, value) =>
-                if Option.is_some(typecheck.first_handle_within(p.ctx, cg_concrete(p, typecheck.texpr_ty(p.subst, value)), [])) { true }
+                if cg_has_handle(p, cg_concrete(p, typecheck.texpr_ty(p.subst, value))) { true }
                 else { cg_stmts_bind_handle(p, stmts, i + 1) },
             _ => cg_stmts_bind_handle(p, stmts, i + 1),
         }
@@ -5022,7 +5107,7 @@ let cg_release_bindings (p: CgProgram) (env: Array[CgSlot]) (names: Array[String
         let code = match cg_lookup(env, names[i]) {
             None => "",
             Some(slot) => if cg_rc_enabled(()) && cg_is_heap(slot.ty)
-                && cg_early_release_safe(p, cg_concrete(p, slot.ity), []) {
+                && cg_can_release_early(p, cg_concrete(p, slot.ity)) {
                     cg_release_slot(cg_concrete(p, slot.ity), slot.ptr, "_dead${n}_${i}")
                 } else { "" },
         };
@@ -5344,7 +5429,7 @@ let cg_match (p: CgProgram) (env: Array[CgSlot]) (n: Int) (scrutinee: typecheck.
     let owner = "%match_owner${sc.n}";
     let token = "%match_token${sc.n}";
     let reset = token_name != "" && sc.drop != "" && cg_rc_enabled(())
-        && cg_early_release_safe(p, sity, [])
+        && cg_can_release_early(p, sity)
         && Option.is_some(cg_reuse_of_ity(p, CgSlot { name: token_name, ptr: token, ty: cg_of_ity(sity), ity: sity }, sity, 0));
     let reserve = reset && match cg_reuse_of_ity(p,
         CgSlot { name: token_name, ptr: token, ty: cg_of_ity(sity), ity: sity }, sity, 0) {
@@ -5628,7 +5713,7 @@ let cg_zero_of (t: CgTy): String =
 // `Result[File, String]` is the case that matters, since a resource
 // almost always arrives through a pattern rather than a `let`.
 let cg_arm_scoped (p: CgProgram) (sity: typecheck.ITy) (tail: Bool): Bool =
-    !tail && Option.is_some(typecheck.first_handle_within(p.ctx, cg_concrete(p, sity), []))
+    !tail && cg_has_handle(p, cg_concrete(p, sity))
 
 // The block a guarded arm branches to when its guard says no: it
 // releases the pattern bindings and guard temporaries, then falls through.
@@ -6057,7 +6142,7 @@ let cg_fn (p0: CgProgram) (def: typecheck.TFn) (targs: Array[typecheck.ITy]) (n0
     let framed = DEBUG_FRAMES.get() && cg_frame_visible(shown);
     let observed = ref(TailObservation { found: false, verdicts: Map.new(()) });
     let p = CgProgram { fns: p0.fns, globals: p0.globals, ctx: p0.ctx, enums: p0.enums, subst: def.subst, generics: def.generics, targs: targs,
-        movable: mov, cur_sym: sym, cur_frame: framed, tail_rel: "", tail_ok: false, cur_proto: "", tail_observation: Some(observed) };
+        movable: mov, cur_sym: sym, cur_frame: framed, tail_rel: "", tail_ok: false, cur_proto: "", tail_observation: Some(observed), type_facts: p0.type_facts };
     let params = cg_params_of(p, def.params, 0, []);
     let entry = cg_param_slots(params, Array.map(def.params, |q| cg_concrete(p, q.ty)), 0, [], "", "");
     let ret = cg_of_ity(cg_concrete(p, def.ret));
@@ -6271,7 +6356,7 @@ let cg_structural_close (p: CgProgram) (t: typecheck.ITy) (acc: Array[typecheck.
     //
     // Hashing shares this layout walk, so retain the capability guard
     // even though pattern matching no longer requests equality helpers.
-    if Option.is_some(typecheck.first_handle_within(p.ctx, t, [])) { acc }
+    if cg_has_handle(p, t) { acc }
     else if cg_eq_is_primitive(t) { acc }
     else if cg_type_seen(seen, t) { acc }
     else {
@@ -6442,7 +6527,7 @@ let cg_emit_str_fn (p: CgProgram) (t: typecheck.ITy): String =
     // renders it. One containing a handle gets none: the checker refuses
     // `.to_string()` on exactly these, and a container's renderer would
     // call the handle's, which is deliberately never generated.
-    if Option.is_some(typecheck.first_handle_within(p.ctx, t, [])) { "" }
+    if cg_has_handle(p, t) { "" }
     else { cg_emit_str_fn_real(p, t) }
 
 let cg_emit_str_fn_real (p: CgProgram) (t: typecheck.ITy): String =
@@ -6996,6 +7081,7 @@ let cg_rel_close (p: CgProgram) (t: typecheck.ITy) (acc: Array[typecheck.ITy]): 
                         else { cg_rel_close_list(p, Array.map(typecheck.ctx_field_types(p.ctx, name), |ft| typecheck.instantiate_template(typecheck.ctx_struct_generics(p.ctx, name), args, ft)), 0, acc2) },
                     ITEnum(name, args) => cg_rel_close_variants(p, cg_find_enum(p, name).variants, args, 0, acc2),
                     ITTuple(elems) => cg_rel_close_list(p, elems, 0, acc2),
+                    ITRef(inner) => cg_rel_close(p, inner, acc2),
                     // A closure's captures are not visible from its
                     // type, so its cell cannot be walked structurally.
                     // Releasing one frees the cell and LEAKS whatever it
@@ -7655,7 +7741,7 @@ let cg_emit_globals (p: CgProgram) (i: Int) (n: Int) (slots: String) (body: Stri
         cg_emit_globals(p, i + 1, n, slots, body)
     } else {
         let g = p.globals[i];
-        let gp = CgProgram { fns: p.fns, globals: p.globals, ctx: p.ctx, enums: p.enums, subst: g.subst, generics: [], targs: [], movable: [], cur_sym: "", cur_frame: false, tail_rel: "", tail_ok: false, cur_proto: "", tail_observation: None };
+        let gp = CgProgram { fns: p.fns, globals: p.globals, ctx: p.ctx, enums: p.enums, subst: g.subst, generics: [], targs: [], movable: [], cur_sym: "", cur_frame: false, tail_rel: "", tail_ok: false, cur_proto: "", tail_observation: None, type_facts: p.type_facts };
         let ty = cg_of_ity(cg_concrete(gp, g.ret));
         let r = cg_expr(gp, [], n, g.body);
         let slot = cg_global_slot(g.module, g.name).concat(" = global ").concat(cg_llvm_ty(ty)).concat(" ").concat(cg_zero_of(ty)).concat("\n");
@@ -7694,7 +7780,7 @@ let cg_reachable (p: CgProgram) (pending: Array[CgInst]) (done: Array[CgInst]) (
                     done
                 },
                 Some(def) => {
-                    let inner = CgProgram { fns: p.fns, globals: p.globals, ctx: p.ctx, enums: p.enums, subst: def.subst, generics: def.generics, targs: head.targs, movable: [], cur_sym: "", cur_frame: false, tail_rel: "", tail_ok: false, cur_proto: "", tail_observation: None };
+                    let inner = CgProgram { fns: p.fns, globals: p.globals, ctx: p.ctx, enums: p.enums, subst: def.subst, generics: def.generics, targs: head.targs, movable: [], cur_sym: "", cur_frame: false, tail_rel: "", tail_ok: false, cur_proto: "", tail_observation: None, type_facts: p.type_facts };
                     cg_reachable(p, Array.concat(rest, cg_calls_in(inner, def.body, [])), done.push(head), fuel + 1)
                 },
             }
@@ -7712,7 +7798,7 @@ let cg_rel_types_of (p: CgProgram) (insts: Array[CgInst]) (i: Int) (acc: Array[t
         match cg_find_tfn(p, insts[i].module, insts[i].name, 0) {
             None => cg_rel_types_of(p, insts, i + 1, acc),
             Some(def) => {
-                let inner = CgProgram { fns: p.fns, globals: p.globals, ctx: p.ctx, enums: p.enums, subst: def.subst, generics: def.generics, targs: insts[i].targs, movable: [], cur_sym: "", cur_frame: false, tail_rel: "", tail_ok: false, cur_proto: "", tail_observation: None };
+                let inner = CgProgram { fns: p.fns, globals: p.globals, ctx: p.ctx, enums: p.enums, subst: def.subst, generics: def.generics, targs: insts[i].targs, movable: [], cur_sym: "", cur_frame: false, tail_rel: "", tail_ok: false, cur_proto: "", tail_observation: None, type_facts: p.type_facts };
                 let withparams = cg_rel_close_list(inner, Array.map(def.params, |q| cg_concrete(inner, q.ty)), 0, acc);
                 let withret = cg_rel_close(inner, cg_concrete(inner, def.ret), withparams);
                 cg_rel_types_of(p, insts, i + 1, cg_rel_in(inner, def.body, withret))
@@ -7803,7 +7889,7 @@ let cg_rel_in_fields (p: CgProgram) (fields: Array[typecheck.TFieldInit]) (i: In
 let cg_eq_in_globals (p: CgProgram) (i: Int) (acc: Array[typecheck.ITy]): Array[typecheck.ITy] =
     if i >= p.globals.len() { acc } else {
         let g = p.globals[i];
-        let gp = CgProgram { fns: p.fns, globals: p.globals, ctx: p.ctx, enums: p.enums, subst: g.subst, generics: [], targs: [], movable: [], cur_sym: "", cur_frame: false, tail_rel: "", tail_ok: false, cur_proto: "", tail_observation: None };
+        let gp = CgProgram { fns: p.fns, globals: p.globals, ctx: p.ctx, enums: p.enums, subst: g.subst, generics: [], targs: [], movable: [], cur_sym: "", cur_frame: false, tail_rel: "", tail_ok: false, cur_proto: "", tail_observation: None, type_facts: p.type_facts };
         cg_eq_in_globals(p, i + 1, cg_eq_in(gp, g.body, acc))
     }
 
@@ -7813,7 +7899,7 @@ let cg_eq_types_of (p: CgProgram) (insts: Array[CgInst]) (i: Int) (acc: Array[ty
         match cg_find_tfn(p, insts[i].module, insts[i].name, 0) {
             None => cg_eq_types_of(p, insts, i + 1, acc),
             Some(def) => {
-                let inner = CgProgram { fns: p.fns, globals: p.globals, ctx: p.ctx, enums: p.enums, subst: def.subst, generics: def.generics, targs: insts[i].targs, movable: [], cur_sym: "", cur_frame: false, tail_rel: "", tail_ok: false, cur_proto: "", tail_observation: None };
+                let inner = CgProgram { fns: p.fns, globals: p.globals, ctx: p.ctx, enums: p.enums, subst: def.subst, generics: def.generics, targs: insts[i].targs, movable: [], cur_sym: "", cur_frame: false, tail_rel: "", tail_ok: false, cur_proto: "", tail_observation: None, type_facts: p.type_facts };
                 cg_eq_types_of(p, insts, i + 1, cg_eq_in(inner, def.body, acc))
             },
         }
@@ -7911,7 +7997,7 @@ let cg_global_roots (p: CgProgram) (i: Int) (acc: Array[CgInst]): Array[CgInst] 
     if i >= p.globals.len() { acc }
     else {
         let g = p.globals[i];
-        let gp = CgProgram { fns: p.fns, globals: p.globals, ctx: p.ctx, enums: p.enums, subst: g.subst, generics: [], targs: [], movable: [], cur_sym: "", cur_frame: false, tail_rel: "", tail_ok: false, cur_proto: "", tail_observation: None };
+        let gp = CgProgram { fns: p.fns, globals: p.globals, ctx: p.ctx, enums: p.enums, subst: g.subst, generics: [], targs: [], movable: [], cur_sym: "", cur_frame: false, tail_rel: "", tail_ok: false, cur_proto: "", tail_observation: None, type_facts: p.type_facts };
         cg_global_roots(p, i + 1, Array.concat(acc, cg_calls_in(gp, g.body, [])))
     }
 

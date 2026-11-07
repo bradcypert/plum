@@ -97,6 +97,10 @@ Repeated resource/type analysis and other text-composition sites remain in the
 profile. This change removes the measured batch-prefix copies while preserving
 their current analysis, ownership and cleanup behavior.
 
+The next pass [caches completed resource/type queries within one compiler
+program](compiler-resource-type-facts.md), with nested-type correctness fixes
+and separate allocation and RSS measurements.
+
 ## Reproduction
 
 ```sh
