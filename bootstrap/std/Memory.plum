@@ -1,6 +1,8 @@
 extern "C" {
     fn plum_heap_snapshot() -> Int;
     fn plum_heap_snapshot_field(token: Int, field: Int) -> Int;
+    fn plum_heap_origin_snapshot() -> Int;
+    fn plum_heap_origin_field(token: Int, origin: Int, field: Int) -> Int;
 }
 
 /// One coherent view of tracked Plum cells, before allocating this record.
@@ -54,4 +56,66 @@ pub let delta (before: Snapshot) (after: Snapshot): Delta = Delta {
     allocated_bytes: after.allocated_bytes - before.allocated_bytes,
     live_allocations: after.live_allocations - before.live_allocations,
     live_bytes: after.live_bytes - before.live_bytes,
+}
+
+/// Physical construction family at the original allocation. This is NOT
+/// the current occupant's type or a source location. ByteStorage is shared
+/// by String/Bytes/CStr views; Record includes tuples, Variant includes
+/// Option/Result, and HandleCell includes task/channel endpoint cells.
+/// Unspecified covers native producers using the unannotated cell allocator.
+pub enum Origin { Unspecified, ByteStorage, ArrayStorage, Record, Variant, Closure, RefCell, HandleCell }
+
+/// Traffic, live requested storage and independent lifetime peaks for one
+/// original construction family. Reuse/reset never changes this origin.
+pub struct OriginStats { pub origin: Origin, pub stats: Snapshot }
+
+/// One coherent capture of totals and every origin, including zero rows.
+/// Row traffic/live counts and bytes sum to total. Row peaks are independent
+/// maxima and do not generally sum to the process peaks in total.
+pub struct OriginSnapshot { pub total: Snapshot, pub rows: Array[OriginStats] }
+
+let origin_stats (token: Int) (index: Int) (origin: Origin): OriginStats = unsafe {
+    let allocations = plum_heap_origin_field(token, index, 0);
+    let allocated_bytes = plum_heap_origin_field(token, index, 1);
+    let live_allocations = plum_heap_origin_field(token, index, 2);
+    let live_bytes = plum_heap_origin_field(token, index, 3);
+    let peak_allocations = plum_heap_origin_field(token, index, 4);
+    let peak_bytes = plum_heap_origin_field(token, index, 5);
+    OriginStats { origin: origin, stats: Snapshot {
+        allocations: allocations, allocated_bytes: allocated_bytes,
+        live_allocations: live_allocations, live_bytes: live_bytes,
+        peak_allocations: peak_allocations, peak_bytes: peak_bytes,
+    } }
+}
+
+/// Capture attribution by original construction family under --memory-stats,
+/// or None without diagnostics. The total and all eight rows freeze together
+/// before allocating the public profile. Its records/array/Some wrapper are
+/// ordinary tracked cells; retained observers affect later samples. Immortal
+/// constructor constants, including hoisted origin labels, remain excluded.
+/// A cell keeps its origin/request through aliases and Perceus cross-type
+/// reuse, including raw reset-token storage. Replacement growth is a fresh
+/// allocation with its own origin; final release retires the original charge.
+/// This measures storage provenance, not present value types or source sites.
+/// Separate snapshot/by_origin calls observe separate points in time.
+pub let by_origin (): Option[OriginSnapshot] = unsafe {
+    let token = plum_heap_origin_snapshot();
+    if token == 0 { None }
+    else {
+        let total = Snapshot {
+            allocations: plum_heap_snapshot_field(token, 0),
+            allocated_bytes: plum_heap_snapshot_field(token, 1),
+            live_allocations: plum_heap_snapshot_field(token, 2),
+            live_bytes: plum_heap_snapshot_field(token, 3),
+            peak_allocations: plum_heap_snapshot_field(token, 4),
+            peak_bytes: plum_heap_snapshot_field(token, 5),
+        };
+        let rows = [
+            origin_stats(token, 0, Unspecified), origin_stats(token, 1, ByteStorage),
+            origin_stats(token, 2, ArrayStorage), origin_stats(token, 3, Record),
+            origin_stats(token, 4, Variant), origin_stats(token, 5, Closure),
+            origin_stats(token, 6, RefCell), origin_stats(token, 7, HandleCell),
+        ];
+        Some(OriginSnapshot { total: total, rows: rows })
+    }
 }

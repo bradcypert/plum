@@ -1,0 +1,16 @@
+// One emission seam for fresh-cell provenance. These IDs match the native
+// PlumAllocationOrigin inventory; tests cover every family and native fallback.
+// Origins describe allocation history, never a reused cell's current type.
+let cg_origin_bytes (): Int = 1
+let cg_origin_array (): Int = 2
+let cg_origin_record (): Int = 3
+let cg_origin_variant (): Int = 4
+let cg_origin_closure (): Int = 5
+let cg_origin_ref (): Int = 6
+let cg_origin_handle (): Int = 7
+
+let cg_alloc_call (size: String) (origin: Int) (heap: Bool): String =
+    if heap { "call ptr @plum_alloc_origin(i64 ${size}, i64 ${origin})" }
+    else { "call ptr @plum_alloc(i64 ${size})" }
+
+let cg_fresh (size: String) (origin: Int): String = cg_alloc_call(size, origin, HEAP_STATS.get())

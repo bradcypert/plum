@@ -3962,7 +3962,7 @@ let cg_task_join (p: CgProgram) (env: Array[CgSlot]) (n: Int) (task: typecheck.T
 // A handle CELL is `{ rc, i64 handle }`: the refcount that gives the
 // thing behind the handle a lifetime, and the opaque shim value itself.
 let cg_handle_cell (cell: String) (handle: String): String =
-    "  ${cell} = call ptr @plum_alloc(i64 16)\n"
+    "  ${cell} = ".concat(cg_fresh("16", cg_origin_handle(()))).concat("\n")
         .concat("  ").concat(cell).concat("_h = getelementptr i8, ptr ").concat(cell).concat(", i64 8\n")
         .concat("  store i64 ").concat(handle).concat(", ptr ").concat(cell).concat("_h\n")
 
@@ -3984,7 +3984,7 @@ let cg_channel_new (p: CgProgram) (env: Array[CgSlot]) (n: Int) (ty: CgTy): Emit
         .concat(cg_thread_check(h, "i64", "0", "", 1))
         .concat(cg_handle_cell(tx, h))
         .concat(cg_handle_cell(rx, h))
-        .concat("  ").concat(cell).concat(" = call ptr @plum_alloc(i64 24)\n")
+        .concat("  ").concat(cell).concat(" = ").concat(cg_fresh("24", cg_origin_record(()))).concat("\n")
         .concat("  ").concat(cell).concat("_a = getelementptr i8, ptr ").concat(cell).concat(", i64 ").concat(cg_field_offset(0).to_string()).concat("\n")
         .concat("  store ptr ").concat(tx).concat(", ptr ").concat(cell).concat("_a\n")
         .concat("  ").concat(cell).concat("_b = getelementptr i8, ptr ").concat(cell).concat(", i64 ").concat(cg_field_offset(1).to_string()).concat("\n")
@@ -4015,7 +4015,7 @@ let cg_channel_send (p: CgProgram) (env: Array[CgSlot]) (n: Int) (ch: typecheck.
             .concat("  ${sent} = call i64 @channel_send(i64 ").concat(cg_reg(x.n + 1)).concat(", ptr ").concat(box).concat(")\n")
             .concat(cg_thread_check(sent, "i64", "0", cleanup.concat("  call void @plum_free(ptr ${box})\n"), 2))
             .concat(cg_dec(cg_concrete(p, typecheck.texpr_ty(p.subst, ch)), c.val))
-            .concat("  ${result} = call ptr @plum_alloc(i64 ${cg_enum_cell_size(p, parser.qualify_type(parser.PRELUDE_MODULE(), "Result"))})\n")
+            .concat("  ${result} = ${cg_fresh(cg_enum_cell_size(p, parser.qualify_type(parser.PRELUDE_MODULE(), "Result")).to_string(), cg_origin_variant(()))}\n")
             .concat("  ${result}_tag = getelementptr i8, ptr ${result}, i64 8\n")
             .concat("  ${result}_payload = getelementptr i8, ptr ${result}, i64 16\n")
             .concat("  ${result}_ok = icmp eq i64 ${sent}, 1\n")
@@ -4036,7 +4036,7 @@ let cg_channel_option (p: CgProgram) (n: Int) (box: String) (elem: typecheck.ITy
     let lty = cg_llvm_ty(cg_of_ity(elem));
     let some = match cg_variant_of(p, parser.qualify_type(parser.PRELUDE_MODULE(), "Option"), "Some") { Some(v) => v.tag, None => 0 };
     let none = match cg_variant_of(p, parser.qualify_type(parser.PRELUDE_MODULE(), "Option"), "None") { Some(v) => v.tag, None => 1 };
-    let code = "  ${v} = call ptr @plum_alloc(i64 ${cg_enum_cell_size(p, parser.qualify_type(parser.PRELUDE_MODULE(), "Option"))})\n"
+    let code = "  ${v} = ${cg_fresh(cg_enum_cell_size(p, parser.qualify_type(parser.PRELUDE_MODULE(), "Option")).to_string(), cg_origin_variant(()))}\n"
         .concat("  ${v}_tag = getelementptr i8, ptr ${v}, i64 8\n")
         .concat("  ${v}_has = icmp ne ptr ${box}, null\n")
         .concat("  br i1 ${v}_has, label %${label}_some, label %${label}_none\n")
@@ -4141,7 +4141,7 @@ let cg_closure (p: CgProgram) (env: Array[CgSlot]) (n: Int) (params: Array[Strin
         .concat(cg_closure_param_releases(param_itys, 0, ""))
         .concat("  ret ").concat(cg_llvm_ty(inner.ty)).concat(" ").concat(inner.val).concat("\n}\n\n");
     let cell = cg_reg(inner.n);
-    let head = "  ${cell} = call ptr @plum_alloc(i64 ${(24 + 8 * used.len())})\n"
+    let head = "  ${cell} = ${cg_fresh((24 + 8 * used.len()).to_string(), cg_origin_closure(()))}\n"
         .concat("  ").concat(cell).concat("_c = getelementptr i8, ptr ").concat(cell).concat(", i64 ").concat(cg_closure_code_offset(()).to_string()).concat("\n")
         .concat("  store ptr ").concat(fn_name).concat(", ptr ").concat(cell).concat("_c\n")
         .concat("  ").concat(cell).concat("_r = getelementptr i8, ptr ").concat(cell).concat(", i64 ").concat(cg_closure_rel_offset(()).to_string()).concat("\n")
@@ -4736,7 +4736,7 @@ let cg_array_fold (p: CgProgram) (env: Array[CgSlot]) (n: Int) (arr_e: typecheck
 // lookup: elements are already in order, so their index IS their slot.
 let cg_tuple_lit (p: CgProgram) (env: Array[CgSlot]) (n: Int) (elems: Array[typecheck.TExpr]) (ty: CgTy): Emit = {
     let cell = cg_reg(n);
-    let head = "  ${cell} = call ptr @plum_alloc(i64 ${(8 + 8 * elems.len())})\n";
+    let head = "  ${cell} = ${cg_fresh((8 + 8 * elems.len()).to_string(), cg_origin_record(()))}\n";
     let f = cg_store_tuple(p, env, n + 1, cell, elems, 0, "", "", "", "");
     Emit { code: head.concat(f.code), allocas: f.allocas, releases: f.releases, globals: f.globals, val: cell, ty: ty, n: f.n }
 }
@@ -4796,7 +4796,7 @@ let cg_struct_lit (p: CgProgram) (env: Array[CgSlot]) (n: Int) (name: String) (f
 }
 
 let cg_cell_alloc (cell: String) (nfields: Int): String =
-    "  ${cell} = call ptr @plum_alloc(i64 ${(8 + 8 * nfields)})\n"
+    "  ${cell} = ${cg_fresh((8 + 8 * nfields).to_string(), cg_origin_record(()))}\n"
 
 // A struct literal that may RECYCLE a dead local's cell instead of
 // allocating one.
@@ -4814,7 +4814,7 @@ let cg_struct_reuse (p: CgProgram) (env: Array[CgSlot]) (n: Int) (name: String) 
         Some(c) => {
             let ev = cg_eval_fields(p, env, field_names, fields, 0,
                 EvalFields { code: "", allocas: "", releases: "", globals: "", vals: [], n: n });
-            let r = cg_reuse_cell(p, c, want, ev.n);
+            let r = cg_reuse_cell(p, c, want, cg_origin_record(()), ev.n);
             let st = cg_store_evald(r.cell, ev.vals, 0, r.n, "");
             Emit { code: ev.code.concat(r.code).concat(st.code),
                 allocas: ev.allocas, releases: ev.releases, globals: ev.globals,
@@ -4929,8 +4929,8 @@ struct ReuseEmit { code: String, cell: String, n: Int }
 // its own reference -- `cg_field_read` increments what it loads -- so a
 // field copied straight across, `name: e.name`, survives its old cell's
 // drop. Inc-before-dec, obtained by ordering rather than by care.
-let cg_reuse_cell (p: CgProgram) (c: ReuseCand) (want: Int) (n: Int): ReuseEmit =
-    if c.reset { cg_reuse_token(c, want, n) } else {
+let cg_reuse_cell (p: CgProgram) (c: ReuseCand) (want: Int) (origin: Int) (n: Int): ReuseEmit =
+    if c.reset { cg_reuse_token(c, want, origin, n) } else {
         let old = cg_reg(n);
         let ok = cg_reg(n + 1);
         let lr = cg_label(n + 2);
@@ -4948,7 +4948,7 @@ let cg_reuse_cell (p: CgProgram) (c: ReuseCand) (want: Int) (n: Int): ReuseEmit 
             .concat("  br label %").concat(lj).concat("\n")
             .concat(lf).concat(":\n")
             .concat(cg_dec(cg_concrete(p, c.slot.ity), old))
-            .concat("  ").concat(fresh).concat(" = call ptr @plum_alloc(i64 ").concat(want.to_string()).concat(")\n")
+            .concat("  ").concat(fresh).concat(" = ").concat(cg_fresh(want.to_string(), origin)).concat("\n")
             .concat("  br label %").concat(lj).concat("\n")
             .concat(lj).concat(":\n")
             .concat("  ").concat(cell).concat(" = phi ptr [ ").concat(old).concat(", %").concat(lr).concat(" ], [ ").concat(fresh).concat(", %").concat(lf).concat(" ]\n"),
@@ -4958,7 +4958,7 @@ let cg_reuse_cell (p: CgProgram) (c: ReuseCand) (want: Int) (n: Int): ReuseEmit 
 
 // Reset tokens own raw storage only. They are null after consumption;
 // ordinary object release must never inspect their stale tag/payload.
-let cg_reuse_token (c: ReuseCand) (want: Int) (n: Int): ReuseEmit = {
+let cg_reuse_token (c: ReuseCand) (want: Int) (origin: Int) (n: Int): ReuseEmit = {
     let old = cg_reg(n);
     let fresh = cg_reg(n + 1);
     let cell = cg_reg(n + 2);
@@ -4967,7 +4967,7 @@ let cg_reuse_token (c: ReuseCand) (want: Int) (n: Int): ReuseEmit = {
     let join = cg_label(n + 5);
     ReuseEmit { code: "  ${old} = load ptr, ptr ${c.slot.ptr}\n  store ptr null, ptr ${c.slot.ptr}\n"
         .concat("  ${old}_empty = icmp eq ptr ${old}, null\n  br i1 ${old}_empty, label %${alloc}, label %${reuse}\n")
-        .concat("${alloc}:\n  ${fresh} = call ptr @plum_alloc(i64 ${want})\n  br label %${join}\n")
+        .concat("${alloc}:\n  ${fresh} = ${cg_fresh(want.to_string(), origin)}\n  br label %${join}\n")
         .concat("${reuse}:\n  br label %${join}\n${join}:\n  ${cell} = phi ptr [ ${fresh}, %${alloc} ], [ ${old}, %${reuse} ]\n"),
         cell: cell, n: n + 6 }
 }
@@ -5099,7 +5099,7 @@ let cg_variant_reuse (p: CgProgram) (env: Array[CgSlot]) (n: Int) (ename: String
 
 let cg_variant_build_reuse (p: CgProgram) (v: CgVariant) (a: ArgVals) (c: ReuseCand) (want: Int): Emit = {
     let enum_name = v.enum_name;
-    let r = cg_reuse_cell(p, c, want, a.n);
+    let r = cg_reuse_cell(p, c, want, cg_origin_variant(()), a.n);
     let tagged = "  ${r.cell}_t = getelementptr i8, ptr ${r.cell}, i64 ${cg_tag_offset(())}\n"
         .concat("  store i64 ").concat(v.tag.to_string()).concat(", ptr ").concat(r.cell).concat("_t\n");
     let stores = cg_store_payload(r.cell, a.vals, 0, r.n, "");
@@ -5180,7 +5180,7 @@ let cg_ref_new (p: CgProgram) (env: Array[CgSlot]) (n: Int) (inner: typecheck.TE
     let cell = cg_reg(r.n);
     let vp = cg_reg(r.n + 1);
     let code = r.code
-        .concat("  ").concat(cell).concat(" = call ptr @plum_alloc(i64 16)\n")
+        .concat("  ").concat(cell).concat(" = ").concat(cg_fresh("16", cg_origin_ref(()))).concat("\n")
         .concat("  ").concat(vp).concat(" = getelementptr i8, ptr ").concat(cell).concat(", i64 8\n")
         .concat("  store ").concat(cg_llvm_ty(r.ty)).concat(" ").concat(r.val).concat(", ptr ").concat(vp).concat("\n");
     Emit { code: code, allocas: r.allocas, releases: r.releases, globals: r.globals, val: cell, ty: CgRef(r.ty), n: r.n + 2 }
@@ -5257,7 +5257,7 @@ let cg_variant_call (p: CgProgram) (env: Array[CgSlot]) (n: Int) (ename: String)
 let cg_variant_build (p: CgProgram) (v: CgVariant) (a: ArgVals): Emit = {
     let enum_name = v.enum_name;
     let cell = cg_reg(a.n);
-    let head = "  ${cell} = call ptr @plum_alloc(i64 ${cg_enum_cell_size(p, enum_name)})\n"
+    let head = "  ${cell} = ${cg_fresh(cg_enum_cell_size(p, enum_name).to_string(), cg_origin_variant(()))}\n"
         .concat("  ").concat(cell).concat("_t = getelementptr i8, ptr ").concat(cell).concat(", i64 ").concat(cg_tag_offset(()).to_string()).concat("\n")
         .concat("  store i64 ").concat(v.tag.to_string()).concat(", ptr ").concat(cell).concat("_t\n");
     let stores = cg_store_payload(cell, a.vals, 0, a.n + 1, "");
@@ -7253,7 +7253,7 @@ let cg_channel_copy_fields (p: CgProgram) (ts: Array[typecheck.ITy]) (i: Int) (p
 
 let cg_emit_channel_copy_record (p: CgProgram) (t: typecheck.ITy) (ts: Array[typecheck.ITy]): String =
     cg_channel_copy_head(t)
-        .concat("  %out = call ptr @plum_alloc(i64 ${8 + 8 * ts.len()})\n")
+        .concat("  %out = ${cg_fresh((8 + 8 * ts.len()).to_string(), cg_origin_record(()))}\n")
         .concat(cg_channel_copy_fields(p, ts, 0, "f", false))
         .concat("  ret ptr %out\n}\n\n")
 
@@ -7271,7 +7271,7 @@ let cg_emit_channel_copy_fn (p: CgProgram) (t: typecheck.ITy): String =
         ITEnum(name, args) => {
             let vs = cg_find_enum(p, name).variants;
             cg_channel_copy_head(t)
-                .concat("  %out = call ptr @plum_alloc(i64 ${cg_enum_cell_size(p, name)})\n")
+                .concat("  %out = ${cg_fresh(cg_enum_cell_size(p, name).to_string(), cg_origin_variant(()))}\n")
                 .concat("  %tp = getelementptr i8, ptr %p, i64 8\n  %tag = load i64, ptr %tp\n")
                 .concat("  %dt = getelementptr i8, ptr %out, i64 8\n  store i64 %tag, ptr %dt\n")
                 .concat("  switch i64 %tag, label %done [\n")
@@ -7289,7 +7289,7 @@ let cg_emit_channel_copy_array (p: CgProgram) (t: typecheck.ITy) (elem: typechec
     cg_channel_copy_head(t)
         .concat("  %lp = getelementptr i8, ptr %p, i64 8\n  %len = load i64, ptr %lp\n")
         .concat("  %bytes = mul i64 %len, 8\n  %size = add i64 %bytes, 16\n")
-        .concat("  %out = call ptr @plum_alloc(i64 %size)\n")
+        .concat("  %out = ${cg_fresh("%size", cg_origin_array(()))}\n")
         .concat("  %dl = getelementptr i8, ptr %out, i64 8\n  store i64 %len, ptr %dl\n")
         .concat("  br label %loop\nloop:\n  %i = phi i64 [ 0, %live ], [ %next, %body ]\n")
         .concat("  %more = icmp slt i64 %i, %len\n  br i1 %more, label %body, label %done\nbody:\n")

@@ -3,6 +3,12 @@ correctness, editor tooling, filesystem safety, and Windows I/O.
 
 ## Compatibility and migration
 
+- **Memory diagnostics expose allocation origins.** `Memory.by_origin()` captures
+  coherent totals and original construction families under `--memory-stats`.
+  Origins and requested sizes survive Perceus reset/reuse until final release;
+  they describe storage provenance rather than current types or source sites.
+  Traffic/live rows sum to the captured total; independent row peaks do not.
+
 - **Streaming file reads use owned native buffers.** `File.read` keeps its
   independent Bytes result and positive-size requirement, releasing private
   capacity after each call. Use `File.read_into` with a retained `NativeBuffer`

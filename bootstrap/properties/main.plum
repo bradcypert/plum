@@ -5,6 +5,7 @@ use Url;
 use Path;
 use Json;
 use NativeBuffer;
+use Memory;
 
 // Property tests: invariants that must hold for MANY inputs, checked
 // against values generated here rather than against answers recorded
@@ -847,7 +848,9 @@ pub let test_url_roundtrip (): Unit = {
 
 // --- Path splits describe the same split ---
 //
-// `join(dirname(p), basename(p)) == clean(p)`, for every path.
+// `join(dirname(p), basename(p)) == clean(p)` away from root fixed points.
+// A root's dirname is itself; UNC root basenames name the share, so joining
+// that name again would repeat it. Joining an empty suffix must keep the root.
 //
 // This is the invariant that decided how a TRAILING SEPARATOR is
 // handled, and it is worth stating why it is not free. Python treats
@@ -880,20 +883,24 @@ let path_body (seed: Int) (left: Int) (acc: String): String =
         path_body(next_seed(seed), left - 1, acc.concat(sep).concat(piece))
     }
 
-let path_split_rt (seed: Int) (left: Int): Unit =
+let path_split_rt (windows: Bool) (seed: Int) (left: Int): Unit =
     if left <= 0 { () } else {
         let p = path_of(seed);
-        check_eq("dirname+basename == clean", p,
-            Path.join(Path.dirname(p), Path.basename(p)), Path.clean(p));
+        let clean = Path.clean_in(windows, p);
+        let dir = Path.dirname_in(windows, p);
+        let base = Path.basename_in(windows, p);
+        let joined = if dir == clean { Path.join_in(windows, dir, "") }
+            else { Path.join_in(windows, dir, base) };
+        check_eq("dirname+basename or root == clean", p, joined, clean);
         // `clean` is idempotent: cleaning an already-clean path changes
         // nothing. A normaliser that is not idempotent has no canonical
         // form, and every comparison built on it is unreliable.
-        check_eq("clean is idempotent", p, Path.clean(Path.clean(p)), Path.clean(p));
-        path_split_rt(next_seed(seed), left - 1)
+        check_eq("clean is idempotent", p, Path.clean_in(windows, clean), clean);
+        path_split_rt(windows, next_seed(seed), left - 1)
     }
 
 pub let test_path_splits (): Unit = {
-    path_split_rt(24601, 300);
+    for windows in [false, true] { path_split_rt(windows, 24601, 300); };
 
     // The documented edges, which a generator will not reliably hit.
     check_eq("clean empty", "''", Path.clean(""), ".");
@@ -1983,4 +1990,36 @@ pub let test_file_read_partitions (): Unit = match Os.temp_dir() {
         };
         assert(Os.remove_tree(root) == Ok(()))
     },
+}
+
+// Partition conservation is independent of the registry implementation:
+// rows and totals must describe the same capture despite observer allocations.
+let origin_conservation (seed: Int): Unit = {
+    let payload = rand_bytes(next_seed(seed), rand_between(seed, 0, 80));
+    let held = ref([payload, payload]);
+    match Memory.by_origin() {
+        None => assert(false),
+        Some(profile) => {
+            let mut count = 0;
+            let mut traffic = 0;
+            let mut live = 0;
+            let mut bytes = 0;
+            for row in profile.rows {
+                count = count + row.stats.allocations;
+                traffic = traffic + row.stats.allocated_bytes;
+                live = live + row.stats.live_allocations;
+                bytes = bytes + row.stats.live_bytes;
+                assert(row.stats.peak_bytes >= row.stats.live_bytes);
+            };
+            assert_eq(count, profile.total.allocations);
+            assert_eq(traffic, profile.total.allocated_bytes);
+            assert_eq(live, profile.total.live_allocations);
+            assert_eq(bytes, profile.total.live_bytes);
+        },
+    };
+    assert(held.get()[0] == payload)
+}
+pub let test_memory_origin_conservation (): Unit = {
+    if Option.is_none(Memory.by_origin()) { assert(Option.is_none(Memory.snapshot())); }
+    else { for seed in 0..64 { origin_conservation(seed); }; }
 }

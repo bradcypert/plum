@@ -26,7 +26,7 @@ Perceus determines ownership and reuse. These instrumentation choices measure th
 - Include the bytes requested for the cell header, explicit array capacity, and string terminator. Exclude allocator rounding, registry metadata, native resources and GPU memory.
 - In-place reuse keeps the original request and one live allocation. Even if the allocator's rounded block can hold a larger value, do not fabricate a larger allocation request. Replacing/growing a cell counts the newly allocated cell and retires the old cell at its actual release; their overlapping lifetime can contribute to peak.
 - Retaining aliases changes no allocation totals. Only final release retires a cell. Static/immortal constants were never dynamically allocated and are excluded.
-- Start with exact aggregate totals. Category attribution should follow only with a complete construction/reuse retagging contract: cross-type reuse makes an allocation-time tag alone misleading.
+- Attribute original allocation families without retagging: #461 defines this as provenance, not a current-type census. Exact sites and current-occupant categories need separate contracts; see [the design comparison](memory-attribution-design.md).
 
 ## Coherent snapshots
 

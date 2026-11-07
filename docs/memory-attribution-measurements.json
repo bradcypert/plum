@@ -1,0 +1,97 @@
+{
+  "platform": "Linux x86_64",
+  "baseline_revision": "744ed564116a5faa77e57b32fbcd29b88396c2ca",
+  "command": [
+    "COMPILER",
+    "emit-llvm",
+    "/tmp/plum-memory-attribution-461/bootstrap/self_host"
+  ],
+  "environment": {
+    "PLUM_RT_STATS": "1"
+  },
+  "method": "Three serial interleaved rounds; wall time from monotonic clock; per-process peak RSS from Linux wait4, MiB. Source-built debug compilers; aggregate/origins compiler binaries built with --memory-stats. stdout discarded. This is requested-cell diagnostics, not whole-process heap attribution.",
+  "binaries_sha256": {
+    "ordinary": "4ee9d8aaf5b43ae2ca008fa96afa7a1f2e1f190b849fed896a18396e6ab86b15",
+    "aggregate-baseline": "9d6aa6464dc7ce28006a17cdcd7efa25722fa1f81483cd3c4466813d7953b148",
+    "origins": "52b55654eaca07fa82e43db6222ff466027ff83c228a8791bb54c5c83c0285a8"
+  },
+  "samples": [
+    {
+      "mode": "ordinary",
+      "repeat": 0,
+      "seconds": 15.727,
+      "rss_mb": 126.48,
+      "stats": "[plum-rt] alloc n=126601881 bytes=6986814385 | str=76500259 concat=3199637 array=23243262"
+    },
+    {
+      "mode": "aggregate-baseline",
+      "repeat": 0,
+      "seconds": 17.577,
+      "rss_mb": 184.81,
+      "stats": "[plum-rt] alloc n=126597632 bytes=7012540480 | str=76500257 concat=3197219 array=23241433"
+    },
+    {
+      "mode": "origins",
+      "repeat": 0,
+      "seconds": 18.017,
+      "rss_mb": 200.77,
+      "stats": "[plum-rt] alloc n=126601832 bytes=7010267511 | str=76500259 concat=3200517 array=23242333"
+    },
+    {
+      "mode": "ordinary",
+      "repeat": 1,
+      "seconds": 15.223,
+      "rss_mb": 126.88,
+      "stats": "[plum-rt] alloc n=126601881 bytes=6986814385 | str=76500259 concat=3199637 array=23243262"
+    },
+    {
+      "mode": "aggregate-baseline",
+      "repeat": 1,
+      "seconds": 17.74,
+      "rss_mb": 184.48,
+      "stats": "[plum-rt] alloc n=126597632 bytes=7012540480 | str=76500257 concat=3197219 array=23241433"
+    },
+    {
+      "mode": "origins",
+      "repeat": 1,
+      "seconds": 18.177,
+      "rss_mb": 201.06,
+      "stats": "[plum-rt] alloc n=126601832 bytes=7010267511 | str=76500259 concat=3200517 array=23242333"
+    },
+    {
+      "mode": "ordinary",
+      "repeat": 2,
+      "seconds": 15.233,
+      "rss_mb": 126.21,
+      "stats": "[plum-rt] alloc n=126601881 bytes=6986814385 | str=76500259 concat=3199637 array=23243262"
+    },
+    {
+      "mode": "aggregate-baseline",
+      "repeat": 2,
+      "seconds": 17.812,
+      "rss_mb": 184.77,
+      "stats": "[plum-rt] alloc n=126597632 bytes=7012540480 | str=76500257 concat=3197219 array=23241433"
+    },
+    {
+      "mode": "origins",
+      "repeat": 2,
+      "seconds": 18.091,
+      "rss_mb": 200.71,
+      "stats": "[plum-rt] alloc n=126601832 bytes=7010267511 | str=76500259 concat=3200517 array=23242333"
+    }
+  ],
+  "medians": {
+    "ordinary": {
+      "seconds": 15.233,
+      "rss_mib": 126.48
+    },
+    "aggregate-baseline": {
+      "seconds": 17.74,
+      "rss_mib": 184.77
+    },
+    "origins": {
+      "seconds": 18.091,
+      "rss_mib": 200.77
+    }
+  }
+}

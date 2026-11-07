@@ -1,6 +1,13 @@
 #ifndef PLUM_MEMORY_SHIM_H
 #define PLUM_MEMORY_SHIM_H
 #include <stdint.h>
+/* Physical allocation provenance, never the current occupant's type.
+ * Keep the compiler/Memory inventories synchronized (checked by the harness). */
+enum PlumAllocationOrigin {
+    PLUM_ORIGIN_UNSPECIFIED, PLUM_ORIGIN_BYTES, PLUM_ORIGIN_ARRAY,
+    PLUM_ORIGIN_RECORD, PLUM_ORIGIN_VARIANT, PLUM_ORIGIN_CLOSURE,
+    PLUM_ORIGIN_REF, PLUM_ORIGIN_HANDLE, PLUM_ORIGIN_COUNT
+};
 #ifdef __cplusplus
 extern "C" {
 #endif

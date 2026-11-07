@@ -2,6 +2,7 @@
  * Cells retain their allocator pointer and layout, including through reuse. */
 #include <stdint.h>
 #include <stdlib.h>
+#include "memory_shim.h"
 
 #ifdef PLUM_HEAP_STATS
 #include <limits.h>
@@ -10,7 +11,7 @@
 
 /* Complemented keys keep the diagnostic index from becoming an accidental
  * conservative LeakSanitizer root for otherwise unreachable Plum cells. */
-struct entry { uintptr_t key; int64_t size; };
+struct entry { uintptr_t key; int64_t size; int origin; };
 struct totals {
     int64_t allocations, allocated_bytes, live_allocations, live_bytes;
     int64_t peak_allocations, peak_bytes;
@@ -19,10 +20,13 @@ static pthread_mutex_t lock = PTHREAD_MUTEX_INITIALIZER;
 static struct entry *entries;
 static size_t capacity, occupied, live;
 static struct totals totals;
+static struct totals origins[PLUM_ORIGIN_COUNT];
 /* A frozen copy belongs to the calling thread until its next snapshot. No
  * Plum allocation/callback occurs between freezing and reading its fields. */
 static _Thread_local struct totals frozen;
+static _Thread_local struct totals frozen_origins[PLUM_ORIGIN_COUNT];
 static _Thread_local int frozen_valid;
+static _Thread_local int frozen_profile;
 #define TOMBSTONE ((uintptr_t)1)
 
 static void fail(const char *message) {
@@ -59,8 +63,10 @@ static void make_room(void) {
     entries = table; capacity = next; occupied = live;
 }
 
-void *plum_heap_alloc(int64_t size) {
+void *plum_heap_alloc_origin(int64_t size, int64_t origin) {
     if (size < 0) fail("Plum memory diagnostics: invalid allocation size\n");
+    if (origin < 0 || origin >= PLUM_ORIGIN_COUNT)
+        fail("Plum memory diagnostics: invalid allocation origin\n");
     void *pointer = malloc((size_t)size);
     if (!pointer) fail("Plum memory diagnostics: allocation failed\n");
     uintptr_t key = ~(uintptr_t)pointer;
@@ -76,14 +82,23 @@ void *plum_heap_alloc(int64_t size) {
     }
     if (hole != SIZE_MAX) i = hole;
     else ++occupied;
-    entries[i] = (struct entry){key, size};
+    entries[i] = (struct entry){key, size, (int)origin};
     ++live;
     ++totals.allocations; totals.allocated_bytes += size;
     ++totals.live_allocations; totals.live_bytes += size;
     if (totals.live_allocations > totals.peak_allocations) totals.peak_allocations = totals.live_allocations;
     if (totals.live_bytes > totals.peak_bytes) totals.peak_bytes = totals.live_bytes;
+    struct totals *row = &origins[origin];
+    ++row->allocations; row->allocated_bytes += size;
+    ++row->live_allocations; row->live_bytes += size;
+    if (row->live_allocations > row->peak_allocations) row->peak_allocations = row->live_allocations;
+    if (row->live_bytes > row->peak_bytes) row->peak_bytes = row->live_bytes;
     pthread_mutex_unlock(&lock);
     return pointer;
+}
+
+void *plum_heap_alloc(int64_t size) {
+    return plum_heap_alloc_origin(size, PLUM_ORIGIN_UNSPECIFIED);
 }
 
 void plum_heap_free(void *pointer) {
@@ -95,6 +110,8 @@ void plum_heap_free(void *pointer) {
         while (entries[i].key) {
             if (entries[i].key == key) {
                 --totals.live_allocations; totals.live_bytes -= entries[i].size;
+                struct totals *row = &origins[entries[i].origin];
+                --row->live_allocations; row->live_bytes -= entries[i].size;
                 entries[i].key = TOMBSTONE; entries[i].size = 0;
                 --live;
                 break;
@@ -113,26 +130,49 @@ int64_t plum_heap_snapshot(void) {
     frozen = totals;
     pthread_mutex_unlock(&lock);
     frozen_valid = 1;
+    frozen_profile = 0;
     return (int64_t)(intptr_t)&frozen;
+}
+int64_t plum_heap_origin_snapshot(void) {
+    pthread_mutex_lock(&lock);
+    frozen = totals;
+    for (int i = 0; i < PLUM_ORIGIN_COUNT; ++i) frozen_origins[i] = origins[i];
+    pthread_mutex_unlock(&lock);
+    frozen_valid = frozen_profile = 1;
+    return (int64_t)(intptr_t)&frozen;
+}
+static int64_t read_field(const struct totals *sample, int64_t field) {
+    switch (field) {
+        case 0: return sample->allocations;
+        case 1: return sample->allocated_bytes;
+        case 2: return sample->live_allocations;
+        case 3: return sample->live_bytes;
+        case 4: return sample->peak_allocations;
+        case 5: return sample->peak_bytes;
+        default: fail("Plum memory diagnostics: invalid snapshot field\n"); return 0;
+    }
 }
 int64_t plum_heap_snapshot_field(int64_t token, int64_t field) {
     if (!frozen_valid || token != (int64_t)(intptr_t)&frozen)
         fail("Plum memory diagnostics: snapshot belongs to another thread\n");
-    switch (field) {
-        case 0: return frozen.allocations;
-        case 1: return frozen.allocated_bytes;
-        case 2: return frozen.live_allocations;
-        case 3: return frozen.live_bytes;
-        case 4: return frozen.peak_allocations;
-        case 5: return frozen.peak_bytes;
-        default: fail("Plum memory diagnostics: invalid snapshot field\n"); return 0;
-    }
+    return read_field(&frozen, field);
+}
+int64_t plum_heap_origin_field(int64_t token, int64_t origin, int64_t field) {
+    if (!frozen_valid || !frozen_profile || token != (int64_t)(intptr_t)&frozen)
+        fail("Plum memory diagnostics: origin snapshot belongs to another thread or was replaced\n");
+    if (origin < 0 || origin >= PLUM_ORIGIN_COUNT)
+        fail("Plum memory diagnostics: invalid allocation origin\n");
+    return read_field(&frozen_origins[origin], field);
 }
 #else
 /* Ordinary builds contain no registry, mutex, TLS snapshot or cell metadata. */
 /* Private allocation hooks deliberately have no disabled stubs: tracked IR
  * linked without the matching native flag must fail rather than undercount. */
 int64_t plum_heap_snapshot(void) { return 0; }
+int64_t plum_heap_origin_snapshot(void) { return 0; }
+int64_t plum_heap_origin_field(int64_t token, int64_t origin, int64_t field) {
+    (void)token; (void)origin; (void)field; return 0;
+}
 int64_t plum_heap_snapshot_field(int64_t token, int64_t field) {
     (void)token; (void)field; return 0;
 }
