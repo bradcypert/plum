@@ -28,6 +28,7 @@ and tail-call replay remain intact.
 | Approach | Benefit | Cost / decision |
 | --- | --- | --- |
 | Collect fragments at the existing batch loops | Removes prefix copies in fresh/reused literals, tuples and argument batches; retains current emitter interfaces | Temporary arrays and fragment references until joining; chosen for the measured hotspot |
+| Grow uniquely owned String capacity geometrically | Could improve append loops throughout programs | Changes runtime capacity/retention policy, including storage shared with CStr; shared prefixes still require copying, so this needs separate runtime and peak-memory evaluation |
 | Introduce a native text builder | Could append into spare capacity | Adds native buffer ownership and accounting responsibilities to codegen |
 | Change every Emit section to a rope/fragment tree | Could remove prefix copies across more composition sites | Changes many emitters, branch merges, debug attachment and tail-cleanup rewriting; a larger redesign requiring its own evidence and review |
 | Memoize resource-safety analysis first | Targets another substantial profile cost | Requires type keys and context/lifecycle rules; does not remove literal-prefix copying |
