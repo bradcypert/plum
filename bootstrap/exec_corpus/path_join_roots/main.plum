@@ -1,0 +1,24 @@
+use Path;
+
+let main (): Unit = {
+    for root in ["/", "\\"] {
+        for child in ["b", "/b", "\\b", "//b", "\\\\b"] {
+            assert_eq(Path.join_in(true, root, child), "\\b");
+        };
+        assert_eq(Path.join_all_in(true, [root, "/", "\\", "b", "/c"]), "\\b\\c");
+    };
+    assert_eq(Path.join_all_in(true, ["", "/", "", "b"]), "\\b");
+    assert_eq(Path.join_all_in(true, ["//", "server", "share"]), "\\\\server\\share");
+    assert_eq(Path.join_all_in(true, ["\\\\", "server", "share"]), "\\\\server\\share");
+    assert_eq(Path.join_all_in(true, ["//server/share/", "/b"]), "\\\\server\\share\\b");
+    assert_eq(Path.join_all_in(true, ["///", "server", "share"]), "\\server\\share");
+    assert_eq(Path.join_all_in(true, ["C:", "b", "c"]), "C:b\\c");
+    assert_eq(Path.join_all_in(true, ["C:", "/", "b"]), "C:\\b");
+    assert_eq(Path.join_all_in(true, ["C:", "\\b", "c"]), "C:\\b\\c");
+    assert_eq(Path.join_all_in(true, ["C:\\", "\\b"]), "C:\\b");
+    assert_eq(Path.join_all_in(true, ["a", "//server/share"]), "a\\server\\share");
+    assert_eq(Path.join_in(false, "/", "/b"), "/b");
+    assert_eq(Path.join_in(false, "a\\", "b"), "a\\/b");
+    assert_eq(Path.join_all_in(false, ["", "", ""]), "");
+    println("path joins preserve roots, UNC prefixes, drive relativity and separator boundaries")
+}

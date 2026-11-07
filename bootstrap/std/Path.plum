@@ -151,17 +151,31 @@ pub let join_all_in (windows: Bool) (parts: Array[String]): String = {
     let kept = drop_empty(parts, 0, []);
     if Array.is_empty(kept) { "" }
     else {
-        let joined = Array.join(kept, "/");
-        // `C:foo` is drive-relative, while `C:/foo` is rooted. The
-        // separator inserted by join would turn the first into the
-        // second, so omit it when the first segment is exactly `C:`.
-        let drive_relative = windows && kept.len() > 1 && has_drive_in(windows, kept[0])
-            && String.char_len(kept[0]) == 2
-            && !String.starts_with(normalize_in(windows, kept[1]), "/");
-        if drive_relative { clean_in(windows, kept[0].concat(String.slice(joined, 3, String.char_len(joined)))) }
-        else { clean_in(windows, joined) }
+        let first = kept[0].as_bytes();
+        let drive_only = windows && has_drive_in(windows, kept[0]) && first.len() == 2;
+        let mut ends_sep = join_sep(windows, byte_at(first, first.len() - 1));
+        let mut chunks = [kept[0]];
+        for i in 1..kept.len() {
+            let b = kept[i].as_bytes();
+            let start = join_skip_seps(windows, b, 0);
+            // Preserve an explicit first UNC prefix, but never manufacture
+            // one by adding a separator after a single rooted prefix.
+            // A bare drive stays relative unless the next part is rooted.
+            let insert = !ends_sep && !(i == 1 && drive_only && start == 0);
+            if insert { chunks = chunks.push("/"); };
+            if start < b.len() {
+                chunks = chunks.push(if start == 0 { kept[i] } else { text_range(b, start, b.len()) });
+                ends_sep = join_sep(windows, byte_at(b, b.len() - 1));
+            } else { ends_sep = ends_sep || insert; };
+        };
+        // Assemble once instead of repeatedly copying an accumulating path.
+        clean_in(windows, Array.join(chunks, ""))
     }
 }
+
+let join_sep (windows: Bool) (c: Int): Bool = c == 47 || (windows && c == 92)
+let join_skip_seps (windows: Bool) (b: Bytes) (i: Int): Int =
+    if i < b.len() && join_sep(windows, byte_at(b, i)) { join_skip_seps(windows, b, i + 1) } else { i }
 pub let join_all (parts: Array[String]): String = join_all_in(IS_WINDOWS, parts)
 
 let drop_empty (parts: Array[String]) (i: Int) (acc: Array[String]): Array[String] =

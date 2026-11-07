@@ -1,0 +1,1 @@
+path joins preserve roots, UNC prefixes, drive relativity and separator boundaries
