@@ -7,13 +7,15 @@ static const char *test_path;
 static void assert_stale(long long stale) {
     assert(file_close_checked(stale) == 0);
     file_close(stale);
-    assert(file_read_n(stale, 1) == -1);
+    unsigned char data[3];
+    assert(file_read_into(stale, data, 1) == -1);
     assert(file_write(stale, "bad", 3) == -1);
     assert(file_seek(stale, 0, 0) == -1);
     assert(file_flush(stale) == -1);
 }
 
 static void reuse_and_capacity(void) {
+    unsigned char data[3];
     assert(file_open(test_path, 3) == -1);
     assert(file_open("", 0) == -1);
     long long old = file_open(test_path, 1);
@@ -30,8 +32,8 @@ static void reuse_and_capacity(void) {
         long long h = file_open(test_path, 0);
         assert(h > 0 && h != next && h != old);
         assert_stale(old);
-        assert(file_read_n(h, 3) == 3);
-        assert(memcmp(file_read_data(), "abc", 3) == 0);
+        assert(file_read_into(h, data, sizeof data) == 3);
+        assert(memcmp(data, "abc", 3) == 0);
         assert(file_close_checked(h) == 0);
     }
     long long live[PLUM_MAX_FILES];
@@ -50,24 +52,23 @@ static void reuse_and_capacity(void) {
 // Every worker uses an independent stream, but shares the registry.
 static void *worker(void *unused) {
     (void)unused;
+    unsigned char data[1];
     for (int i = 0; i < 500; i++) {
         long long h = file_open(test_path, 0);
         assert(h > 0);
-        assert(file_read_n(h, 1) == 1);
+        assert(file_read_into(h, data, 1) == 1);
         assert(file_seek(h, 0, 0) == 0);
         assert(file_flush(h) == 0);
         assert(file_close_checked(h) == 0);
         assert_stale(h);
     }
-    free(read_buf); // Test teardown: production TLS buffer lifetime is unchanged.
-    read_buf = NULL;
-    read_cap = 0;
     return NULL;
 }
 
 typedef struct { long long h; int writing; } Race;
 
 static void *race_io(void *raw) {
+    unsigned char data[1];
     Race *race = raw;
     long long h = race->h;
     for (int i = 0; i < 1000; i++) {
@@ -76,7 +77,7 @@ static void *race_io(void *raw) {
             n = file_write(h, "x", 1);
             assert(n == 1 || n == -1);
         } else {
-            n = file_read_n(h, 1);
+            n = file_read_into(h, data, 1);
             assert(n == 1 || n == 0 || n == -1);
         }
         n = file_seek(h, 0, 0);
@@ -85,13 +86,11 @@ static void *race_io(void *raw) {
         assert(n == 0 || n == -1);
     }
     assert(file_close_checked(h) == 0);
-    free(read_buf);
-    read_buf = NULL;
-    read_cap = 0;
     return NULL;
 }
 
 static void close_during_io(int writing) {
+    unsigned char data[3];
     // tmpfile is read/write, unlike the public single-direction open modes.
     PlumFileSlot *slot = &slots[0];
     slot->identity += PLUM_MAX_FILES;
@@ -107,8 +106,8 @@ static void close_during_io(int writing) {
     long long replacement = file_open(test_path, 0);
     assert(replacement > 0 && replacement != h);
     for (int i = 0; i < 4; i++) assert(pthread_join(threads[i], NULL) == 0);
-    assert(file_read_n(replacement, 3) == 3);
-    assert(memcmp(file_read_data(), "abc", 3) == 0);
+    assert(file_read_into(replacement, data, sizeof data) == 3);
+    assert(memcmp(data, "abc", 3) == 0);
     assert(file_close_checked(replacement) == 0);
 }
 
@@ -125,7 +124,26 @@ static void independent_allocation(void) {
     assert(file_close_checked(b) == 0);
 }
 
+static void bounded_reads(void) {
+    long long h = file_open(test_path, 0);
+    assert(h > 0);
+    unsigned char data[5] = {0xA5, 0xA5, 0xA5, 0xA5, 0xA5};
+    assert(file_read_into(h, NULL, 1) == -1);
+    assert(file_read_into(h, data, 0) == -1);
+    assert(file_read_into(h, data, -1) == -1);
+    assert(file_seek(h, 0, 1) == 0); // Invalid requests consume nothing.
+    assert(file_read_into(h, data + 1, 2) == 2);
+    assert(data[0] == 0xA5 && data[3] == 0xA5 && data[4] == 0xA5);
+    assert(data[1] == 'a' && data[2] == 'b'); // No implicit terminator write.
+    assert(file_read_into(h, data + 1, 2) == 1);
+    assert(data[1] == 'c' && data[2] == 'b');
+    assert(file_read_into(h, data + 1, 2) == 0);
+    assert(file_read_into(h, data, 0) == -1); // Invalid even at EOF.
+    assert(file_close_checked(h) == 0);
+}
+
 static void exhaustion(void) {
+    unsigned char data[1];
     // Highest encodable generation for slot 0: never wrap to handle 1.
     long long last = LLONG_MAX - ((LLONG_MAX - 1) % PLUM_MAX_FILES);
     slots[0].identity = last - PLUM_MAX_FILES;
@@ -135,7 +153,7 @@ static void exhaustion(void) {
     long long h = file_open(test_path, 0);
     assert(h > 0 && (h - 1) % PLUM_MAX_FILES != 0);
     assert_stale(1);
-    assert(file_read_n(h, 1) == 1);
+    assert(file_read_into(h, data, 1) == 1);
     assert(file_close_checked(h) == 0);
     // Retiring all slots fails cleanly rather than opening an untracked FILE.
     for (int i = 0; i < PLUM_MAX_FILES; i++) slots[i].identity = LLONG_MAX;
@@ -154,8 +172,8 @@ int main(int argc, char **argv) {
     close_during_io(0);
     close_during_io(1);
     independent_allocation();
+    bounded_reads();
     exhaustion();
-    free(read_buf);
     assert(remove(test_path) == 0);
     printf("native file handles: ok (slot size %zu, table %zu bytes)\n", sizeof(PlumFileSlot), sizeof(slots));
     return 0;

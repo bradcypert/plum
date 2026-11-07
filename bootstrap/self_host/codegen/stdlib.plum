@@ -49,7 +49,7 @@ let cg_std_needs (name: String): Array[String] =
     else if name == "Url" { ["Encoding"] }
     // `Path` asks `Os.platform()` which separator to use.
     // `Os.read_stdin_line_timeout` takes a `Duration`.
-    else if name == "Os" { ["Time"] }
+    else if name == "Os" { ["Time", "NativeBuffer"] }
     else if name == "Path" { ["Os"] }
     // `Process.start` waits with a `Duration`, which is `Time`'s.
     else if name == "Process" { ["Time"] }

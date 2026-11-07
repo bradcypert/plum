@@ -54,7 +54,7 @@ fails without truncation. Discard resets logical length; it is not secure erasur
   add general Plum-stack unwinding. Ordinary-type drop/Plum on_drop redesigns
   are unnecessary for this native resource.
 
-## Network integration
+## File and network integration
 
 Replace TCP/TLS receive scratch pointers with `recv_into(handle, pointer,
 capacity)` returning a count. Net.read_into supports caller buffer reuse;
@@ -64,6 +64,19 @@ behind. Reads require positive capacity, keeping a zero-size request distinct
 from peer EOF. The native receive ABI changes; ordinary Plum read signatures
 remain available. A private-buffer read allocates native storage per call;
 callers needing amortized reuse can retain a Buffer and use Net.read_into.
+
+Streaming file reads follow the same ownership path: `File.read_into` leases
+caller-owned capacity for one `file_read_into` operation, and `File.read`
+allocates a private buffer and returns an independent Bytes copy. Short-lived
+file-reading workers leave no retained scratch allocation. Positive capacity
+is required; EOF commits an empty prefix, and a read/closed-file error discards
+the prefix. A busy lease is rejected before file I/O, preserving contents and
+file position. The file-slot mutex continues to serialize stdio and close on
+one stream; it neither owns nor frees the buffer. Independent files and buffers
+remain independent. A reusable buffer can be used sequentially with different
+files. Convenience reads allocate per call; retain a buffer with `File.read_into`
+to reuse its capacity. Whole-file `Os.read_file`/`Os.read_bytes` use their existing
+separate, checked read path.
 
 ## Accounting and validation
 
@@ -84,8 +97,8 @@ and panic cleanup, threaded TCP/TLS receives, native capacity returning to its
 baseline, and ASan/LSan. Diagnostic overhead and the per-read allocation tradeoff
 belong in the PR alongside compiler memory measurements.
 
-File-read scratch has the same ownership problem and is tracked in #462 for
-migration onto this interface. Stdin reader-state synchronization remains #271.
+Streaming file-read scratch is removed by #462. Stdin reader-state
+synchronization remains #271.
 
 ## A reusable text-widget adapter
 
