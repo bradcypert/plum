@@ -73,6 +73,9 @@ The remaining profile includes repeated recursive type/resource analysis and
 about 661 MB attributed to array-literal text assembly. Those are separate
 follow-ups; this change keeps the existing analysis and emission algorithms.
 
+The [emission-fragment follow-up](compiler-emission-fragments.md) removes literal
+and argument prefix copying while preserving Perceus analysis and emitted IR.
+
 ## Reproduction
 
 The benchmark uses ordinary compilers built through seed-to-source, with the
