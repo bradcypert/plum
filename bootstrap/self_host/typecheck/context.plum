@@ -33,7 +33,13 @@ struct EnumInfo { name: String, generics: Array[String], variants: Array[Variant
 // mean threading the context through `cg_of_ity`, which has 44 call
 // sites and no access to one, to answer a question only five places
 // actually ask.
-struct HandleInfo { name: String, module: String, is_pub: Bool, on_drop: String }
+// Keep the declaration's short name alongside its qualified identity. Both
+// context passes reuse the parsed name; lookup must not split it repeatedly.
+struct HandleInfo { name: String, short_name: String, module: String, is_pub: Bool, on_drop: String }
+
+let handle_info (decl: parser.HandleDeclNode) (module_name: String) (is_pub: Bool): HandleInfo =
+    HandleInfo { name: parser.qualify_type(module_name, decl.name), short_name: decl.name,
+        module: module_name, is_pub: is_pub, on_drop: decl.on_drop }
 
 pub struct TyContext { pub structs: Array[StructInfo], pub enums: Array[EnumInfo], handles: Array[HandleInfo] }
 
@@ -211,7 +217,7 @@ let collect_names_acc (items: Array[parser.ItemNode]) (i: Int) (ctx: TyContext):
             IKHandle(decl) => collect_names_acc(items, i + 1, TyContext {
                 structs: ctx.structs.push(StructInfo { name: parser.qualify_type(items[i].module, decl.name), generics: [], fields: [], module: items[i].module, is_pub: items[i].is_pub }),
                 enums: ctx.enums,
-                handles: ctx.handles.push(HandleInfo { name: parser.qualify_type(items[i].module, decl.name), module: items[i].module, is_pub: items[i].is_pub, on_drop: decl.on_drop }),
+                handles: ctx.handles.push(handle_info(decl, items[i].module, items[i].is_pub)),
             }),
             IKEnum(decl) => collect_names_acc(items, i + 1, TyContext {
                 structs: ctx.structs,
@@ -264,7 +270,7 @@ let add_handle (out: TyContext) (decl: parser.HandleDeclNode) (module_name: Stri
     TyContext {
         structs: out.structs.push(StructInfo { name: parser.qualify_type(module_name, decl.name), generics: [], fields: [], module: module_name, is_pub: is_pub }),
         enums: out.enums,
-        handles: out.handles.push(HandleInfo { name: parser.qualify_type(module_name, decl.name), module: module_name, is_pub: is_pub, on_drop: decl.on_drop }),
+        handles: out.handles.push(handle_info(decl, module_name, is_pub)),
     }
 
 // --- Lookups ---
@@ -594,7 +600,7 @@ pub let ctx_is_handle (ctx: TyContext) (name: String): Bool =
 
 let ctx_handle_at (hs: Array[HandleInfo]) (name: String) (i: Int): Bool =
     if i >= hs.len() { false }
-    else if hs[i].name == name || parser.bare_type_name(hs[i].name) == name { true }
+    else if hs[i].name == name || hs[i].short_name == name { true }
     else { ctx_handle_at(hs, name, i + 1) }
 
 // The C function to call when one dies. "" when `name` is not a handle.
@@ -603,13 +609,37 @@ pub let ctx_handle_on_drop (ctx: TyContext) (name: String): String =
 
 let ctx_on_drop_at (hs: Array[HandleInfo]) (name: String) (i: Int): String =
     if i >= hs.len() { "" }
-    else if hs[i].name == name || parser.bare_type_name(hs[i].name) == name { hs[i].on_drop }
+    else if hs[i].name == name || hs[i].short_name == name { hs[i].on_drop }
     else { ctx_on_drop_at(hs, name, i + 1) }
 
 // Every declared handle's qualified name, for the backend's emission
 // worklist.
 pub let ctx_handle_names (ctx: TyContext): Array[String] =
     Array.map(ctx.handles, |h| h.name)
+
+pub let test_handle_lookup_names_and_drop_hooks (): Unit = {
+    let root = parser.parse_program(lexer.tokenize("handle Root { on_drop: root_close }\nstruct Holder { value: alpha.Shared }\n")).items;
+    let alpha = parser.with_module(parser.parse_program(lexer.tokenize("pub handle Shared { on_drop: alpha_close }\npub handle Other { on_drop: other_close }\nstruct Plain {}\n")).items, "alpha");
+    let beta = parser.with_module(parser.parse_program(lexer.tokenize("pub handle Shared { on_drop: beta_close }\n")).items, "beta");
+    let ctx = build_context(parser.ProgramNode { items: root.concat(alpha).concat(beta) });
+    assert_eq(ctx_handle_names(ctx), ["Root", "alpha.Shared", "alpha.Other", "beta.Shared"]);
+    assert_eq(ctx_field_types(ctx, "Holder"), [ITStruct("alpha.Shared", [])]);
+    for name in ["Root", "Shared", "Other", "alpha.Shared", "alpha.Other", "beta.Shared"] {
+        assert(ctx_is_handle(ctx, name));
+    };
+    assert_eq(ctx_handle_on_drop(ctx, "Root"), "root_close");
+    assert_eq(ctx_handle_on_drop(ctx, "Shared"), "alpha_close");
+    assert_eq(ctx_handle_on_drop(ctx, "alpha.Shared"), "alpha_close");
+    assert_eq(ctx_handle_on_drop(ctx, "beta.Shared"), "beta_close");
+    assert_eq(ctx_handle_on_drop(ctx, "Other"), "other_close");
+    for name in ["", "Plain", "alpha.Plain", "Missing", "alpha.Missing", "SharedExtra", "a.Shared"] {
+        assert(!ctx_is_handle(ctx, name));
+        assert_eq(ctx_handle_on_drop(ctx, name), "");
+    };
+    let empty = build_context(parser.ProgramNode { items: [] });
+    assert(!ctx_is_handle(empty, "Shared"));
+    assert_eq(ctx_handle_on_drop(empty, "Shared"), "");
+}
 
 pub let ctx_field_names (ctx: TyContext) (name: String): Array[String] =
     match find_struct(ctx, name) {

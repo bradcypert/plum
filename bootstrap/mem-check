@@ -165,9 +165,10 @@ esac
 # pre-fix compiler, before tail calls in a cycle returned early.
 # Fragment collection reduced default/debug allocation traffic from about
 # 38.4 GB to 6.7 GB; shared boundary trimming reduced it again from
-# 7.0 GB to 5.0 GB. Keep an independent requested-byte budget: RSS alone
+# 7.0 GB to 5.0 GB, and retaining parsed handle names to about 3.7 GB.
+# Keep an independent requested-byte budget: RSS alone
 # does not catch repeatedly copying either annotated text or metadata.
-check "$emit_ceiling" 6000000000 "emit-llvm, whole compiler" emit-llvm bootstrap/self_host
+check "$emit_ceiling" 4500000000 "emit-llvm, whole compiler" emit-llvm bootstrap/self_host
 
 # 40 MB on Linux with compact TLS embedding; 83 MB on that same pre-fix
 # compiler.
@@ -177,9 +178,10 @@ check "$check_ceiling" 0 "check, whole compiler" check bootstrap/self_host
 # to 4.5 GB allocated cumulatively. RSS alone cannot catch that regression:
 # cumulative allocation traffic can fall without moving the live peak.
 # Use the built-in requested-byte counter, not allocator-dependent timing.
-# This leaves about 1 GB for growth while rejecting unconditional replay.
+# Retaining parsed handle names further reduced this from 4.8 GB to 3.5 GB.
+# Leave about 0.5 GB for growth while rejecting repeated name splitting.
 # Release mode also keeps debug line-attachment work out of this budget.
-check "$emit_ceiling" 5500000000 "release emit-llvm, whole compiler" emit-llvm bootstrap/self_host --release
+check "$emit_ceiling" 4000000000 "release emit-llvm, whole compiler" emit-llvm bootstrap/self_host --release
 
 [ $fail -ne 0 ] && exit 1
 echo "mem-check: the compiler stays within its memory ceilings"

@@ -62,6 +62,9 @@ allocation hotspot remains. The next profile-guided target is expression
 emission and its replay; the diagnostics can distinguish those costs from
 retention rather than treating allocation traffic as a leak.
 
+The [handle-lookup follow-up](compiler-handle-lookup.md) profiles those emission
+helpers and removes repeated name splitting while preserving replay and cleanup.
+
 Perceus ownership, cell layout and native ABI are unchanged. Shared no-op results
 retain existing capacity until the final owner drops and can prevent in-place
 updates while another alias or CStr remains. Changed trims own independent cells
