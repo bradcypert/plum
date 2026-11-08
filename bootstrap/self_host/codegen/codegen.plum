@@ -2392,7 +2392,7 @@ let cg_params_shadow (ps: Array[String]) (name: String) (i: Int): Bool =
 // Lifetime/borrow pins in `names` must always hold. Future writes only pin
 // values whose replacement has not been proved: a later assignment uses a
 // new slot value, not the one consumed by the current assignment's RHS.
-struct LvCtx { exprs: Array[typecheck.TExpr], names: Array[String], writes: Array[String], scope: Array[String], replaced: Array[String] }
+struct LvCtx { exprs: LvFuture, names: Array[String], writes: Array[String], scope: Array[String], replaced: Array[String] }
 
 // Names bound and still in scope, innermost LAST -- `lv_pick` searches
 // backwards so a shadowed outer name is never chosen over the inner one
@@ -2410,7 +2410,7 @@ let lv_dead (ctx: LvCtx) (v: String): Bool =
     else if cg_name_in(ctx.names, v, 0) { false }
     else if cg_name_in(ctx.replaced, v, 0) { true }
     else if cg_name_in(ctx.writes, v, 0) { false }
-    else { lv_none_read(ctx.exprs, v, 0) }
+    else { lv_future_none_read(ctx.exprs, v) }
 
 let lv_none_read (xs: Array[typecheck.TExpr]) (v: String) (i: Int): Bool =
     if i >= xs.len() { true }
@@ -2418,7 +2418,10 @@ let lv_none_read (xs: Array[typecheck.TExpr]) (v: String) (i: Int): Bool =
     else { lv_none_read(xs, v, i + 1) }
 
 let lv_with (ctx: LvCtx) (extra: Array[typecheck.TExpr]): LvCtx =
-    LvCtx { exprs: lv_cat(ctx.exprs, extra, 0), names: ctx.names, writes: ctx.writes, scope: ctx.scope, replaced: Array.filter(ctx.replaced, |v| lv_none_read(extra, v, 0)) }
+    lv_with_future(ctx, lv_future_exprs(extra, 0))
+
+let lv_with_future (ctx: LvCtx) (extra: LvFuture): LvCtx =
+    LvCtx { exprs: lv_future_cat(ctx.exprs, extra), names: ctx.names, writes: ctx.writes, scope: ctx.scope, replaced: Array.filter(ctx.replaced, |v| lv_future_none_read(extra, v)) }
 
 let lv_cat (a: Array[typecheck.TExpr]) (b: Array[typecheck.TExpr]) (i: Int): Array[typecheck.TExpr] =
     if i >= b.len() { a } else { lv_cat(a.push(b[i]), b, i + 1) }
@@ -2433,9 +2436,6 @@ let lv_unreplace (ctx: LvCtx) (names: Array[String]): LvCtx =
     LvCtx { exprs: ctx.exprs, names: ctx.names, writes: ctx.writes, scope: ctx.scope,
         replaced: Array.filter(ctx.replaced, |v| !Array.contains(names, v)) }
 
-let lv_rest (xs: Array[typecheck.TExpr]) (from: Int) (acc: Array[typecheck.TExpr]): Array[typecheck.TExpr] =
-    if from >= xs.len() { acc } else { lv_rest(xs, from + 1, acc.push(xs[from])) }
-
 let lv_tokens (scope: Array[String]) (i: Int) (acc: Array[String]): Array[String] =
     if i < 0 { acc }
     else { lv_tokens(scope, i - 1, if scope[i].starts_with("<reset:") { acc.push(scope[i]) } else { acc }) }
@@ -2444,7 +2444,7 @@ let lv_tokens (scope: Array[String]) (i: Int) (acc: Array[String]): Array[String
 // everything after it, plus whatever follows the list itself.
 let lv_seq (ctx: LvCtx) (xs: Array[typecheck.TExpr]) (i: Int) (acc: Array[typecheck.TExpr]): Array[typecheck.TExpr] =
     if i >= xs.len() { acc }
-    else { lv_seq(ctx, xs, i + 1, acc.push(lv_expr(lv_with(ctx, lv_rest(xs, i + 1, [])), xs[i]))) }
+    else { lv_seq(ctx, xs, i + 1, acc.push(lv_expr(lv_with_future(ctx, lv_future_exprs(xs, i + 1)), xs[i]))) }
 
 let lv_opt (ctx: LvCtx) (o: Option[typecheck.TExpr]): Option[typecheck.TExpr] =
     match o { None => None, Some(x) => Some(lv_expr(ctx, x)) }
@@ -2694,7 +2694,7 @@ let lv_node (ctx: LvCtx) (node: typecheck.TNode): typecheck.TNode =
         // in `cg_movable_params` (that is computed for the enclosing
         // function), so the interlock that stops `Some(x)` recycling
         // `x`'s own cell into itself is this, and only this.
-        TClosure(ps, body) => TClosure(ps, lv_expr(LvCtx { exprs: [body], names: [], writes: [], scope: lv_cat_names([], ps, 0), replaced: [] }, body)),
+        TClosure(ps, body) => TClosure(ps, lv_expr(LvCtx { exprs: lv_future_exprs([body], 0), names: [], writes: [], scope: lv_cat_names([], ps, 0), replaced: [] }, body)),
         // `spawn` runs its block on another thread, at a time nothing
         // here orders. Everything it touches stays live.
         TSpawn(a) => TSpawn(lv_expr(lv_with(ctx, [a]), a)),
@@ -2723,13 +2723,10 @@ let lv_node (ctx: LvCtx) (node: typecheck.TNode): typecheck.TNode =
 let lv_fields (ctx: LvCtx) (fs: Array[typecheck.TFieldInit]) (i: Int) (acc: Array[typecheck.TFieldInit]) (after: Array[typecheck.TExpr]): Array[typecheck.TFieldInit] =
     if i >= fs.len() { acc }
     else {
-        let rest = lv_cat(lv_field_rest(fs, i + 1, []), after, 0);
+        let rest = lv_future_cat(lv_future_fields(fs, i + 1), lv_future_exprs(after, 0));
         lv_fields(ctx, fs, i + 1,
-            acc.push(typecheck.TFieldInit { name: fs[i].name, value: lv_expr(lv_with(ctx, rest), fs[i].value) }), after)
+            acc.push(typecheck.TFieldInit { name: fs[i].name, value: lv_expr(lv_with_future(ctx, rest), fs[i].value) }), after)
     }
-
-let lv_field_rest (fs: Array[typecheck.TFieldInit]) (from: Int) (acc: Array[typecheck.TExpr]): Array[typecheck.TExpr] =
-    if from >= fs.len() { acc } else { lv_field_rest(fs, from + 1, acc.push(fs[from].value)) }
 
 // Every in-scope name dead at this point, innermost FIRST -- the
 // backend takes the first it can represent, and innermost-first is what
@@ -2794,12 +2791,13 @@ let lv_block (ctx: LvCtx) (b: typecheck.TBlock) (i: Int) (scope: Array[String]) 
     if i >= b.stmts.len() {
         typecheck.TBlock { stmts: acc, tail: lv_opt(LvCtx { exprs: ctx.exprs, names: ctx.names, writes: ctx.writes, scope: scope, replaced: ctx.replaced }, b.tail), starts: b.starts }
     } else {
+        let rest = lv_future_block(b, i + 1);
         let sctx = LvCtx {
-            exprs: lv_cat(lv_cat(ctx.exprs, lv_stmt_rest(b.stmts, i + 1, []), 0), lv_opt_list(b.tail), 0),
+            exprs: lv_future_cat(ctx.exprs, rest),
             names: ctx.names,
             writes: lv_cat_names(ctx.writes, lv_assigned(b.stmts, i + 1, []), 0),
             scope: scope,
-            replaced: Array.filter(ctx.replaced, |v| lv_none_read(lv_cat(lv_stmt_rest(b.stmts, i + 1, []), lv_opt_list(b.tail), 0), v, 0)),
+            replaced: Array.filter(ctx.replaced, |v| lv_future_none_read(rest, v)),
         };
         match b.stmts[i] {
             // A `let` in a loop body stores into the SAME slot every
@@ -2899,7 +2897,7 @@ let lv_pat_names (pat: typecheck.TPattern) (acc: Array[String]): Array[String] =
 // empty: whatever the body's last expression reads, nothing reads
 // afterwards.
 let lv_fn (params: Array[typecheck.TParam]) (body: typecheck.TExpr): typecheck.TExpr =
-    lv_expr(LvCtx { exprs: [], names: [], writes: [], scope: lv_param_names(params, 0, []), replaced: [] }, body)
+    lv_expr(LvCtx { exprs: LvFutureEmpty, names: [], writes: [], scope: lv_param_names(params, 0, []), replaced: [] }, body)
 
 let lv_param_names (params: Array[typecheck.TParam]) (i: Int) (acc: Array[String]): Array[String] =
     if i >= params.len() { acc } else { lv_param_names(params, i + 1, acc.push(params[i].name)) }

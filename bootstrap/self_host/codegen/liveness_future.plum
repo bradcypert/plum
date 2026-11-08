@@ -1,0 +1,86 @@
+// A continuation describes future reads, not expressions to evaluate here.
+// Keep source arrays and offsets instead of materializing their suffixes.
+// Concatenation preserves the old flat-list query order, with empty parts
+// elided. These nodes live only for the enclosing liveness traversal.
+enum LvFuture {
+    LvFutureEmpty,
+    LvFutureExprs(Array[typecheck.TExpr], Int),
+    LvFutureStmts(Array[typecheck.TStmt], Int),
+    LvFutureFields(Array[typecheck.TFieldInit], Int),
+    LvFutureJoin(LvFuture, LvFuture),
+}
+
+let lv_future_exprs (xs: Array[typecheck.TExpr]) (from: Int): LvFuture =
+    if from >= xs.len() { LvFutureEmpty } else { LvFutureExprs(xs, from) }
+
+let lv_future_stmts (xs: Array[typecheck.TStmt]) (from: Int): LvFuture =
+    if from >= xs.len() { LvFutureEmpty } else { LvFutureStmts(xs, from) }
+
+let lv_future_fields (xs: Array[typecheck.TFieldInit]) (from: Int): LvFuture =
+    if from >= xs.len() { LvFutureEmpty } else { LvFutureFields(xs, from) }
+
+let lv_future_cat (a: LvFuture) (b: LvFuture): LvFuture =
+    match a {
+        LvFutureEmpty => b,
+        _ => match b { LvFutureEmpty => a, _ => LvFutureJoin(a, b) },
+    }
+
+let lv_future_block (b: typecheck.TBlock) (from: Int): LvFuture =
+    lv_future_cat(lv_future_stmts(b.stmts, from), lv_future_exprs(lv_opt_list(b.tail), 0))
+
+let lv_future_none_read (future: LvFuture) (name: String): Bool =
+    match future {
+        LvFutureEmpty => true,
+        LvFutureExprs(xs, from) => lv_none_read(xs, name, from),
+        LvFutureStmts(xs, from) => lv_future_stmts_none_read(xs, name, from),
+        LvFutureFields(xs, from) => lv_future_fields_none_read(xs, name, from),
+        LvFutureJoin(a, b) => lv_future_none_read(a, name) && lv_future_none_read(b, name),
+    }
+
+// The old statement collector kept only RHS expressions. A binding or
+// assignment here must not kill reads in later entries: scope, write pins
+// and replacement evidence are separate parts of LvCtx. Treating this as a
+// whole block with cg_reads_max_block would change that conservative rule.
+let lv_future_stmts_none_read (xs: Array[typecheck.TStmt]) (name: String) (from: Int): Bool =
+    if from >= xs.len() { true }
+    else {
+        let value = match xs[from] { TSLet(_, v) => v, TSAssign(_, v) => v, TSExpr(v) => v };
+        cg_reads_max(name, value) == 0 && lv_future_stmts_none_read(xs, name, from + 1)
+    }
+
+let lv_future_fields_none_read (xs: Array[typecheck.TFieldInit]) (name: String) (from: Int): Bool =
+    if from >= xs.len() { true }
+    else { cg_reads_max(name, xs[from].value) == 0 && lv_future_fields_none_read(xs, name, from + 1) }
+
+pub let test_liveness_future_ranges (): Unit = {
+    let x = typecheck.TExpr { ty: ITInt, node: TIdent("x") };
+    let y = typecheck.TExpr { ty: ITInt, node: TIdent("y") };
+    let zero = typecheck.TExpr { ty: ITInt, node: TInt(0) };
+    let later = lv_future_exprs([x, y], 1);
+    assert(lv_future_none_read(later, "x"));
+    assert(!lv_future_none_read(later, "y"));
+    assert(lv_future_none_read(lv_future_exprs([x], 1), "x"));
+    let fields = [typecheck.TFieldInit { name: "first", value: x }, typecheck.TFieldInit { name: "last", value: y }];
+    let tail = lv_future_fields(fields, 1);
+    assert(lv_future_none_read(tail, "x"));
+    assert(!lv_future_none_read(tail, "y"));
+    let stmts = [TSExpr(x), TSLet(TPIdent("x", 0), zero), TSAssign("y", zero), TSExpr(x)];
+    let block = typecheck.TBlock { stmts: stmts, starts: [], tail: Some(y) };
+    let after = lv_future_block(block, 1);
+    assert(!lv_future_none_read(after, "x"));
+    assert(!lv_future_none_read(after, "y"));
+    assert(lv_future_none_read(lv_future_stmts(stmts, 1), "y"));
+    assert(lv_future_none_read(after, "absent"));
+    assert(lv_future_none_read(lv_future_block(block, stmts.len()), "x"));
+    let both = lv_future_cat(lv_future_exprs([x], 0), lv_future_cat(LvFutureEmpty, tail));
+    assert(!lv_future_none_read(both, "x"));
+    assert(!lv_future_none_read(both, "y"));
+    assert(lv_future_none_read(lv_future_cat(both, LvFutureEmpty), "absent"));
+    let ctx = LvCtx { exprs: LvFutureEmpty, names: [], writes: ["x"], scope: ["x"], replaced: ["x"] };
+    assert(lv_dead(ctx, "x"));
+    assert(!lv_dead(lv_with_future(ctx, lv_future_exprs([x], 0)), "x"));
+    assert(lv_dead(lv_with_future(ctx, later), "x"));
+    assert(!lv_dead(LvCtx { names: ["x"], ..ctx }, "x"));
+    assert(!lv_dead(LvCtx { replaced: [], ..ctx }, "x"));
+    assert(!lv_dead(LvCtx { scope: [], ..ctx }, "x"));
+}

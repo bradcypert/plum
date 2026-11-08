@@ -3,6 +3,7 @@
 import os
 from pathlib import Path
 import re
+import runpy
 import subprocess
 import sys
 import tempfile
@@ -32,6 +33,18 @@ def main():
             run([compiler, 'build', fixtures / name, '--sanitize', 'address', *flags, '-o', binary])
             return binary
         build.count = 0
+
+        # A unique heap string must survive every earlier operand and be
+        # transferable at its last use. Share the allocation guard's source
+        # generator so its sibling-read case also executes under ASan/LSan.
+        future = Path(work) / 'liveness-future'
+        future.mkdir()
+        future_source = runpy.run_path(str(root / 'bootstrap/liveness-memory-check.py'))['source']
+        (future / 'main.plum').write_text(future_source(64))
+        for flags in [[], ['--release']]:
+            binary = Path(work) / ('liveness-future-' + str(len(flags)))
+            run([compiler, 'build', future, '--sanitize=address', *flags, '-o', binary])
+            run([binary], contains='ok\n')
 
         # The original missing attribute must be observable in generated IR,
         # rather than only testing native malloc/free interceptors.

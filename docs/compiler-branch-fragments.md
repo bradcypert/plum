@@ -151,3 +151,5 @@ alternating order. Allocation counters and raw IR hashes are recorded alongside
 input/binary hashes. Timing measurements exclude instrumentation and other
 validation builds. The scaling records use the harness's exact generated
 source and compare raw IR at each width and mode.
+
+The next allocation pass is [shared liveness continuations](compiler-liveness-continuations.md).
