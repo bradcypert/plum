@@ -1,0 +1,92 @@
+#!/usr/bin/env python3
+"""Check actual emitted String growth, failure paths, ownership and accounting."""
+import argparse
+import os
+from pathlib import Path
+import re
+import subprocess
+import tempfile
+
+
+def main():
+    ap = argparse.ArgumentParser(description=__doc__)
+    ap.add_argument('compiler', nargs='?', default='./sh.real')
+    ap.add_argument('--sanitize', action='store_true')
+    args = ap.parse_args()
+    root = Path(__file__).resolve().parent.parent
+    compiler = str(Path(args.compiler).resolve())
+    env = dict(os.environ, PLUM_NO_BUILD_CACHE='1',
+               ASAN_OPTIONS='detect_leaks=1:halt_on_error=1', LSAN_OPTIONS='exitcode=23')
+    env.pop('PLUM_CC', None)
+    def run(command):
+        r = subprocess.run([str(x) for x in command], cwd=root, env=env,
+                           capture_output=True, text=True, timeout=300)
+        if r.returncode:
+            raise RuntimeError(f'{command}: exit {r.returncode}\n{r.stdout}\n{r.stderr}')
+        return r.stdout
+    with tempfile.TemporaryDirectory(prefix='plum-string-growth-') as work:
+        work = Path(work)
+        project = root / 'bootstrap/exec_corpus/string_growth'
+        for release in (False, True):
+            for tracked in (False, True):
+                flags = (['--release'] if release else []) + (['--memory-stats'] if tracked else [])
+                if args.sanitize:
+                    flags += ['--sanitize=address']
+                binary = work / 'public.exe'
+                run([compiler, 'build', project, *flags, '-o', binary])
+                if run([binary]) != (project / 'expected.txt').read_text():
+                    raise RuntimeError('incorrect public String/Bytes/CStr output')
+        for tracked in (False, True):
+            ir = run([compiler, 'emit-llvm', project, *(['--memory-stats'] if tracked else [])])
+            # Extract definitions emitted by this compiler, not a copied IR
+            # implementation. Inject failure only at the private malloc seam.
+            names = ['plum_alloc_preferred', 'plum_str_concat_length',
+                     'plum_str_growth_bytes', 'plum_str_concat_copy', 'plum_str_concat',
+                     'plum_str_concat_reuse', 'plum_rel_str', 'plum_rc_inc', 'plum_free']
+            definitions = []
+            for name in names:
+                m = re.search(r'^define [^\n]*@' + name + r'\([^\n]*\).*?^}', ir, re.M | re.S)
+                if not m:
+                    raise RuntimeError('missing runtime function: ' + name)
+                body = m[0]
+                if name == 'plum_alloc_preferred':
+                    if body.count('call ptr @malloc(') != 2:
+                        raise RuntimeError('allocation seam changed; update fault injection')
+                    body = body.replace('call ptr @malloc(', 'call ptr @growth_test_malloc(')
+                definitions.append(body)
+            constants = re.findall(r'^@(?:plum_[nb]_alloc|plum_n_concat|\.plum_concat_[a-z_]+) = .*$', ir, re.M)
+            declarations = '''declare ptr @growth_test_malloc(i64)
+declare ptr @memcpy(ptr, ptr, i64)
+declare void @free(ptr)
+declare i64 @malloc_usable_size(ptr)
+declare void @plum_memory_fatal(ptr, i64) noreturn
+declare { i64, i1 } @llvm.sadd.with.overflow.i64(i64, i64)
+'''
+            if tracked:
+                declarations += 'declare void @plum_heap_adopt_origin(ptr, i64, i64)\ndeclare void @plum_heap_free(ptr)\n'
+            source = work / 'runtime.ll'
+            source.write_text(declarations + '\n'.join(constants + definitions) + '\n')
+            for optimization in ('-O0', '-O2'):
+                binary = work / 'native.exe'
+                command = ['clang', optimization, '-g', '-Wno-override-module', '-pthread']
+                if tracked:
+                    command += ['-DPLUM_HEAP_STATS']
+                if args.sanitize:
+                    command += ['-fsanitize=address', '-fno-omit-frame-pointer']
+                run(command + [source, root / 'bootstrap/string-growth-test.c',
+                               root / 'native_stdlib/memory_shim.c', '-o', binary])
+                print(f'{optimization} tracked={tracked}: {run([binary]).strip()}')
+                for case in ('negative', 'negative-b', 'overflow', 'header-overflow', 'concat-negative', 'reuse-overflow', 'oom', 'exact-oom'):
+                    r = subprocess.run([str(binary), case], cwd=root, env=env,
+                                       capture_output=True, text=True, timeout=30)
+                    message = 'cannot allocate storage' if 'oom' in case else 'invalid concatenation size'
+                    if r.returncode != 1 or r.stderr != f'Plum String: {message}\n':
+                        raise RuntimeError(f'{case}: wrong fatal path ({r.returncode})\n{r.stdout}{r.stderr}')
+    print('string-growth-check: public aliases, emitted arithmetic, growth, failure fallback and accounting passed')
+
+
+if __name__ == '__main__':
+    try:
+        main()
+    except (OSError, subprocess.SubprocessError, RuntimeError) as error:
+        raise SystemExit(str(error))

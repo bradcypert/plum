@@ -56,7 +56,7 @@ trap 'rm -rf "$work"' EXIT
 # `seed -> binary` leg below will tell you about immediately, in the
 # form of an undefined reference.
 seed_shims=(native_stdlib/argv_shim.c native_stdlib/compat_shim.c native_stdlib/dir_shim.c
-            native_stdlib/handle_shim.c native_stdlib/io_shim.c
+            native_stdlib/handle_shim.c native_stdlib/io_shim.c native_stdlib/memory_shim.c
             native_stdlib/os_shim.c native_stdlib/process_shim.c
             native_stdlib/thread_shim.c native_stdlib/time_shim.c
             native_stdlib/whole_file_shim.c)

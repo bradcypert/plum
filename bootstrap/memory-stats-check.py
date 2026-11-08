@@ -49,9 +49,12 @@ def main():
         if sys.platform.startswith('linux') or sys.platform == 'darwin':
             for name, fails, message in [('memory_stats', False, enabled), ('memory_origins', False, origin_enabled), ('tracked_leak', True, 'LeakSanitizer: detected memory leaks')]:
                 source = root / ('bootstrap/sanitizer_corpus' if fails else 'bootstrap/exec_corpus') / name
-                binary = Path(work) / (name + ".exe")
-                run([compiler, 'build', source, '--memory-stats', '--sanitize', 'address', '-o', binary])
-                run([binary], fails=fails, contains=message)
+                for flags in ([[], ['--release']] if fails else [[]]):
+                    binary = Path(work) / (name + str(len(flags)) + ".exe")
+                    run([compiler, 'build', source, '--memory-stats', '--sanitize', 'address', *flags, '-o', binary])
+                    result = run([binary], fails=fails, contains=message)
+                    if fails and '112 byte(s) leaked in 2 allocation(s)' not in result.stderr:
+                        raise RuntimeError('ordinary and adopted cells must both remain visible to LeakSanitizer:\n' + result.stderr)
         # The ordinary registry shim has no table, lock or TLS; emitted cell
         # allocation remains direct malloc, and its release wrapper is inline.
         plain = run([compiler, 'emit-llvm', fixture]).stdout

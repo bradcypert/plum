@@ -2,7 +2,30 @@
  * Cells retain their allocator pointer and layout, including through reuse. */
 #include <stdint.h>
 #include <stdlib.h>
+#include <errno.h>
+#ifdef _WIN32
+#include <io.h>
+#else
+#include <unistd.h>
+#endif
 #include "memory_shim.h"
+
+/* Fatal size/OOM errors must not allocate or run user cleanup. Messages are
+ * small static ASCII ranges supplied by the runtime, never format strings. */
+_Noreturn void plum_memory_fatal(const char *message, int64_t length) {
+    while (length > 0) {
+#ifdef _WIN32
+        int written = _write(2, message, (unsigned int)length);
+#else
+        ssize_t written = write(2, message, (size_t)length);
+#endif
+        if (written < 0 && errno == EINTR) continue;
+        if (written <= 0) break;
+        message += written;
+        length -= written;
+    }
+    _Exit(1);
+}
 
 #ifdef PLUM_HEAP_STATS
 #include <limits.h>
@@ -69,6 +92,16 @@ void *plum_heap_alloc_origin(int64_t size, int64_t origin) {
         fail("Plum memory diagnostics: invalid allocation origin\n");
     void *pointer = malloc((size_t)size);
     if (!pointer) fail("Plum memory diagnostics: allocation failed\n");
+    plum_heap_adopt_origin(pointer, size, origin);
+    return pointer;
+}
+
+/* Adopt only successful raw allocations. Speculative reserve failures never
+ * create a cell/event; both allocators share the same locked insertion. */
+void plum_heap_adopt_origin(void *pointer, int64_t size, int64_t origin) {
+    if (!pointer || size < 0) fail("Plum memory diagnostics: invalid adopted allocation\n");
+    if (origin < 0 || origin >= PLUM_ORIGIN_COUNT)
+        fail("Plum memory diagnostics: invalid allocation origin\n");
     uintptr_t key = ~(uintptr_t)pointer;
     pthread_mutex_lock(&lock);
     if (totals.allocations == INT64_MAX || totals.allocated_bytes > INT64_MAX - size)
@@ -94,7 +127,6 @@ void *plum_heap_alloc_origin(int64_t size, int64_t origin) {
     if (row->live_allocations > row->peak_allocations) row->peak_allocations = row->live_allocations;
     if (row->live_bytes > row->peak_bytes) row->peak_bytes = row->live_bytes;
     pthread_mutex_unlock(&lock);
-    return pointer;
 }
 
 void *plum_heap_alloc(int64_t size) {
