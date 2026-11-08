@@ -144,6 +144,8 @@ def main():
             contains='escape detection and panic cleanup passed')
         run([sys.executable, root / 'bootstrap/qualified-name-check.py', compiler, '--sanitize'],
             contains='qualified-name-check: boundaries, ownership and allocation budgets passed')
+        run([sys.executable, root / 'bootstrap/symbol-encoding-check.py', compiler, '--sanitize'],
+            contains='symbol-encoding-check: byte identities, ownership and allocation budgets passed')
     print('sanitizer-check: generated/native access failures, leaks, clean ownership, symbols, cache isolation and fail-closed runner passed')
 
 

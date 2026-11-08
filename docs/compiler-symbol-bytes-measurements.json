@@ -1,0 +1,1037 @@
+{
+  "baseline_commit": "e4bb637ce5088d306faf7db301613d312d2f69f0",
+  "compiler_path": "Before is the final #477 seed-to-source compiler and matches merged main. Candidate built directly from the same checked-in seed and current source.",
+  "metadata": {
+    "platform": "Linux-7.2.11-arch1-1-x86_64-with-glibc2.44",
+    "samples": 3,
+    "harness_sha256": "f9d6dfb5b2e1dbee3566130b8d86f00f048513da39fca3a5a287f98cf5b7cda0",
+    "revision": "e4bb637ce5088d306faf7db301613d312d2f69f0",
+    "binaries": {
+      "before": {
+        "path": "/tmp/plum-qualified-final",
+        "sha256": "76fb04933fe48582b486f8ba84f7aaf8f6570eef8fab8034f84fe7b5daca051f"
+      },
+      "after": {
+        "path": "/tmp/plum-symbol-final",
+        "sha256": "1f5755dbe4afa29bc30e43b67f8ff4c5c460613b932164a163d0d662553ace43"
+      }
+    },
+    "heap_binaries": {},
+    "input_sha256": {
+      "bootstrap/exec_corpus/collections/main.plum": "e0cf9a9060b774547adc0032a2465aac09e78a8884b2a5e94d899b43e4032f79",
+      "bootstrap/properties/main.plum": "889590b8fa9a66ba8189ea8b52a151e1305bb3a2e1ea76730849747f8d9d71de",
+      "bootstrap/self_host/buildcache/buildcache.plum": "49204521896102952902afe253e39aed34619600babc7e81c7991ba7fc1722c7",
+      "bootstrap/self_host/buildcache/native.plum": "666db370c558e64a5e1da3b7ac25f62640ee7a65b465c76b3f146539d9241c77",
+      "bootstrap/self_host/buildmode/buildmode.plum": "41e000d0d71c3aa3d1b72bf4960e5494a49b3a3c7fd4950270da1dabe75a902f",
+      "bootstrap/self_host/codegen/blocks.plum": "718eb23afb139caf903ca56ee9e9cd03e40bbdac5e7d8ac10e720770b18d06d6",
+      "bootstrap/self_host/codegen/callgraph.plum": "c7afd7922acbb267e8dfb597adb3d4336ee81355fecf2f091665e17368428fd1",
+      "bootstrap/self_host/codegen/codegen.plum": "e26c0a576cae6103efc83390f3b037856732ad41b15f351112fca37f0826f367",
+      "bootstrap/self_host/codegen/hash.plum": "289e2afec907abfd8c3bca48b0c3fc56e64df31fbc7730f44a3f80802f3c2c75",
+      "bootstrap/self_host/codegen/heapstats.plum": "6feb35bb7a3241f976050af255a5682cba547f7611c28785c456a9e2dcb40d81",
+      "bootstrap/self_host/codegen/liveness_future.plum": "7c7d1cd0cbca195a5125f751ed648b90d94ed155667dc23909be047aeaf172b1",
+      "bootstrap/self_host/codegen/prelude.plum": "edef1f2285c7c7556942ed52dd2b8066e5b3462ad1cad8e9b482ba3aaf3376ec",
+      "bootstrap/self_host/codegen/runtime.plum": "f7a318780a59169f6688eda3221d489a439a1bc0950e2dd0770f4213f27c6abf",
+      "bootstrap/self_host/codegen/sanitize.plum": "b1cbf77108082529fd60b48db33cf6b065f0bf8638823e79ea6802254443c685",
+      "bootstrap/self_host/codegen/stdlib.plum": "92e9d00e59bb8ab5ffc7caf26490a6c7b2ed61e44fb1ceccf618a96a3543d015",
+      "bootstrap/self_host/codegen/symbol_atoms.plum": "e150cf746ce17aa280da941cf85057b8b20e507db239ea20c537ca43f5a8315f",
+      "bootstrap/self_host/codegen/symbols.plum": "f3293a168fe85125ada32494bbe34ddd4272cbc93d2b19ee321d974dd868826f",
+      "bootstrap/self_host/fmt/fmt.plum": "46c46714ee904924e788a70fe84fdf56fc88a98391fa284ce84f5d6cd3ff5e62",
+      "bootstrap/self_host/highlight/highlight.plum": "dd9fba51c46d7dba4cecceec8afd1a42e2ba200a9b46dadf58d1e294e6ab7568",
+      "bootstrap/self_host/lexer/lexer.plum": "e59decd4cbe5a2561d5f1a2baa2b42087f6d5dbac1cc4ef2d1273c629855bbff",
+      "bootstrap/self_host/lsp/lsp.plum": "54c80d01204a45970c4af896abfec6865e65107b84f4f712e145217b4216150a",
+      "bootstrap/self_host/lsp_diagnostics.plum": "4d2920d3c8cd0168808a724e8eeb983904a3c300dd878c94fd8c0d4683371af5",
+      "bootstrap/self_host/main.plum": "f0036f6544d0c3a47a55901f8bb2fe9c138b05fed642b46cd8e93baddbeecf26",
+      "bootstrap/self_host/parser/parser.plum": "ce23a742275b01c05df19a989012208477486286cd5c09abe31f49ffea9aa3d9",
+      "bootstrap/self_host/paths.plum": "fef5e5886d8d76cdd352d36b3b7cce4cc33492c7578a5d56cc6cf1771229f686",
+      "bootstrap/self_host/pkg/fetch.plum": "2efbd101e883531e766414be938f5970c831957d262ab3852415d233ef5fa82b",
+      "bootstrap/self_host/pkg/pkg.plum": "5f42f8c1e75712e214b655f6f90a633758bb92073a8e97373545bdfae52de79c",
+      "bootstrap/self_host/shims/shims.plum": "f537c70e3179aef77de9cce34f8b7fdf8ff63c08e117a7f42c67f81d9e47515d",
+      "bootstrap/self_host/snapshot.plum": "485c58e01ac801a0438522b39d14cb38bade4aa530797c549d8645e433cd48fa",
+      "bootstrap/self_host/treefs/treefs.plum": "9ca62a968018407d6faa7257238bc63b31c89b8476739fe460fba59e429e3869",
+      "bootstrap/self_host/typecheck/context.plum": "90e006879e67685ba2c4215fd62d8947c2fd02fb1aa793859b5c015c9de3c36f",
+      "bootstrap/self_host/typecheck/infer.plum": "1482cdc8bb443aa6d99a968d1d2aa4cbf8b9aebb3b730b85cda7420f31164d43",
+      "bootstrap/self_host/typecheck/patterns.plum": "ffe739322c487bac4b42f63b89bbd273fa647b17fd15cfa112c2a71d9669a012",
+      "bootstrap/self_host/typecheck/qualified_names.plum": "397fe7cf8969bec8c9be72ef64a6a2bffd4797e2f535b15c28ae68c369a1e648",
+      "bootstrap/self_host/typecheck/texpr.plum": "4476c6af72bb18f1446f1a8b0d15d1376c3d82dac04f459a242dbce72e1b31a4",
+      "bootstrap/self_host/typecheck/types.plum": "7205879bd24ab4f44a2914f2eb5eb505026d1098f9908cf626a02cb47ffcacfa",
+      "bootstrap/std/Crypto.plum": "f37bd19072452ad0c5b274e1b664b0215adc904671840957db564732bbd572bc",
+      "bootstrap/std/Encoding.plum": "263fb76b4545b3dba196fc1ef41792a170c36edc4d249b5ce08d76f66f3b7b2f",
+      "bootstrap/std/Http.plum": "25b1fdb70c59d1020c1c91ebc73b65213c06a28e31f20a4d7dda3b2136a3cf61",
+      "bootstrap/std/Json.plum": "93fa7a90ba3ee9278ca07163eb096c5af96a47932ce4bfc760b7930db2d0efb0",
+      "bootstrap/std/Memory.plum": "515e0a0171223fc1103e79a88aba6e28098ca6bbea08740b363675e25c3d898b",
+      "bootstrap/std/NativeBuffer.plum": "c5e164845c62d205323fa5f59bfa12a9e06f3cd6eff7af6d3ed67f850fec8199",
+      "bootstrap/std/Net.plum": "d5a16b19f821f791bb80e367c963a795ca843febbc3ac4a4d58e3839f314d5b6",
+      "bootstrap/std/Os.plum": "b513e01094f6409a1bd8aa12605bd6ca27597e36e51b7358a5a3c0eb9e4735dc",
+      "bootstrap/std/Path.plum": "66d9b4714659af0af4e71ea34af936722e7a0435e45bd6e62dacdc4e280b188c",
+      "bootstrap/std/Process.plum": "f5e0bfff19e72f2d9a196d90791a140f535976731b736bb253237afad2f2e11b",
+      "bootstrap/std/Terminal.plum": "bfbaf80737ca345e35f2997cf7654d943e2d199b69f978879c529123927a46ba",
+      "bootstrap/std/Time.plum": "b2166de08be9c576a337fe7ced84dafeca9df1bf1636a9629f751198a207b5b7",
+      "bootstrap/std/Url.plum": "acfccba7be1707bf301e4acb7cf14f9725bffd05cdeffcff669fa67b0343bca2",
+      "bootstrap/std/prelude.plum": "c9596b9b91ba61ac668f60b1e3114be49d647b689276d4d69930170e6afdd810"
+    },
+    "cases": {
+      "check-compiler": [
+        "check",
+        "bootstrap/self_host"
+      ],
+      "emit-compiler": [
+        "emit-llvm",
+        "bootstrap/self_host",
+        "--release"
+      ],
+      "emit-compiler-debug": [
+        "emit-llvm",
+        "bootstrap/self_host"
+      ]
+    }
+  },
+  "samples": [
+    {
+      "case": "check-compiler",
+      "label": "before",
+      "sample": 0,
+      "heap": false,
+      "wall_s": 2.2970483120006975,
+      "peak_rss_kib": 48588,
+      "user_s": 2.268349,
+      "system_s": 0.019979,
+      "allocations": 8618024,
+      "allocated_bytes": 285498904,
+      "phases": [
+        "dependency resolution 108 us",
+        "source discovery 888 us"
+      ],
+      "stdout_bytes": 3,
+      "stdout_sha256": "dc51b8c96c2d745df3bd5590d990230a482fd247123599548e0632fdbf97fc22"
+    },
+    {
+      "case": "check-compiler",
+      "label": "after",
+      "sample": 0,
+      "heap": false,
+      "wall_s": 1.7822679590026382,
+      "peak_rss_kib": 48764,
+      "user_s": 1.76111,
+      "system_s": 0.015667,
+      "allocations": 8618024,
+      "allocated_bytes": 285498904,
+      "phases": [
+        "dependency resolution 108 us",
+        "source discovery 899 us"
+      ],
+      "stdout_bytes": 3,
+      "stdout_sha256": "dc51b8c96c2d745df3bd5590d990230a482fd247123599548e0632fdbf97fc22"
+    },
+    {
+      "case": "emit-compiler",
+      "label": "before",
+      "sample": 0,
+      "heap": false,
+      "wall_s": 4.556462599997758,
+      "peak_rss_kib": 118004,
+      "user_s": 4.5152909999999995,
+      "system_s": 0.028551,
+      "allocations": 16085951,
+      "allocated_bytes": 1072174546,
+      "phases": [
+        "dependency resolution 62 us",
+        "source discovery 458 us",
+        "prelude/stdlib 61396 us",
+        "type checking 1109318 us",
+        "reachability 310237 us",
+        "instantiations 2084",
+        "helper discovery 206133 us",
+        "global emission 2330 us",
+        "helper emission 308139 us",
+        "function emission 2003270 us",
+        "debug metadata 0 us",
+        "IR join 3366 us",
+        "IR bytes 27346727"
+      ],
+      "stdout_bytes": 27346728,
+      "stdout_sha256": "97e3a0b01fdd935f1ccc371ba1a6028d22ed25bddc611f93a3a43b12b53e9b69"
+    },
+    {
+      "case": "emit-compiler",
+      "label": "after",
+      "sample": 0,
+      "heap": false,
+      "wall_s": 4.580902531000902,
+      "peak_rss_kib": 117968,
+      "user_s": 4.539395,
+      "system_s": 0.028373,
+      "allocations": 15632491,
+      "allocated_bytes": 1034791834,
+      "phases": [
+        "dependency resolution 104 us",
+        "source discovery 891 us",
+        "prelude/stdlib 61825 us",
+        "type checking 1109682 us",
+        "reachability 310624 us",
+        "instantiations 2084",
+        "helper discovery 204581 us",
+        "global emission 2323 us",
+        "helper emission 309430 us",
+        "function emission 1998482 us",
+        "debug metadata 0 us",
+        "IR join 3162 us",
+        "IR bytes 27346727"
+      ],
+      "stdout_bytes": 27346728,
+      "stdout_sha256": "97e3a0b01fdd935f1ccc371ba1a6028d22ed25bddc611f93a3a43b12b53e9b69"
+    },
+    {
+      "case": "emit-compiler-debug",
+      "label": "before",
+      "sample": 0,
+      "heap": false,
+      "wall_s": 4.784953570000653,
+      "peak_rss_kib": 132632,
+      "user_s": 4.729477,
+      "system_s": 0.041062,
+      "allocations": 19335952,
+      "allocated_bytes": 1238750678,
+      "phases": [
+        "dependency resolution 108 us",
+        "source discovery 902 us",
+        "prelude/stdlib 61462 us",
+        "type checking 1111791 us",
+        "reachability 312319 us",
+        "instantiations 2084",
+        "helper discovery 207214 us",
+        "global emission 2336 us",
+        "helper emission 310517 us",
+        "function emission 2211294 us",
+        "debug metadata 168 us",
+        "IR join 3296 us",
+        "IR bytes 32296798"
+      ],
+      "stdout_bytes": 32296799,
+      "stdout_sha256": "c451bf7896477956b8a969726c8a3398f4f235519fbddca57d47b5b3be6708b5"
+    },
+    {
+      "case": "emit-compiler-debug",
+      "label": "after",
+      "sample": 0,
+      "heap": false,
+      "wall_s": 4.783501503996376,
+      "peak_rss_kib": 132448,
+      "user_s": 4.7292819999999995,
+      "system_s": 0.040063999999999995,
+      "allocations": 18888010,
+      "allocated_bytes": 1201916494,
+      "phases": [
+        "dependency resolution 137 us",
+        "source discovery 449 us",
+        "prelude/stdlib 61833 us",
+        "type checking 1132278 us",
+        "reachability 312462 us",
+        "instantiations 2084",
+        "helper discovery 208158 us",
+        "global emission 2330 us",
+        "helper emission 311961 us",
+        "function emission 2195958 us",
+        "debug metadata 171 us",
+        "IR join 3195 us",
+        "IR bytes 32296798"
+      ],
+      "stdout_bytes": 32296799,
+      "stdout_sha256": "c451bf7896477956b8a969726c8a3398f4f235519fbddca57d47b5b3be6708b5"
+    },
+    {
+      "case": "check-compiler",
+      "label": "after",
+      "sample": 1,
+      "heap": false,
+      "wall_s": 1.7910282900047605,
+      "peak_rss_kib": 48452,
+      "user_s": 1.764343,
+      "system_s": 0.020908,
+      "allocations": 8618024,
+      "allocated_bytes": 285498904,
+      "phases": [
+        "dependency resolution 103 us",
+        "source discovery 894 us"
+      ],
+      "stdout_bytes": 3,
+      "stdout_sha256": "dc51b8c96c2d745df3bd5590d990230a482fd247123599548e0632fdbf97fc22"
+    },
+    {
+      "case": "check-compiler",
+      "label": "before",
+      "sample": 1,
+      "heap": false,
+      "wall_s": 1.7030273679993115,
+      "peak_rss_kib": 49056,
+      "user_s": 1.680691,
+      "system_s": 0.016905,
+      "allocations": 8618024,
+      "allocated_bytes": 285498904,
+      "phases": [
+        "dependency resolution 108 us",
+        "source discovery 902 us"
+      ],
+      "stdout_bytes": 3,
+      "stdout_sha256": "dc51b8c96c2d745df3bd5590d990230a482fd247123599548e0632fdbf97fc22"
+    },
+    {
+      "case": "emit-compiler",
+      "label": "after",
+      "sample": 1,
+      "heap": false,
+      "wall_s": 4.625049934002163,
+      "peak_rss_kib": 117872,
+      "user_s": 4.588311,
+      "system_s": 0.022907999999999998,
+      "allocations": 15632491,
+      "allocated_bytes": 1034791833,
+      "phases": [
+        "dependency resolution 99 us",
+        "source discovery 897 us",
+        "prelude/stdlib 70447 us",
+        "type checking 1121173 us",
+        "reachability 312403 us",
+        "instantiations 2084",
+        "helper discovery 203902 us",
+        "global emission 2338 us",
+        "helper emission 309968 us",
+        "function emission 2032964 us",
+        "debug metadata 0 us",
+        "IR join 3164 us",
+        "IR bytes 27346727"
+      ],
+      "stdout_bytes": 27346728,
+      "stdout_sha256": "97e3a0b01fdd935f1ccc371ba1a6028d22ed25bddc611f93a3a43b12b53e9b69"
+    },
+    {
+      "case": "emit-compiler",
+      "label": "before",
+      "sample": 1,
+      "heap": false,
+      "wall_s": 4.6300909370038426,
+      "peak_rss_kib": 117872,
+      "user_s": 4.583608,
+      "system_s": 0.033468,
+      "allocations": 16085951,
+      "allocated_bytes": 1072174547,
+      "phases": [
+        "dependency resolution 112 us",
+        "source discovery 903 us",
+        "prelude/stdlib 63904 us",
+        "type checking 1124370 us",
+        "reachability 314631 us",
+        "instantiations 2084",
+        "helper discovery 212435 us",
+        "global emission 2358 us",
+        "helper emission 312747 us",
+        "function emission 2028801 us",
+        "debug metadata 0 us",
+        "IR join 3893 us",
+        "IR bytes 27346727"
+      ],
+      "stdout_bytes": 27346728,
+      "stdout_sha256": "97e3a0b01fdd935f1ccc371ba1a6028d22ed25bddc611f93a3a43b12b53e9b69"
+    },
+    {
+      "case": "emit-compiler-debug",
+      "label": "after",
+      "sample": 1,
+      "heap": false,
+      "wall_s": 4.8531644489994505,
+      "peak_rss_kib": 132716,
+      "user_s": 4.798099,
+      "system_s": 0.040035,
+      "allocations": 18888010,
+      "allocated_bytes": 1201916494,
+      "phases": [
+        "dependency resolution 105 us",
+        "source discovery 898 us",
+        "prelude/stdlib 62952 us",
+        "type checking 1126902 us",
+        "reachability 317840 us",
+        "instantiations 2084",
+        "helper discovery 228138 us",
+        "global emission 2426 us",
+        "helper emission 311699 us",
+        "function emission 2202401 us",
+        "debug metadata 173 us",
+        "IR join 3298 us",
+        "IR bytes 32296798"
+      ],
+      "stdout_bytes": 32296799,
+      "stdout_sha256": "c451bf7896477956b8a969726c8a3398f4f235519fbddca57d47b5b3be6708b5"
+    },
+    {
+      "case": "emit-compiler-debug",
+      "label": "before",
+      "sample": 1,
+      "heap": false,
+      "wall_s": 4.824875149999571,
+      "peak_rss_kib": 132556,
+      "user_s": 4.778048,
+      "system_s": 0.032709999999999996,
+      "allocations": 19335952,
+      "allocated_bytes": 1238750678,
+      "phases": [
+        "dependency resolution 118 us",
+        "source discovery 889 us",
+        "prelude/stdlib 64866 us",
+        "type checking 1124126 us",
+        "reachability 313569 us",
+        "instantiations 2084",
+        "helper discovery 205095 us",
+        "global emission 2337 us",
+        "helper emission 311181 us",
+        "function emission 2240031 us",
+        "debug metadata 176 us",
+        "IR join 3294 us",
+        "IR bytes 32296798"
+      ],
+      "stdout_bytes": 32296799,
+      "stdout_sha256": "c451bf7896477956b8a969726c8a3398f4f235519fbddca57d47b5b3be6708b5"
+    },
+    {
+      "case": "check-compiler",
+      "label": "before",
+      "sample": 2,
+      "heap": false,
+      "wall_s": 1.712032827999792,
+      "peak_rss_kib": 49076,
+      "user_s": 1.688695,
+      "system_s": 0.018942,
+      "allocations": 8618024,
+      "allocated_bytes": 285498904,
+      "phases": [
+        "dependency resolution 106 us",
+        "source discovery 899 us"
+      ],
+      "stdout_bytes": 3,
+      "stdout_sha256": "dc51b8c96c2d745df3bd5590d990230a482fd247123599548e0632fdbf97fc22"
+    },
+    {
+      "case": "check-compiler",
+      "label": "after",
+      "sample": 2,
+      "heap": false,
+      "wall_s": 1.6818913970055291,
+      "peak_rss_kib": 48812,
+      "user_s": 1.6610619999999998,
+      "system_s": 0.016118,
+      "allocations": 8618024,
+      "allocated_bytes": 285498904,
+      "phases": [
+        "dependency resolution 113 us",
+        "source discovery 939 us"
+      ],
+      "stdout_bytes": 3,
+      "stdout_sha256": "dc51b8c96c2d745df3bd5590d990230a482fd247123599548e0632fdbf97fc22"
+    },
+    {
+      "case": "emit-compiler",
+      "label": "before",
+      "sample": 2,
+      "heap": false,
+      "wall_s": 4.659353320996161,
+      "peak_rss_kib": 117844,
+      "user_s": 4.6111889999999995,
+      "system_s": 0.034894,
+      "allocations": 16085951,
+      "allocated_bytes": 1072174547,
+      "phases": [
+        "dependency resolution 111 us",
+        "source discovery 902 us",
+        "prelude/stdlib 62563 us",
+        "type checking 1119758 us",
+        "reachability 312993 us",
+        "instantiations 2084",
+        "helper discovery 203911 us",
+        "global emission 2344 us",
+        "helper emission 311949 us",
+        "function emission 2049207 us",
+        "debug metadata 0 us",
+        "IR join 3212 us",
+        "IR bytes 27346727"
+      ],
+      "stdout_bytes": 27346728,
+      "stdout_sha256": "97e3a0b01fdd935f1ccc371ba1a6028d22ed25bddc611f93a3a43b12b53e9b69"
+    },
+    {
+      "case": "emit-compiler",
+      "label": "after",
+      "sample": 2,
+      "heap": false,
+      "wall_s": 4.607824726001127,
+      "peak_rss_kib": 117988,
+      "user_s": 4.561357,
+      "system_s": 0.032931999999999996,
+      "allocations": 15632491,
+      "allocated_bytes": 1034791834,
+      "phases": [
+        "dependency resolution 109 us",
+        "source discovery 899 us",
+        "prelude/stdlib 65265 us",
+        "type checking 1125109 us",
+        "reachability 313640 us",
+        "instantiations 2084",
+        "helper discovery 205782 us",
+        "global emission 2344 us",
+        "helper emission 311376 us",
+        "function emission 2020784 us",
+        "debug metadata 0 us",
+        "IR join 3127 us",
+        "IR bytes 27346727"
+      ],
+      "stdout_bytes": 27346728,
+      "stdout_sha256": "97e3a0b01fdd935f1ccc371ba1a6028d22ed25bddc611f93a3a43b12b53e9b69"
+    },
+    {
+      "case": "emit-compiler-debug",
+      "label": "before",
+      "sample": 2,
+      "heap": false,
+      "wall_s": 4.797949984000297,
+      "peak_rss_kib": 132540,
+      "user_s": 4.75584,
+      "system_s": 0.027927999999999998,
+      "allocations": 19335952,
+      "allocated_bytes": 1238750678,
+      "phases": [
+        "dependency resolution 104 us",
+        "source discovery 908 us",
+        "prelude/stdlib 63316 us",
+        "type checking 1116526 us",
+        "reachability 314866 us",
+        "instantiations 2084",
+        "helper discovery 210430 us",
+        "global emission 2354 us",
+        "helper emission 312546 us",
+        "function emission 2211754 us",
+        "debug metadata 168 us",
+        "IR join 3117 us",
+        "IR bytes 32296798"
+      ],
+      "stdout_bytes": 32296799,
+      "stdout_sha256": "c451bf7896477956b8a969726c8a3398f4f235519fbddca57d47b5b3be6708b5"
+    },
+    {
+      "case": "emit-compiler-debug",
+      "label": "after",
+      "sample": 2,
+      "heap": false,
+      "wall_s": 4.82635432400275,
+      "peak_rss_kib": 132288,
+      "user_s": 4.772016,
+      "system_s": 0.040381,
+      "allocations": 18888010,
+      "allocated_bytes": 1201916494,
+      "phases": [
+        "dependency resolution 105 us",
+        "source discovery 898 us",
+        "prelude/stdlib 63407 us",
+        "type checking 1122908 us",
+        "reachability 313887 us",
+        "instantiations 2084",
+        "helper discovery 213861 us",
+        "global emission 2353 us",
+        "helper emission 314763 us",
+        "function emission 2209381 us",
+        "debug metadata 165 us",
+        "IR join 3366 us",
+        "IR bytes 32296798"
+      ],
+      "stdout_bytes": 32296799,
+      "stdout_sha256": "c451bf7896477956b8a969726c8a3398f4f235519fbddca57d47b5b3be6708b5"
+    },
+    {
+      "case": "check-compiler",
+      "label": "after",
+      "sample": 3,
+      "heap": false,
+      "wall_s": 1.7000784069969086,
+      "peak_rss_kib": 48612,
+      "user_s": 1.673172,
+      "system_s": 0.02232,
+      "allocations": 8618024,
+      "allocated_bytes": 285498904,
+      "phases": [
+        "dependency resolution 105 us",
+        "source discovery 900 us"
+      ],
+      "stdout_bytes": 3,
+      "stdout_sha256": "dc51b8c96c2d745df3bd5590d990230a482fd247123599548e0632fdbf97fc22"
+    },
+    {
+      "case": "check-compiler",
+      "label": "before",
+      "sample": 3,
+      "heap": false,
+      "wall_s": 1.6987279199965997,
+      "peak_rss_kib": 48620,
+      "user_s": 1.673975,
+      "system_s": 0.019969999999999998,
+      "allocations": 8618024,
+      "allocated_bytes": 285498904,
+      "phases": [
+        "dependency resolution 110 us",
+        "source discovery 901 us"
+      ],
+      "stdout_bytes": 3,
+      "stdout_sha256": "dc51b8c96c2d745df3bd5590d990230a482fd247123599548e0632fdbf97fc22"
+    },
+    {
+      "case": "emit-compiler",
+      "label": "after",
+      "sample": 3,
+      "heap": false,
+      "wall_s": 4.642115737995482,
+      "peak_rss_kib": 117728,
+      "user_s": 4.602616,
+      "system_s": 0.026112999999999997,
+      "allocations": 15632491,
+      "allocated_bytes": 1034791834,
+      "phases": [
+        "dependency resolution 102 us",
+        "source discovery 903 us",
+        "prelude/stdlib 63885 us",
+        "type checking 1137457 us",
+        "reachability 323841 us",
+        "instantiations 2084",
+        "helper discovery 209329 us",
+        "global emission 2367 us",
+        "helper emission 313482 us",
+        "function emission 2014465 us",
+        "debug metadata 0 us",
+        "IR join 3130 us",
+        "IR bytes 27346727"
+      ],
+      "stdout_bytes": 27346728,
+      "stdout_sha256": "97e3a0b01fdd935f1ccc371ba1a6028d22ed25bddc611f93a3a43b12b53e9b69"
+    },
+    {
+      "case": "emit-compiler",
+      "label": "before",
+      "sample": 3,
+      "heap": false,
+      "wall_s": 4.6379765500023495,
+      "peak_rss_kib": 117780,
+      "user_s": 4.594396,
+      "system_s": 0.030625,
+      "allocations": 16085951,
+      "allocated_bytes": 1072174547,
+      "phases": [
+        "dependency resolution 106 us",
+        "source discovery 899 us",
+        "prelude/stdlib 63005 us",
+        "type checking 1119927 us",
+        "reachability 314781 us",
+        "instantiations 2084",
+        "helper discovery 206185 us",
+        "global emission 2354 us",
+        "helper emission 311655 us",
+        "function emission 2053535 us",
+        "debug metadata 0 us",
+        "IR join 4065 us",
+        "IR bytes 27346727"
+      ],
+      "stdout_bytes": 27346728,
+      "stdout_sha256": "97e3a0b01fdd935f1ccc371ba1a6028d22ed25bddc611f93a3a43b12b53e9b69"
+    },
+    {
+      "case": "emit-compiler-debug",
+      "label": "after",
+      "sample": 3,
+      "heap": false,
+      "wall_s": 4.8294066909948015,
+      "peak_rss_kib": 132296,
+      "user_s": 4.785933,
+      "system_s": 0.029899,
+      "allocations": 18888010,
+      "allocated_bytes": 1201916493,
+      "phases": [
+        "dependency resolution 58 us",
+        "source discovery 480 us",
+        "prelude/stdlib 64570 us",
+        "type checking 1143060 us",
+        "reachability 313672 us",
+        "instantiations 2084",
+        "helper discovery 209085 us",
+        "global emission 2357 us",
+        "helper emission 311612 us",
+        "function emission 2217015 us",
+        "debug metadata 172 us",
+        "IR join 4051 us",
+        "IR bytes 32296798"
+      ],
+      "stdout_bytes": 32296799,
+      "stdout_sha256": "c451bf7896477956b8a969726c8a3398f4f235519fbddca57d47b5b3be6708b5"
+    },
+    {
+      "case": "emit-compiler-debug",
+      "label": "before",
+      "sample": 3,
+      "heap": false,
+      "wall_s": 4.842127495001478,
+      "peak_rss_kib": 132460,
+      "user_s": 4.79535,
+      "system_s": 0.032924,
+      "allocations": 19335952,
+      "allocated_bytes": 1238750678,
+      "phases": [
+        "dependency resolution 104 us",
+        "source discovery 904 us",
+        "prelude/stdlib 62305 us",
+        "type checking 1124844 us",
+        "reachability 325121 us",
+        "instantiations 2084",
+        "helper discovery 207645 us",
+        "global emission 2357 us",
+        "helper emission 312097 us",
+        "function emission 2236699 us",
+        "debug metadata 195 us",
+        "IR join 3798 us",
+        "IR bytes 32296798"
+      ],
+      "stdout_bytes": 32296799,
+      "stdout_sha256": "c451bf7896477956b8a969726c8a3398f4f235519fbddca57d47b5b3be6708b5"
+    }
+  ],
+  "llvm_byte_identical": true,
+  "exclusive_profile": {
+    "rows": [
+      {
+        "name": "plum.f.codegen.cg_join_text.0.",
+        "bytes": 136945231,
+        "allocations": 74286,
+        "calls": 156000
+      },
+      {
+        "name": "plum.f.lexer.tokenize_fragment_at.0.",
+        "bytes": 65220869,
+        "allocations": 1825056,
+        "calls": 1205
+      },
+      {
+        "name": "plum.f.codegen.cg_escape_llvm.0.",
+        "bytes": 54934336,
+        "allocations": 89286,
+        "calls": 14881
+      },
+      {
+        "name": "plum.f.codegen.cg_symbol_atom.0.",
+        "bytes": 48211482,
+        "allocations": 652834,
+        "calls": 185419
+      },
+      {
+        "name": "plum.f.parser.set_source_context.0.",
+        "bytes": 46971141,
+        "allocations": 1806529,
+        "calls": 51
+      },
+      {
+        "name": "plum.f.codegen.cg_concat.0.",
+        "bytes": 44810554,
+        "allocations": 50944,
+        "calls": 6339
+      },
+      {
+        "name": "plum.f.typecheck.subst_apply.0.",
+        "bytes": 44069688,
+        "allocations": 1592899,
+        "calls": 1352079
+      },
+      {
+        "name": "plum.f.codegen.cg_fn_call_real.0.",
+        "bytes": 36239892,
+        "allocations": 108664,
+        "calls": 12036
+      },
+      {
+        "name": "plum.f.codegen.cg_emit_program_entry.0.",
+        "bytes": 28907108,
+        "allocations": 8,
+        "calls": 1
+      },
+      {
+        "name": "plum.f.codegen.cg_emit_insts.0.",
+        "bytes": 25674877,
+        "allocations": 1,
+        "calls": 1
+      },
+      {
+        "name": "plum.f.typecheck.instantiate_template.0.",
+        "bytes": 21253960,
+        "allocations": 658690,
+        "calls": 627562
+      },
+      {
+        "name": "plum.f.codegen.cg_const_cell.0.",
+        "bytes": 19287843,
+        "allocations": 27594,
+        "calls": 2579
+      },
+      {
+        "name": "plum.f.typecheck.compose_resolve_acc.0.",
+        "bytes": 16114368,
+        "allocations": 438354,
+        "calls": 440405
+      },
+      {
+        "name": "plum.f.lexer.lex_ident_or_keyword.0.",
+        "bytes": 15514336,
+        "allocations": 393393,
+        "calls": 105992
+      },
+      {
+        "name": "plum.f.codegen.cg_str_constant.0.",
+        "bytes": 15042631,
+        "allocations": 122146,
+        "calls": 12184
+      },
+      {
+        "name": "plum.f.codegen.cg_release_slot.0.",
+        "bytes": 14076499,
+        "allocations": 153997,
+        "calls": 24002
+      },
+      {
+        "name": "plum.f.codegen.cg_reuse_drops.0.",
+        "bytes": 12151969,
+        "allocations": 27250,
+        "calls": 5812
+      },
+      {
+        "name": "plum.f.parser.doc_before.0.",
+        "bytes": 12067678,
+        "allocations": 31402,
+        "calls": 2686
+      },
+      {
+        "name": "plum.f.codegen.cg_shortcircuit.0.",
+        "bytes": 9587557,
+        "allocations": 16546,
+        "calls": 1001
+      },
+      {
+        "name": "plum.f.typecheck.subst_compose.0.",
+        "bytes": 9526224,
+        "allocations": 318288,
+        "calls": 81897
+      }
+    ],
+    "depth": 0,
+    "llvm_byte_identical": true,
+    "probe_c_sha256": "9aada146ebeb25aeb637cfdc9c910b367d9af3a619a2226bc0fa0a4e10b743f0",
+    "wrapper_sha256": "aec63f83ba54be40f3acb715010610a92de25d975a872fbbf6ffbbd2bfd5dcb6"
+  },
+  "focused_guard": {
+    "baseline_ascii_width32_debug": {
+      "allocations": 605,
+      "allocated_bytes": 293195
+    },
+    "after_log": [
+      "  symbol ascii width=32 debug: 5 allocations, 395 bytes (ceiling 4480)",
+      "  symbol ascii width=256 debug: 8 allocations, 2686 bytes (ceiling 7840)",
+      "  symbol ascii width=2048 debug: 11 allocations, 20657 bytes (ceiling 34720)",
+      "  symbol mixed width=32 debug: 709 allocations, 86831 bytes (ceiling 198800)",
+      "  symbol mixed width=256 debug: 712 allocations, 543842 bytes (ceiling 882000)",
+      "  symbol mixed width=2048 debug: 715 allocations, 4199573 bytes (ceiling 6347600)",
+      "  symbol dense width=32 debug: 810 allocations, 619966 bytes (ceiling 1504800)",
+      "  symbol dense width=256 debug: 1116 allocations, 5054052 bytes (ceiling 10464800)",
+      "  symbol dense width=2048 debug: 1422 allocations, 40559626 bytes (ceiling 82144800)",
+      "  symbol ascii width=32 release: 5 allocations, 395 bytes (ceiling 4480)",
+      "  symbol ascii width=256 release: 8 allocations, 2686 bytes (ceiling 7840)",
+      "  symbol ascii width=2048 release: 11 allocations, 20657 bytes (ceiling 34720)",
+      "  symbol mixed width=32 release: 709 allocations, 86831 bytes (ceiling 198800)",
+      "  symbol mixed width=256 release: 712 allocations, 543842 bytes (ceiling 882000)",
+      "  symbol mixed width=2048 release: 715 allocations, 4199573 bytes (ceiling 6347600)",
+      "  symbol dense width=32 release: 810 allocations, 619966 bytes (ceiling 1504800)",
+      "  symbol dense width=256 release: 1116 allocations, 5054052 bytes (ceiling 10464800)",
+      "  symbol dense width=2048 release: 1422 allocations, 40559626 bytes (ceiling 82144800)"
+    ],
+    "production_source_sha256": "e150cf746ce17aa280da941cf85057b8b20e507db239ea20c537ca43f5a8315f",
+    "harness_sha256": "7f81ea9b9e2044a9cdae9068934c57fd85bf6dbebac07c2c780b3a96a5f8187a",
+    "before_samples": [
+      {
+        "mode": "debug",
+        "kind": "ascii",
+        "width": 32,
+        "allocations": 605,
+        "allocated_bytes": 293195
+      },
+      {
+        "mode": "debug",
+        "kind": "ascii",
+        "width": 256,
+        "allocations": 908,
+        "allocated_bytes": 2441086
+      },
+      {
+        "mode": "debug",
+        "kind": "ascii",
+        "width": 2048,
+        "allocations": 1211,
+        "allocated_bytes": 19657457
+      },
+      {
+        "mode": "debug",
+        "kind": "mixed",
+        "width": 32,
+        "allocations": 1409,
+        "allocated_bytes": 685231
+      },
+      {
+        "mode": "debug",
+        "kind": "mixed",
+        "width": 256,
+        "allocations": 1712,
+        "allocated_bytes": 5438242
+      },
+      {
+        "mode": "debug",
+        "kind": "mixed",
+        "width": 2048,
+        "allocations": 2015,
+        "allocated_bytes": 43495573
+      },
+      {
+        "mode": "debug",
+        "kind": "dense",
+        "width": 32,
+        "allocations": 1310,
+        "allocated_bytes": 760766
+      },
+      {
+        "mode": "debug",
+        "kind": "dense",
+        "width": 256,
+        "allocations": 1916,
+        "allocated_bytes": 6265252
+      },
+      {
+        "mode": "debug",
+        "kind": "dense",
+        "width": 2048,
+        "allocations": 2522,
+        "allocated_bytes": 50367626
+      },
+      {
+        "mode": "release",
+        "kind": "ascii",
+        "width": 32,
+        "allocations": 605,
+        "allocated_bytes": 293195
+      },
+      {
+        "mode": "release",
+        "kind": "ascii",
+        "width": 256,
+        "allocations": 908,
+        "allocated_bytes": 2441086
+      },
+      {
+        "mode": "release",
+        "kind": "ascii",
+        "width": 2048,
+        "allocations": 1211,
+        "allocated_bytes": 19657457
+      },
+      {
+        "mode": "release",
+        "kind": "mixed",
+        "width": 32,
+        "allocations": 1409,
+        "allocated_bytes": 685231
+      },
+      {
+        "mode": "release",
+        "kind": "mixed",
+        "width": 256,
+        "allocations": 1712,
+        "allocated_bytes": 5438242
+      },
+      {
+        "mode": "release",
+        "kind": "mixed",
+        "width": 2048,
+        "allocations": 2015,
+        "allocated_bytes": 43495573
+      },
+      {
+        "mode": "release",
+        "kind": "dense",
+        "width": 32,
+        "allocations": 1310,
+        "allocated_bytes": 760766
+      },
+      {
+        "mode": "release",
+        "kind": "dense",
+        "width": 256,
+        "allocations": 1916,
+        "allocated_bytes": 6265252
+      },
+      {
+        "mode": "release",
+        "kind": "dense",
+        "width": 2048,
+        "allocations": 2522,
+        "allocated_bytes": 50367626
+      }
+    ]
+  },
+  "clang": "23.1.4",
+  "string_accumulator_experiment": {
+    "shipped": false,
+    "followup_issue": 478,
+    "source_sha256": "74e4e60cbfe0d7b471b28337fa571fcfbdff9872fa4c72b6d5a86dc647d20440",
+    "focused_log": [
+      "  symbol ascii width=32 debug: 5 allocations, 395 bytes (ceiling 4480)",
+      "  symbol ascii width=256 debug: 8 allocations, 2686 bytes (ceiling 7840)",
+      "  symbol ascii width=2048 debug: 11 allocations, 20657 bytes (ceiling 34720)",
+      "  symbol mixed width=32 debug: 509 allocations, 75631 bytes (ceiling 198800)",
+      "  symbol mixed width=256 debug: 512 allocations, 532642 bytes (ceiling 882000)",
+      "  symbol mixed width=2048 debug: 515 allocations, 4188373 bytes (ceiling 6347600)",
+      "  symbol dense width=32 debug: 1310 allocations, 138066 bytes (ceiling 1504800)",
+      "  symbol dense width=256 debug: 9716 allocations, 7542152 bytes (ceiling 10464800)"
+    ],
+    "public_repeat_reproduction": [
+      {
+        "repetitions": 512,
+        "output_bytes": 1536,
+        "allocations": 105,
+        "allocated_bytes": 75659
+      },
+      {
+        "repetitions": 1024,
+        "output_bytes": 3072,
+        "allocations": 202,
+        "allocated_bytes": 298598
+      },
+      {
+        "repetitions": 2048,
+        "output_bytes": 6144,
+        "allocations": 394,
+        "allocated_bytes": 1186790
+      },
+      {
+        "repetitions": 4096,
+        "output_bytes": 12288,
+        "allocations": 778,
+        "allocated_bytes": 4732647
+      }
+    ],
+    "llvm_byte_identical": true,
+    "fragments_release_single_sample": {
+      "allocations": 15634855,
+      "allocated_bytes": 1034619629,
+      "profile_enabled": false
+    },
+    "string_accumulator_release_single_sample": {
+      "allocations": 15511521,
+      "allocated_bytes": 1026093432,
+      "profile_enabled": false
+    }
+  },
+  "asan_compiler_emission": "Instrumented compiler emitted itself with no ASan/LSan diagnostics, clean exit and identical LLVM."
+}
