@@ -1,0 +1,790 @@
+{
+  "results": [
+    {
+      "variant": "fragments",
+      "mode": "debug",
+      "kind": "bytes",
+      "width": 1,
+      "allocations": 3583,
+      "allocated_bytes": 1400351
+    },
+    {
+      "variant": "fragments",
+      "mode": "debug",
+      "kind": "ascii",
+      "width": 32,
+      "allocations": 5,
+      "allocated_bytes": 395
+    },
+    {
+      "variant": "fragments",
+      "mode": "debug",
+      "kind": "ascii",
+      "width": 256,
+      "allocations": 8,
+      "allocated_bytes": 2686
+    },
+    {
+      "variant": "fragments",
+      "mode": "debug",
+      "kind": "ascii",
+      "width": 2048,
+      "allocations": 11,
+      "allocated_bytes": 20657
+    },
+    {
+      "variant": "fragments",
+      "mode": "debug",
+      "kind": "mixed",
+      "width": 32,
+      "allocations": 709,
+      "allocated_bytes": 86831
+    },
+    {
+      "variant": "fragments",
+      "mode": "debug",
+      "kind": "mixed",
+      "width": 256,
+      "allocations": 712,
+      "allocated_bytes": 543842
+    },
+    {
+      "variant": "fragments",
+      "mode": "debug",
+      "kind": "mixed",
+      "width": 2048,
+      "allocations": 715,
+      "allocated_bytes": 4199573
+    },
+    {
+      "variant": "fragments",
+      "mode": "debug",
+      "kind": "dense",
+      "width": 32,
+      "allocations": 810,
+      "allocated_bytes": 619966
+    },
+    {
+      "variant": "fragments",
+      "mode": "debug",
+      "kind": "dense",
+      "width": 256,
+      "allocations": 1116,
+      "allocated_bytes": 5054052
+    },
+    {
+      "variant": "fragments",
+      "mode": "debug",
+      "kind": "dense",
+      "width": 2048,
+      "allocations": 1422,
+      "allocated_bytes": 40559626
+    },
+    {
+      "variant": "fragments",
+      "mode": "release",
+      "kind": "bytes",
+      "width": 1,
+      "allocations": 3583,
+      "allocated_bytes": 1400351
+    },
+    {
+      "variant": "fragments",
+      "mode": "release",
+      "kind": "ascii",
+      "width": 32,
+      "allocations": 5,
+      "allocated_bytes": 395
+    },
+    {
+      "variant": "fragments",
+      "mode": "release",
+      "kind": "ascii",
+      "width": 256,
+      "allocations": 8,
+      "allocated_bytes": 2686
+    },
+    {
+      "variant": "fragments",
+      "mode": "release",
+      "kind": "ascii",
+      "width": 2048,
+      "allocations": 11,
+      "allocated_bytes": 20657
+    },
+    {
+      "variant": "fragments",
+      "mode": "release",
+      "kind": "mixed",
+      "width": 32,
+      "allocations": 709,
+      "allocated_bytes": 86831
+    },
+    {
+      "variant": "fragments",
+      "mode": "release",
+      "kind": "mixed",
+      "width": 256,
+      "allocations": 712,
+      "allocated_bytes": 543842
+    },
+    {
+      "variant": "fragments",
+      "mode": "release",
+      "kind": "mixed",
+      "width": 2048,
+      "allocations": 715,
+      "allocated_bytes": 4199573
+    },
+    {
+      "variant": "fragments",
+      "mode": "release",
+      "kind": "dense",
+      "width": 32,
+      "allocations": 810,
+      "allocated_bytes": 619966
+    },
+    {
+      "variant": "fragments",
+      "mode": "release",
+      "kind": "dense",
+      "width": 256,
+      "allocations": 1116,
+      "allocated_bytes": 5054052
+    },
+    {
+      "variant": "fragments",
+      "mode": "release",
+      "kind": "dense",
+      "width": 2048,
+      "allocations": 1422,
+      "allocated_bytes": 40559626
+    },
+    {
+      "variant": "owned",
+      "mode": "debug",
+      "kind": "bytes",
+      "width": 1,
+      "allocations": 3239,
+      "allocated_bytes": 650746
+    },
+    {
+      "variant": "owned",
+      "mode": "debug",
+      "kind": "ascii",
+      "width": 32,
+      "allocations": 5,
+      "allocated_bytes": 395
+    },
+    {
+      "variant": "owned",
+      "mode": "debug",
+      "kind": "ascii",
+      "width": 256,
+      "allocations": 8,
+      "allocated_bytes": 2686
+    },
+    {
+      "variant": "owned",
+      "mode": "debug",
+      "kind": "ascii",
+      "width": 2048,
+      "allocations": 11,
+      "allocated_bytes": 20657
+    },
+    {
+      "variant": "owned",
+      "mode": "debug",
+      "kind": "mixed",
+      "width": 32,
+      "allocations": 509,
+      "allocated_bytes": 75631
+    },
+    {
+      "variant": "owned",
+      "mode": "debug",
+      "kind": "mixed",
+      "width": 256,
+      "allocations": 512,
+      "allocated_bytes": 532642
+    },
+    {
+      "variant": "owned",
+      "mode": "debug",
+      "kind": "mixed",
+      "width": 2048,
+      "allocations": 515,
+      "allocated_bytes": 4188373
+    },
+    {
+      "variant": "owned",
+      "mode": "debug",
+      "kind": "dense",
+      "width": 32,
+      "allocations": 710,
+      "allocated_bytes": 78666
+    },
+    {
+      "variant": "owned",
+      "mode": "debug",
+      "kind": "dense",
+      "width": 256,
+      "allocations": 1216,
+      "allocated_bytes": 662252
+    },
+    {
+      "variant": "owned",
+      "mode": "debug",
+      "kind": "dense",
+      "width": 2048,
+      "allocations": 1722,
+      "allocated_bytes": 5127726
+    },
+    {
+      "variant": "owned",
+      "mode": "release",
+      "kind": "bytes",
+      "width": 1,
+      "allocations": 3239,
+      "allocated_bytes": 650746
+    },
+    {
+      "variant": "owned",
+      "mode": "release",
+      "kind": "ascii",
+      "width": 32,
+      "allocations": 5,
+      "allocated_bytes": 395
+    },
+    {
+      "variant": "owned",
+      "mode": "release",
+      "kind": "ascii",
+      "width": 256,
+      "allocations": 8,
+      "allocated_bytes": 2686
+    },
+    {
+      "variant": "owned",
+      "mode": "release",
+      "kind": "ascii",
+      "width": 2048,
+      "allocations": 11,
+      "allocated_bytes": 20657
+    },
+    {
+      "variant": "owned",
+      "mode": "release",
+      "kind": "mixed",
+      "width": 32,
+      "allocations": 509,
+      "allocated_bytes": 75631
+    },
+    {
+      "variant": "owned",
+      "mode": "release",
+      "kind": "mixed",
+      "width": 256,
+      "allocations": 512,
+      "allocated_bytes": 532642
+    },
+    {
+      "variant": "owned",
+      "mode": "release",
+      "kind": "mixed",
+      "width": 2048,
+      "allocations": 515,
+      "allocated_bytes": 4188373
+    },
+    {
+      "variant": "owned",
+      "mode": "release",
+      "kind": "dense",
+      "width": 32,
+      "allocations": 710,
+      "allocated_bytes": 78666
+    },
+    {
+      "variant": "owned",
+      "mode": "release",
+      "kind": "dense",
+      "width": 256,
+      "allocations": 1216,
+      "allocated_bytes": 662252
+    },
+    {
+      "variant": "owned",
+      "mode": "release",
+      "kind": "dense",
+      "width": 2048,
+      "allocations": 1722,
+      "allocated_bytes": 5127726
+    },
+    {
+      "variant": "batched",
+      "mode": "debug",
+      "kind": "bytes",
+      "width": 1,
+      "allocations": 3239,
+      "allocated_bytes": 651134
+    },
+    {
+      "variant": "batched",
+      "mode": "debug",
+      "kind": "ascii",
+      "width": 32,
+      "allocations": 5,
+      "allocated_bytes": 395
+    },
+    {
+      "variant": "batched",
+      "mode": "debug",
+      "kind": "ascii",
+      "width": 256,
+      "allocations": 8,
+      "allocated_bytes": 2686
+    },
+    {
+      "variant": "batched",
+      "mode": "debug",
+      "kind": "ascii",
+      "width": 2048,
+      "allocations": 11,
+      "allocated_bytes": 20657
+    },
+    {
+      "variant": "batched",
+      "mode": "debug",
+      "kind": "mixed",
+      "width": 32,
+      "allocations": 509,
+      "allocated_bytes": 75631
+    },
+    {
+      "variant": "batched",
+      "mode": "debug",
+      "kind": "mixed",
+      "width": 256,
+      "allocations": 512,
+      "allocated_bytes": 532642
+    },
+    {
+      "variant": "batched",
+      "mode": "debug",
+      "kind": "mixed",
+      "width": 2048,
+      "allocations": 515,
+      "allocated_bytes": 4188373
+    },
+    {
+      "variant": "batched",
+      "mode": "debug",
+      "kind": "dense",
+      "width": 32,
+      "allocations": 710,
+      "allocated_bytes": 78866
+    },
+    {
+      "variant": "batched",
+      "mode": "debug",
+      "kind": "dense",
+      "width": 256,
+      "allocations": 1216,
+      "allocated_bytes": 662452
+    },
+    {
+      "variant": "batched",
+      "mode": "debug",
+      "kind": "dense",
+      "width": 2048,
+      "allocations": 1722,
+      "allocated_bytes": 5127926
+    },
+    {
+      "variant": "batched",
+      "mode": "release",
+      "kind": "bytes",
+      "width": 1,
+      "allocations": 3239,
+      "allocated_bytes": 651134
+    },
+    {
+      "variant": "batched",
+      "mode": "release",
+      "kind": "ascii",
+      "width": 32,
+      "allocations": 5,
+      "allocated_bytes": 395
+    },
+    {
+      "variant": "batched",
+      "mode": "release",
+      "kind": "ascii",
+      "width": 256,
+      "allocations": 8,
+      "allocated_bytes": 2686
+    },
+    {
+      "variant": "batched",
+      "mode": "release",
+      "kind": "ascii",
+      "width": 2048,
+      "allocations": 11,
+      "allocated_bytes": 20657
+    },
+    {
+      "variant": "batched",
+      "mode": "release",
+      "kind": "mixed",
+      "width": 32,
+      "allocations": 509,
+      "allocated_bytes": 75631
+    },
+    {
+      "variant": "batched",
+      "mode": "release",
+      "kind": "mixed",
+      "width": 256,
+      "allocations": 512,
+      "allocated_bytes": 532642
+    },
+    {
+      "variant": "batched",
+      "mode": "release",
+      "kind": "mixed",
+      "width": 2048,
+      "allocations": 515,
+      "allocated_bytes": 4188373
+    },
+    {
+      "variant": "batched",
+      "mode": "release",
+      "kind": "dense",
+      "width": 32,
+      "allocations": 710,
+      "allocated_bytes": 78866
+    },
+    {
+      "variant": "batched",
+      "mode": "release",
+      "kind": "dense",
+      "width": 256,
+      "allocations": 1216,
+      "allocated_bytes": 662452
+    },
+    {
+      "variant": "batched",
+      "mode": "release",
+      "kind": "dense",
+      "width": 2048,
+      "allocations": 1722,
+      "allocated_bytes": 5127926
+    }
+  ],
+  "compiler": [
+    {
+      "variant": "fragments",
+      "mode": "debug",
+      "allocations": 18578212,
+      "allocated_bytes": 1086909205,
+      "llvm_bytes": 32320037,
+      "llvm_sha256": "14a76351cecfe273d70ddb25ec7a46363eff8e97c3f19c9836186a11a35dae40"
+    },
+    {
+      "variant": "fragments",
+      "mode": "release",
+      "allocations": 15327474,
+      "allocated_bytes": 919787774,
+      "llvm_bytes": 27368154,
+      "llvm_sha256": "9cdcb068077adb2d2b78551a479b1dd3a8eb162bb756f876f2c9642d6ecbca50"
+    },
+    {
+      "variant": "owned",
+      "mode": "debug",
+      "allocations": 18454689,
+      "allocated_bytes": 1077917556,
+      "llvm_bytes": 32320037,
+      "llvm_sha256": "14a76351cecfe273d70ddb25ec7a46363eff8e97c3f19c9836186a11a35dae40"
+    },
+    {
+      "variant": "owned",
+      "mode": "release",
+      "allocations": 15207133,
+      "allocated_bytes": 910972109,
+      "llvm_bytes": 27368154,
+      "llvm_sha256": "9cdcb068077adb2d2b78551a479b1dd3a8eb162bb756f876f2c9642d6ecbca50"
+    },
+    {
+      "variant": "batched",
+      "mode": "debug",
+      "allocations": 18454689,
+      "allocated_bytes": 1077970182,
+      "llvm_bytes": 32320037,
+      "llvm_sha256": "14a76351cecfe273d70ddb25ec7a46363eff8e97c3f19c9836186a11a35dae40"
+    },
+    {
+      "variant": "batched",
+      "mode": "release",
+      "allocations": 15207133,
+      "allocated_bytes": 911024735,
+      "llvm_bytes": 27368154,
+      "llvm_sha256": "9cdcb068077adb2d2b78551a479b1dd3a8eb162bb756f876f2c9642d6ecbca50"
+    }
+  ],
+  "retention": [
+    {
+      "variant": "fragments",
+      "kind": "dense",
+      "allocated_bytes": 405265,
+      "result_request": 12305,
+      "peak_bytes": 298993,
+      "logical_bytes": 12288
+    },
+    {
+      "variant": "fragments",
+      "kind": "mixed",
+      "allocated_bytes": 6358,
+      "result_request": 3092,
+      "peak_bytes": 9641,
+      "logical_bytes": 3075
+    },
+    {
+      "variant": "owned",
+      "kind": "dense",
+      "allocated_bytes": 50946,
+      "result_request": 17043,
+      "peak_bytes": 32511,
+      "logical_bytes": 12288
+    },
+    {
+      "variant": "owned",
+      "kind": "mixed",
+      "allocated_bytes": 6246,
+      "result_request": 3092,
+      "peak_bytes": 9561,
+      "logical_bytes": 3075
+    },
+    {
+      "variant": "batched",
+      "kind": "dense",
+      "allocated_bytes": 50948,
+      "result_request": 17043,
+      "peak_bytes": 32511,
+      "logical_bytes": 12288
+    },
+    {
+      "variant": "batched",
+      "kind": "mixed",
+      "allocated_bytes": 6246,
+      "result_request": 3092,
+      "peak_bytes": 9561,
+      "logical_bytes": 3075
+    }
+  ],
+  "timing": [
+    {
+      "variant": "fragments",
+      "kind": "ascii",
+      "median_seconds": 0.015429188002599403,
+      "samples_seconds": [
+        0.01276548599707894,
+        0.01883484499558108,
+        0.018705271002545487,
+        0.015429188002599403,
+        0.01435588900494622,
+        0.01658202600083314,
+        0.013124532000801992,
+        0.018441475003783125,
+        0.014556857000570744
+      ],
+      "executable_bytes": 145632
+    },
+    {
+      "variant": "owned",
+      "kind": "ascii",
+      "median_seconds": 0.01774663800460985,
+      "samples_seconds": [
+        0.010518759998376481,
+        0.018571930995676666,
+        0.011068433996115346,
+        0.012687590002315119,
+        0.010949250005069189,
+        0.01845272700302303,
+        0.018368748998909723,
+        0.018792054994264618,
+        0.01774663800460985
+      ],
+      "executable_bytes": 141480
+    },
+    {
+      "variant": "batched",
+      "kind": "ascii",
+      "median_seconds": 0.013205082999775186,
+      "samples_seconds": [
+        0.018388525997579563,
+        0.011957365997659508,
+        0.011376502996427007,
+        0.013205082999775186,
+        0.015598124999087304,
+        0.010468826003489085,
+        0.012059838998538908,
+        0.01828602299792692,
+        0.01891306200559484
+      ],
+      "executable_bytes": 159248
+    },
+    {
+      "variant": "fragments",
+      "kind": "mixed",
+      "median_seconds": 0.05008721200283617,
+      "samples_seconds": [
+        0.05449211900122464,
+        0.04836294900451321,
+        0.049178682995261624,
+        0.06142307899426669,
+        0.05008721200283617,
+        0.05225535100180423,
+        0.04810178699699463,
+        0.06322063100378728,
+        0.04709928100055549
+      ],
+      "executable_bytes": 145696
+    },
+    {
+      "variant": "owned",
+      "kind": "mixed",
+      "median_seconds": 0.050489068002207205,
+      "samples_seconds": [
+        0.06100341999990633,
+        0.04815259200404398,
+        0.05557071899966104,
+        0.04877469199709594,
+        0.048819196003023535,
+        0.055665526997472625,
+        0.05322651899768971,
+        0.04791227100213291,
+        0.050489068002207205
+      ],
+      "executable_bytes": 141544
+    },
+    {
+      "variant": "batched",
+      "kind": "mixed",
+      "median_seconds": 0.04819752700132085,
+      "samples_seconds": [
+        0.04767219799396116,
+        0.04819752700132085,
+        0.04773091900278814,
+        0.05037165799876675,
+        0.04686616300023161,
+        0.049790564000431914,
+        0.05988465400150744,
+        0.056122105997928884,
+        0.0470542659968487
+      ],
+      "executable_bytes": 159312
+    },
+    {
+      "variant": "fragments",
+      "kind": "dense",
+      "median_seconds": 0.01600295800017193,
+      "samples_seconds": [
+        0.01413204800337553,
+        0.01997732400195673,
+        0.017220348003320396,
+        0.016446291003376245,
+        0.01582799899915699,
+        0.01600295800017193,
+        0.014992657001130283,
+        0.01760763600032078,
+        0.015171453000220936
+      ],
+      "executable_bytes": 145664
+    },
+    {
+      "variant": "owned",
+      "kind": "dense",
+      "median_seconds": 0.009818742000788916,
+      "samples_seconds": [
+        0.012222124001709744,
+        0.01241606999974465,
+        0.008963904998381622,
+        0.012077503000909928,
+        0.009818742000788916,
+        0.00844165199669078,
+        0.00881668700458249,
+        0.01326672999857692,
+        0.00913291300093988
+      ],
+      "executable_bytes": 141512
+    },
+    {
+      "variant": "batched",
+      "kind": "dense",
+      "median_seconds": 0.009721760005049873,
+      "samples_seconds": [
+        0.008528624995960854,
+        0.009786501999769825,
+        0.007765609996567946,
+        0.010308002994861454,
+        0.009874027004116215,
+        0.00965294100024039,
+        0.009721760005049873,
+        0.010254151995468419,
+        0.008265209995443001
+      ],
+      "executable_bytes": 159280
+    }
+  ],
+  "method": {
+    "baseline": "de18d2d (merged #480), whose tree matches d9803c8",
+    "compiler": "/tmp/plum-478-final built from refreshed seed -> source",
+    "variants": "all run against merged geometric runtime; compiler emit input identical for every variant",
+    "timing": "9 interleaved release-process runs, width2048, 100 encodings; small process timings are diagnostic and not a whole-compiler speed claim"
+  },
+  "final_compiler": [
+    {
+      "variant": "fragments",
+      "mode": "debug",
+      "allocations": 18580193,
+      "allocated_bytes": 1086926260,
+      "llvm_bytes": 32319736,
+      "llvm_sha256": "7985ce4214af58e211784e4b58c5f6bac34c654f45909cbeab72f1d34f33101a",
+      "peak_kib": 131248
+    },
+    {
+      "variant": "fragments",
+      "mode": "release",
+      "allocations": 15332621,
+      "allocated_bytes": 920072731,
+      "llvm_bytes": 27367791,
+      "llvm_sha256": "a4ac53488c45a1d6be83c3ef890bee9542df196d30ce2758cb5be2d87d02fde5",
+      "peak_kib": 116604
+    },
+    {
+      "variant": "owned",
+      "mode": "debug",
+      "allocations": 18456748,
+      "allocated_bytes": 1077964953,
+      "llvm_bytes": 32319736,
+      "llvm_sha256": "7985ce4214af58e211784e4b58c5f6bac34c654f45909cbeab72f1d34f33101a",
+      "peak_kib": 130900
+    },
+    {
+      "variant": "owned",
+      "mode": "release",
+      "allocations": 15207252,
+      "allocated_bytes": 910940921,
+      "llvm_bytes": 27367791,
+      "llvm_sha256": "a4ac53488c45a1d6be83c3ef890bee9542df196d30ce2758cb5be2d87d02fde5",
+      "peak_kib": 116416
+    }
+  ],
+  "final_input": "same chosen production source for both compilers; fresh Python child reads compiler-only resource usage; no whole-compiler speed claim",
+  "provenance": {
+    "baseline_commit": "de18d2d",
+    "chosen": "owned String + existing shared 16-digit hex table",
+    "new_runtime_or_native_changes": false,
+    "input_mapping": "unchanged byte-for-byte $hh encoding; all 256 bytes checked independently"
+  }
+}

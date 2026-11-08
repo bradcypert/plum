@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Guard actual compiler symbol atoms: lazy ASCII path and owned fragments."""
+"""Guard actual compiler symbol atoms: lazy ASCII path and owned String growth."""
 import argparse
 import os
 from pathlib import Path
@@ -78,10 +78,11 @@ def main():
                         count_limit = 2000
                         ceiling = 50_000 + 50 * width + 100 * (30 * width + 512)
                     else:
-                        # Dense escapes must reuse the owned fragment array,
-                        # rather than copying it on each successive push.
+                        # One owned output grows geometrically. Bound traffic
+                        # tightly enough to reject both exact-growth copying
+                        # and retaining three pointers per escaped byte.
                         count_limit = 4000
-                        ceiling = 20_000 + 100 * (400 * width + 2048)
+                        ceiling = 20_000 + 100 * (40 * width + 1024)
                     print(f'  symbol {kind} width={width} {mode}: {allocations} allocations, {allocated} bytes (ceiling {ceiling})', flush=True)
                     if allocations > count_limit or allocated > ceiling:
                         raise RuntimeError('symbol encoding exceeded its allocation budget')
