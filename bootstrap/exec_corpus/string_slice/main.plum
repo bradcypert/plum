@@ -1,4 +1,5 @@
 let temporary (): String = String.slice("aé中🙂\x00".repeat(64), 1, 4)
+let raw_string (bytes: Array[Int]): String = unsafe { Bytes.from_array(bytes).as_cstr().as_string() }
 
 let main (): Unit = {
     assert_eq(temporary(), "é中🙂");
@@ -20,7 +21,9 @@ let main (): Unit = {
     assert_eq(unsafe { part_pointer.as_string() }, "é中🙂");
     // Preserve grouping even for a leading continuation run, invalid
     // lead bytes, truncated sequences, and an ASCII/continuation group.
-    for text in ["", "\x00", "\x80\xbfa\xbf.\xff\x80\xe2", "\xf0\x9f", "é中🙂\x00é"] {
+    let malformed = raw_string([128, 191, 97, 191, 46, 255, 128, 226]);
+    assert_eq(malformed.as_bytes().to_array(), [128, 191, 97, 191, 46, 255, 128, 226]);
+    for text in ["", "\x00", malformed, raw_string([240, 159]), "é中🙂\x00é"] {
         let chars = chars_of(text);
         for start in [(-9223372036854775807 - 1), -1, 0, 1, 2, 3, 5, 9223372036854775807] {
             for end in [(-9223372036854775807 - 1), -1, 0, 1, 2, 3, 5, 9223372036854775807] {

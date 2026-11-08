@@ -20,7 +20,7 @@ The private byte-prefix helper already served `String.index_of`. It now has a
 shared name, `plum__string_count_starts`, and counts non-continuation bytes.
 For a whole nonempty string, the first byte contributes one character and
 scanning starts at byte one. This exactly preserves `chars_of`'s grouping even
-for malformed raw byte escapes, rather than assuming every String is valid
+for malformed native byte sequences, rather than assuming every String is valid
 UTF-8. Search offset conversion retains its original zero/zero starting state.
 Embedded NULs count normally; combining marks remain separate codepoints.
 

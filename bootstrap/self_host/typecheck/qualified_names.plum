@@ -1,0 +1,62 @@
+// Qualified-name boundaries are character indices, not byte offsets.
+// Keep the scan allocation-free without exposing that distinction to
+// the callers that slice names or resolve aliases.
+
+// Existing runtime primitive; every access below is guarded by the
+// length of the shared Bytes view. No new runtime ABI is introduced.
+let bytes_at_raw (bytes: Bytes) (i: Int): Int = 0
+
+let qualified_dot_scan (bytes: Bytes) (n: Int) (i: Int) (character: Int) (best: Int): Int =
+    if i >= n { best } else {
+        let byte = bytes_at_raw(bytes, i);
+        let position = character + if i == 0 || byte < 128 || byte >= 192 { 1 } else { 0 };
+        // chars_of groups a first byte with following continuations.
+        // A dot followed by a continuation is therefore not the single
+        // character ".", even for malformed native filename bytes.
+        let dot = byte == 46 && (i + 1 >= n || {
+            let next = bytes_at_raw(bytes, i + 1);
+            next < 128 || next >= 192
+        });
+        qualified_dot_scan(bytes, n, i + 1, position, if dot { position } else { best })
+    }
+
+let last_dot_index (name: String): Int = {
+    let bytes = name.as_bytes();
+    qualified_dot_scan(bytes, bytes.len(), 0, -1, -1)
+}
+
+// `"Os.File"` -> `"Os"`; an unqualified name belongs to the root.
+let module_of_qualified (name: String): String = {
+    let i = last_dot_index(name);
+    if i < 0 { "" } else { String.slice(name, 0, i) }
+}
+
+// Independent materialized-character oracle for both the index and
+// the extracted module. Raw fragments can combine across boundaries.
+let qualified_test_native_text (bytes: Array[Int]): String = unsafe { Bytes.from_array(bytes).as_cstr().as_string() }
+
+pub let test_qualified_name_boundaries (): Unit = {
+    let continuation = qualified_test_native_text([128]);
+    assert_eq(continuation.as_bytes().to_array(), [128]);
+    let alphabet = ["", ".", "..", "a", "é", "中", "🙂", "é", "\x00", continuation,
+        qualified_test_native_text([191]), qualified_test_native_text([255]),
+        qualified_test_native_text([46, 128]), qualified_test_native_text([240, 159])];
+    for left in alphabet {
+        for right in alphabet {
+            for middle in ["", ".", ".leaf."] {
+                let name = left.concat(middle).concat(right);
+                let chars = chars_of(name);
+                let mut expected = -1;
+                for i in 0..chars.len() { if chars[i] == "." { expected = i; }; };
+                assert_eq(last_dot_index(name), expected);
+                assert_eq(module_of_qualified(name), if expected < 0 { "" } else { Array.concat_all(Array.slice(chars, 0, expected)) });
+            };
+        };
+    };
+    // Long undotted prefixes and continuation runs must use bounded stack.
+    let prefix = "éa".repeat(65536);
+    assert_eq(last_dot_index(prefix), -1);
+    assert_eq(last_dot_index(prefix.concat(".Leaf")), 131072);
+    assert_eq(module_of_qualified(prefix.concat(".Leaf")), prefix);
+    assert_eq(last_dot_index(".".concat(continuation.repeat(65536)).concat(".Leaf")), 1);
+}

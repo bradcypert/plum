@@ -125,11 +125,10 @@ let use_target_at (uses: Array[UseBinding]) (file: String) (ns: String) (i: Int)
 // becomes `parsec.json.Doc` when `json` is bound. Only the module part
 // is rewritten; the type's own name is the last segment and is never
 // touched.
-// `last_dot_index` is `infer.plum`'s, reused rather than written again:
-// both files are module `typecheck`, so a second copy is a
-// redefinition, which is how this was found.
+// The shared qualified-name scanner returns a character index, matching
+// String.slice even when the module name contains non-ASCII bytes.
 pub let rewrite_type_path (name: String): String = {
-    let i = last_dot_index(name, 0, 0 - 1);
+    let i = last_dot_index(name);
     if i < 0 { name }
     else {
         let ns = String.slice(name, 0, i);
@@ -138,6 +137,25 @@ pub let rewrite_type_path (name: String): String = {
             Some(target) => target.concat(String.slice(name, i, String.char_len(name))),
         }
     }
+}
+
+pub let test_qualified_alias_boundaries (): Unit = {
+    let saved_uses = USES.get();
+    let saved_error = ERR.get();
+    set_uses([UseBinding { path: "first.plum", local: "é中", module: "package.deep" },
+        UseBinding { path: "second.plum", local: "é中", module: "other" },
+        UseBinding { path: "first.plum", local: "nested.alias", module: "canonical" }]);
+    set_err_pos("first.plum", 0, "");
+    assert_eq(rewrite_type_path("é中.Point"), "package.deep.Point");
+    assert_eq(rewrite_type_path("nested.alias.Enum"), "canonical.Enum");
+    assert_eq(rewrite_type_path("unknown.Point"), "unknown.Point");
+    assert_eq(rewrite_type_path("Bare"), "Bare");
+    set_err_pos("second.plum", 0, "");
+    assert_eq(rewrite_type_path("é中.Point"), "other.Point");
+    set_err_pos("third.plum", 0, "");
+    assert_eq(rewrite_type_path("é中.Point"), "é中.Point");
+    USES.set(saved_uses);
+    ERR.set(saved_error)
 }
 
 // The root module is spelled `""` internally -- it holds the prelude
