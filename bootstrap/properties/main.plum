@@ -2099,3 +2099,29 @@ pub let test_unicode_trim_boundaries (): Unit = {
         assert_eq(source, left.concat(core).concat(right));
     }
 }
+
+// Repetition preserves the complete byte sequence, including NUL, and obeys
+// addition/multiplication laws independently of the runtime's copy strategy.
+pub let test_string_repeat_laws (): Unit = {
+    let alphabet = ["", "a", "é", "🙂", "\x00", "e\u{301}", "\n"];
+    let mut seed = 482;
+    for i in 0..160 {
+        seed = next_seed(seed);
+        let a = alphabet[rand_between(seed, 0, alphabet.len() - 1)];
+        seed = next_seed(seed);
+        let b = alphabet[rand_between(seed, 0, alphabet.len() - 1)];
+        let text = a.concat(b);
+        seed = next_seed(seed);
+        let n = rand_between(seed, 0, 31);
+        seed = next_seed(seed);
+        let m = rand_between(seed, 0, 7);
+        let repeated = text.repeat(n);
+        let mut expected = "";
+        for j in 0..n { expected = expected.concat(text); };
+        assert_eq(repeated, expected);
+        assert_eq(repeated.len(), text.len() * n);
+        assert_eq(text.repeat(n + m), repeated.concat(text.repeat(m)));
+        assert_eq(repeated.repeat(m), text.repeat(n * m));
+        assert_eq(text.repeat(-1), "");
+    };
+}

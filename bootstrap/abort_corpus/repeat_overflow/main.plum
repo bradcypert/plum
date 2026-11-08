@@ -1,0 +1,5 @@
+let main (): Unit = {
+    print("before\n");
+    println("abc".repeat(9223372036854775807));
+    println("unreachable")
+}

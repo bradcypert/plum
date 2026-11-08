@@ -27,21 +27,9 @@ bytes once, without allocating an array or individual characters.
 
 ## `let String.repeat (s: String) (n: Int): String`
 
-The string joined to itself `n` times. `n` of zero or less gives
-an empty string.
-Repeats `s` `n` times.
-
-A LOOP with a self-rebinding accumulator, not recursion. It was
-`s.concat(String.repeat(s, n - 1))`, which concatenates onto a
-string one shorter each time, so the bytes allocated are
-1+2+3+...+n: quadratic. 25k characters allocated 313MB, 50k
-allocated 1.25GB, 100k allocated 5.0GB, and a million never
-finished.
-
-`out = out.concat(s)` is the shape the backend can grow in place,
-because the slot is overwritten with the result and nothing can
-observe a mutation. Found while writing SHA-256, whose test
-vector needs a million characters.
+The string joined to itself `n` times. Zero or negative counts and
+empty input give an empty string. Repeating nonempty input once shares
+its storage; larger results allocate one buffer without spare capacity.
 
 ## `let String.char_len (s: String): Int`
 

@@ -17,6 +17,8 @@ extern void *plum_alloc_preferred(int64_t, int64_t, int64_t);
 extern int64_t plum_str_concat_length(int64_t, int64_t);
 extern int64_t plum_str_growth_bytes(int64_t, int64_t);
 extern void *plum_str_concat(void *, void *);
+extern void *plum_str_repeat(void *, int64_t);
+extern int64_t plum_str_repeat_length(int64_t, int64_t);
 extern void *plum_str_concat_reuse(void *, void *);
 extern void plum_rel_str(void *);
 extern void plum_rc_inc(void *);
@@ -189,6 +191,54 @@ static void traffic(int steps) {
     CHECK(field(2) == 0 && field(3) == 0 && origin_field(3) == 0);
 #endif
 }
+static void repetition(void) {
+    const char chunk[] = "a\xc3\xa9\0\xf0\x9f\x99\x82";
+    void *input = text(chunk, 8, 128);
+    int64_t n = plum_n_alloc;
+    for (int64_t count = -2; count <= 0; ++count) {
+        void *empty = plum_str_repeat(input, count);
+        value(empty, "", 0); plum_rel_str(empty);
+    }
+    void *empty = plum_str_repeat(input, INT64_MIN);
+    value(empty, "", 0); plum_rel_str(empty);
+    void *same = plum_str_repeat(input, 1);
+    CHECK(same == input && *(int64_t *)input == 2);
+    plum_rel_str(same);
+    CHECK(plum_n_alloc == n && *(int64_t *)input == 1);
+    void *blank = text("", 0, 128);
+    n = plum_n_alloc;
+    empty = plum_str_repeat(blank, INT64_MAX);
+    value(empty, "", 0);
+    CHECK(plum_n_alloc == n && *(int64_t *)blank == 1);
+    plum_rel_str(empty); plum_rel_str(blank);
+    CHECK(plum_str_repeat_length(0, INT64_MAX) == 0);
+    CHECK(plum_str_repeat_length(-1, -1) == 0);
+    CHECK(plum_str_repeat_length(1, INT64_MAX - 17) == INT64_MAX - 17);
+    CHECK(plum_str_repeat_length((INT64_MAX - 17) / 3, 3) == ((INT64_MAX - 17) / 3) * 3);
+    for (int64_t count = 2; count <= 4096; count = count * 2 - 1) {
+        int64_t length = 8 * count, required = length + 17;
+        n = plum_n_alloc;
+        int64_t bytes = plum_b_alloc, live = field(3), origins = origin_field(3);
+        attempts = 0;
+        void *out = plum_str_repeat(input, count);
+        CHECK(out != input && plum_n_alloc == n + 1 && plum_b_alloc == bytes + required);
+        CHECK(attempts == 1 && requests[0] == required);
+        CHECK(((int64_t *)out)[1] == length && ((char *)out)[16 + length] == 0);
+        for (int64_t i = 0; i < length; ++i) CHECK(((char *)out)[16 + i] == chunk[i % 8]);
+        value(input, chunk, 8);
+#ifdef PLUM_HEAP_STATS
+        CHECK(field(3) == live + required && origin_field(3) == origins + required);
+#else
+        (void)live; (void)origins;
+#endif
+        plum_rel_str(out);
+        CHECK(field(3) == live);
+    }
+    plum_rel_str(input);
+#ifdef PLUM_HEAP_STATS
+    CHECK(field(2) == 0 && field(3) == 0);
+#endif
+}
 int main(int argc, char **argv) {
     if (argc > 1) {
         if (!strcmp(argv[1], "negative")) plum_str_concat_length(-1, 0);
@@ -201,6 +251,15 @@ int main(int argc, char **argv) {
         else if (!strcmp(argv[1], "reuse-overflow")) {
             int64_t a[] = {1, INT64_MAX - 17}, b[] = {-1, 1}; plum_str_concat_reuse(a, b);
         }
+        else if (!strcmp(argv[1], "repeat-negative-length")) {
+            int64_t input[] = {1, -1}; plum_str_repeat(input, 2);
+        }
+        else if (!strcmp(argv[1], "repeat-overflow")) plum_str_repeat_length(INT64_MAX, 2);
+        else if (!strcmp(argv[1], "repeat-header-overflow")) plum_str_repeat_length(INT64_MAX - 16, 1);
+        else if (!strcmp(argv[1], "repeat-oom")) {
+            struct { int64_t rc, length; char data[4]; } input = {-1, 3, "abc"};
+            failures = 1; plum_str_repeat(&input, 5);
+        }
         else if (!strcmp(argv[1], "oom")) { failures = 2; plum_alloc_preferred(33, 80, 1); }
         else if (!strcmp(argv[1], "exact-oom")) { failures = 1; plum_alloc_preferred(33, 33, 1); }
         else return 3;
@@ -208,5 +267,6 @@ int main(int argc, char **argv) {
     }
     arithmetic(); fallback(); ownership(); growth_fallback(); snapshots();
     for (int steps = 512; steps <= 4096; steps *= 2) traffic(steps);
+    repetition();
     return 0;
 }

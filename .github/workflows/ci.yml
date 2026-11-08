@@ -130,7 +130,7 @@ jobs:
         run: ./bootstrap/self-test ./sh.real
       - name: sanitizers cover generated code, native code, leaks and cache transitions
         run: python3 ./bootstrap/sanitizer-check.py ./sh.real
-      - name: String growth preserves ownership, bounded traffic and allocation failures
+      - name: String growth and repetition preserve ownership, bounded traffic and allocation failures
         run: python3 ./bootstrap/string-growth-check.py ./sh.real --sanitize
       - name: opt-in memory snapshots preserve ownership, reuse and concurrency
         run: python3 ./bootstrap/memory-stats-check.py ./sh.real
@@ -770,7 +770,7 @@ jobs:
         run: python3 bootstrap/winsock-init-check
       - name: task and channel failures preserve ownership
         run: ./bootstrap/thread-smoke ./sh.real
-      - name: String growth preserves ownership, bounded traffic and allocation failures
+      - name: String growth and repetition preserve ownership, bounded traffic and allocation failures
         run: python3 ./bootstrap/string-growth-check.py ./sh.real
       - name: opt-in memory snapshots preserve ownership and native threads
         run: python3 ./bootstrap/memory-stats-check.py ./sh.real
