@@ -150,3 +150,5 @@ The benchmark uses one warmup and three serial interleaved measured rounds with
 alternating order, isolated caches and no diagnostic address registry. Requested
 bytes measure cumulative traffic; RSS measures process peak. Instrumented runs
 are excluded from timing, which is observational rather than a CI threshold.
+
+The next allocation pass is [branch and match text fragments](compiler-branch-fragments.md).
