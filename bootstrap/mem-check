@@ -157,9 +157,10 @@ esac
 # Batched callgraph worklists reduce it further to about 1.9 GB.
 # Branch and match fragments reduce this to about 1.5 GB.
 # Indexed liveness continuations reduce this to about 1.4 GB.
+# Collecting block and function sections reduces this to about 1.3 GB.
 # Keep an independent requested-byte budget: RSS alone
 # does not catch repeatedly copying either annotated text or metadata.
-check "$debug_emit_ceiling" 1650000000 "emit-llvm, whole compiler" emit-llvm bootstrap/self_host
+check "$debug_emit_ceiling" 1600000000 "emit-llvm, whole compiler" emit-llvm bootstrap/self_host
 
 # 40 MB on Linux with compact TLS embedding; 83 MB on that same pre-fix
 # compiler.
@@ -176,9 +177,10 @@ check "$check_ceiling" 0 "check, whole compiler" check bootstrap/self_host
 # Batched callgraph worklists bring it to about 1.7 GB.
 # Branch and match fragments bring it to about 1.4 GB.
 # Indexed liveness continuations bring it to about 1.2 GB.
+# Collecting block and function sections brings it to about 1.1 GB.
 # Leave about 0.3 GB for growth; focused guards reject suffix/prefix copies.
 # Release mode also keeps debug line-attachment work out of this budget.
-check "$release_emit_ceiling" 1500000000 "release emit-llvm, whole compiler" emit-llvm bootstrap/self_host --release
+check "$release_emit_ceiling" 1450000000 "release emit-llvm, whole compiler" emit-llvm bootstrap/self_host --release
 
 # Exercise both allocation paths at several widths; a whole-compiler total
 # alone can hide a quadratic literal builder as the surrounding source grows.
@@ -186,6 +188,7 @@ python3 "$root/bootstrap/emission-memory-check.py" "$plum" || fail=1
 python3 "$root/bootstrap/reachability-memory-check.py" "$plum" || fail=1
 python3 "$root/bootstrap/branch-memory-check.py" "$plum" || fail=1
 python3 "$root/bootstrap/liveness-memory-check.py" "$plum" || fail=1
+python3 "$root/bootstrap/block-memory-check.py" "$plum" || fail=1
 
 [ $fail -ne 0 ] && exit 1
 echo "mem-check: the compiler stays within its memory ceilings"

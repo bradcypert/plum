@@ -2092,14 +2092,14 @@ let cg_block_ty (p: CgProgram) (env: Array[CgSlot]) (n: Int) (block: typecheck.T
             // things created, so they are the first released.
             let mine = r.releases.concat(s.releases);
             let here = !tail && cg_block_binds_handle(p, block);
-            Emit { code: s.code.concat(r.code).concat(if here { mine } else { "" }),
+            Emit { code: cg_join_text([s.code, r.code, if here { mine } else { "" }]),
                    allocas: s.allocas.concat(r.allocas),
                    releases: if here { "" } else { mine },
                    globals: s.globals.concat(r.globals), val: r.val, ty: ty, n: r.n }
         },
         None => {
             let here = !tail && cg_block_binds_handle(p, block);
-            Emit { code: s.code.concat(cg_tail_pop(p, tail)).concat(if here { s.releases } else { "" }),
+            Emit { code: cg_join_text([s.code, cg_tail_pop(p, tail), if here { s.releases } else { "" }]),
                    allocas: s.allocas,
                    releases: if here { "" } else { s.releases },
                    globals: s.globals, val: "0", ty: CgUnit, n: s.n }
@@ -2115,14 +2115,6 @@ let cg_block_ty (p: CgProgram) (env: Array[CgSlot]) (n: Int) (block: typecheck.T
 // line conversion needs the enclosing FUNCTION's file, which this does
 // not know and should not have to be told. Keeping it an offset also
 // keeps replay independent of debug metadata numbering.
-let cg_stmts (p: CgProgram) (env: Array[CgSlot]) (n: Int) (stmts: Array[typecheck.TStmt]) (i: Int) (starts: Array[Int]): BlockEmit =
-    if i >= stmts.len() { BlockEmit { code: "", allocas: "", releases: "", globals: "", env: env, n: n } }
-    else {
-        let r = cg_stmts_at(p, env, n, stmts, i, starts);
-        BlockEmit { code: cg_dbg_marker(starts, i).concat(r.code), allocas: r.allocas, releases: r.releases,
-            globals: r.globals, env: r.env, n: r.n }
-    }
-
 // `  ; plum.off N` before a statement, or nothing. A comment is legal
 // anywhere in LLVM text, so a build that never reads these is unharmed
 // by them -- but they are gated anyway, since a release build should
@@ -2130,108 +2122,6 @@ let cg_stmts (p: CgProgram) (env: Array[CgSlot]) (n: Int) (stmts: Array[typechec
 let cg_dbg_marker (starts: Array[Int]) (i: Int): String =
     if !DEBUG_INFO.get() || i >= starts.len() || starts[i] < 0 { "" }
     else { "  ; plum.off ${starts[i]}\n" }
-
-let cg_stmts_at (p: CgProgram) (env: Array[CgSlot]) (n: Int) (stmts: Array[typecheck.TStmt]) (i: Int) (starts: Array[Int]): BlockEmit =
-    if i >= stmts.len() { BlockEmit { code: "", allocas: "", releases: "", globals: "", env: env, n: n } }
-    else {
-        match stmts[i] {
-            // A DESTRUCTURING `let` is an irrefutable one-arm match,
-            // so it reuses the pattern machinery rather than growing a
-            // second copy of it: `cg_pattern` already knows how to bind
-            // every name in a tuple/struct pattern, take a reference per
-            // binding, and report the slots it created. The `test` it
-            // produces is ignored -- the checker has already established
-            // the pattern is irrefutable, which is what makes this a
-            // `let` and not a `match`.
-            TSLet(pattern, value) => if !cg_is_ident_pattern(pattern) {
-                let r = cg_expr(p, env, n, value);
-                let vty = cg_concrete(p, typecheck.texpr_ty(p.subst, value));
-                let pat = cg_pattern(p, env, r.n, pattern, r.val, vty);
-                // Bindings borrow from the scrutinee and take their own
-                // reference (see `cg_pattern`'s `TPIdent` arm), so the
-                // scrutinee's own reference is released once they have.
-                let head = r.code.concat(pat.code).concat(pat.binds).concat(cg_dec(vty, r.val));
-                let rest = cg_stmts(p, pat.env, pat.n, stmts, i + 1, starts);
-                BlockEmit {
-                    code: head.concat(rest.code),
-                    allocas: r.allocas.concat(pat.allocas).concat(rest.allocas),
-                    // LIFO, as above: later statements first, then the
-                    // names this pattern bound, then the scrutinee's own
-                    // temporaries.
-                    releases: rest.releases.concat(pat.releases).concat(r.releases),
-                    globals: r.globals.concat(pat.globals).concat(rest.globals),
-                    env: rest.env, n: rest.n,
-                }
-            } else {
-                // The slot register is claimed BEFORE the initializer is
-                // emitted, so the initializer can be handed it as a
-                // reuse candidate (`lv_self_slot`). It is only in scope
-                // under that reserved name, never under `name`, so
-                // shadowing is unaffected.
-                let vty = cg_concrete(p, typecheck.texpr_ty(p.subst, value));
-                let slot = cg_reg(n);
-                let r = cg_expr(p, env.push(CgSlot { name: lv_self_slot(()), ptr: slot, ty: cg_of_ity(vty), ity: vty }), n + 1, value);
-                let name = cg_let_name(pattern);
-                let lty = cg_llvm_ty(r.ty);
-                // Rule 2: the slot takes ownership of `r`'s +1. Any
-                // value already in the slot -- a previous iteration's,
-                // if this `let` is inside a loop -- is released first.
-                let head = r.code
-                    .concat(cg_release_slot(vty, slot, "_pre"))
-                    .concat("  store ").concat(lty).concat(" ").concat(r.val).concat(", ptr ").concat(slot).concat("\n");
-                let rest = cg_stmts(p, env.push(CgSlot { name: name, ptr: slot, ty: r.ty, ity: vty }), r.n, stmts, i + 1, starts);
-                BlockEmit {
-                    code: head.concat(rest.code),
-                    // The null-init and the exit release are as much a
-                    // part of creating a slot as the `alloca` is; a slot
-                    // whose release goes missing leaks, and one whose
-                    // null-init goes missing releases uninitialised
-                    // stack the first time it is overwritten.
-                    allocas: "  ${slot} = alloca ${lty}\n${cg_null_init(vty, slot)}${r.allocas}${rest.allocas}",
-                    // LIFO: everything declared LATER in this block is
-                    // released before this slot is. Acquire a lock and
-                    // then a file, and the file is released first --
-                    // which is the order every language with guards
-                    // uses, and the only one that composes when one
-                    // resource is held inside another's lifetime.
-                    //
-                    // Order is not a memory-safety question: the slots
-                    // are disjoint, so any order frees the same cells.
-                    // It became observable when `handle` gave a release
-                    // a SIDE EFFECT (issue #9), and until then there was
-                    // nothing to get wrong.
-                    releases: rest.releases.concat(r.releases).concat(cg_release_slot(vty, slot, "_end")),
-                    globals: r.globals.concat(rest.globals), env: rest.env, n: rest.n }
-            },
-            // Assignment needs no new slot — that is the whole payoff of
-            // every local being an `alloca`: `let mut` and `let` are the
-            // same thing here, and a reassignment is one `store`.
-            // The liveness pass marks consuming reads in the RHS, including
-            // replacement of this slot. Every operation follows that same
-            // ownership path; assignment only releases what remains.
-            TSAssign(name, value) => {
-                let r = cg_expr(p, env, n, value);
-                let store = match cg_lookup(env, name) {
-                    Some(slot) => cg_release_slot(cg_concrete(p, typecheck.texpr_ty(p.subst, value)), slot.ptr, "_a".concat(r.n.to_string())).concat("  store ").concat(cg_llvm_ty(slot.ty)).concat(" ").concat(r.val).concat(", ptr ").concat(slot.ptr).concat("\n"),
-                    None => { cg_fail("assignment to an unbound name: ".concat(name)); "" },
-                };
-                let rest = cg_stmts(p, env, r.n + 1, stmts, i + 1, starts);
-                BlockEmit { code: r.code.concat(store).concat(rest.code), allocas: r.allocas.concat(rest.allocas), releases: rest.releases.concat(r.releases), globals: r.globals.concat(rest.globals), env: rest.env, n: rest.n }
-            },
-            TSExpr(e) => {
-                let r = cg_expr(p, env, n, e);
-                let rest = cg_stmts(p, env, r.n, stmts, i + 1, starts);
-                // Rule 1: the value is owned, and nothing takes it.
-                // LIFO, same as the `let` arms: anything this statement
-                // created is released AFTER everything the later ones
-                // did. A bare block statement -- `{ let x = ..; .. };` --
-                // carries its slots' releases here, so without this the
-                // block's contents would outlive a `let` written below
-                // it, which is the wrong nesting.
-                BlockEmit { code: r.code.concat(cg_dec(cg_concrete(p, typecheck.texpr_ty(p.subst, e)), r.val)).concat(rest.code), allocas: r.allocas.concat(rest.allocas), releases: rest.releases.concat(r.releases), globals: r.globals.concat(rest.globals), env: rest.env, n: rest.n }
-            },
-        }
-    }
 
 // --- Move-on-last-read ---
 //
@@ -6051,26 +5941,17 @@ let cg_fn (p0: CgProgram) (def: typecheck.TFn) (targs: Array[typecheck.ITy]) (n0
     // ahead of any instruction that could branch — see `Emit`'s own
     // comment for why that is a correctness requirement inside loops
     // and not just a tidiness preference.
-    let text = body.globals
-        .concat(if framed { cg_frame_global(sym, shown) } else { "" })
-        .concat(header)
-        .concat(cg_dbg_attach(cg_frame_push(sym, shown)
-        .concat(entry.code)
-        .concat(body.allocas)
-        .concat(body.code)
-        // Every slot is released here, on the way out. The RESULT is
-        // untouched: it carries its own +1, obtained independently of
-        // any slot (rule 3), so returning a parameter's value and then
-        // releasing that parameter is balanced rather than a
-        // use-after-free.
-        //
-        // The frame pop already happened, per path, before these
-        // releases — which is fine, because a release only decrements
-        // and frees; nothing here can abort and want a trace.
-        .concat(body.releases)
-        .concat(entry.releases)
-        .concat("  ret ").concat(cg_llvm_ty(ret)).concat(" ").concat(body.val).concat("\n"), dbg.loc, dbg.sp, dfile))
-        .concat("}\n\n");
+    let instructions = cg_join_text([
+        cg_frame_push(sym, shown), entry.code, body.allocas, body.code,
+        // The result owns its reference independently. Release frame slots
+        // after the body's path-specific pop, preserving body/parameter order.
+        body.releases, entry.releases,
+        "  ret ${cg_llvm_ty(ret)} ${body.val}\n",
+    ]);
+    let text = cg_join_text([
+        body.globals, if framed { cg_frame_global(sym, shown) } else { "" }, header,
+        cg_dbg_attach(instructions, dbg.loc, dbg.sp, dfile), "}\n\n",
+    ]);
     FnEmit { text: text, next: body.n }
 }
 

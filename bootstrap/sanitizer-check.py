@@ -46,6 +46,16 @@ def main():
             run([compiler, 'build', future, '--sanitize=address', *flags, '-o', binary])
             run([binary], contains='ok\n')
 
+        block_source = runpy.run_path(str(root / 'bootstrap/block-memory-check.py'))['source']
+        for kind in ('expr', 'let', 'assign'):
+            project = Path(work) / ('block-' + kind)
+            project.mkdir()
+            (project / 'main.plum').write_text(block_source(kind, 32))
+            for flags in [[], ['--release']]:
+                binary = Path(work) / ('block-' + kind + str(len(flags)))
+                run([compiler, 'build', project, '--sanitize=address', *flags, '-o', binary])
+                run([binary], contains='ok\n')
+
         # The original missing attribute must be observable in generated IR,
         # rather than only testing native malloc/free interceptors.
         for flags in [[], ['--release']]:

@@ -1,0 +1,77 @@
+// Emit statements in source order, collecting each section without copying
+// the rest of the block. Owned accumulator parameters permit Perceus reuse;
+// the previous statement's result is released before the tail call, so its
+// environment does not keep the next environment append shared.
+let cg_stmts (p: CgProgram) (env: Array[CgSlot]) (n: Int) (stmts: Array[typecheck.TStmt]) (i: Int) (starts: Array[Int]): BlockEmit =
+    cg_stmts_collect(p, env, n, stmts, i, starts, [], [], [], [])
+
+let cg_stmts_collect (p: CgProgram) (env: Array[CgSlot]) (n: Int) (stmts: Array[typecheck.TStmt]) (i: Int) (starts: Array[Int]) (code: Array[String]) (allocas: Array[String]) (releases: Array[String]) (globals: Array[String]): BlockEmit =
+    if i >= stmts.len() {
+        BlockEmit { code: cg_join_text(code), allocas: cg_join_text(allocas),
+            releases: cg_join_text(Array.reverse(releases)), globals: cg_join_text(globals), env: env, n: n }
+    } else {
+        let r = cg_stmt(p, env, n, stmts[i]);
+        let marker = cg_dbg_marker(starts, i);
+        cg_stmts_collect(p, r.env, r.n, stmts, i + 1, starts,
+            if marker == "" && r.code == "" { code } else { code.push(cg_join_text([marker, r.code])) },
+            if r.allocas == "" { allocas } else { allocas.push(r.allocas) },
+            if r.releases == "" { releases } else { releases.push(r.releases) },
+            if r.globals == "" { globals } else { globals.push(r.globals) })
+    }
+
+// One statement owns its local sections and resulting environment/counter.
+// The collector determines inter-statement order: forward code/allocas/globals
+// and reverse cleanup groups. Each group's internal cleanup order stays intact.
+let cg_stmt (p: CgProgram) (env: Array[CgSlot]) (n: Int) (stmt: typecheck.TStmt): BlockEmit =
+    match stmt {
+        TSLet(pattern, value) => if !cg_is_ident_pattern(pattern) {
+            // Destructuring is an irrefutable one-arm match. Bindings take
+            // references before the scrutinee's owned temporary is released.
+            let r = cg_expr(p, env, n, value);
+            let vty = cg_concrete(p, typecheck.texpr_ty(p.subst, value));
+            let pat = cg_pattern(p, env, r.n, pattern, r.val, vty);
+            BlockEmit {
+                code: cg_join_text([r.code, pat.code, pat.binds, cg_dec(vty, r.val)]),
+                allocas: r.allocas.concat(pat.allocas),
+                releases: pat.releases.concat(r.releases),
+                globals: r.globals.concat(pat.globals), env: pat.env, n: pat.n,
+            }
+        } else {
+            // Claim the slot before the initializer, under the unspellable
+            // self-slot name. The source name enters scope only afterwards.
+            let vty = cg_concrete(p, typecheck.texpr_ty(p.subst, value));
+            let slot = cg_reg(n);
+            let r = cg_expr(p, env.push(CgSlot { name: lv_self_slot(()), ptr: slot, ty: cg_of_ity(vty), ity: vty }), n + 1, value);
+            let name = cg_let_name(pattern);
+            let lty = cg_llvm_ty(r.ty);
+            BlockEmit {
+                code: cg_join_text([r.code, cg_release_slot(vty, slot, "_pre"), "  store ${lty} ${r.val}, ptr ${slot}\n"]),
+                // Slots are null-initialized, released on replacement, and
+                // released at exit. This also handles repeated loop bindings.
+                allocas: cg_join_text(["  ${slot} = alloca ${lty}\n", cg_null_init(vty, slot), r.allocas]),
+                releases: r.releases.concat(cg_release_slot(vty, slot, "_end")),
+                globals: r.globals,
+                env: env.push(CgSlot { name: name, ptr: slot, ty: r.ty, ity: vty }), n: r.n,
+            }
+        },
+        TSAssign(name, value) => {
+            let r = cg_expr(p, env, n, value);
+            let store = match cg_lookup(env, name) {
+                Some(slot) => cg_release_slot(cg_concrete(p, typecheck.texpr_ty(p.subst, value)), slot.ptr, "_a".concat(r.n.to_string()))
+                    .concat("  store ${cg_llvm_ty(slot.ty)} ${r.val}, ptr ${slot.ptr}\n"),
+                None => { cg_fail("assignment to an unbound name: ".concat(name)); "" },
+            };
+            // Releasing the overwritten value belongs here, at the store.
+            // RHS temporaries join the block's LIFO exit cleanup like every
+            // other statement. Preserve the historical extra counter step.
+            BlockEmit { code: r.code.concat(store), allocas: r.allocas, releases: r.releases,
+                globals: r.globals, env: env, n: r.n + 1 }
+        },
+        TSExpr(e) => {
+            let r = cg_expr(p, env, n, e);
+            // The discarded result owns a reference and is released now;
+            // deferred temporaries remain in this statement's cleanup group.
+            BlockEmit { code: r.code.concat(cg_dec(cg_concrete(p, typecheck.texpr_ty(p.subst, e)), r.val)),
+                allocas: r.allocas, releases: r.releases, globals: r.globals, env: env, n: r.n }
+        },
+    }
