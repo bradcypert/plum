@@ -1,0 +1,19 @@
+drop 6
+drop 5
+drop 4
+drop 3
+drop 2
+drop 1
+drop 13
+drop 12
+drop 11
+drop 22
+drop 21
+drop 12
+drop 11
+drop 2
+drop 1
+drop 32
+drop 31
+statement cleanup preserves LIFO groups, tail calls and escaped owners
+drop 33

@@ -1,0 +1,60 @@
+extern "C" {
+    fn close_resource(id: Int) -> Unit;
+    fn cleanup_count() -> Int;
+}
+handle Resource { on_drop: close_resource }
+let hold (id: Int): () -> Int = {
+    let r = unsafe { Resource.from_raw(id) };
+    || unsafe { r.raw() }
+}
+let closed (): Int = unsafe { cleanup_count() }
+
+// Erased closures keep their captured resources until the existing frame
+// cleanup. Interleave both assignment and non-assignment release groups.
+let exercise (): Unit = {
+    let first = hold(1);
+    { let second = hold(2); 0 };
+    let mut value = 0;
+    value = { let third = hold(3); 0 };
+    { let fourth = hold(4); 0 };
+    value = { let fifth = hold(5); 0 };
+    let sixth = hold(6);
+    assert_eq(value, 0);
+    assert_eq(closed(), 0);
+}
+
+let result (): Int = {
+    let first = hold(11);
+    let mut value = 0;
+    value = { let second = hold(12); 1 };
+    let (third, _) = (hold(13), 0);
+    value
+}
+
+let tail (n: Int): Unit = {
+    let first = hold(n * 10 + 1);
+    let mut value = 0;
+    value = { let second = hold(n * 10 + 2); n };
+    if value == 0 { () } else { tail(n - 1) }
+}
+
+let escape (): () -> Int = {
+    let first = hold(31);
+    let mut value = 0;
+    value = { let second = hold(32); 0 };
+    let escaped = hold(33);
+    escaped
+}
+
+let main (): Unit = {
+    exercise();
+    assert_eq(closed(), 6);
+    assert_eq(result(), 1);
+    assert_eq(closed(), 9);
+    tail(2);
+    assert_eq(closed(), 15);
+    let escaped = escape();
+    assert_eq(closed(), 17);
+    assert_eq(escaped(), 33);
+    println("statement cleanup preserves LIFO groups, tail calls and escaped owners")
+}
