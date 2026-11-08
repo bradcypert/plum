@@ -13,29 +13,30 @@ let cg_symbol_first_escape (bytes: Bytes) (n: Int) (i: Int): Int =
     else if cg_symbol_byte_ok(bytes_at_raw(bytes, i)) { cg_symbol_first_escape(bytes, n, i + 1) }
     else { i }
 
+// The ASCII fast path shares its input. Escaped names move one output
+// owner through tail calls, allowing Perceus concat reuse and geometric
+// String growth without retaining a pointer array of output fragments.
 let cg_symbol_atom (name: String): String = {
     let bytes = name.as_bytes();
     let n = bytes.len();
     let first = cg_symbol_first_escape(bytes, n, 0);
-    // Common ASCII identifiers share their original String. Allocate
-    // neither an integer byte array nor a fragment array to discover this.
     if first == n { name }
-    else { cg_symbol_collect(bytes, n, first, 0, []) }
+    else {
+        let out = if first > 0 { cg_symbol_ascii(bytes, 0, first) } else { "" };
+        cg_symbol_render(bytes, n, first, first, out)
+    }
 }
 
-// Only the escaped path owns fragments. Move the array through tail calls
-// so ordinary Perceus reuse can grow it geometrically. The first scan stops
-// at its first escape; this traversal continues there, not from byte zero.
-let cg_symbol_collect (bytes: Bytes) (n: Int) (i: Int) (start: Int) (parts: Array[String]): String =
+let cg_symbol_render (bytes: Bytes) (n: Int) (i: Int) (start: Int) (out: String): String =
     if i >= n {
-        Array.concat_all(if start < n { parts.push(cg_symbol_ascii(bytes, start, n)) } else { parts })
+        if start < n { out.concat(cg_symbol_ascii(bytes, start, n)) } else { out }
     } else {
         let b = bytes_at_raw(bytes, i);
-        if cg_symbol_byte_ok(b) { cg_symbol_collect(bytes, n, i + 1, start, parts) }
+        if cg_symbol_byte_ok(b) { cg_symbol_render(bytes, n, i + 1, start, out) }
         else {
-            parts = if i > start { parts.push(cg_symbol_ascii(bytes, start, i)) } else { parts };
-            parts = parts.push("$").push(CG_SYMBOL_HEX[b / 16]).push(CG_SYMBOL_HEX[b % 16]);
-            cg_symbol_collect(bytes, n, i + 1, i + 1, parts)
+            out = if i > start { out.concat(cg_symbol_ascii(bytes, start, i)) } else { out };
+            out = out.concat("$").concat(CG_SYMBOL_HEX[b / 16]).concat(CG_SYMBOL_HEX[b % 16]);
+            cg_symbol_render(bytes, n, i + 1, i + 1, out)
         }
     }
 
@@ -82,5 +83,16 @@ pub let test_symbol_atom_bytes (): Unit = {
     assert_eq(unsafe { pointer.as_string() }, shared);
     let mut escaped = "$.";
     for i in 0..12 { escaped = escaped.concat(escaped); };
-    assert_eq(cg_symbol_atom(escaped), "$24$2e".repeat(4096));
+    let mut encoded = cg_symbol_atom(escaped);
+    assert_eq(encoded, "$24$2e".repeat(4096));
+    assert_eq(escaped, "$.".repeat(4096));
+    // A reserved output can later be shared through any of the three views.
+    let alias = encoded;
+    let bytes = encoded.as_bytes();
+    let pointer = encoded.as_cstr();
+    encoded = encoded.concat("changed");
+    assert_eq(alias, "$24$2e".repeat(4096));
+    assert(bytes == alias.as_bytes());
+    assert_eq(unsafe { pointer.as_string() }, alias);
+    assert_eq(encoded, alias.concat("changed"));
 }
