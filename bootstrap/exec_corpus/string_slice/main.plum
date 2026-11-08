@@ -1,0 +1,38 @@
+let temporary (): String = String.slice("aé中🙂\x00".repeat(64), 1, 4)
+
+let main (): Unit = {
+    assert_eq(temporary(), "é中🙂");
+    let slice = String.slice;
+    assert_eq(slice("aé中🙂\x00é", 1, 6), "é中🙂\x00e");
+    let mut source = "aé中🙂\x00".repeat(64);
+    let original = source;
+    let pointer = source.as_cstr();
+    let mut part = String.slice(source, 1, 4);
+    let saved = part;
+    let part_pointer = part.as_cstr();
+    source = source.concat("changed");
+    part = part.concat("changed");
+    assert_eq(saved, "é中🙂");
+    assert_eq(part, "é中🙂changed");
+    assert_eq(original, "aé中🙂\x00".repeat(64));
+    assert_eq(source, original.concat("changed"));
+    assert_eq(unsafe { pointer.as_string() }, "aé中🙂");
+    assert_eq(unsafe { part_pointer.as_string() }, "é中🙂");
+    // Preserve grouping even for a leading continuation run, invalid
+    // lead bytes, truncated sequences, and an ASCII/continuation group.
+    for text in ["", "\x00", "\x80\xbfa\xbf.\xff\x80\xe2", "\xf0\x9f", "é中🙂\x00é"] {
+        let chars = chars_of(text);
+        for start in [(-9223372036854775807 - 1), -1, 0, 1, 2, 3, 5, 9223372036854775807] {
+            for end in [(-9223372036854775807 - 1), -1, 0, 1, 2, 3, 5, 9223372036854775807] {
+                assert_eq(String.slice(text, start, end), Array.concat_all(Array.slice(chars, start, end)));
+            };
+        };
+    };
+    // Multi-million-byte scans must use bounded stack space. The
+    // retained result is independent storage, not a view of the input.
+    let mut long = "é中🙂\x00";
+    for i in 0..18 { long = long.concat(long); };
+    assert_eq(String.slice(long, 1048573, 9223372036854775807), "中🙂\x00");
+    assert_eq(String.slice(long, 1048576, 9223372036854775807), "");
+    println("slices preserve codepoint bounds, raw bytes, aliases and bounded stack")
+}

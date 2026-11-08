@@ -8,10 +8,9 @@ Part of [`prelude`](prelude.md).
 
 --- Strings ---
 
-All of these are built on `chars_of`, which is the one primitive
-in `runtime.plum`. That is what makes them codepoint-safe rather
-than byte-indexed, so `String.slice` can never split a multi-byte
-character in half, because it never sees bytes at all.
+String operations use codepoint boundaries rather than byte
+indices. `String.slice` scans those boundaries directly; operations
+that need individual characters can materialize them with `chars_of`.
 The string with its CHARACTERS reversed, not its bytes — so text
 outside ASCII survives.
 
@@ -23,6 +22,8 @@ Whether the string has no bytes.
 
 Characters from `start` up to but not including `end`, counted in
 CODEPOINTS rather than bytes. Out-of-range bounds are clamped.
+Scans only as far as the requested boundaries and copies the selected
+bytes once, without allocating an array or individual characters.
 
 ## `let String.repeat (s: String) (n: Int): String`
 
