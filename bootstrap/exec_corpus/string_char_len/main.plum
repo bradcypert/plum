@@ -1,0 +1,29 @@
+let temporary (): Int = String.char_len("é中🙂\x00".repeat(100))
+
+let main (): Unit = {
+    assert_eq(String.char_len(""), 0);
+    assert_eq(String.char_len("aé中🙂\x00é"), 7);
+    assert_eq(temporary(), 400);
+    let count = String.char_len;
+    assert_eq(count("é中🙂"), 3);
+    let mut text = "aé中🙂\x00".repeat(64);
+    let alias = text;
+    let pointer = text.as_cstr();
+    assert_eq(String.char_len(text), 320);
+    text = text.concat("changed");
+    assert_eq(String.char_len(text), 327);
+    assert_eq(String.char_len(alias), 320);
+    // C strings stop at NUL. The counted alias must still own the full
+    // allocation while the pointer retains it through replacement.
+    assert_eq(unsafe { pointer.as_string() }, "aé中🙂");
+    assert_eq(alias, "aé中🙂\x00".repeat(64));
+    // Preserve chars_of's grouping even for malformed raw byte escapes.
+    for raw in ["\x80", "\x80\xbf", "\x80a\xbf", "\xff\x80", "\xe2", "\xf0\x9f"] {
+        assert_eq(String.char_len(raw), chars_of(raw).len());
+    };
+    // A scan over millions of bytes also guards constant stack usage.
+    let mut long = "é中🙂\x00";
+    for i in 0..18 { long = long.concat(long); };
+    assert_eq(String.char_len(long), 1048576);
+    println("character counts preserve UTF-8, NULs, aliases and bounded stack")
+}

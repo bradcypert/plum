@@ -82,7 +82,8 @@ def main():
             literal = Path(work) / ('literal-emission' + str(len(flags)))
             run([compiler, 'build', root / 'bootstrap/exec_corpus/literal_emission', '--sanitize=address', '--memory-stats', *flags, '-o', literal])
             run([literal], contains='literal emission preserves sections, order, aliases and reuse')
-            for name, message in [('statement_cleanup_order', 'statement cleanup preserves LIFO groups, tail calls and escaped owners'),
+            for name, message in [('string_char_len', 'character counts preserve UTF-8, NULs, aliases and bounded stack'),
+                                  ('statement_cleanup_order', 'statement cleanup preserves LIFO groups, tail calls and escaped owners'),
                                   ('branch_emission', 'branch emission preserves guards, sections, effects and tail calls'),
                                   ('nested_resource_scope', 'nested resources close at scope exit'),
                                   ('ref_payload_release', 'reference payload destructors are available'),

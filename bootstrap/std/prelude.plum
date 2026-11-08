@@ -238,7 +238,15 @@ pub let String.repeat (s: String) (n: Int): String = {
 /// computed from a byte count puts an accented name in the wrong place.
 /// The number of CHARACTERS (codepoints). `String.len` is the number
 /// of BYTES, and the two differ for anything outside ASCII.
-pub let String.char_len (s: String): Int = chars_of(s).len()
+/// Scans the UTF-8 bytes in linear time and constant space, without
+/// allocating an array or a string for each character.
+pub let String.char_len (s: String): Int = {
+    let bytes = bytes_of_str_raw(s);
+    let n = bytes_len_raw(bytes);
+    // chars_of groups the first byte with any following continuation
+    // bytes, even for malformed text supplied through unsafe code.
+    if n == 0 { 0 } else { plum__string_count_starts(bytes, n, 1, 1) }
+}
 
 /// Pad `s` to `width` CHARACTERS with `fill`, on the left or the right.
 ///
@@ -551,13 +559,13 @@ let plum__string_search_bytes (s: Bytes) (needle: Bytes) (links: Array[Int]) (i:
         else { plum__string_search_bytes(s, needle, links, i + 1, next) }
     }
 
-// Valid UTF-8 matches start at codepoint boundaries. Count leading
-// bytes before the match, without decoding or allocating characters.
-let plum__string_search_char_index (s: Bytes) (end: Int) (i: Int) (count: Int): Int =
+// Count non-continuation bytes in a borrowed UTF-8 prefix. Shared by
+// character counts and the conversion of search offsets to codepoints.
+let plum__string_count_starts (s: Bytes) (end: Int) (i: Int) (count: Int): Int =
     if i >= end { count }
     else {
         let byte = bytes_at_raw(s, i);
-        plum__string_search_char_index(s, end, i + 1, count + if byte < 128 || byte >= 192 { 1 } else { 0 })
+        plum__string_count_starts(s, end, i + 1, count + if byte < 128 || byte >= 192 { 1 } else { 0 })
     }
 
 /// The CHARACTER index where `needle` first appears, or `None`.
@@ -572,7 +580,7 @@ pub let String.index_of (s: String) (needle: String): Option[Int] =
         let pattern = bytes_of_str_raw(needle);
         let links = plum__string_search_links(pattern);
         match plum__string_search_bytes(text, pattern, links, 0, 0) {
-            Some(offset) => Some(plum__string_search_char_index(text, offset, 0, 0)),
+            Some(offset) => Some(plum__string_count_starts(text, offset, 0, 0)),
             None => None,
         }
     }

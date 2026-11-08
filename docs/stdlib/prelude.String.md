@@ -52,6 +52,8 @@ program that lines text up in columns wants this one; padding
 computed from a byte count puts an accented name in the wrong place.
 The number of CHARACTERS (codepoints). `String.len` is the number
 of BYTES, and the two differ for anything outside ASCII.
+Scans the UTF-8 bytes in linear time and constant space, without
+allocating an array or a string for each character.
 
 ## `let String.pad_left (s: String) (width: Int) (fill: String): String`
 

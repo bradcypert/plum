@@ -1863,6 +1863,27 @@ let search_reference (s: String) (needle: String): Int = {
     found
 }
 
+// An independently materialized codepoint array is the count oracle.
+// Include UTF-8 width boundaries, combining marks and embedded NULs.
+pub let test_string_char_len (): Unit = {
+    let alphabet = ["\x00", "a", "\u{7f}", "\u{80}", "\u{7ff}", "\u{800}",
+        "\u{d7ff}", "\u{e000}", "\u{ffff}", "\u{10000}", "\u{10ffff}", "é", "中", "🙂", "́"];
+    assert_eq(String.char_len(""), 0);
+    assert_eq(String.char_len("aé中🙂\x00é"), 7);
+    for i in 0..250 {
+        let mut seed = next_seed(i + 1);
+        let mut text = "";
+        let n = rand_between(seed, 0, 64);
+        for j in 0..n {
+            seed = next_seed(seed);
+            text = text.concat(alphabet[rand_between(seed, 0, alphabet.len() - 1)]);
+        };
+        check_eq("String.char_len codepoint oracle", i.to_string(),
+            String.char_len(text).to_string(), chars_of(text).len().to_string());
+        assert_eq(String.char_len(text), n);
+    }
+}
+
 pub let test_string_index_of (): Unit = {
     for i in 0..250 {
         let seed = next_seed(i + 1);
