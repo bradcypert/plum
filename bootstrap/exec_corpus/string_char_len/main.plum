@@ -1,4 +1,5 @@
 let temporary (): Int = String.char_len("é中🙂\x00".repeat(100))
+let raw_string (bytes: Array[Int]): String = unsafe { Bytes.from_array(bytes).as_cstr().as_string() }
 
 let main (): Unit = {
     assert_eq(String.char_len(""), 0);
@@ -17,8 +18,13 @@ let main (): Unit = {
     // allocation while the pointer retains it through replacement.
     assert_eq(unsafe { pointer.as_string() }, "aé中🙂");
     assert_eq(alias, "aé中🙂\x00".repeat(64));
-    // Preserve chars_of's grouping even for malformed raw byte escapes.
-    for raw in ["\x80", "\x80\xbf", "\x80a\xbf", "\xff\x80", "\xe2", "\xf0\x9f"] {
+    // Hex escapes encode Unicode characters; construct real malformed
+    // bytes through the explicit unsafe native-text conversion instead.
+    let lone = raw_string([128]);
+    assert_eq(lone.as_bytes().to_array(), [128]);
+    let malformed = [lone, raw_string([128, 191]), raw_string([128, 97, 191]),
+        raw_string([255, 128]), raw_string([226]), raw_string([240, 159])];
+    for raw in malformed {
         assert_eq(String.char_len(raw), chars_of(raw).len());
     };
     // A scan over millions of bytes also guards constant stack usage.

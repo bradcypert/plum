@@ -142,6 +142,8 @@ def main():
         run([runner, '--plum', broken, fixtures / 'clean'], fails=True, contains='leak detection preflight failed')
         run([sys.executable, root / 'bootstrap/native-buffer-check.py', compiler],
             contains='escape detection and panic cleanup passed')
+        run([sys.executable, root / 'bootstrap/qualified-name-check.py', compiler, '--sanitize'],
+            contains='qualified-name-check: boundaries, ownership and allocation budgets passed')
     print('sanitizer-check: generated/native access failures, leaks, clean ownership, symbols, cache isolation and fail-closed runner passed')
 
 

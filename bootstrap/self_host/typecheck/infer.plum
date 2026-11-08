@@ -2446,18 +2446,6 @@ let find_sig_for_method (p2: Program2) (base_ty: ITy) (qualified: String): Optio
         },
     }
 
-// `"Os.File"` -> `"Os"`; a bare name -> `""` (the root), which is what
-// an unqualified type is already in.
-let module_of_qualified (name: String): String = {
-    let i = last_dot_index(name, 0, 0 - 1);
-    if i < 0 { "" } else { String.slice(name, 0, i) }
-}
-
-let last_dot_index (s: String) (i: Int) (best: Int): Int =
-    if i >= String.char_len(s) { best }
-    else if String.slice(s, i, i + 1) == "." { last_dot_index(s, i + 1, i) }
-    else { last_dot_index(s, i + 1, best) }
-
 let infer_namespaced_method (p2: Program2) (state: FreshState) (env: TyEnv) (acc: Subst) (base_ty: ITy) (base: parser.PExpr) (method_name: String) (args: Array[parser.PExpr]): InferResult =
     match ity_namespace(base_ty) {
         None => { fail_tc(no_method_message(base_ty, method_name)); ir_unsupported(acc, state, "unsupported method call") },
