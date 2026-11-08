@@ -14,8 +14,8 @@ def source(width):
     return ('let identity(s: String): String = s\n'
             + 'let collect(s: String): Array[String] = [\n'
             + ',\n'.join('identity(s)' for _ in range(width)) + '\n]\n'
-            + f'let main(): Unit = {{ let xs = collect("shared"); assert_eq(xs.len(), {width}); '
-            + 'for x in xs { assert_eq(x,"shared"); }; println("ok") }\n')
+            + f'let main(): Unit = {{ let xs = collect(41.to_string().concat("-shared")); assert_eq(xs.len(), {width}); '
+            + 'for x in xs { assert_eq(x,"41-shared"); }; println("ok") }\n')
 
 
 def main():
