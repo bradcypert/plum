@@ -46,6 +46,16 @@ def main():
             run([compiler, 'build', future, '--sanitize=address', *flags, '-o', binary])
             run([binary], contains='ok\n')
 
+        block_source = runpy.run_path(str(root / 'bootstrap/block-memory-check.py'))['source']
+        for kind in ('expr', 'let', 'assign'):
+            project = Path(work) / ('block-' + kind)
+            project.mkdir()
+            (project / 'main.plum').write_text(block_source(kind, 32))
+            for flags in [[], ['--release']]:
+                binary = Path(work) / ('block-' + kind + str(len(flags)))
+                run([compiler, 'build', project, '--sanitize=address', *flags, '-o', binary])
+                run([binary], contains='ok\n')
+
         # The original missing attribute must be observable in generated IR,
         # rather than only testing native malloc/free interceptors.
         for flags in [[], ['--release']]:
@@ -72,7 +82,8 @@ def main():
             literal = Path(work) / ('literal-emission' + str(len(flags)))
             run([compiler, 'build', root / 'bootstrap/exec_corpus/literal_emission', '--sanitize=address', '--memory-stats', *flags, '-o', literal])
             run([literal], contains='literal emission preserves sections, order, aliases and reuse')
-            for name, message in [('branch_emission', 'branch emission preserves guards, sections, effects and tail calls'),
+            for name, message in [('statement_cleanup_order', 'statement cleanup preserves LIFO groups, tail calls and escaped owners'),
+                                  ('branch_emission', 'branch emission preserves guards, sections, effects and tail calls'),
                                   ('nested_resource_scope', 'nested resources close at scope exit'),
                                   ('ref_payload_release', 'reference payload destructors are available'),
                                   ('symbol_modules', 'punctuation-distinct modules retain separate'),

@@ -169,3 +169,5 @@ The benchmark runs one warmup and three serial interleaved measured rounds,
 alternating order. Raw samples retain input/binary and output hashes. The
 ordinary baseline executable was built and validated through #472's own
 seed-to-source path; that source tree is identical to merged main `2eaffbe`.
+
+The next pass collects [block and function sections and corrects assignment cleanup order](compiler-block-sections.md).
