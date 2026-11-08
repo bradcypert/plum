@@ -1,0 +1,86 @@
+// Keep #320's injective byte encoding: ASCII letters/digits/underscore
+// pass through; every other byte becomes $hh, including '$' itself.
+let cg_symbol_byte_ok (b: Int): Bool =
+    (b >= 65 && b <= 90) || (b >= 97 && b <= 122) || (b >= 48 && b <= 57) || b == 95
+
+let CG_SYMBOL_HEX: Array[String] = ["0", "1", "2", "3", "4", "5", "6", "7", "8", "9", "a", "b", "c", "d", "e", "f"]
+
+// Existing scalar runtime read, guarded by the shared view's length.
+let bytes_at_raw (bytes: Bytes) (i: Int): Int = 0
+
+let cg_symbol_first_escape (bytes: Bytes) (n: Int) (i: Int): Int =
+    if i >= n { n }
+    else if cg_symbol_byte_ok(bytes_at_raw(bytes, i)) { cg_symbol_first_escape(bytes, n, i + 1) }
+    else { i }
+
+let cg_symbol_atom (name: String): String = {
+    let bytes = name.as_bytes();
+    let n = bytes.len();
+    let first = cg_symbol_first_escape(bytes, n, 0);
+    // Common ASCII identifiers share their original String. Allocate
+    // neither an integer byte array nor a fragment array to discover this.
+    if first == n { name }
+    else { cg_symbol_collect(bytes, n, first, 0, []) }
+}
+
+// Only the escaped path owns fragments. Move the array through tail calls
+// so ordinary Perceus reuse can grow it geometrically. The first scan stops
+// at its first escape; this traversal continues there, not from byte zero.
+let cg_symbol_collect (bytes: Bytes) (n: Int) (i: Int) (start: Int) (parts: Array[String]): String =
+    if i >= n {
+        Array.concat_all(if start < n { parts.push(cg_symbol_ascii(bytes, start, n)) } else { parts })
+    } else {
+        let b = bytes_at_raw(bytes, i);
+        if cg_symbol_byte_ok(b) { cg_symbol_collect(bytes, n, i + 1, start, parts) }
+        else {
+            parts = if i > start { parts.push(cg_symbol_ascii(bytes, start, i)) } else { parts };
+            parts = parts.push("$").push(CG_SYMBOL_HEX[b / 16]).push(CG_SYMBOL_HEX[b % 16]);
+            cg_symbol_collect(bytes, n, i + 1, i + 1, parts)
+        }
+    }
+
+// Retained runs are proven ASCII by the scanner. Keep the existing checked
+// conversion and error path; neither Unicode nor malformed bytes enter runs.
+let cg_symbol_ascii (bytes: Bytes) (start: Int) (end: Int): String =
+    match bytes.slice(start, end).as_string() {
+        Ok(text) => text,
+        Err(_) => { cg_fail("internal: non-ASCII symbol run"); "" },
+    }
+
+let cg_symbol_test_byte (b: Int): String =
+    if b == 0 { "\x00" } else { unsafe { Bytes.from_array([b]).as_cstr().as_string() } }
+
+pub let test_symbol_atom_bytes (): Unit = {
+    let alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_";
+    let mut values: Array[String] = [];
+    let mut encoded: Array[String] = [];
+    for b in 0..256 {
+        let raw = cg_symbol_test_byte(b);
+        assert_eq(raw.as_bytes().to_array(), [b]);
+        let expected = if Option.is_some(String.index_of(alphabet, raw)) { raw }
+            else { "$".concat(Bytes.from_array([b]).to_hex()) };
+        assert_eq(cg_symbol_atom(raw), expected);
+        values = values.push(raw);
+        encoded = encoded.push(expected);
+    };
+    for a in [0, 36, 46, 65, 95, 127, 128, 195, 255] {
+        for b in [0, 36, 46, 65, 95, 127, 128, 169, 255] {
+            let raw = "Safe_9".concat(values[a]).concat(values[b]).concat("Z");
+            assert_eq(cg_symbol_atom(raw), "Safe_9".concat(encoded[a]).concat(encoded[b]).concat("Z"));
+        };
+    };
+    assert_eq(cg_symbol_atom(""), "");
+    let mut ascii = "valid_name09";
+    for i in 0..14 { ascii = ascii.concat(ascii); };
+    assert_eq(cg_symbol_atom(ascii), ascii);
+    let mut source = "name09".repeat(64);
+    let shared = cg_symbol_atom(source);
+    let pointer = shared.as_cstr();
+    source = source.concat("changed");
+    assert_eq(shared, "name09".repeat(64));
+    assert_eq(source, shared.concat("changed"));
+    assert_eq(unsafe { pointer.as_string() }, shared);
+    let mut escaped = "$.";
+    for i in 0..12 { escaped = escaped.concat(escaped); };
+    assert_eq(cg_symbol_atom(escaped), "$24$2e".repeat(4096));
+}
