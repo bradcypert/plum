@@ -40,7 +40,7 @@ pub enum ITy {
     // `plum_str_eq` is a length check plus `memcmp`, and nothing in the
     // cell has ever known about UTF-8. What made a `String` textual was
     // the FUNCTION SET, not the representation: `chars_of` decodes
-    // codepoints, `String.slice` is defined over it and so can never
+    // codepoints, `String.slice` scans the same boundaries and cannot
     // split a character, and `.as_cstr()` stops at a NUL.
     //
     // So this is deliberately NOT `ITStruct("Bytes", ..)` wrapping an

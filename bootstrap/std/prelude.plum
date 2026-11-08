@@ -197,10 +197,9 @@ pub let Float.clamp (x: Float) (lo: Float) (hi: Float): Float = Float.min(Float.
 
 /// --- Strings ---
 ///
-/// All of these are built on `chars_of`, which is the one primitive
-/// in `runtime.plum`. That is what makes them codepoint-safe rather
-/// than byte-indexed, so `String.slice` can never split a multi-byte
-/// character in half, because it never sees bytes at all.
+/// String operations use codepoint boundaries rather than byte
+/// indices. `String.slice` scans those boundaries directly; operations
+/// that need individual characters can materialize them with `chars_of`.
 /// The string with its CHARACTERS reversed, not its bytes — so text
 /// outside ASCII survives.
 pub let String.reverse (s: String): String = Array.concat_all(Array.reverse(chars_of(s)))
@@ -208,7 +207,32 @@ pub let String.reverse (s: String): String = Array.concat_all(Array.reverse(char
 pub let String.is_empty (s: String): Bool = s.len() == 0
 /// Characters from `start` up to but not including `end`, counted in
 /// CODEPOINTS rather than bytes. Out-of-range bounds are clamped.
-pub let String.slice (s: String) (start: Int) (end: Int): String = Array.concat_all(Array.slice(chars_of(s), start, end))
+/// Scans only as far as the requested boundaries and copies the selected
+/// bytes once, without allocating an array or individual characters.
+pub let String.slice (s: String) (start: Int) (end: Int): String = {
+    let lo = if start < 0 { 0 } else { start };
+    if end <= lo { "" } else {
+        let bytes = bytes_of_str_raw(s);
+        let n = bytes_len_raw(bytes);
+        let first = if lo == 0 { 0 } else { plum__string_slice_boundary(bytes, n, 1, lo - 1) };
+        if first >= n { "" } else {
+            let last = plum__string_slice_boundary(bytes, n, first + 1, end - lo - 1);
+            str_of_bytes_raw(bytes_slice_raw(bytes, first, last))
+        }
+    }
+}
+
+// The first byte of a character was already consumed. Skip its
+// continuation bytes, then count further character starts until the
+// requested boundary. This also preserves chars_of's grouping for
+// malformed raw byte sequences, including a leading continuation run.
+let plum__string_slice_boundary (bytes: Bytes) (n: Int) (i: Int) (left: Int): Int =
+    if i >= n { n } else {
+        let byte = bytes_at_raw(bytes, i);
+        if byte >= 128 && byte < 192 { plum__string_slice_boundary(bytes, n, i + 1, left) }
+        else if left <= 0 { i }
+        else { plum__string_slice_boundary(bytes, n, i + 1, left - 1) }
+    }
 /// The string joined to itself `n` times. `n` of zero or less gives
 /// an empty string.
 /// Repeats `s` `n` times.

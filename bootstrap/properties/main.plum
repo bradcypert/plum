@@ -1884,6 +1884,33 @@ pub let test_string_char_len (): Unit = {
     }
 }
 
+// Array slicing of materialized characters is an independent oracle.
+// Bounds span both Int extremes, reversed/empty ranges and Unicode.
+pub let test_string_slice (): Unit = {
+    let alphabet = ["\x00", "a", "\u{7f}", "\u{80}", "\u{7ff}", "\u{800}",
+        "\u{d7ff}", "\u{e000}", "\u{ffff}", "\u{10000}", "\u{10ffff}", "é", "中", "🙂", "́"];
+    for i in 0..200 {
+        let mut seed = next_seed(i + 1);
+        let mut text = "";
+        let n = rand_between(seed, 0, 32);
+        for j in 0..n {
+            seed = next_seed(seed);
+            text = text.concat(alphabet[rand_between(seed, 0, alphabet.len() - 1)]);
+        };
+        let chars = chars_of(text);
+        let a = rand_between(seed, -4, n + 4);
+        let b = rand_between(next_seed(seed), -4, n + 4);
+        let bounds = [(-9223372036854775807 - 1), -1, 0, a, b, n, n + 1, 9223372036854775807];
+        for start in bounds {
+            for end in bounds {
+                check_eq("String.slice codepoint oracle", i.to_string().concat(" / ").concat(start.to_string()).concat("..").concat(end.to_string()),
+                    String.slice(text, start, end), Array.concat_all(Array.slice(chars, start, end)));
+            };
+        };
+        assert_eq(String.slice(text, 0, a).concat(String.slice(text, a, 9223372036854775807)), text);
+    }
+}
+
 pub let test_string_index_of (): Unit = {
     for i in 0..250 {
         let seed = next_seed(i + 1);
