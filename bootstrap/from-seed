@@ -45,6 +45,7 @@ clang -O2 -Wno-override-module "$seed" \
     native_stdlib/dir_shim.c \
     native_stdlib/handle_shim.c \
     native_stdlib/io_shim.c \
+    native_stdlib/memory_shim.c \
     native_stdlib/os_shim.c \
     native_stdlib/process_shim.c \
     native_stdlib/thread_shim.c \

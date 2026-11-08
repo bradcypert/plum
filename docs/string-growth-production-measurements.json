@@ -1,0 +1,332 @@
+{
+  "description": "Actual unmodified compiler build output, Linux x86_64/glibc; allocation-free native observer; deltas exclude initial args setup, peak is whole-process; no timing/RSS inference",
+  "results": [
+    {
+      "policy": "main",
+      "mode": "debug",
+      "kind": "repeat",
+      "n": 4096,
+      "allocations": 769,
+      "allocated_bytes": 4732436,
+      "result_request": 12299,
+      "usable": 12312,
+      "peak_bytes": 24580,
+      "logical_bytes": 12288
+    },
+    {
+      "policy": "main",
+      "mode": "release",
+      "kind": "repeat",
+      "n": 4096,
+      "allocations": 769,
+      "allocated_bytes": 4732436,
+      "result_request": 12299,
+      "usable": 12312,
+      "peak_bytes": 24580,
+      "logical_bytes": 12288
+    },
+    {
+      "policy": "production",
+      "mode": "debug",
+      "kind": "repeat",
+      "n": 4096,
+      "allocations": 17,
+      "allocated_bytes": 50948,
+      "result_request": 17043,
+      "usable": 17048,
+      "peak_bytes": 28398,
+      "logical_bytes": 12288
+    },
+    {
+      "policy": "production",
+      "mode": "release",
+      "kind": "repeat",
+      "n": 4096,
+      "allocations": 17,
+      "allocated_bytes": 50948,
+      "result_request": 17043,
+      "usable": 17048,
+      "peak_bytes": 28398,
+      "logical_bytes": 12288
+    },
+    {
+      "policy": "main",
+      "mode": "debug",
+      "kind": "repeat",
+      "n": 5460,
+      "allocations": 1025,
+      "allocated_bytes": 8407060,
+      "result_request": 16394,
+      "usable": 16408,
+      "peak_bytes": 32773,
+      "logical_bytes": 16380
+    },
+    {
+      "policy": "main",
+      "mode": "release",
+      "kind": "repeat",
+      "n": 5460,
+      "allocations": 1025,
+      "allocated_bytes": 8407060,
+      "result_request": 16394,
+      "usable": 16408,
+      "peak_bytes": 32773,
+      "logical_bytes": 16380
+    },
+    {
+      "policy": "production",
+      "mode": "debug",
+      "kind": "repeat",
+      "n": 5460,
+      "allocations": 17,
+      "allocated_bytes": 50948,
+      "result_request": 17043,
+      "usable": 17048,
+      "peak_bytes": 28398,
+      "logical_bytes": 16380
+    },
+    {
+      "policy": "production",
+      "mode": "release",
+      "kind": "repeat",
+      "n": 5460,
+      "allocations": 17,
+      "allocated_bytes": 50948,
+      "result_request": 17043,
+      "usable": 17048,
+      "peak_bytes": 28398,
+      "logical_bytes": 16380
+    },
+    {
+      "policy": "main",
+      "mode": "debug",
+      "kind": "mixed",
+      "n": 8192,
+      "allocations": 2049,
+      "allocated_bytes": 33589266,
+      "result_request": 32777,
+      "usable": 32792,
+      "peak_bytes": 65538,
+      "logical_bytes": 32768
+    },
+    {
+      "policy": "main",
+      "mode": "release",
+      "kind": "mixed",
+      "n": 8192,
+      "allocations": 2049,
+      "allocated_bytes": 33589266,
+      "result_request": 32777,
+      "usable": 32792,
+      "peak_bytes": 65538,
+      "logical_bytes": 32768
+    },
+    {
+      "policy": "production",
+      "mode": "debug",
+      "kind": "mixed",
+      "n": 8192,
+      "allocations": 19,
+      "allocated_bytes": 114864,
+      "result_request": 38355,
+      "usable": 38360,
+      "peak_bytes": 63918,
+      "logical_bytes": 32768
+    },
+    {
+      "policy": "production",
+      "mode": "release",
+      "kind": "mixed",
+      "n": 8192,
+      "allocations": 19,
+      "allocated_bytes": 114864,
+      "result_request": 38355,
+      "usable": 38360,
+      "peak_bytes": 63918,
+      "logical_bytes": 32768
+    }
+  ],
+  "compiler_emission": {
+    "input": "same current bootstrap/self_host source tree for both compilers; main compiler from 6321c97, production compiler from refreshed seed -> source; runtime prefix intentionally changes",
+    "results": [
+      {
+        "compiler": "main",
+        "mode": "debug",
+        "allocations": 18903360,
+        "allocated_bytes": 1202336242
+      },
+      {
+        "compiler": "main",
+        "mode": "release",
+        "allocations": 15646467,
+        "allocated_bytes": 1035133226
+      },
+      {
+        "compiler": "production",
+        "mode": "debug",
+        "allocations": 18578510,
+        "allocated_bytes": 1086906587
+      },
+      {
+        "compiler": "production",
+        "mode": "release",
+        "allocations": 15330463,
+        "allocated_bytes": 919988221
+      }
+    ]
+  },
+  "provenance": {
+    "baseline_commit": "6321c97c73eb40a8b9eedecd89a66bb149a46a4c",
+    "baseline_compiler_sha256": "1f5755dbe4afa29bc30e43b67f8ff4c5c460613b932164a163d0d662553ace43",
+    "production_compiler_sha256": "46e6bb1dea29d6be9bd9b9558217f2ac110e860f8de1316e89b40c64ce913fcb",
+    "production_seed_ir_sha256": "14a76351cecfe273d70ddb25ec7a46363eff8e97c3f19c9836186a11a35dae40",
+    "native_fingerprint": "36ad1bde3e697d83da2a4f270fd0f7c9a17f9d920cac91a5b45e65d19c1d2791"
+  },
+  "repeat_results": [
+    {
+      "policy": "main",
+      "mode": "debug",
+      "kind": "repeat",
+      "n": 4096,
+      "allocations": 769,
+      "allocated_bytes": 4732436,
+      "result_request": 12299,
+      "usable": 12312,
+      "peak_bytes": 24580,
+      "logical_bytes": 12288
+    },
+    {
+      "policy": "main",
+      "mode": "release",
+      "kind": "repeat",
+      "n": 4096,
+      "allocations": 769,
+      "allocated_bytes": 4732436,
+      "result_request": 12299,
+      "usable": 12312,
+      "peak_bytes": 24580,
+      "logical_bytes": 12288
+    },
+    {
+      "policy": "production",
+      "mode": "debug",
+      "kind": "repeat",
+      "n": 4096,
+      "allocations": 17,
+      "allocated_bytes": 50948,
+      "result_request": 17043,
+      "usable": 17048,
+      "peak_bytes": 28398,
+      "logical_bytes": 12288
+    },
+    {
+      "policy": "production",
+      "mode": "release",
+      "kind": "repeat",
+      "n": 4096,
+      "allocations": 17,
+      "allocated_bytes": 50948,
+      "result_request": 17043,
+      "usable": 17048,
+      "peak_bytes": 28398,
+      "logical_bytes": 12288
+    },
+    {
+      "policy": "main",
+      "mode": "debug",
+      "kind": "repeat",
+      "n": 5460,
+      "allocations": 1025,
+      "allocated_bytes": 8407060,
+      "result_request": 16394,
+      "usable": 16408,
+      "peak_bytes": 32773,
+      "logical_bytes": 16380
+    },
+    {
+      "policy": "main",
+      "mode": "release",
+      "kind": "repeat",
+      "n": 5460,
+      "allocations": 1024,
+      "allocated_bytes": 8397899,
+      "result_request": 16394,
+      "usable": 16408,
+      "peak_bytes": 32773,
+      "logical_bytes": 16380
+    },
+    {
+      "policy": "production",
+      "mode": "debug",
+      "kind": "repeat",
+      "n": 5460,
+      "allocations": 17,
+      "allocated_bytes": 50948,
+      "result_request": 17043,
+      "usable": 17048,
+      "peak_bytes": 28398,
+      "logical_bytes": 16380
+    },
+    {
+      "policy": "production",
+      "mode": "release",
+      "kind": "repeat",
+      "n": 5460,
+      "allocations": 17,
+      "allocated_bytes": 50948,
+      "result_request": 17043,
+      "usable": 17048,
+      "peak_bytes": 28398,
+      "logical_bytes": 16380
+    },
+    {
+      "policy": "main",
+      "mode": "debug",
+      "kind": "mixed",
+      "n": 8192,
+      "allocations": 2049,
+      "allocated_bytes": 33589266,
+      "result_request": 32777,
+      "usable": 32792,
+      "peak_bytes": 65538,
+      "logical_bytes": 32768
+    },
+    {
+      "policy": "main",
+      "mode": "release",
+      "kind": "mixed",
+      "n": 8192,
+      "allocations": 2049,
+      "allocated_bytes": 33589266,
+      "result_request": 32777,
+      "usable": 32792,
+      "peak_bytes": 65538,
+      "logical_bytes": 32768
+    },
+    {
+      "policy": "production",
+      "mode": "debug",
+      "kind": "mixed",
+      "n": 8192,
+      "allocations": 19,
+      "allocated_bytes": 114864,
+      "result_request": 38355,
+      "usable": 38360,
+      "peak_bytes": 63918,
+      "logical_bytes": 32768
+    },
+    {
+      "policy": "production",
+      "mode": "release",
+      "kind": "mixed",
+      "n": 8192,
+      "allocations": 19,
+      "allocated_bytes": 114864,
+      "result_request": 38355,
+      "usable": 38360,
+      "peak_bytes": 63918,
+      "logical_bytes": 32768
+    }
+  ],
+  "repeat_note": "Independent invocation of checked-in measurement harness. Exact counts can vary slightly with allocator placement/rounding; figures are observed runs, not universal exact guarantees."
+}
