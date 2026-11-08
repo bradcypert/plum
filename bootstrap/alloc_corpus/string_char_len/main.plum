@@ -1,0 +1,8 @@
+// Input construction has a small geometric allocation cost. Repeated
+// character counts must borrow it without allocating decoded characters.
+let main (): Unit = {
+    let mut text = "aé中🙂\x00";
+    for i in 0..12 { text = text.concat(text); };
+    for i in 0..100 { assert_eq(String.char_len(text), 20480); };
+    println("20480")
+}

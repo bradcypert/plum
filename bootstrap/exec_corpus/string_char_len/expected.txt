@@ -1,0 +1,1 @@
+character counts preserve UTF-8, NULs, aliases and bounded stack
