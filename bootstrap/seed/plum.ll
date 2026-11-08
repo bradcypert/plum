@@ -360160,11 +360160,11 @@ L136980:
   call void @plum_rc_inc(ptr %t136998), !dbg !5796
   %t136999 = call ptr @plum_str_concat_reuse(ptr %t136995, ptr %t136998), !dbg !5796
   call void @plum_rel_str(ptr %t136998), !dbg !5796
-  %t137000 = load ptr, ptr %t136885, !dbg !5796
+  %t137000 = load ptr, ptr %t136962, !dbg !5796
   %t137001 = getelementptr i8, ptr %t137000, i64 24, !dbg !5796
   %t137002 = load ptr, ptr %t137001, !dbg !5796
   call void @plum_rc_inc(ptr %t137002), !dbg !5796
-  %t137003 = load ptr, ptr %t136962, !dbg !5796
+  %t137003 = load ptr, ptr %t136885, !dbg !5796
   %t137004 = getelementptr i8, ptr %t137003, i64 24, !dbg !5796
   %t137005 = load ptr, ptr %t137004, !dbg !5796
   call void @plum_rc_inc(ptr %t137005), !dbg !5796
