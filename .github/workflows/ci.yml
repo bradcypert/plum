@@ -98,6 +98,35 @@ jobs:
       - name: corpus
         run: ./bootstrap/corpus-check --shard ${{ matrix.shard }}/2
 
+  # These suites took almost eight minutes in the CLI/docs job, leaving
+  # later checks unrun at its 15-minute limit. Keep their full coverage
+  # in an isolated checkout with the same source-built compiler.
+  runtime_checks:
+    name: Linux sanitizer and ownership checks
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v5
+      - name: install clang
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y clang
+          clang --version
+      - uses: actions/download-artifact@v4
+        with:
+          name: plum-linux-compiler
+      - name: restore freshly built compiler
+        run: tar -xzf plum-linux-compiler.tar.gz
+      - name: compiler internals preserve native object compilation
+        run: ./bootstrap/self-test ./sh.real
+      - name: sanitizers cover generated code, native code, leaks and cache transitions
+        run: python3 ./bootstrap/sanitizer-check.py ./sh.real
+      - name: String construction preserves ownership, bounded traffic and allocation failures
+        run: python3 ./bootstrap/string-growth-check.py ./sh.real --sanitize
+      - name: opt-in memory snapshots preserve ownership, reuse and concurrency
+        run: python3 ./bootstrap/memory-stats-check.py ./sh.real
+
   checks:
     name: Linux CLI, docs and source checks
     needs: build
@@ -126,14 +155,6 @@ jobs:
         run: ./bootstrap/check-shims
       - name: no runtime declare goes unused
         run: ./bootstrap/check-declares
-      - name: compiler internals preserve native object compilation
-        run: ./bootstrap/self-test ./sh.real
-      - name: sanitizers cover generated code, native code, leaks and cache transitions
-        run: python3 ./bootstrap/sanitizer-check.py ./sh.real
-      - name: String growth and repetition preserve ownership, bounded traffic and allocation failures
-        run: python3 ./bootstrap/string-growth-check.py ./sh.real --sanitize
-      - name: opt-in memory snapshots preserve ownership, reuse and concurrency
-        run: python3 ./bootstrap/memory-stats-check.py ./sh.real
       - name: plum test really runs tests
         run: ./bootstrap/test-smoke
       - name: lexer diagnostics preserve source locations
@@ -285,7 +306,7 @@ jobs:
   bootstrap:
     name: build from seed and validate
     if: ${{ always() }}
-    needs: [build, bootstrap_proofs, corpus, checks, native_checks, cache_behavior, cache_objects]
+    needs: [build, bootstrap_proofs, corpus, checks, runtime_checks, native_checks, cache_behavior, cache_objects]
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
@@ -295,6 +316,7 @@ jobs:
           test "${{ needs.bootstrap_proofs.result }}" = success
           test "${{ needs.corpus.result }}" = success
           test "${{ needs.checks.result }}" = success
+          test "${{ needs.runtime_checks.result }}" = success
           test "${{ needs.native_checks.result }}" = success
           test "${{ needs.cache_behavior.result }}" = success
           test "${{ needs.cache_objects.result }}" = success
@@ -484,24 +506,51 @@ jobs:
   # platform earns a release job by being green here first; when it
   # has been, add it to `release.yml` and move it up the tier table in
   # README.md.
-  linux-arm64:
-    name: linux arm64 builds and runs real programs
+  # Build once on arm64 and validate independent suites in parallel. The
+  # former serial job hit 30 minutes after its cache checks passed, leaving
+  # language-server and property checks unrun.
+  linux-arm64-build:
+    name: build Linux arm64 compiler from seed
     runs-on: ubuntu-24.04-arm
-    timeout-minutes: 30
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v5
-
       - name: install clang
         run: |
           sudo apt-get update
           sudo apt-get install -y clang
           clang --version
-
       - name: seed -> compiler
         run: |
           ./bootstrap/from-seed -o sh.seed
           ./sh.seed build bootstrap/self_host -o sh.real
+      - name: archive freshly built compiler
+        run: tar -czf plum-linux-arm64-compiler.tar.gz sh.real
+      - uses: actions/upload-artifact@v4
+        with:
+          name: plum-linux-arm64-compiler
+          path: plum-linux-arm64-compiler.tar.gz
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 7
 
+  linux-arm64-checks:
+    name: Linux arm64 compiler, corpus and platform checks
+    needs: linux-arm64-build
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v5
+      - name: install clang
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y clang
+          clang --version
+      - uses: actions/download-artifact@v4
+        with:
+          name: plum-linux-arm64-compiler
+      - name: restore freshly built compiler
+        run: tar -xzf plum-linux-arm64-compiler.tar.gz
       - name: the compiler reproduces itself
         run: ./bootstrap/bootstrap-check
 
@@ -520,14 +569,45 @@ jobs:
       - name: the compiler it built works
         run: ./bootstrap/platform-smoke ./sh.real
 
-      - name: build cache preserves program behavior
-        run: ./bootstrap/build-cache-check ./sh.real
-
       - name: the language server answers a real session
         run: ./bootstrap/lsp-smoke ./sh.real
 
       - name: properties hold
         run: ./bootstrap/property-check ./sh.real
+
+  linux-arm64-cache:
+    name: Linux arm64 build cache behavior
+    needs: linux-arm64-build
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v5
+      - name: install clang
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y clang
+          clang --version
+      - uses: actions/download-artifact@v4
+        with:
+          name: plum-linux-arm64-compiler
+      - name: restore freshly built compiler
+        run: tar -xzf plum-linux-arm64-compiler.tar.gz
+      - name: build cache preserves program behavior
+        run: ./bootstrap/build-cache-check ./sh.real
+
+  # Preserve the existing check name and require every arm64 consumer.
+  linux-arm64:
+    name: linux arm64 builds and runs real programs
+    if: ${{ always() }}
+    needs: [linux-arm64-build, linux-arm64-checks, linux-arm64-cache]
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: every Linux arm64 validation passed
+        run: |
+          test "${{ needs.linux-arm64-build.result }}" = success
+          test "${{ needs.linux-arm64-checks.result }}" = success
+          test "${{ needs.linux-arm64-cache.result }}" = success
 
   # Windows, under MSYS2/MinGW. This was `continue-on-error` while the
   # port was being written blind; it went green on 2026-08-25 -- 43 of
