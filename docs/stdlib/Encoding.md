@@ -88,3 +88,5 @@ as a literal plus sign, matching `percent_encode`.
 Returns `Bytes` rather than `String` because an escape can encode
 any byte, including sequences that are not valid UTF-8. Call
 `Bytes.as_string` when text is what was expected.
+Validates before constructing output. Unescaped input shares storage;
+escaped input uses one exact-sized Bytes cell plus Result bookkeeping.

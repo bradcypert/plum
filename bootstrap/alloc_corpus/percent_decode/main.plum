@@ -1,0 +1,4 @@
+use Encoding;
+let main (): Unit = {
+    for i in 0..1000 { assert_eq(Encoding.percent_decode("a%00%FF+").unwrap_or(Bytes.empty()).len(), 4); };
+}

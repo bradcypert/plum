@@ -2286,3 +2286,29 @@ pub let test_base64_decode_laws (): Unit = {
         };
     };
 }
+
+// All bytes survive lowercase triplets; plus is literal, and the first bad escape wins.
+pub let test_percent_decode_laws (): Unit = {
+    let digits = ["0", "1", "2", "3", "4", "5", "6", "7", "8", "9", "a", "b", "c", "d", "e", "f"];
+    for c in 0..256 {
+        let text = "%".concat(digits[c / 16]).concat(digits[c % 16]);
+        assert_eq(Encoding.percent_decode(text).unwrap_or(Bytes.empty()).to_array(), [c]);
+    };
+    for prefix in ["", "a+b", "é", "\x00🙂", "%00%FF"] {
+        let offset = prefix.len().to_string();
+        for suffix in ["%", "%G"] {
+            match Encoding.percent_decode(prefix.concat(suffix)) {
+                Err(e) => assert_eq(e, "Encoding.percent_decode: truncated escape at byte ".concat(offset)),
+                Ok(_) => assert(false),
+            };
+        };
+        for suffix in ["%GG", "%0G%", "%G0%00"] {
+            match Encoding.percent_decode(prefix.concat(suffix)) {
+                Err(e) => assert_eq(e, "Encoding.percent_decode: invalid escape at byte ".concat(offset)),
+                Ok(_) => assert(false),
+            };
+        };
+    };
+    assert_eq(Encoding.percent_decode("a+b%2Bc").unwrap_or(Bytes.empty()).to_array(), "a+b+c".as_bytes().to_array());
+    assert_eq(Encoding.percent_decode("%2520").unwrap_or(Bytes.empty()).to_array(), "%20".as_bytes().to_array());
+}

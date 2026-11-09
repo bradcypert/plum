@@ -159,17 +159,22 @@ let plum__percent_encode_raw (b: Bytes): String = ""
 /// result uses one exact-sized allocation; empty input uses static storage.
 pub let percent_encode (b: Bytes): String = plum__percent_encode_raw(b)
 
-let pct_decode_acc (b: Bytes) (i: Int) (n: Int) (acc: Array[Int]): Result[Array[Int], String] =
-    if i >= n { Ok(acc) }
+// Borrowed, validated input and its escape count; returns an owned Bytes.
+let plum__percent_decode_validated_raw (b: Bytes) (escapes: Int): Bytes = Bytes.empty()
+
+// Validate and count before constructing output. No array or optional byte
+// objects are needed, and errors retain their original encoded-byte offsets.
+let pct_decode_scan (b: Bytes) (i: Int) (n: Int) (escapes: Int): Result[Int, String] =
+    if i >= n { Ok(escapes) }
     else {
-        let c = byte_at(b, i);
-        if c != 37 { pct_decode_acc(b, i + 1, n, acc.push(c)) }
-        else if i + 2 >= n { Err("Encoding.percent_decode: truncated escape at byte ".concat(i.to_string())) }
+        let c = bytes_at_raw(b, i);
+        if c != 37 { pct_decode_scan(b, i + 1, n, escapes) }
+        else if n - i < 3 { Err("Encoding.percent_decode: truncated escape at byte ".concat(i.to_string())) }
         else {
-            let hi = hex_digit_value(byte_at(b, i + 1));
-            let lo = hex_digit_value(byte_at(b, i + 2));
+            let hi = hex_digit_value(bytes_at_raw(b, i + 1));
+            let lo = hex_digit_value(bytes_at_raw(b, i + 2));
             if hi < 0 || lo < 0 { Err("Encoding.percent_decode: invalid escape at byte ".concat(i.to_string())) }
-            else { pct_decode_acc(b, i + 3, n, acc.push(hi * 16 + lo)) }
+            else { pct_decode_scan(b, i + 3, n, escapes + 1) }
         }
     }
 
@@ -181,8 +186,16 @@ let pct_decode_acc (b: Bytes) (i: Int) (n: Int) (acc: Array[Int]): Result[Array[
 /// Returns `Bytes` rather than `String` because an escape can encode
 /// any byte, including sequences that are not valid UTF-8. Call
 /// `Bytes.as_string` when text is what was expected.
+/// Validates before constructing output. Unescaped input shares storage;
+/// escaped input uses one exact-sized Bytes cell plus Result bookkeeping.
 pub let percent_decode (s: String): Result[Bytes, String] = {
     let b = s.as_bytes();
-    Result.map(pct_decode_acc(b, 0, b.len(), []), |vals| Bytes.from_array(vals))
+    if b.len() == 0 { Ok(Bytes.empty()) }
+    else {
+        match pct_decode_scan(b, 0, b.len(), 0) {
+            Err(e) => Err(e),
+            Ok(escapes) => Ok(plum__percent_decode_validated_raw(b, escapes)),
+        }
+    }
 }
 

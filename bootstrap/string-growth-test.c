@@ -23,6 +23,8 @@ extern void *plum_bytes_to_hex(void *);
 extern void *plum_bytes_percent_encode(void *);
 extern void *plum_bytes_base64_encode(void *, bool);
 extern int64_t plum_base64_length(int64_t, bool);
+extern int64_t plum_percent_decoded_length(int64_t, int64_t);
+extern void *plum_percent_decode_validated(void *, int64_t);
 extern int64_t plum_base64_decode_value(int64_t);
 extern int64_t plum_base64_decoded_length(int64_t, int64_t);
 extern void *plum_base64_decode_validated(void *, int64_t);
@@ -476,6 +478,64 @@ static void base64_decoding(void) {
     CHECK(field(2) == 0 && field(3) == 0);
 #endif
 }
+
+static void percent_decoding(void) {
+    const char *digits[] = {"0123456789ABCDEF", "0123456789abcdef"};
+    for (int lower = 0; lower < 2; ++lower) {
+        for (int literal = 0; literal < 2; ++literal) {
+            unsigned char encoded[1024], expected[512];
+            int n = 0, length = 0, escapes = 0;
+            for (int c = 0; c < 256; ++c) {
+                if (literal && c != '%') encoded[n++] = (unsigned char)c;
+                else {
+                    encoded[n++] = '%'; encoded[n++] = digits[lower][c / 16];
+                    encoded[n++] = digits[lower][c % 16]; ++escapes;
+                }
+                expected[length++] = (unsigned char)c;
+            }
+            void *source = text((char *)encoded, n, 4096);
+            int64_t allocs = plum_n_alloc, bytes = plum_b_alloc, live = field(3), origin = origin_field(3);
+            attempts = 0;
+            void *out = plum_percent_decode_validated(source, escapes);
+            CHECK(plum_percent_decoded_length(n, escapes) == length);
+            CHECK(out != source && *(int64_t *)source == 1 && *(int64_t *)out == 1);
+            CHECK(attempts == 1 && requests[0] == length + 17);
+            CHECK(plum_n_alloc == allocs + 1 && plum_b_alloc == bytes + length + 17);
+            value(source, (char *)encoded, n); value(out, (char *)expected, length);
+#ifdef PLUM_HEAP_STATS
+            CHECK(field(3) == live + length + 17 && origin_field(3) == origin + length + 17);
+#else
+            (void)origin;
+#endif
+            plum_rel_str(out); CHECK(field(3) == live); plum_rel_str(source);
+        }
+    }
+    /* Identity shares the existing requested capacity, including NUL/high bytes. */
+    const char plain[] = "a+\0\xc3\xa9";
+    void *source = text(plain, 5, 4096);
+    int64_t allocs = plum_n_alloc, live = field(3);
+    attempts = 0;
+    void *out = plum_percent_decode_validated(source, 0);
+    CHECK(out == source && *(int64_t *)source == 2 && attempts == 0);
+    CHECK(plum_n_alloc == allocs && field(3) == live);
+    value(out, plain, 5); plum_rel_str(source); value(out, plain, 5); plum_rel_str(out);
+    source = text("", 0, 4096); live = field(3); attempts = 0;
+    out = plum_percent_decode_validated(source, 0);
+    CHECK(out != source && *(int64_t *)source == 1 && attempts == 0);
+    value(out, "", 0); plum_rel_str(out); CHECK(field(3) == live); plum_rel_str(source);
+    for (int64_t n = 0; n < 10000; ++n) {
+        CHECK(plum_percent_decoded_length(n, 0) == n);
+        CHECK(plum_percent_decoded_length(n, n / 6) == n - 2 * (n / 6));
+        CHECK(plum_percent_decoded_length(n, n / 3) == n - 2 * (n / 3));
+    }
+    const int64_t max = INT64_MAX - 17;
+    CHECK(plum_percent_decoded_length(max, 0) == max);
+    CHECK(plum_percent_decoded_length(max, max / 3) == max - 2 * (max / 3));
+#ifdef PLUM_HEAP_STATS
+    CHECK(field(2) == 0 && field(3) == 0);
+#endif
+}
+
 int main(int argc, char **argv) {
     if (argc > 1) {
         if (!strcmp(argv[1], "negative")) plum_str_concat_length(-1, 0);
@@ -577,6 +637,18 @@ int main(int argc, char **argv) {
             /* A header-only source proves failure precedes any payload read. */
             plum_base64_decode_validated(input, count);
         }
+        else if (!strncmp(argv[1], "pctdecode-", 10)) {
+            int64_t input[] = {1, 3}, escapes = 1;
+            if (!strcmp(argv[1], "pctdecode-negative-input")) input[1] = -1;
+            else if (!strcmp(argv[1], "pctdecode-large-input")) input[1] = INT64_MAX;
+            else if (!strcmp(argv[1], "pctdecode-negative-count")) escapes = -1;
+            else if (!strcmp(argv[1], "pctdecode-count-overflow")) escapes = INT64_MAX;
+            else if (!strcmp(argv[1], "pctdecode-short-group")) input[1] = 2;
+            else if (!strcmp(argv[1], "pctdecode-oom")) failures = 1;
+            else return 3;
+            /* Header only: count/size/OOM failures must precede payload reads. */
+            plum_percent_decode_validated(input, escapes);
+        }
         else if (!strcmp(argv[1], "oom")) { failures = 2; plum_alloc_preferred(33, 80, 1); }
         else if (!strcmp(argv[1], "exact-oom")) { failures = 1; plum_alloc_preferred(33, 33, 1); }
         else return 3;
@@ -584,6 +656,6 @@ int main(int argc, char **argv) {
     }
     arithmetic(); fallback(); ownership(); growth_fallback(); snapshots();
     for (int steps = 512; steps <= 4096; steps *= 2) traffic(steps);
-    repetition(); hexadecimal(); joining(); percent_encoding(); base64_encoding(); base64_decoding();
+    repetition(); hexadecimal(); joining(); percent_encoding(); base64_encoding(); base64_decoding(); percent_decoding();
     return 0;
 }
