@@ -23,6 +23,9 @@ extern void *plum_bytes_to_hex(void *);
 extern void *plum_bytes_percent_encode(void *);
 extern void *plum_bytes_base64_encode(void *, bool);
 extern int64_t plum_base64_length(int64_t, bool);
+extern int64_t plum_base64_decode_value(int64_t);
+extern int64_t plum_base64_decoded_length(int64_t, int64_t);
+extern void *plum_base64_decode_validated(void *, int64_t);
 extern int64_t plum_str_added_length(int64_t, int64_t, const char *, int64_t);
 extern void *plum_str_join(void *, void *);
 extern void *plum_str_concat_all(void *);
@@ -424,6 +427,55 @@ static void base64_encoding(void) {
     CHECK(field(2) == 0 && field(3) == 0);
 #endif
 }
+static void base64_decoding(void) {
+    const char *alpha = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    for (int c = 0; c < 256; ++c) {
+        const char *p = c ? strchr(alpha, c) : NULL;
+        int64_t expected = c == '-' ? 62 : c == '_' ? 63 : p ? p - alpha : -1;
+        CHECK(plum_base64_decode_value(c) == expected);
+    }
+    CHECK(plum_base64_decode_value(-1) == -1 && plum_base64_decode_value(256) == -1);
+    CHECK(plum_base64_decode_value(INT64_MIN) == -1 && plum_base64_decode_value(INT64_MAX) == -1);
+    unsigned char bytes[258]; char encoded[350];
+    for (int i = 0; i < 258; ++i) bytes[i] = (unsigned char)i;
+    for (int length = 0; length <= 258; ++length) {
+        for (int url = 0; url < 2; ++url) {
+            int encoded_length = reference_base64(encoded, bytes, length, url != 0);
+            int count = encoded_length;
+            while (count && encoded[count - 1] == '=') --count;
+            CHECK(plum_base64_decoded_length(encoded_length, count) == length);
+            void *source = text(encoded, encoded_length, 4096);
+            int64_t n = plum_n_alloc, allocated = plum_b_alloc, live = field(3), origins = origin_field(3);
+            attempts = 0;
+            void *out = plum_base64_decode_validated(source, count);
+            int64_t request = length ? length + 17 : 0;
+            CHECK(out != source && *(int64_t *)source == 1 && attempts == (length ? 1 : 0));
+            if (length) CHECK(requests[0] == request && *(int64_t *)out == 1);
+            CHECK(plum_n_alloc == n + (length ? 1 : 0) && plum_b_alloc == allocated + request);
+            value(out, (char *)bytes, length); value(source, encoded, encoded_length);
+#ifdef PLUM_HEAP_STATS
+            CHECK(field(3) == live + request && origin_field(3) == origins + request);
+#else
+            (void)origins;
+#endif
+            plum_rel_str(out); CHECK(field(3) == live); plum_rel_str(source);
+        }
+    }
+    for (int count = 0; count < 10000; ++count) {
+        if (count % 4 == 1) continue;
+        int64_t expected = (count / 4) * 3 + (count % 4 ? count % 4 - 1 : 0);
+        CHECK(plum_base64_decoded_length(count, count) == expected);
+        CHECK(plum_base64_decoded_length(((count + 3) / 4) * 4, count) == expected);
+    }
+    const int64_t max = INT64_MAX - 17, q = max / 4;
+    CHECK(plum_base64_decoded_length(max, max) == q * 3 + 1);
+    CHECK(plum_base64_decoded_length(max - 2, max - 2) == q * 3);
+    CHECK(plum_base64_decoded_length(max - 2, max - 3) == q * 3 - 1);
+    CHECK(plum_base64_decoded_length(max - 2, max - 4) == q * 3 - 2);
+#ifdef PLUM_HEAP_STATS
+    CHECK(field(2) == 0 && field(3) == 0);
+#endif
+}
 int main(int argc, char **argv) {
     if (argc > 1) {
         if (!strcmp(argv[1], "negative")) plum_str_concat_length(-1, 0);
@@ -511,6 +563,20 @@ int main(int argc, char **argv) {
             /* Header only: the failed result allocation precedes every data read. */
             int64_t input[] = {1, 1}; failures = 1; plum_bytes_base64_encode(input, false);
         }
+        else if (!strncmp(argv[1], "b64decode-", 10)) {
+            int64_t input[] = {1, 2}, count = 2;
+            if (!strcmp(argv[1], "b64decode-negative-input")) input[1] = -1;
+            else if (!strcmp(argv[1], "b64decode-large-input")) input[1] = INT64_MAX;
+            else if (!strcmp(argv[1], "b64decode-negative-count")) count = -1;
+            else if (!strcmp(argv[1], "b64decode-count-overflow")) count = 3;
+            else if (!strcmp(argv[1], "b64decode-short-group")) { input[1] = 1; count = 1; }
+            else if (!strcmp(argv[1], "b64decode-padding-shape")) input[1] = 3;
+            else if (!strcmp(argv[1], "b64decode-extra-padding")) input[1] = 8;
+            else if (!strcmp(argv[1], "b64decode-oom")) failures = 1;
+            else return 3;
+            /* A header-only source proves failure precedes any payload read. */
+            plum_base64_decode_validated(input, count);
+        }
         else if (!strcmp(argv[1], "oom")) { failures = 2; plum_alloc_preferred(33, 80, 1); }
         else if (!strcmp(argv[1], "exact-oom")) { failures = 1; plum_alloc_preferred(33, 33, 1); }
         else return 3;
@@ -518,6 +584,6 @@ int main(int argc, char **argv) {
     }
     arithmetic(); fallback(); ownership(); growth_fallback(); snapshots();
     for (int steps = 512; steps <= 4096; steps *= 2) traffic(steps);
-    repetition(); hexadecimal(); joining(); percent_encoding(); base64_encoding();
+    repetition(); hexadecimal(); joining(); percent_encoding(); base64_encoding(); base64_decoding();
     return 0;
 }

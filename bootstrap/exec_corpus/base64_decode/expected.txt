@@ -1,0 +1,1 @@
+Base64 decode: exact errors, precedence, binary bytes, alphabets, padding and immutable aliases

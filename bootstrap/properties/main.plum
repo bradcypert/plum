@@ -2257,3 +2257,32 @@ pub let test_base64_encode_laws (): Unit = {
         match Encoding.base64_url_decode(url) { Ok(out) => assert_eq(out.to_array(), input.to_array()), Err(_) => assert(false) };
     };
 }
+
+// Padding and alphabet choices preserve bytes; invalid suffixes outrank tail checks.
+pub let test_base64_decode_laws (): Unit = {
+    let mut seed = 488;
+    for trial in 0..200 {
+        seed = next_seed(seed);
+        let input = rand_bytes(seed, rand_between(seed, 0, 192));
+        let standard = Encoding.base64_encode(input);
+        let url = Encoding.base64_url_encode(input);
+        let unpadded = standard.replace("=", "");
+        for text in [standard, url, unpadded, standard.replace("+", "-").replace("/", "_")] {
+            match Encoding.base64_decode(text) { Ok(out) => assert_eq(out.to_array(), input.to_array()), Err(_) => assert(false) };
+            match Encoding.base64_url_decode(text) { Ok(out) => assert_eq(out.to_array(), input.to_array()), Err(_) => assert(false) };
+        };
+        match Encoding.base64_decode(unpadded.concat("!")) {
+            Ok(_) => assert(false),
+            Err(e) => assert_eq(e, "Encoding.base64_decode: invalid character at byte ".concat(unpadded.len().to_string())),
+        };
+    };
+    for n in 0..60 {
+        let prefix = "AAAA".repeat(n);
+        for suffix in ["AB!", "AAB!"] {
+            match Encoding.base64_decode(prefix.concat(suffix)) {
+                Ok(_) => assert(false),
+                Err(e) => assert_eq(e, "Encoding.base64_decode: invalid character at byte ".concat((prefix.len() + suffix.len() - 1).to_string())),
+            };
+        };
+    };
+}

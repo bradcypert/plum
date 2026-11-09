@@ -54,6 +54,8 @@ Returns `Err` for unrecognised characters, impossible lengths,
 malformed padding, or nonzero unused tail bits. If present, padding
 must be a suffix of one or two `=` characters completing a group
 of four. Unused tail bits must be zero, with or without padding.
+Validates before allocating output. Nonempty success uses one exact-sized
+Bytes cell plus Result bookkeeping; invalid input builds no output buffer.
 
 ## `let base64_url_decode (s: String): Result[Bytes, String]`
 

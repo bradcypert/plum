@@ -1,0 +1,4 @@
+use Encoding;
+let main (): Unit = {
+    for i in 0..1000 { match Encoding.base64_decode("YWJj+/8=") { Ok(b) => assert_eq(b.len(), 5), Err(_) => assert(false) }; };
+}
