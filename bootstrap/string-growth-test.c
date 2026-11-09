@@ -23,7 +23,8 @@ extern void *plum_bytes_to_hex(void *);
 extern void *plum_bytes_percent_encode(void *);
 extern void *plum_bytes_base64_encode(void *, bool);
 extern int64_t plum_base64_length(int64_t, bool);
-extern unsigned char plum_hex_pair(unsigned char, unsigned char);
+/* Private LLVM i8 helpers cross into C through an explicit widening bridge. */
+extern int64_t growth_test_hex_pair(int64_t, int64_t);
 extern int64_t plum_hex_decoded_length(int64_t);
 extern void *plum_hex_decode_validated(void *);
 extern int64_t plum_percent_decoded_length(int64_t, int64_t);
@@ -546,7 +547,7 @@ static void hex_decoding(void) {
     for (int form = 0; form < 4; ++form) {
         for (int hi = 0; hi < 16; ++hi)
             for (int lo = 0; lo < 16; ++lo)
-                CHECK(plum_hex_pair(digits[form & 1][hi], digits[form >> 1][lo]) == hi * 16 + lo);
+                CHECK(growth_test_hex_pair(digits[form & 1][hi], digits[form >> 1][lo]) == hi * 16 + lo);
         for (int length = 0; length <= 258; ++length) {
             for (int i = 0; i < length; ++i) {
                 expected[i] = (unsigned char)i;

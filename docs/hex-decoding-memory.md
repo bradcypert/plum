@@ -139,6 +139,10 @@ output lengths 0–258, unchanged unique input with spare capacity, exact reques
 ByteStorage accounting and final release, static empty output, scalar near-limit
 sizes, and header-only invalid-size/allocation-failure cases before payload reads.
 Existing percent-decoder tests cover the shared conversion helper as well.
+The private byte-sized LLVM helper is tested through an explicit LLVM-to-C
+widening bridge. C's unsigned-char return convention on Darwin requires extension
+that the internal LLVM `i8` interface does not promise; the bridge zero-extends
+the result before the C assertion. Production callers use the internal interface.
 Public property tests stay within the public API. The refreshed seed is rebuilt
 to the source compiler and checked for bootstrap consistency/native filename
 bytes. Documentation is regenerated with that source-built compiler.

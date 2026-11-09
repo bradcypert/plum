@@ -69,8 +69,21 @@ declare { i64, i1 } @llvm.smul.with.overflow.i64(i64, i64)
 '''
             if tracked:
                 declarations += 'declare void @plum_heap_adopt_origin(ptr, i64, i64)\ndeclare void @plum_heap_free(ptr)\n'
+            # The private helper has an LLVM i8 interface, not C's unsigned-char
+            # ABI. Darwin's C caller expects the callee to zero-extend its return;
+            # LLVM only promises the low eight bits. Widen explicitly in LLVM
+            # before crossing into C, without duplicating the conversion logic.
+            bridge = '''define i64 @growth_test_hex_pair(i64 %hi, i64 %lo) {
+entry:
+  %a = trunc i64 %hi to i8
+  %b = trunc i64 %lo to i8
+  %byte = call i8 @plum_hex_pair(i8 %a, i8 %b)
+  %wide = zext i8 %byte to i64
+  ret i64 %wide
+}
+'''
             source = work / 'runtime.ll'
-            source.write_text(declarations + '\n'.join(constants + definitions) + '\n')
+            source.write_text(declarations + '\n'.join(constants + definitions) + '\n' + bridge)
             for optimization in ('-O0', '-O2'):
                 binary = work / 'native.exe'
                 command = ['clang', optimization, '-g', '-Wno-override-module', '-pthread']
