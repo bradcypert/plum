@@ -2125,3 +2125,33 @@ pub let test_string_repeat_laws (): Unit = {
         assert_eq(text.repeat(-1), "");
     };
 }
+
+// Exercise spelling/diagnostic laws through public APIs, independently of
+// the parser's byte scanner and private range helpers.
+pub let test_int_scan_spelling (): Unit = {
+    let invalid = ["x", " ", "+", "\x00", "é", "🙂", "\n"];
+    let mut seed = 483;
+    for i in 0..180 {
+        seed = next_seed(seed);
+        let value = rand_between(seed, -1000000000, 1000000000);
+        let spelling = value.to_string();
+        seed = next_seed(seed);
+        let zeros = "0".repeat(rand_between(seed, 0, 80));
+        let padded = if value < 0 { "-".concat(zeros).concat(String.slice(spelling, 1, spelling.len())) }
+            else { zeros.concat(spelling) };
+        assert_eq(padded.parse_int().unwrap_or(0 - 9223372036854775807 - 1), value);
+        seed = next_seed(seed);
+        let bad = invalid[rand_between(seed, 0, invalid.len() - 1)];
+        let text = zeros.concat("7").concat(bad).concat("9");
+        match text.parse_int() {
+            Ok(_) => assert(false),
+            Err(message) => assert_eq(message, "expected a digit, found ".concat(bad)),
+        };
+    };
+    for boundary in ["9223372036854775807", "-9223372036854775808"] {
+        match boundary.concat("0x").parse_int() {
+            Ok(_) => assert(false),
+            Err(message) => assert_eq(message, "integer out of range"),
+        };
+    };
+}

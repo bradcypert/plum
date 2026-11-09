@@ -1,0 +1,6 @@
+// The input remains live, preventing its storage from becoming a result cell.
+let main (): Unit = {
+    let input = "0".repeat(65536);
+    assert_eq(input.parse_int().unwrap_or(-1), 0);
+    assert_eq(input.len(), 65536)
+}

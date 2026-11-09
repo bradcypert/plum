@@ -1,0 +1,60 @@
+// Independent character-based oracle. Accumulate negatively for both signs
+// so the positive path differs from the byte parser's arithmetic.
+let ref_digits: Array[String] = ["0", "1", "2", "3", "4", "5", "6", "7", "8", "9"]
+let ref_min (): Int = 0 - 9223372036854775807 - 1
+let ref_acc (units: Array[String]) (i: Int) (value: Int) (negative: Bool): Result[Int, String] =
+    if i >= units.len() { Ok(if negative { value } else { 0 - value }) }
+    else { match Array.find_index(ref_digits, |digit| digit == units[i]) {
+        None => Err("expected a digit, found ".concat(units[i])),
+        Some(digit) => {
+            let limit = if negative { ref_min(()) } else { 0 - 9223372036854775807 };
+            if value < 0 - 922337203685477580 { Err("integer out of range") }
+            else if value * 10 < limit + digit { Err("integer out of range") }
+            else { ref_acc(units, i + 1, value * 10 - digit, negative) }
+        },
+    } }
+let reference (s: String): Result[Int, String] = {
+    let units = chars_of(s);
+    if units.len() == 0 { Err("empty string") } else {
+        let negative = units[0] == "-";
+        let start = if negative { 1 } else { 0 };
+        if start >= units.len() { Err("expected at least one digit") }
+        else { ref_acc(units, start, 0, negative) }
+    }
+}
+let shown (result: Result[Int, String]): String = match result {
+    Ok(value) => "ok:".concat(value.to_string()),
+    Err(message) => "err:".concat(message),
+}
+let raw_byte (byte: Int): String =
+    if byte == 0 { "\x00" } else { unsafe { Bytes.from_array([byte]).as_cstr().as_string() } }
+let compare (text: String): Unit = assert_eq(shown(text.parse_int()), shown(reference(text)))
+let main (): Unit = {
+    for text in [
+        "", "-", "+", "--1", "+1", " 1", "1 ", "-0", "0001", "-0001",
+        "9223372036854775807", "9223372036854775808", "-9223372036854775808", "-9223372036854775809",
+        "999999999999999999999x", "12é34", "12\x0034", "１２", "١٢", "−1"
+    ] { compare(text); };
+    for byte in 0..256 {
+        let raw = raw_byte(byte);
+        assert_eq(raw.as_bytes().to_array(), [byte]);
+        for prefix in ["", "-", "0", "-0", "123", "-123", "922337203685477580", "-922337203685477580"] {
+            for suffix in ["", "x", raw_byte(128), raw_byte(191).concat("x")] {
+                compare(prefix.concat(raw).concat(suffix));
+            };
+        };
+    };
+    let zeros = "0".repeat(65536);
+    assert_eq(zeros.parse_int().unwrap_or(-1), 0);
+    assert_eq(zeros.concat("9223372036854775807").parse_int().unwrap_or(-1), 9223372036854775807);
+    assert_eq("-".concat(zeros).concat("9223372036854775808").parse_int().unwrap_or(0), ref_min(()));
+    let mut source = zeros.concat("7");
+    let bytes = source.as_bytes();
+    let pointer = unsafe { source.as_cstr() };
+    assert_eq(source.parse_int().unwrap_or(0), 7);
+    source = source.concat("x");
+    assert(bytes == zeros.concat("7").as_bytes());
+    assert_eq(unsafe { pointer.as_string() }, zeros.concat("7"));
+    assert_eq(source.len(), 65538);
+    println("integer parsing: limits, errors, all bytes, raw groups, long inputs and aliases")
+}

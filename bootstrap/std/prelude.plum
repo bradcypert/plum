@@ -849,60 +849,50 @@ let plum__join_acc (parts: Array[String]) (sep: String) (i: Int) (acc: Array[Str
 /// reads the right way round.
 pub let Array.join (parts: Array[String]) (sep: String): String = Array.concat_all(plum__join_acc(parts, sep, 0, []))
 
-let plum__string_digit_value (c: String): Result[Int, String] = match c {
-    "0" => Ok(0), "1" => Ok(1), "2" => Ok(2), "3" => Ok(3), "4" => Ok(4),
-    "5" => Ok(5), "6" => Ok(6), "7" => Ok(7), "8" => Ok(8), "9" => Ok(9),
-    _ => Err("expected a digit, found ".concat(c)),
-}
-
 /// Int's minimum, which CANNOT be written as a literal: its
 /// magnitude is out of range as a positive number, so the lexer
 /// rejects `9223372036854775808` before any sign is applied.
 let plum__int_min (u: Unit): Int = 0 - 9223372036854775807 - 1
 
-let plum__string_parse_int_acc (cs: Array[String]) (i: Int) (acc: Int) (any: Bool) (negative: Bool): Result[Int, String] =
-    if i >= cs.len() { if any { Ok(acc) } else { Err("expected at least one digit") } }
-    else { match plum__string_digit_value(cs[i]) {
-        // Range is checked BEFORE multiplying, not after. `*` and
-        // `+` on Int abort the program on overflow (2026-08-21), so
-        // an out-of-range literal used to KILL a program that had
-        // asked for a `Result` precisely so it could handle bad
-        // input -- `String.parse_int("99999999999999999999")` printed
-        // `integer overflow` and exited 1 instead of returning Err.
-        // Before that change the backends wrapped and returned a
-        // garbage number instead, which was no better.
-        //
-        // 922337203685477580 is Int::MAX / 10: one more and `acc * 10`
-        // itself overflows.
-        // Accumulated NEGATIVELY for a negative number, rather
-        // than building the magnitude and negating at the end.
-        // The magnitude of Int's minimum is one larger than its
-        // maximum, so `-9223372036854775808` -- a perfectly good
-        // Int -- overflowed while still positive and came back as
-        // `integer out of range`. Found by a property test on
-        // 2026-08-25; the Rust interpreter had the identical bug,
-        // so `interp-check` agreed with it and saw nothing.
-        Ok(d) => if negative {
-            if acc < 0 - 922337203685477580 { Err("integer out of range") }
-                     else if acc * 10 < plum__int_min(()) + d { Err("integer out of range") }
-                     else { plum__string_parse_int_acc(cs, i + 1, acc * 10 - d, true, negative) }
-        } else if acc > 922337203685477580 { Err("integer out of range") }
-                 else if acc * 10 > 9223372036854775807 - d { Err("integer out of range") }
-                 else { plum__string_parse_int_acc(cs, i + 1, acc * 10 + d, true, negative) },
-        Err(e) => Err(e),
-    } }
+// chars_of groups following continuation bytes with the preceding byte,
+// even for unsafe raw Strings. Only accept a sign/digit as a one-byte unit.
+let plum__string_parse_int_acc (s: String) (bytes: Bytes) (n: Int) (i: Int) (acc: Int) (any: Bool) (negative: Bool): Result[Int, String] =
+    if i >= n { if any { Ok(acc) } else { Err("expected at least one digit") } }
+    else {
+        let byte = bytes_at_raw(bytes, i);
+        if byte < 48 || byte > 57 || (i + 1 < n && plum__is_cont(bytes, i + 1)) {
+            // Accepted prefix units are single ASCII bytes, so i is also
+            // the character index here. Reuse String.slice's grouping for
+            // the first rejected unit instead of adding another decoder.
+            Err("expected a digit, found ".concat(String.slice(s, i, i + 1)))
+        } else {
+            let digit = byte - 48;
+            // Check range before checked multiplication/addition. Negative
+            // accumulation represents Int::MIN without negating its magnitude.
+            if negative {
+                if acc < 0 - 922337203685477580 { Err("integer out of range") }
+                else if acc * 10 < plum__int_min(()) + digit { Err("integer out of range") }
+                else { plum__string_parse_int_acc(s, bytes, n, i + 1, acc * 10 - digit, true, negative) }
+            } else if acc > 922337203685477580 { Err("integer out of range") }
+            else if acc * 10 > 9223372036854775807 - digit { Err("integer out of range") }
+            else { plum__string_parse_int_acc(s, bytes, n, i + 1, acc * 10 + digit, true, negative) }
+        }
+    }
 
 /// Parses a decimal integer, with an optional leading `-`.
 ///
 /// `Err` on anything else, including an empty string, surrounding
 /// spaces, and a number too large for an `Int`. No `0x` or `0b`
 /// prefixes — this is the inverse of `to_string`, not a literal
-/// parser.
+/// parser. Scans ASCII digits directly without a character array;
+/// the first invalid character keeps the existing diagnostic.
 pub let String.parse_int (s: String): Result[Int, String] = {
-    let cs = chars_of(s);
-    if Array.is_empty(cs) { Err("empty string") }
-    else if cs[0] == "-" { plum__string_parse_int_acc(Array.slice(cs, 1, cs.len()), 0, 0, false, true) }
-    else { plum__string_parse_int_acc(cs, 0, 0, false, false) }
+    let bytes = bytes_of_str_raw(s);
+    let n = bytes_len_raw(bytes);
+    if n == 0 { Err("empty string") } else {
+        let negative = bytes_at_raw(bytes, 0) == 45 && (n == 1 || !plum__is_cont(bytes, 1));
+        plum__string_parse_int_acc(s, bytes, n, if negative { 1 } else { 0 }, 0, false, negative)
+    }
 }
 
 /// `String.parse_float` DELEGATES to the JSON number parser below,
