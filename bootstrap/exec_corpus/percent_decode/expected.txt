@@ -1,0 +1,1 @@
+Percent decode: exact errors, byte offsets, all triplets, literal plus, binary bytes and immutable aliases
