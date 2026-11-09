@@ -192,5 +192,8 @@ python3 "$root/bootstrap/block-memory-check.py" "$plum" || fail=1
 python3 "$root/bootstrap/qualified-name-check.py" "$plum" || fail=1
 python3 "$root/bootstrap/symbol-encoding-check.py" "$plum" || fail=1
 
+# No per-digit character or Result cells during integer parsing.
+python3 "$root/bootstrap/parse-int-check.py" "$plum" || fail=1
+
 [ $fail -ne 0 ] && exit 1
 echo "mem-check: the compiler stays within its memory ceilings"

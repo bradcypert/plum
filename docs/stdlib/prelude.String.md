@@ -167,7 +167,8 @@ Parses a decimal integer, with an optional leading `-`.
 `Err` on anything else, including an empty string, surrounding
 spaces, and a number too large for an `Int`. No `0x` or `0b`
 prefixes — this is the inverse of `to_string`, not a literal
-parser.
+parser. Scans ASCII digits directly without a character array;
+the first invalid character keeps the existing diagnostic.
 
 ## `let String.parse_float (s: String): Result[Float, String]`
 
