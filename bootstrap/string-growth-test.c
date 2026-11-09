@@ -19,6 +19,9 @@ extern int64_t plum_str_growth_bytes(int64_t, int64_t);
 extern void *plum_str_concat(void *, void *);
 extern void *plum_str_repeat(void *, int64_t);
 extern void *plum_bytes_to_hex(void *);
+extern void *plum_str_join(void *, void *);
+extern void *plum_str_concat_all(void *);
+extern int64_t plum_str_join_length(void *, void *);
 extern int64_t plum_str_repeat_length(int64_t, int64_t);
 extern void *plum_str_concat_reuse(void *, void *);
 extern void plum_rel_str(void *);
@@ -275,6 +278,53 @@ static void hexadecimal(void) {
     CHECK(field(2) == 0 && field(3) == 0);
 #endif
 }
+static void joining(void) {
+    const char chunk[] = "a\0\xc3\xa9";
+    void *source = text(chunk, 4, 1024), *blank = text("", 0, 128);
+    struct { int64_t rc, length; void *items[4]; } parts = {1, 1, {source}};
+    int64_t n = plum_n_alloc, bytes = plum_b_alloc, live = field(3), origins = origin_field(3);
+    attempts = 0;
+    void *out = plum_str_join(&parts, source); /* one item ignores its separator */
+    CHECK(out != source && attempts == 1 && requests[0] == 21);
+    CHECK(plum_n_alloc == n + 1 && plum_b_alloc == bytes + 21);
+    CHECK(*(int64_t *)source == 1 && parts.rc == 1 && parts.items[0] == source);
+    value(out, chunk, 4); value(source, chunk, 4);
+#ifdef PLUM_HEAP_STATS
+    CHECK(field(3) == live + 21 && origin_field(3) == origins + 21);
+#else
+    (void)origins;
+#endif
+    plum_rel_str(out); CHECK(field(3) == live);
+    parts.length = 4; parts.items[1] = blank; parts.items[2] = source; parts.items[3] = blank;
+    plum_rc_inc(source); plum_rc_inc(blank); /* duplicate array edges */
+    char expected[20]; for (int i = 0; i < 5; ++i) memcpy(expected + 4*i, chunk, 4);
+    attempts = 0;
+    out = plum_str_join(&parts, source); /* separator aliases an array element */
+    CHECK(attempts == 1 && requests[0] == 37);
+    CHECK(parts.rc == 1 && parts.length == 4 && *(int64_t *)source == 2 && *(int64_t *)blank == 2);
+    value(out, expected, 20); value(source, chunk, 4); value(blank, "", 0);
+    plum_rel_str(out);
+    out = plum_str_concat_all(&parts); value(out, expected, 8); plum_rel_str(out);
+    parts.items[0] = blank; parts.items[2] = blank;
+    n = plum_n_alloc; attempts = 0;
+    out = plum_str_join(&parts, blank); value(out, "", 0); plum_rel_str(out);
+    CHECK(plum_n_alloc == n && attempts == 0);
+    parts.length = 0;
+    /* Empty array does not inspect an unused separator or item payload. */
+    out = plum_str_join(&parts, NULL); value(out, "", 0); plum_rel_str(out);
+    out = plum_str_concat_all(&parts); value(out, "", 0); plum_rel_str(out);
+    CHECK(plum_n_alloc == n && attempts == 0);
+    /* Header-only values test the exact boundary without enormous allocations. */
+    int64_t huge[] = {-1, INT64_MAX - 17};
+    parts.length = 1; parts.items[0] = huge;
+    CHECK(plum_str_join_length(&parts, blank) == INT64_MAX - 17);
+    parts.length = 2; parts.items[0] = blank; parts.items[1] = blank;
+    CHECK(plum_str_join_length(&parts, huge) == INT64_MAX - 17);
+    plum_rel_str(source); plum_rel_str(source); plum_rel_str(blank); plum_rel_str(blank);
+#ifdef PLUM_HEAP_STATS
+    CHECK(field(2) == 0 && field(3) == 0);
+#endif
+}
 int main(int argc, char **argv) {
     if (argc > 1) {
         if (!strcmp(argv[1], "negative")) plum_str_concat_length(-1, 0);
@@ -309,6 +359,25 @@ int main(int argc, char **argv) {
             /* Header only: allocation failure must precede every input read. */
             int64_t input[] = {1, 3}; failures = 1; plum_bytes_to_hex(input);
         }
+        else if (!strncmp(argv[1], "join-", 5) || !strcmp(argv[1], "concat-all-oom")) {
+            int64_t zero[] = {-1, 0}, one[] = {-1, 1}, huge[] = {-1, INT64_MAX - 17};
+            struct { int64_t rc, length; void *items[3]; } parts = {-1, 1, {one, zero, zero}};
+            void *sep = zero;
+            if (!strcmp(argv[1], "join-negative-count")) parts.length = -1;
+            else if (!strcmp(argv[1], "join-large-count")) parts.length = 1152921504606846974LL;
+            else if (!strcmp(argv[1], "join-negative-part")) one[1] = -1;
+            else if (!strcmp(argv[1], "join-header-overflow")) one[1] = INT64_MAX - 16;
+            else if (!strcmp(argv[1], "join-sum-overflow")) { parts.length = 2; parts.items[1] = one; one[1] = (INT64_MAX - 17) / 2 + 20; }
+            else if (!strcmp(argv[1], "join-negative-separator")) { parts.length = 2; huge[1] = -1; sep = huge; }
+            else if (!strcmp(argv[1], "join-product-overflow")) { parts.length = 3; huge[1] = INT64_MAX; sep = huge; }
+            else if (!strcmp(argv[1], "join-separator-header-overflow")) { parts.length = 2; huge[1] = INT64_MAX - 16; sep = huge; }
+            else if (!strcmp(argv[1], "join-combined-overflow")) { parts.length = 2; sep = huge; }
+            else if (!strcmp(argv[1], "join-oom")) failures = 1;
+            else if (!strcmp(argv[1], "concat-all-oom")) { failures = 1; plum_str_concat_all(&parts); return 4; }
+            else return 3;
+            /* OOM cases have no byte payload: failure must precede copying. */
+            plum_str_join(&parts, sep);
+        }
         else if (!strcmp(argv[1], "oom")) { failures = 2; plum_alloc_preferred(33, 80, 1); }
         else if (!strcmp(argv[1], "exact-oom")) { failures = 1; plum_alloc_preferred(33, 33, 1); }
         else return 3;
@@ -316,6 +385,6 @@ int main(int argc, char **argv) {
     }
     arithmetic(); fallback(); ownership(); growth_fallback(); snapshots();
     for (int steps = 512; steps <= 4096; steps *= 2) traffic(steps);
-    repetition(); hexadecimal();
+    repetition(); hexadecimal(); joining();
     return 0;
 }

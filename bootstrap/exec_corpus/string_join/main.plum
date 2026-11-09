@@ -1,0 +1,48 @@
+let reference (parts: Array[String]) (sep: String): String = {
+    let mut out = "";
+    for i in 0..parts.len() {
+        if i > 0 { out = out.concat(sep); };
+        out = out.concat(parts[i]);
+    };
+    out
+}
+let main (): Unit = {
+    let raw = unsafe { Bytes.from_array([255, 128, 65]).as_cstr().as_string() };
+    for parts in [[], [""], ["a"], ["", ""], ["", "a", ""], ["a", "", "b"], ["aé", "\x00", "🙂", "", raw]] {
+        for sep in ["", ",", "é\x00🙂", raw, "<>".repeat(1024)] {
+            assert_eq(parts.join(sep).as_bytes().to_array(), reference(parts, sep).as_bytes().to_array());
+        };
+        assert_eq(Array.concat_all(parts), reference(parts, ""));
+    };
+    let mut source = "abcé🙂".repeat(50);
+    let mut parts = [source, "", source];
+    let array_alias = parts;
+    let mut sep = source;
+    let input_view = unsafe { sep.as_cstr() };
+    let mut joined = parts.join(sep);
+    let saved = joined;
+    let bytes = joined.as_bytes();
+    let pointer = unsafe { joined.as_cstr() };
+    source = source.concat("changed");
+    sep = sep.concat("separator");
+    parts = parts.set(0, "replacement");
+    joined = joined.concat("tail");
+    let original = "abcé🙂".repeat(50);
+    let want = original.repeat(4);
+    assert_eq(saved, want);
+    assert_eq(bytes.to_array(), want.as_bytes().to_array());
+    assert_eq(unsafe { pointer.as_string() }, want);
+    assert_eq(unsafe { input_view.as_string() }, original);
+    assert_eq(array_alias[0], original);
+    assert_eq(array_alias[2], original);
+    assert_eq(parts[0], "replacement");
+    assert_eq(source, original.concat("changed"));
+    assert_eq(sep, original.concat("separator"));
+    assert_eq(joined, want.concat("tail"));
+    let mut many = [];
+    for i in 0..32768 { many = many.push("é\x00🙂"); };
+    assert_eq(many.join("|").as_bytes().to_array(), "é\x00🙂|".repeat(32767).concat("é\x00🙂").as_bytes().to_array());
+    assert_eq(Array.concat_all(many), "é\x00🙂".repeat(32768));
+    assert_eq(many.len(), 32768);
+    println("String join: exact bytes, separators, empty parts and immutable aliases")
+}

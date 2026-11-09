@@ -1,0 +1,6 @@
+// Static inputs isolate construction traffic; every result is 157 bytes.
+let main (): Unit = {
+    let parts = ["aé", "\x00", "🙂", "", "aé", "\x00", "🙂", "", "aé", "\x00", "🙂", "", "aé", "\x00", "🙂", "", "aé", "\x00", "🙂", "", "aé", "\x00", "🙂", "", "aé", "\x00", "🙂", "", "aé", "\x00", "🙂", ""];
+    for i in 0..1000 { assert_eq(parts.join("<\x00>").len(), 157); };
+    assert_eq(parts.len(), 32)
+}
