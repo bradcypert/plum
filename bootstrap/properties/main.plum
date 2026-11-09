@@ -2205,3 +2205,33 @@ pub let test_string_join_laws (): Unit = {
         assert_eq(actual, left.join(sep).concat(middle).concat(right.join(sep)));
     };
 }
+
+// Encoding is a byte homomorphism; concatenation cannot change escape boundaries.
+pub let test_percent_encode_laws (): Unit = {
+    let mut seed = 486;
+    let unreserved = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-._~";
+    for trial in 0..220 {
+        seed = next_seed(seed);
+        let a = rand_bytes(seed, rand_between(seed, 0, 96));
+        seed = next_seed(seed);
+        let b = rand_bytes(seed, rand_between(seed, 0, 96));
+        let joined = a.concat(b);
+        let encoded = Encoding.percent_encode(joined);
+        assert_eq(encoded, Encoding.percent_encode(a).concat(Encoding.percent_encode(b)));
+        let mut expected_length = 0;
+        for value in joined.to_array() {
+            let plain = (value >= 65 && value <= 90) || (value >= 97 && value <= 122)
+                || (value >= 48 && value <= 57) || value == 45 || value == 46 || value == 95 || value == 126;
+            expected_length = expected_length + (if plain { 1 } else { 3 });
+        };
+        assert_eq(encoded.len(), expected_length);
+        assert(!encoded.contains("+"));
+        match Encoding.percent_decode(encoded) {
+            Ok(decoded) => assert_eq(decoded.to_array(), joined.to_array()),
+            Err(_) => assert(false),
+        };
+    };
+    for n in [0, 1, 2, 17, 128] {
+        assert_eq(Encoding.percent_encode(unreserved.repeat(n).as_bytes()), unreserved.repeat(n));
+    };
+}

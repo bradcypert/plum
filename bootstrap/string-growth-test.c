@@ -19,6 +19,8 @@ extern int64_t plum_str_growth_bytes(int64_t, int64_t);
 extern void *plum_str_concat(void *, void *);
 extern void *plum_str_repeat(void *, int64_t);
 extern void *plum_bytes_to_hex(void *);
+extern void *plum_bytes_percent_encode(void *);
+extern int64_t plum_str_added_length(int64_t, int64_t, const char *, int64_t);
 extern void *plum_str_join(void *, void *);
 extern void *plum_str_concat_all(void *);
 extern int64_t plum_str_join_length(void *, void *);
@@ -325,6 +327,45 @@ static void joining(void) {
     CHECK(field(2) == 0 && field(3) == 0);
 #endif
 }
+static void percent_encoding(void) {
+    char input[256], expected[637];
+    const char *allowed = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-._~";
+    int size = 0;
+    for (int i = 0; i < 256; ++i) {
+        input[i] = (char)i;
+        if (i && strchr(allowed, i)) expected[size++] = (char)i;
+        else { CHECK(snprintf(expected + size, 4, "%%%02X", i) == 3); size += 3; }
+    }
+    CHECK(size == 636); expected[size] = 0;
+    void *source = text(input, 256, 4096);
+    int64_t n = plum_n_alloc, bytes = plum_b_alloc, live = field(3), origins = origin_field(3);
+    attempts = 0;
+    void *out = plum_bytes_percent_encode(source);
+    CHECK(out != source && attempts == 1 && requests[0] == 653);
+    CHECK(plum_n_alloc == n + 1 && plum_b_alloc == bytes + 653 && *(int64_t *)source == 1);
+    value(out, expected, 636); value(source, input, 256);
+#ifdef PLUM_HEAP_STATS
+    CHECK(field(3) == live + 653 && origin_field(3) == origins + 653);
+#else
+    (void)origins;
+#endif
+    plum_rel_str(out); CHECK(field(3) == live); plum_rel_str(source);
+    source = text(allowed, (int64_t)strlen(allowed), 4096);
+    n = plum_n_alloc; bytes = plum_b_alloc; live = field(3); attempts = 0;
+    out = plum_bytes_percent_encode(source);
+    CHECK(out == source && *(int64_t *)source == 2 && attempts == 0);
+    CHECK(plum_n_alloc == n && plum_b_alloc == bytes && field(3) == live);
+    plum_rel_str(source); /* Result keeps the entire original request alive. */
+    CHECK(*(int64_t *)out == 1 && field(3) == live);
+    value(out, allowed, (int64_t)strlen(allowed)); plum_rel_str(out);
+    source = text("", 0, 4096); n = plum_n_alloc; attempts = 0;
+    out = plum_bytes_percent_encode(source);
+    CHECK(out != source && *(int64_t *)source == 1 && plum_n_alloc == n && attempts == 0);
+    value(out, "", 0); plum_rel_str(source); plum_rel_str(out);
+#ifdef PLUM_HEAP_STATS
+    CHECK(field(2) == 0 && field(3) == 0);
+#endif
+}
 int main(int argc, char **argv) {
     if (argc > 1) {
         if (!strcmp(argv[1], "negative")) plum_str_concat_length(-1, 0);
@@ -378,6 +419,21 @@ int main(int argc, char **argv) {
             /* OOM cases have no byte payload: failure must precede copying. */
             plum_str_join(&parts, sep);
         }
+        else if (!strcmp(argv[1], "percent-negative-length")) {
+            int64_t input[] = {1, -1}; plum_bytes_percent_encode(input);
+        }
+        else if (!strcmp(argv[1], "percent-large-length")) {
+            int64_t input[] = {1, INT64_MAX}; plum_bytes_percent_encode(input);
+        }
+        else if (!strcmp(argv[1], "percent-sum-overflow") || !strcmp(argv[1], "percent-header-overflow")) {
+            const char error[] = "Plum String: invalid percent-encoding size\n";
+            int64_t length = !strcmp(argv[1], "percent-sum-overflow") ? INT64_MAX - 2 : INT64_MAX - 18;
+            plum_str_added_length(length, 3, error, (int64_t)sizeof(error) - 1);
+        }
+        else if (!strcmp(argv[1], "percent-oom")) {
+            struct { int64_t rc, length; char data[2]; } input = {1, 1, "%"};
+            failures = 1; plum_bytes_percent_encode(&input);
+        }
         else if (!strcmp(argv[1], "oom")) { failures = 2; plum_alloc_preferred(33, 80, 1); }
         else if (!strcmp(argv[1], "exact-oom")) { failures = 1; plum_alloc_preferred(33, 33, 1); }
         else return 3;
@@ -385,6 +441,6 @@ int main(int argc, char **argv) {
     }
     arithmetic(); fallback(); ownership(); growth_fallback(); snapshots();
     for (int steps = 512; steps <= 4096; steps *= 2) traffic(steps);
-    repetition(); hexadecimal(); joining();
+    repetition(); hexadecimal(); joining(); percent_encoding();
     return 0;
 }

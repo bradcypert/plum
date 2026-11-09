@@ -1,0 +1,95 @@
+{
+  "method": "Identical final sources; actual before and refreshed seed-to-source compilers. One warmup and two samples per emission mode. Encoder and single-source Encoding embedding change measured together. Requested traffic is cumulative; RSS is separate. No timing claim.",
+  "binaries": {
+    "before": {
+      "path": "/tmp/plum-join-final",
+      "sha256": "dabd54dd599427606086e7e831f119bde174c47c9c4a6ce602994d356169dd55"
+    },
+    "after": {
+      "path": "/tmp/plum-percent-final",
+      "sha256": "9c0f2f69b5aae3a6f1eee9c9200fb9a2319be2824ba31503a83da49618fb5f81"
+    }
+  },
+  "results": [
+    {
+      "case": "emit-compiler",
+      "label": "after",
+      "sample": 1,
+      "allocated_bytes": 906459610,
+      "allocations": 15127362,
+      "peak_rss_kib": 116768,
+      "stdout_bytes": 27383771,
+      "stdout_sha256": "5abc509f96a51c8b44bc9e8b35d02bf384243467e6d8354affa9a2af7ddde931"
+    },
+    {
+      "case": "emit-compiler",
+      "label": "before",
+      "sample": 1,
+      "allocated_bytes": 907097044,
+      "allocations": 15139952,
+      "peak_rss_kib": 116776,
+      "stdout_bytes": 27392518,
+      "stdout_sha256": "30579d0cc1de37e5e606edc12c3559b9953d5058a4872b2e5cf529ad00283c07"
+    },
+    {
+      "case": "emit-compiler-debug",
+      "label": "after",
+      "sample": 1,
+      "allocated_bytes": 1072915462,
+      "allocations": 18354766,
+      "peak_rss_kib": 131096,
+      "stdout_bytes": 32334298,
+      "stdout_sha256": "d39364445877716e6afad733770550a1c2196e07afab8391e8ebbaa7c04d540e"
+    },
+    {
+      "case": "emit-compiler-debug",
+      "label": "before",
+      "sample": 1,
+      "allocated_bytes": 1073382207,
+      "allocations": 18365050,
+      "peak_rss_kib": 131412,
+      "stdout_bytes": 32347582,
+      "stdout_sha256": "036c3afd8e2cf9bad9c9ec7837e4525826833bbe07a3671be9fe160dfcf6742f"
+    },
+    {
+      "case": "emit-compiler",
+      "label": "before",
+      "sample": 2,
+      "allocated_bytes": 907097045,
+      "allocations": 15139952,
+      "peak_rss_kib": 117076,
+      "stdout_bytes": 27392518,
+      "stdout_sha256": "30579d0cc1de37e5e606edc12c3559b9953d5058a4872b2e5cf529ad00283c07"
+    },
+    {
+      "case": "emit-compiler",
+      "label": "after",
+      "sample": 2,
+      "allocated_bytes": 906530294,
+      "allocations": 15128877,
+      "peak_rss_kib": 116140,
+      "stdout_bytes": 27383771,
+      "stdout_sha256": "5abc509f96a51c8b44bc9e8b35d02bf384243467e6d8354affa9a2af7ddde931"
+    },
+    {
+      "case": "emit-compiler-debug",
+      "label": "before",
+      "sample": 2,
+      "allocated_bytes": 1073493363,
+      "allocations": 18366025,
+      "peak_rss_kib": 130916,
+      "stdout_bytes": 32347582,
+      "stdout_sha256": "036c3afd8e2cf9bad9c9ec7837e4525826833bbe07a3671be9fe160dfcf6742f"
+    },
+    {
+      "case": "emit-compiler-debug",
+      "label": "after",
+      "sample": 2,
+      "allocated_bytes": 1072915462,
+      "allocations": 18354766,
+      "peak_rss_kib": 131556,
+      "stdout_bytes": 32334298,
+      "stdout_sha256": "d39364445877716e6afad733770550a1c2196e07afab8391e8ebbaa7c04d540e"
+    }
+  ]
+}

@@ -1,0 +1,1 @@
+Percent encode: all bytes, uppercase escapes, identity sharing and immutable aliases

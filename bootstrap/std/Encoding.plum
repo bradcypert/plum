@@ -179,31 +179,8 @@ pub let base64_url_decode (s: String): Result[Bytes, String] = base64_decode(s)
 
 // --- Percent-encoding ---
 
-// See `percent_encode` for the alphabet and the `+` decision.
-let is_unreserved (c: Int): Bool =
-    (c >= 65 && c <= 90) || (c >= 97 && c <= 122) || (c >= 48 && c <= 57)
-        || c == 45 || c == 46 || c == 95 || c == 126
-
-/// A 0-15 value as the ASCII byte of its uppercase hex digit.
-let hex_upper_byte (v: Int): Int = if v < 10 { 48 + v } else { 65 + v - 10 }
-
-/// Builds the output as BYTES rather than as characters, which is
-/// what lets an unreserved byte pass straight through: turning one
-/// back into a one-character String would need an ASCII table to
-/// index, and the table would exist only to undo a conversion that
-/// never had to happen.
-let pct_acc (b: Bytes) (i: Int) (n: Int) (acc: Array[Int]): Array[Int] =
-    if i >= n { acc }
-    else {
-        let c = byte_at(b, i);
-        if is_unreserved(c) { pct_acc(b, i + 1, n, acc.push(c)) }
-        else { pct_acc(b, i + 1, n, acc.push(37).push(hex_upper_byte(c / 16)).push(hex_upper_byte(c % 16))) }
-    }
-
-// The `Err` arm below is unreachable by construction: every byte
-// emitted is either an unreserved character or one of `%0-9A-F`, all
-// ASCII and therefore valid UTF-8. Written as a `match` rather than an
-// unwrap so the impossible case is visible rather than asserted.
+// Runtime constructor borrows input, sharing unchanged ASCII or filling a new cell.
+let plum__percent_encode_raw (b: Bytes): String = ""
 
 /// Percent-encodes bytes for use in a URL, RFC 3986.
 ///
@@ -215,11 +192,9 @@ let pct_acc (b: Bytes) (i: Int) (n: Int) (acc: Array[Int]): Array[Int] =
 /// HTML form bodies (`application/x-www-form-urlencoded`), not to
 /// URLs, and a decoder that accepted both would turn a literal `+` in
 /// a query value into a space.
-pub let percent_encode (b: Bytes): String =
-    match Bytes.as_string(Bytes.from_array(pct_acc(b, 0, b.len(), []))) {
-        Ok(s) => s,
-        Err(e) => e,
-    }
+/// Unchanged unreserved ASCII shares the input storage. Otherwise the
+/// result uses one exact-sized allocation; empty input uses static storage.
+pub let percent_encode (b: Bytes): String = plum__percent_encode_raw(b)
 
 let pct_decode_acc (b: Bytes) (i: Int) (n: Int) (acc: Array[Int]): Result[Array[Int], String] =
     if i >= n { Ok(acc) }
