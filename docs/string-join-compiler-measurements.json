@@ -1,0 +1,95 @@
+{
+  "method": "Identical final source tree, before and refreshed seed-to-source compilers. compiler-profile.py: one warmup and two recorded samples per mode. Requested traffic is cumulative; RSS is a separate process measure. No timing claim.",
+  "binaries": {
+    "before": {
+      "path": "/tmp/plum-hex-final",
+      "sha256": "01013d4211634b214ae5148ebeef301759201693297c04dc8cb8774689f82a12"
+    },
+    "after": {
+      "path": "/tmp/plum-join-final",
+      "sha256": "dabd54dd599427606086e7e831f119bde174c47c9c4a6ce602994d356169dd55"
+    }
+  },
+  "results": [
+    {
+      "case": "emit-compiler",
+      "label": "after",
+      "sample": 1,
+      "allocated_bytes": 909024347,
+      "allocations": 15159342,
+      "peak_rss_kib": 116284,
+      "stdout_bytes": 27394059,
+      "stdout_sha256": "fcd1a6c54151384b451ed5510e9d4e784dfa03cc3b296a7425414761e5718371"
+    },
+    {
+      "case": "emit-compiler",
+      "label": "before",
+      "sample": 1,
+      "allocated_bytes": 911553626,
+      "allocations": 15216027,
+      "peak_rss_kib": 117220,
+      "stdout_bytes": 27397677,
+      "stdout_sha256": "2e39690301b63db5e2b157cf3a860fc8547bdc13cb52ce858a360ccfe68374e0"
+    },
+    {
+      "case": "emit-compiler-debug",
+      "label": "after",
+      "sample": 1,
+      "allocated_bytes": 1075622540,
+      "allocations": 18394959,
+      "peak_rss_kib": 131176,
+      "stdout_bytes": 32346015,
+      "stdout_sha256": "0b67577fb4a962bd176550ef84b1cd3af4a7b4ac51d7e98f4b25bf0b0b3300e9"
+    },
+    {
+      "case": "emit-compiler-debug",
+      "label": "before",
+      "sample": 1,
+      "allocated_bytes": 1078196051,
+      "allocations": 18449142,
+      "peak_rss_kib": 132012,
+      "stdout_bytes": 32351335,
+      "stdout_sha256": "7cc9610bc64302acd29991aa103bb1e392fc91e230fc6be56f8ac4078bfcb22b"
+    },
+    {
+      "case": "emit-compiler",
+      "label": "before",
+      "sample": 2,
+      "allocated_bytes": 911553625,
+      "allocations": 15216027,
+      "peak_rss_kib": 116700,
+      "stdout_bytes": 27397677,
+      "stdout_sha256": "2e39690301b63db5e2b157cf3a860fc8547bdc13cb52ce858a360ccfe68374e0"
+    },
+    {
+      "case": "emit-compiler",
+      "label": "after",
+      "sample": 2,
+      "allocated_bytes": 909024347,
+      "allocations": 15159342,
+      "peak_rss_kib": 116872,
+      "stdout_bytes": 27394059,
+      "stdout_sha256": "fcd1a6c54151384b451ed5510e9d4e784dfa03cc3b296a7425414761e5718371"
+    },
+    {
+      "case": "emit-compiler-debug",
+      "label": "before",
+      "sample": 2,
+      "allocated_bytes": 1078196051,
+      "allocations": 18449142,
+      "peak_rss_kib": 131356,
+      "stdout_bytes": 32351335,
+      "stdout_sha256": "7cc9610bc64302acd29991aa103bb1e392fc91e230fc6be56f8ac4078bfcb22b"
+    },
+    {
+      "case": "emit-compiler-debug",
+      "label": "after",
+      "sample": 2,
+      "allocated_bytes": 1075622539,
+      "allocations": 18394959,
+      "peak_rss_kib": 131116,
+      "stdout_bytes": 32346015,
+      "stdout_sha256": "0b67577fb4a962bd176550ef84b1cd3af4a7b4ac51d7e98f4b25bf0b0b3300e9"
+    }
+  ]
+}

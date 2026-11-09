@@ -82,12 +82,11 @@ associative, so a different order can give a different last digit.
 
 ## `let Array.join (parts: Array[String]) (sep: String): String`
 
-Namespaced under `Array`, not `String`, since 2026-08-25: both
-take an `Array[String]`. `String.` used to mean two different
-things, "first parameter is a String" for most of it and
-"produces a String" for these two, and `x.f(a)` = `T.f(x, a)`
-needs it to mean exactly one. `parts.join(", ")` now works and
-reads the right way round.
+Joins parts in order with `sep` between adjacent entries. Empty parts
+still contribute separator boundaries.
+
+Copies parts and separators directly into one exact-sized allocation.
+Empty output uses shared static storage.
 
 ## `let Array.sort_by (arr: Array[T]) (le: (T, T) -> Bool): Array[T]`
 
@@ -114,9 +113,11 @@ Pairs elements positionally, stopping at the shorter array.
 
 ## `let Array.concat_all (parts: Array[String]): String`
 
-Joins in ONE allocation. Building a large string by repeated
-`.concat` is quadratic; this is what the compiler's own emitter
-uses for anything that accumulates.
+Concatenates parts in order, without a separator. The compiler's own
+emitter uses this for collected output fragments.
+
+Uses checked sizes and one exact-sized allocation for nonempty output;
+empty output uses shared static storage.
 
 ## `let Array.sort_string (arr: Array[String]): Array[String]`
 

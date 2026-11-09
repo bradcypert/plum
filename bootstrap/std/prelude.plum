@@ -831,20 +831,15 @@ let plum__bytes_to_hex_raw (b: Bytes): String = ""
 /// an empty result uses shared static storage.
 pub let Bytes.to_hex (b: Bytes): String = plum__bytes_to_hex_raw(b)
 
-/// The one string operation that had NEITHER form: there was no way
-/// to join an array of strings with a separator at all.
-let plum__join_acc (parts: Array[String]) (sep: String) (i: Int) (acc: Array[String]): Array[String] =
-    if i >= parts.len() { acc }
-    else if i == 0 { plum__join_acc(parts, sep, 1, acc.push(parts[0])) }
-    else { plum__join_acc(parts, sep, i + 1, acc.push(sep).push(parts[i])) }
+// The runtime plans and fills a known-size result while borrowing all inputs.
+let plum__string_join_raw (parts: Array[String]) (sep: String): String = ""
 
-/// Namespaced under `Array`, not `String`, since 2026-08-25: both
-/// take an `Array[String]`. `String.` used to mean two different
-/// things, "first parameter is a String" for most of it and
-/// "produces a String" for these two, and `x.f(a)` = `T.f(x, a)`
-/// needs it to mean exactly one. `parts.join(", ")` now works and
-/// reads the right way round.
-pub let Array.join (parts: Array[String]) (sep: String): String = Array.concat_all(plum__join_acc(parts, sep, 0, []))
+/// Joins parts in order with `sep` between adjacent entries. Empty parts
+/// still contribute separator boundaries.
+///
+/// Copies parts and separators directly into one exact-sized allocation.
+/// Empty output uses shared static storage.
+pub let Array.join (parts: Array[String]) (sep: String): String = plum__string_join_raw(parts, sep)
 
 /// Int's minimum, which CANNOT be written as a literal: its
 /// magnitude is out of range as a positive number, so the lexer
@@ -1263,9 +1258,11 @@ pub let Rng.choice[T] (r: Rng) (xs: Array[T]): (Rng, Option[T]) =
 /// needing a `.runes()` decoder.
 let string_concat_all_raw (parts: Array[String]): String = ""
 
-/// Joins in ONE allocation. Building a large string by repeated
-/// `.concat` is quadratic; this is what the compiler's own emitter
-/// uses for anything that accumulates.
+/// Concatenates parts in order, without a separator. The compiler's own
+/// emitter uses this for collected output fragments.
+///
+/// Uses checked sizes and one exact-sized allocation for nonempty output;
+/// empty output uses shared static storage.
 pub let Array.concat_all (parts: Array[String]): String = string_concat_all_raw(parts)
 
 /// Decimal text to the NEAREST double, via libc `strtod`.

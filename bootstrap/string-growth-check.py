@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Check actual emitted String growth/repetition/hex, failure paths, ownership and accounting."""
+"""Check actual emitted String growth/repetition/hex/join, failure paths, ownership and accounting."""
 import argparse
 import os
 from pathlib import Path
@@ -27,7 +27,7 @@ def main():
     with tempfile.TemporaryDirectory(prefix='plum-string-growth-') as work:
         work = Path(work)
         project = root / 'bootstrap/exec_corpus/string_growth'
-        for project_name in ('string_growth', 'string_repeat', 'bytes_hex'):
+        for project_name in ('string_growth', 'string_repeat', 'bytes_hex', 'string_join'):
             project = root / 'bootstrap/exec_corpus' / project_name
             for release in (False, True):
                 for tracked in (False, True):
@@ -44,7 +44,7 @@ def main():
             ir = run([compiler, 'emit-llvm', project, *flags])
             # Extract definitions emitted by this compiler, not a copied IR
             # implementation. Inject failure only at the private malloc seam.
-            names = ['plum_alloc_preferred', 'plum_str_scaled_length', 'plum_bytes_to_hex', 'plum_str_repeat_length', 'plum_str_repeat', 'plum_str_concat_length',
+            names = ['plum_alloc_preferred', 'plum_str_join_length', 'plum_str_join', 'plum_str_concat_all', 'plum_str_scaled_length', 'plum_bytes_to_hex', 'plum_str_repeat_length', 'plum_str_repeat', 'plum_str_concat_length',
                      'plum_str_growth_bytes', 'plum_str_concat_copy', 'plum_str_concat',
                      'plum_str_concat_reuse', 'plum_rel_str', 'plum_rc_inc', 'plum_free']
             definitions = []
@@ -81,13 +81,13 @@ declare { i64, i1 } @llvm.smul.with.overflow.i64(i64, i64)
                 run(command + [source, root / 'bootstrap/string-growth-test.c',
                                root / 'native_stdlib/memory_shim.c', '-o', binary])
                 print(f'{optimization} tracked={tracked}: {run([binary]).strip()}')
-                for case in ('negative', 'negative-b', 'overflow', 'header-overflow', 'concat-negative', 'reuse-overflow', 'oom', 'exact-oom', 'repeat-negative-length', 'repeat-overflow', 'repeat-header-overflow', 'repeat-oom', 'hex-negative-length', 'hex-overflow', 'hex-header-overflow', 'hex-oom'):
+                for case in ('negative', 'negative-b', 'overflow', 'header-overflow', 'concat-negative', 'reuse-overflow', 'oom', 'exact-oom', 'repeat-negative-length', 'repeat-overflow', 'repeat-header-overflow', 'repeat-oom', 'hex-negative-length', 'hex-overflow', 'hex-header-overflow', 'hex-oom', 'join-negative-count', 'join-large-count', 'join-negative-part', 'join-header-overflow', 'join-sum-overflow', 'join-negative-separator', 'join-product-overflow', 'join-separator-header-overflow', 'join-combined-overflow', 'join-oom', 'concat-all-oom'):
                     r = subprocess.run([str(binary), case], cwd=root, env=env,
                                        capture_output=True, text=True, timeout=30)
                     message = 'cannot allocate storage' if 'oom' in case else 'invalid hexadecimal size' if case.startswith('hex-') else 'invalid repetition size' if case.startswith('repeat-') else 'invalid concatenation size'
                     if r.returncode != 1 or r.stderr != f'Plum String: {message}\n':
                         raise RuntimeError(f'{case}: wrong fatal path ({r.returncode})\n{r.stdout}{r.stderr}')
-    print('string-growth-check: public aliases, emitted arithmetic, growth/repetition/hex, failure fallback and accounting passed')
+    print('string-growth-check: public aliases, emitted arithmetic, growth/repetition/hex/join, failure fallback and accounting passed')
 
 
 if __name__ == '__main__':

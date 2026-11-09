@@ -2174,3 +2174,34 @@ pub let test_bytes_hex_laws (): Unit = {
     };
     assert_eq(Bytes.from_array([0, 128, 255]).to_hex(), "0080ff");
 }
+
+// Joining preserves byte order, exact lengths and the boundary separator.
+pub let test_string_join_laws (): Unit = {
+    let alphabet = ["", "a", "é", "🙂", "\x00", "e\u{301}", "\n"];
+    let mut seed = 485;
+    for trial in 0..220 {
+        seed = next_seed(seed);
+        let n = rand_between(seed, 0, 40);
+        let mut parts = [];
+        let mut expected = "";
+        let sep = alphabet[rand_between(seed, 0, alphabet.len() - 1)];
+        let mut sum = 0;
+        for i in 0..n {
+            seed = next_seed(seed);
+            let text = alphabet[rand_between(seed, 0, alphabet.len() - 1)];
+            parts = parts.push(text);
+            if i > 0 { expected = expected.concat(sep); };
+            expected = expected.concat(text);
+            sum = sum + text.len();
+        };
+        let actual = parts.join(sep);
+        assert_eq(actual, expected);
+        assert_eq(actual.len(), sum + (if n > 0 { n - 1 } else { 0 }) * sep.len());
+        assert_eq(parts.join(""), Array.concat_all(parts));
+        let k = rand_between(next_seed(seed), 0, n);
+        let left = Array.slice(parts, 0, k);
+        let right = Array.slice(parts, k, n);
+        let middle = if k > 0 && k < n { sep } else { "" };
+        assert_eq(actual, left.join(sep).concat(middle).concat(right.join(sep)));
+    };
+}
