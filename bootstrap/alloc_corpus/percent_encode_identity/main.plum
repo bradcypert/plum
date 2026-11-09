@@ -1,0 +1,4 @@
+use Encoding;
+let main (): Unit = {
+    for i in 0..1000 { assert_eq(Encoding.percent_encode("azAZ09-._~".as_bytes()), "azAZ09-._~"); };
+}

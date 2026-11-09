@@ -71,6 +71,8 @@ output comparable byte for byte.
 HTML form bodies (`application/x-www-form-urlencoded`), not to
 URLs, and a decoder that accepted both would turn a literal `+` in
 a query value into a space.
+Unchanged unreserved ASCII shares the input storage. Otherwise the
+result uses one exact-sized allocation; empty input uses static storage.
 
 ## `let percent_decode (s: String): Result[Bytes, String]`
 
