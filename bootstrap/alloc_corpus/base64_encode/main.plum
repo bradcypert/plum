@@ -1,0 +1,11 @@
+use Encoding;
+let main (): Unit = {
+    for i in 0..1000 {
+        assert_eq(Encoding.base64_encode("a".as_bytes()), "YQ==");
+        assert_eq(Encoding.base64_url_encode("a".as_bytes()), "YQ");
+        assert_eq(Encoding.base64_encode("ab".as_bytes()), "YWI=");
+        assert_eq(Encoding.base64_url_encode("ab".as_bytes()), "YWI");
+        assert_eq(Encoding.base64_encode("abc".as_bytes()), "YWJj");
+        assert_eq(Encoding.base64_url_encode("abc".as_bytes()), "YWJj");
+    };
+}
