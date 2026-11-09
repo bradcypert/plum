@@ -1,0 +1,2 @@
+// A known-size result needs one cell, with no geometric reserve or chunks.
+let main (): Unit = assert_eq("abc".repeat(65536).len(), 196608)

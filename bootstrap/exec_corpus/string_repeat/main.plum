@@ -1,0 +1,26 @@
+let reference (s: String) (n: Int): String = {
+    let mut out = "";
+    for i in 0..n { out = out.concat(s); };
+    out
+}
+let main (): Unit = {
+    for text in ["", "a", "abc", "aé\x00🙂", "🙂é"] {
+        for n in [-1, 0, 1, 2, 3, 7, 15, 16, 17, 31, 32, 33, 257, 4096] {
+            assert_eq(text.repeat(n), reference(text, n));
+        };
+    };
+    assert_eq("".repeat(9223372036854775807), "");
+    assert_eq("x".repeat(-9223372036854775807 - 1), "");
+    let mut source = "éabc".repeat(50);
+    let once = source.repeat(1);
+    let bytes = once.as_bytes();
+    let pointer = unsafe { once.as_cstr() };
+    source = source.concat("changed");
+    assert_eq(once, reference("éabc", 50));
+    assert(bytes == once.as_bytes());
+    assert_eq(unsafe { pointer.as_string() }, once);
+    assert_eq(source, once.concat("changed"));
+    let raw = unsafe { Bytes.from_array([255, 128, 65]).as_cstr().as_string() };
+    assert_eq(raw.repeat(3).as_bytes().to_array(), [255, 128, 65, 255, 128, 65, 255, 128, 65]);
+    println("String repeat: exact bytes, UTF-8, NUL, partial fills, zero/one and immutable aliases")
+}
