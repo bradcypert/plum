@@ -2235,3 +2235,25 @@ pub let test_percent_encode_laws (): Unit = {
         assert_eq(Encoding.percent_encode(unreserved.repeat(n).as_bytes()), unreserved.repeat(n));
     };
 }
+
+// Full groups concatenate independently; URL output differs only in alphabet/padding.
+pub let test_base64_encode_laws (): Unit = {
+    let mut seed = 487;
+    for trial in 0..220 {
+        seed = next_seed(seed);
+        let n = rand_between(seed, 0, 192);
+        let input = rand_bytes(seed, n);
+        let standard = Encoding.base64_encode(input);
+        let url = Encoding.base64_url_encode(input);
+        assert_eq(standard.len(), ((n + 2) / 3) * 4);
+        assert_eq(url.len(), (n / 3) * 4 + (if n % 3 == 0 { 0 } else { n % 3 + 1 }));
+        assert_eq(url, standard.replace("+", "-").replace("/", "_").replace("=", ""));
+        let k = (rand_between(next_seed(seed), 0, n) / 3) * 3;
+        let left = input.slice(0, k);
+        let right = input.slice(k, n);
+        assert_eq(standard, Encoding.base64_encode(left).concat(Encoding.base64_encode(right)));
+        assert_eq(url, Encoding.base64_url_encode(left).concat(Encoding.base64_url_encode(right)));
+        match Encoding.base64_decode(standard) { Ok(out) => assert_eq(out.to_array(), input.to_array()), Err(_) => assert(false) };
+        match Encoding.base64_url_decode(url) { Ok(out) => assert_eq(out.to_array(), input.to_array()), Err(_) => assert(false) };
+    };
+}

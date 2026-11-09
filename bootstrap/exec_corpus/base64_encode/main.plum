@@ -1,0 +1,51 @@
+use Encoding;
+use Crypto;
+let main (): Unit = {
+    let mut values = [];
+    for i in 0..256 { values = values.push(i); };
+    let all = Bytes.from_array(values);
+    assert_eq(Encoding.base64_encode(all), "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8gISIjJCUmJygpKissLS4vMDEyMzQ1Njc4OTo7PD0+P0BBQkNERUZHSElKS0xNTk9QUVJTVFVWV1hZWltcXV5fYGFiY2RlZmdoaWprbG1ub3BxcnN0dXZ3eHl6e3x9fn+AgYKDhIWGh4iJiouMjY6PkJGSk5SVlpeYmZqbnJ2en6ChoqOkpaanqKmqq6ytrq+wsbKztLW2t7i5uru8vb6/wMHCw8TFxsfIycrLzM3Oz9DR0tPU1dbX2Nna29zd3t/g4eLj5OXm5+jp6uvs7e7v8PHy8/T19vf4+fr7/P3+/w==");
+    assert_eq(Encoding.base64_url_encode(all), "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8gISIjJCUmJygpKissLS4vMDEyMzQ1Njc4OTo7PD0-P0BBQkNERUZHSElKS0xNTk9QUVJTVFVWV1hZWltcXV5fYGFiY2RlZmdoaWprbG1ub3BxcnN0dXZ3eHl6e3x9fn-AgYKDhIWGh4iJiouMjY6PkJGSk5SVlpeYmZqbnJ2en6ChoqOkpaanqKmqq6ytrq-wsbKztLW2t7i5uru8vb6_wMHCw8TFxsfIycrLzM3Oz9DR0tPU1dbX2Nna29zd3t_g4eLj5OXm5-jp6uvs7e7v8PHy8_T19vf4-fr7_P3-_w");
+    let mut standard = [];
+    let mut urls = [];
+    for n in 0..257 {
+        let bytes = all.slice(0, n);
+        let s = Encoding.base64_encode(bytes);
+        let u = Encoding.base64_url_encode(bytes);
+        assert_eq(s.len(), ((n + 2) / 3) * 4);
+        assert_eq(u.len(), (n / 3) * 4 + (if n % 3 == 0 { 0 } else { n % 3 + 1 }));
+        standard = standard.push(s);
+        urls = urls.push(u);
+    };
+    assert_eq(Crypto.sha256(Array.concat_all(standard).as_bytes()).to_hex(), "5a60fad7638a5e44a1a6127b297fd50252d457b34182038f8a40fafe207bb4dc");
+    assert_eq(Crypto.sha256(Array.concat_all(urls).as_bytes()).to_hex(), "491429c46da0032273206089cd2b833fd7ed76c9c201f7dbab47c476c7123c31");
+    assert_eq(Encoding.base64_encode(Bytes.from_array([251])), "+w==");
+    assert_eq(Encoding.base64_url_encode(Bytes.from_array([251])), "-w");
+    assert_eq(Encoding.base64_encode(Bytes.from_array([251, 255])), "+/8=");
+    assert_eq(Encoding.base64_url_encode(Bytes.from_array([251, 255])), "-_8");
+    assert_eq(Encoding.base64_encode(Bytes.empty()), "");
+    assert_eq(Encoding.base64_url_encode(Bytes.empty()), "");
+    let mut input = all;
+    let alias = input;
+    let mut encoded = Encoding.base64_encode(input);
+    let saved = encoded;
+    let bytes = saved.as_bytes();
+    let pointer = unsafe { saved.as_cstr() };
+    input = input.concat(Bytes.from_array([0]));
+    encoded = encoded.concat("tail");
+    assert_eq(alias.to_array(), values);
+    assert_eq(input.len(), 257);
+    assert_eq(bytes.to_array(), saved.as_bytes().to_array());
+    assert_eq(unsafe { pointer.as_string() }, saved);
+    assert_eq(encoded, saved.concat("tail"));
+    for tail in [Bytes.empty(), Bytes.from_array([251]), Bytes.from_array([251, 255])] {
+        let large = "abc".repeat(32768).as_bytes().concat(tail);
+        let prefix = "YWJj".repeat(32768);
+        let std_tail = if tail.len() == 0 { "" } else if tail.len() == 1 { "+w==" } else { "+/8=" };
+        let url_tail = if tail.len() == 0 { "" } else if tail.len() == 1 { "-w" } else { "-_8" };
+        assert_eq(Encoding.base64_encode(large), prefix.concat(std_tail));
+        assert_eq(Encoding.base64_url_encode(large), prefix.concat(url_tail));
+        assert_eq(large.len(), 98304 + tail.len());
+    };
+    println("Base64 encode: alphabets, every prefix, short tails, binary bytes and immutable aliases")
+}

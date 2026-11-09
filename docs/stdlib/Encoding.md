@@ -28,14 +28,16 @@ ordinary outcomes rather than programmer error.
 Encodes bytes as base64, RFC 4648, using the standard alphabet
 (`A-Z a-z 0-9 + /`) with `=` padding.
 
-Padding makes the output a multiple of four, so a decoder can
-frame it without being told the length.
+Nonempty output uses one exact-sized allocation; empty output uses
+shared static storage. Alphabet tables require no heap initialization.
 
 ## `let base64_url_encode (b: Bytes): String`
 
-The URL-safe alphabet (`-` and `_` for `+` and `/`), with padding
-OMITTED, which is what JWTs and `data:` URLs expect, since `=`
-needs escaping in a query string.
+Encodes bytes using the URL-safe alphabet (`-` and `_`), with
+`=` padding omitted.
+
+Nonempty output uses one exact-sized allocation; empty output uses
+shared static storage. Alphabet tables require no heap initialization.
 
 ## `let base64_decode (s: String): Result[Bytes, String]`
 

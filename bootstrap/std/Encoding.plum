@@ -1,13 +1,3 @@
-/// The base64 alphabets, split ONCE into indexable arrays.
-///
-/// Hoisted to globals deliberately. Character-classification tables
-/// have been the hot spot in this project twice, both times because
-/// a `chars_of` or a `String.index_of` sat inside a per-character
-/// loop and re-split its alphabet for every byte processed. A global
-/// is evaluated once, by `@plum_init_globals`.
-let B64_STD_CHARS: Array[String] = chars_of("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/")
-let B64_URL_CHARS: Array[String] = chars_of("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_")
-
 let byte_at (b: Bytes) (i: Int): Int = match b.at(i) { Some(v) => v, None => 0 }
 
 // --- Hex ---
@@ -55,42 +45,22 @@ pub let hex_decode (s: String): Result[Bytes, String] = {
 
 // --- Base64 ---
 
-// Arithmetic rather than bit operations throughout: the shifts are
-// exact divisions and remainders on values already known to be
-// 0..255, and this keeps the code readable without depending on
-// what bitwise operators Plum does or does not have.
-let b64_acc (b: Bytes) (alpha: Array[String]) (pad: Bool) (i: Int) (n: Int) (acc: Array[String]): Array[String] =
-    if i >= n { acc }
-    else {
-        let rem = n - i;
-        let b0 = byte_at(b, i);
-        let b1 = if rem > 1 { byte_at(b, i + 1) } else { 0 };
-        let b2 = if rem > 2 { byte_at(b, i + 2) } else { 0 };
-        let c0 = alpha[b0 / 4];
-        let c1 = alpha[(b0 % 4) * 16 + b1 / 16];
-        let with2 = acc.push(c0).push(c1);
-        // A 1-byte tail encodes to two characters, a 2-byte tail to
-        // three. Padding makes the output a multiple of four so a
-        // decoder can frame it without a length; the URL form drops
-        // it because `=` needs escaping in a query string.
-        let with3 = if rem > 1 { with2.push(alpha[(b1 % 16) * 4 + b2 / 64]) }
-                    else if pad { with2.push("=") } else { with2 };
-        let with4 = if rem > 2 { with3.push(alpha[b2 % 64]) }
-                    else if pad { with3.push("=") } else { with3 };
-        b64_acc(b, alpha, pad, i + 3, n, with4)
-    }
+// One runtime constructor borrows bytes and selects static byte alphabets.
+let plum__base64_encode_raw (b: Bytes) (url: Bool): String = ""
 
 /// Encodes bytes as base64, RFC 4648, using the standard alphabet
 /// (`A-Z a-z 0-9 + /`) with `=` padding.
 ///
-/// Padding makes the output a multiple of four, so a decoder can
-/// frame it without being told the length.
-pub let base64_encode (b: Bytes): String = Array.concat_all(b64_acc(b, B64_STD_CHARS, true, 0, b.len(), []))
+/// Nonempty output uses one exact-sized allocation; empty output uses
+/// shared static storage. Alphabet tables require no heap initialization.
+pub let base64_encode (b: Bytes): String = plum__base64_encode_raw(b, false)
 
-/// The URL-safe alphabet (`-` and `_` for `+` and `/`), with padding
-/// OMITTED, which is what JWTs and `data:` URLs expect, since `=`
-/// needs escaping in a query string.
-pub let base64_url_encode (b: Bytes): String = Array.concat_all(b64_acc(b, B64_URL_CHARS, false, 0, b.len(), []))
+/// Encodes bytes using the URL-safe alphabet (`-` and `_`), with
+/// `=` padding omitted.
+///
+/// Nonempty output uses one exact-sized allocation; empty output uses
+/// shared static storage. Alphabet tables require no heap initialization.
+pub let base64_url_encode (b: Bytes): String = plum__base64_encode_raw(b, true)
 
 // One decoder serves both alphabets; see `base64_decode`.
 ///
