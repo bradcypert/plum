@@ -1,0 +1,6 @@
+// Keep the input live across an exact-sized hex construction.
+let main (): Unit = {
+    let input = "aé\x00🙂".repeat(4096).as_bytes();
+    assert_eq(input.to_hex().len(), 65536);
+    assert_eq(input.len(), 32768)
+}

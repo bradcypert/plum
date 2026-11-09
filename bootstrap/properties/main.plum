@@ -2155,3 +2155,22 @@ pub let test_int_scan_spelling (): Unit = {
         };
     };
 }
+
+// Hex preserves concatenation order and byte length, including binary edges.
+pub let test_bytes_hex_laws (): Unit = {
+    let mut seed = 484;
+    for i in 0..240 {
+        seed = next_seed(seed);
+        let a = rand_bytes(seed, rand_between(seed, 0, 128));
+        seed = next_seed(seed);
+        let b = rand_bytes(seed, rand_between(seed, 0, 128));
+        let joined = a.concat(b);
+        let encoded = joined.to_hex();
+        assert_eq(encoded, a.to_hex().concat(b.to_hex()));
+        assert_eq(encoded.len(), joined.len() * 2);
+        assert_eq(encoded, Encoding.hex_encode(joined));
+        for digit in chars_of(encoded) { assert("0123456789abcdef".contains(digit)); };
+        assert_eq(joined.to_array(), a.to_array().concat(b.to_array()));
+    };
+    assert_eq(Bytes.from_array([0, 128, 255]).to_hex(), "0080ff");
+}

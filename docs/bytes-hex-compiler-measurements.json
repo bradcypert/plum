@@ -1,0 +1,41 @@
+{
+  "method": "Identical final source tree; actual before and refreshed seed-to-source compilers. compiler-profile.py: one warmup, one recorded sample per mode. Allocation traffic is cumulative requested bytes; RSS is a separate process measure. Timing is not a claim.",
+  "results": [
+    {
+      "case": "emit-compiler",
+      "label": "after",
+      "allocated_bytes": 911265130,
+      "allocations": 15208345,
+      "peak_rss_kib": 116392,
+      "stdout_bytes": 27388890,
+      "stdout_sha256": "16ac883c54136538d244247f7a18c4c07db09356731bce2a63853c396809ad2e"
+    },
+    {
+      "case": "emit-compiler",
+      "label": "before",
+      "allocated_bytes": 911422472,
+      "allocations": 15211494,
+      "peak_rss_kib": 116520,
+      "stdout_bytes": 27391154,
+      "stdout_sha256": "82547ae91707e1ee4879dfa5da12073c8331cd56a7457a51266710a960b27d79"
+    },
+    {
+      "case": "emit-compiler-debug",
+      "label": "after",
+      "allocated_bytes": 1077771839,
+      "allocations": 18440647,
+      "peak_rss_kib": 131452,
+      "stdout_bytes": 32341552,
+      "stdout_sha256": "6bdb05af08e830e76426d4b3c88515dc44d7020c180b3919507f93e9ad5b4e1b"
+    },
+    {
+      "case": "emit-compiler-debug",
+      "label": "before",
+      "allocated_bytes": 1078067127,
+      "allocations": 18444375,
+      "peak_rss_kib": 131516,
+      "stdout_bytes": 32345331,
+      "stdout_sha256": "dac0096e0219ffa02a390e063253693bd759869fd3aac40b947dfc8af4b4b5e5"
+    }
+  ]
+}

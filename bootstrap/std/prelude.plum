@@ -824,15 +824,12 @@ let plum__hex_digit (v: Int): String =
     else if v == 8 { "8" } else if v == 9 { "9" } else if v == 10 { "a" } else if v == 11 { "b" }
     else if v == 12 { "c" } else if v == 13 { "d" } else if v == 14 { "e" } else { "f" }
 
-let plum__bytes_hex_acc (b: Bytes) (i: Int) (n: Int) (acc: Array[String]): Array[String] =
-    if i >= n { acc }
-    else {
-        let v = bytes_at_raw(b, i);
-        plum__bytes_hex_acc(b, i + 1, n, acc.push(plum__hex_digit(v / 16)).push(plum__hex_digit(v % 16)))
-    }
+// Implemented by the generated runtime; borrows b and returns owned storage.
+let plum__bytes_to_hex_raw (b: Bytes): String = ""
 /// Lowercase hex, two characters per byte. `Encoding.hex_decode`
-/// reads it back.
-pub let Bytes.to_hex (b: Bytes): String = Array.concat_all(plum__bytes_hex_acc(b, 0, bytes_len_raw(b), []))
+/// reads it back. A nonempty result uses one exact-sized allocation;
+/// an empty result uses shared static storage.
+pub let Bytes.to_hex (b: Bytes): String = plum__bytes_to_hex_raw(b)
 
 /// The one string operation that had NEITHER form: there was no way
 /// to join an array of strings with a separator at all.

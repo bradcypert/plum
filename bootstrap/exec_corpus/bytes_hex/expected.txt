@@ -1,0 +1,1 @@
+Bytes hex: all byte values, exact output, empty, binary and immutable aliases

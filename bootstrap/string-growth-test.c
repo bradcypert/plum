@@ -18,6 +18,7 @@ extern int64_t plum_str_concat_length(int64_t, int64_t);
 extern int64_t plum_str_growth_bytes(int64_t, int64_t);
 extern void *plum_str_concat(void *, void *);
 extern void *plum_str_repeat(void *, int64_t);
+extern void *plum_bytes_to_hex(void *);
 extern int64_t plum_str_repeat_length(int64_t, int64_t);
 extern void *plum_str_concat_reuse(void *, void *);
 extern void plum_rel_str(void *);
@@ -239,6 +240,41 @@ static void repetition(void) {
     CHECK(field(2) == 0 && field(3) == 0);
 #endif
 }
+static void hexadecimal(void) {
+    unsigned char input[256];
+    char expected[513];
+    const char digits[] = "0123456789abcdef";
+    for (int i = 0; i < 256; ++i) {
+        input[i] = (unsigned char)i;
+        expected[2*i] = digits[i / 16]; expected[2*i+1] = digits[i % 16];
+    }
+    expected[512] = 0;
+    /* Unique input with enough capacity must still remain unchanged: borrowed. */
+    void *source = text((char *)input, 256, 1024);
+    int64_t n = plum_n_alloc, bytes = plum_b_alloc, live = field(3), origins = origin_field(3);
+    attempts = 0;
+    void *out = plum_bytes_to_hex(source);
+    CHECK(out != source && *(int64_t *)source == 1 && *(int64_t *)out == 1);
+    CHECK(attempts == 1 && requests[0] == 529);
+    CHECK(plum_n_alloc == n + 1 && plum_b_alloc == bytes + 529);
+    value(out, expected, 512); value(source, (char *)input, 256);
+#ifdef PLUM_HEAP_STATS
+    CHECK(field(3) == live + 529 && origin_field(3) == origins + 529);
+#else
+    (void)origins;
+#endif
+    plum_rel_str(out); CHECK(field(3) == live); plum_rel_str(source);
+    source = text("", 0, 128);
+    n = plum_n_alloc; attempts = 0;
+    out = plum_bytes_to_hex(source);
+    value(out, "", 0);
+    CHECK(plum_n_alloc == n && attempts == 0 && *(int64_t *)source == 1);
+    plum_rel_str(out); plum_rel_str(source);
+    CHECK(plum_str_repeat_length((INT64_MAX - 17) / 2, 2) == INT64_MAX - 17);
+#ifdef PLUM_HEAP_STATS
+    CHECK(field(2) == 0 && field(3) == 0);
+#endif
+}
 int main(int argc, char **argv) {
     if (argc > 1) {
         if (!strcmp(argv[1], "negative")) plum_str_concat_length(-1, 0);
@@ -260,6 +296,19 @@ int main(int argc, char **argv) {
             struct { int64_t rc, length; char data[4]; } input = {-1, 3, "abc"};
             failures = 1; plum_str_repeat(&input, 5);
         }
+        else if (!strcmp(argv[1], "hex-negative-length")) {
+            int64_t input[] = {1, -1}; plum_bytes_to_hex(input);
+        }
+        else if (!strcmp(argv[1], "hex-overflow")) {
+            int64_t input[] = {1, INT64_MAX}; plum_bytes_to_hex(input);
+        }
+        else if (!strcmp(argv[1], "hex-header-overflow")) {
+            int64_t input[] = {1, (INT64_MAX - 17) / 2 + 1}; plum_bytes_to_hex(input);
+        }
+        else if (!strcmp(argv[1], "hex-oom")) {
+            /* Header only: allocation failure must precede every input read. */
+            int64_t input[] = {1, 3}; failures = 1; plum_bytes_to_hex(input);
+        }
         else if (!strcmp(argv[1], "oom")) { failures = 2; plum_alloc_preferred(33, 80, 1); }
         else if (!strcmp(argv[1], "exact-oom")) { failures = 1; plum_alloc_preferred(33, 33, 1); }
         else return 3;
@@ -267,6 +316,6 @@ int main(int argc, char **argv) {
     }
     arithmetic(); fallback(); ownership(); growth_fallback(); snapshots();
     for (int steps = 512; steps <= 4096; steps *= 2) traffic(steps);
-    repetition();
+    repetition(); hexadecimal();
     return 0;
 }
