@@ -23,6 +23,9 @@ extern void *plum_bytes_to_hex(void *);
 extern void *plum_bytes_percent_encode(void *);
 extern void *plum_bytes_base64_encode(void *, bool);
 extern int64_t plum_base64_length(int64_t, bool);
+extern unsigned char plum_hex_pair(unsigned char, unsigned char);
+extern int64_t plum_hex_decoded_length(int64_t);
+extern void *plum_hex_decode_validated(void *);
 extern int64_t plum_percent_decoded_length(int64_t, int64_t);
 extern void *plum_percent_decode_validated(void *, int64_t);
 extern int64_t plum_base64_decode_value(int64_t);
@@ -536,6 +539,48 @@ static void percent_decoding(void) {
 #endif
 }
 
+
+static void hex_decoding(void) {
+    const char *digits[] = {"0123456789ABCDEF", "0123456789abcdef"};
+    unsigned char input[516], expected[258];
+    for (int form = 0; form < 4; ++form) {
+        for (int hi = 0; hi < 16; ++hi)
+            for (int lo = 0; lo < 16; ++lo)
+                CHECK(plum_hex_pair(digits[form & 1][hi], digits[form >> 1][lo]) == hi * 16 + lo);
+        for (int length = 0; length <= 258; ++length) {
+            for (int i = 0; i < length; ++i) {
+                expected[i] = (unsigned char)i;
+                input[2*i] = digits[form & 1][expected[i] / 16];
+                input[2*i+1] = digits[form >> 1][expected[i] % 16];
+            }
+            void *source = text((char *)input, 2 * length, 4096);
+            int64_t allocs = plum_n_alloc, bytes = plum_b_alloc, live = field(3), origin = origin_field(3);
+            attempts = 0;
+            void *out = plum_hex_decode_validated(source);
+            int64_t request = length ? length + 17 : 0;
+            CHECK(plum_hex_decoded_length(2 * length) == length);
+            CHECK(out != source && *(int64_t *)source == 1);
+            CHECK(attempts == (length ? 1 : 0));
+            if (length) CHECK(requests[0] == request && *(int64_t *)out == 1);
+            CHECK(plum_n_alloc == allocs + (length ? 1 : 0) && plum_b_alloc == bytes + request);
+            value(source, (char *)input, 2 * length); value(out, (char *)expected, length);
+#ifdef PLUM_HEAP_STATS
+            CHECK(field(3) == live + request && origin_field(3) == origin + request);
+#else
+            (void)origin;
+#endif
+            plum_rel_str(out); CHECK(field(3) == live); plum_rel_str(source);
+        }
+    }
+    for (int64_t n = 0; n < 10000; n += 2) CHECK(plum_hex_decoded_length(n) == n / 2);
+    const int64_t max = INT64_MAX - 17;
+    CHECK(plum_hex_decoded_length(max) == max / 2);
+    CHECK(plum_hex_decoded_length(max - 2) == max / 2 - 1);
+#ifdef PLUM_HEAP_STATS
+    CHECK(field(2) == 0 && field(3) == 0);
+#endif
+}
+
 int main(int argc, char **argv) {
     if (argc > 1) {
         if (!strcmp(argv[1], "negative")) plum_str_concat_length(-1, 0);
@@ -649,6 +694,17 @@ int main(int argc, char **argv) {
             /* Header only: count/size/OOM failures must precede payload reads. */
             plum_percent_decode_validated(input, escapes);
         }
+        else if (!strncmp(argv[1], "hexdecode-", 10)) {
+            int64_t input[] = {1, 2};
+            if (!strcmp(argv[1], "hexdecode-negative-input")) input[1] = -1;
+            else if (!strcmp(argv[1], "hexdecode-large-input")) input[1] = INT64_MAX;
+            else if (!strcmp(argv[1], "hexdecode-header-overflow")) input[1] = INT64_MAX - 16;
+            else if (!strcmp(argv[1], "hexdecode-odd-input")) input[1] = 1;
+            else if (!strcmp(argv[1], "hexdecode-oom")) failures = 1;
+            else return 3;
+            /* Header only: invalid sizes/OOM must fail before any payload read. */
+            plum_hex_decode_validated(input);
+        }
         else if (!strcmp(argv[1], "oom")) { failures = 2; plum_alloc_preferred(33, 80, 1); }
         else if (!strcmp(argv[1], "exact-oom")) { failures = 1; plum_alloc_preferred(33, 33, 1); }
         else return 3;
@@ -656,6 +712,6 @@ int main(int argc, char **argv) {
     }
     arithmetic(); fallback(); ownership(); growth_fallback(); snapshots();
     for (int steps = 512; steps <= 4096; steps *= 2) traffic(steps);
-    repetition(); hexadecimal(); joining(); percent_encoding(); base64_encoding(); base64_decoding(); percent_decoding();
+    repetition(); hexadecimal(); joining(); percent_encoding(); base64_encoding(); base64_decoding(); percent_decoding(); hex_decoding();
     return 0;
 }

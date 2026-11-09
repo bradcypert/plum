@@ -1,0 +1,76 @@
+use Encoding;
+// Frozen original decoder, using only public APIs, to preserve exact errors.
+let oracle_at (b: Bytes) (i: Int): Int = b.at(i).unwrap_or(0)
+let oracle_value (c: Int): Int =
+    if c >= 48 && c <= 57 { c - 48 }
+    else if c >= 97 && c <= 102 { c - 97 + 10 }
+    else if c >= 65 && c <= 70 { c - 65 + 10 }
+    else { 0 - 1 }
+
+let oracle_acc (b: Bytes) (i: Int) (n: Int) (acc: Array[Int]): Result[Array[Int], String] =
+    if i >= n { Ok(acc) }
+    else {
+        let hi = oracle_value(oracle_at(b, i));
+        let lo = oracle_value(oracle_at(b, i + 1));
+        if hi < 0 || lo < 0 { Err("Encoding.hex_decode: not a hex digit at byte ".concat(i.to_string())) }
+        else { oracle_acc(b, i + 2, n, acc.push(hi * 16 + lo)) }
+    }
+
+let oracle_decode (s: String): Result[Bytes, String] = {
+    let b = s.as_bytes();
+    let n = b.len();
+    if n % 2 != 0 { Err("Encoding.hex_decode: odd number of hex digits") }
+    else { Result.map(oracle_acc(b, 0, n, []), |vals| Bytes.from_array(vals)) }
+}
+let describe (r: Result[Bytes, String]): String = match r {
+    Ok(b) => "ok:".concat(b.to_hex()),
+    Err(e) => "err:".concat(e),
+}
+let compare (s: String): Unit = assert_eq(describe(Encoding.hex_decode(s)), describe(oracle_decode(s)))
+let main (): Unit = {
+    let alphabet = ["0", "9", "A", "f", "G", "g", " ", "%", "\x00", "é"];
+    let mut count = 1;
+    for length in 0..5 {
+        for code in 0..count {
+            let mut rest = code;
+            let mut text = "";
+            for i in 0..length { text = text.concat(alphabet[rest % alphabet.len()]); rest = rest / alphabet.len(); };
+            compare(text);
+        };
+        count = count * alphabet.len();
+    };
+    let upper = ["0", "1", "2", "3", "4", "5", "6", "7", "8", "9", "A", "B", "C", "D", "E", "F"];
+    let lower = ["0", "1", "2", "3", "4", "5", "6", "7", "8", "9", "a", "b", "c", "d", "e", "f"];
+    let mut all_upper = "";
+    let mut all_lower = "";
+    let mut values = [];
+    for byte in 0..256 {
+        let a = upper[byte / 16].concat(upper[byte % 16]);
+        let b = lower[byte / 16].concat(lower[byte % 16]);
+        assert_eq(Encoding.hex_decode(a).unwrap_or(Bytes.empty()).to_array(), [byte]);
+        assert_eq(Encoding.hex_decode(b).unwrap_or(Bytes.empty()).to_array(), [byte]);
+        all_upper = all_upper.concat(a); all_lower = all_lower.concat(b);
+        values = values.push(byte);
+    };
+    assert_eq(Encoding.hex_decode(all_upper).unwrap_or(Bytes.empty()).to_array(), values);
+    assert_eq(Encoding.hex_decode(all_lower).unwrap_or(Bytes.empty()).to_array(), values);
+    for text in ["G", "G00", "00G", "00AG", "é", "é0", "00é", "00é0", "0x", "0x00", "AA BB", "AA:BB", "00\x00A", "GG0"] { compare(text); };
+    assert(Result.is_err(Encoding.hex_decode("ff").unwrap_or(Bytes.empty()).as_string()));
+    let mut input = "6100fF2B".repeat(50);
+    let saved = input;
+    let input_view = unsafe { input.as_cstr() };
+    let mut output = Encoding.hex_decode(input).unwrap_or(Bytes.empty());
+    let saved_output = output;
+    input = input.concat("!"); output = output.concat(Bytes.from_array([0]));
+    assert_eq(saved, "6100fF2B".repeat(50));
+    assert_eq(unsafe { input_view.as_string() }, saved);
+    assert_eq(saved_output.to_hex(), "6100ff2b".repeat(50));
+    assert_eq(output.to_hex(), "6100ff2b".repeat(50).concat("00"));
+    let mut binary = Encoding.hex_decode("fBfF").unwrap_or(Bytes.empty());
+    let output_view = unsafe { binary.as_cstr() };
+    binary = binary.concat(Bytes.from_array([0]));
+    assert_eq(unsafe { output_view.as_string() }.as_bytes().to_array(), [251, 255]);
+    assert_eq(binary.to_array(), [251, 255, 0]);
+    assert_eq(Encoding.hex_decode("6100fF2b".repeat(32768)).unwrap_or(Bytes.empty()).to_hex(), "6100ff2b".repeat(32768));
+    println("Hex decode: exact errors, odd-length precedence, pair byte offsets, all bytes and immutable aliases")
+}

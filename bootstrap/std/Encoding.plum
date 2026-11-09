@@ -1,4 +1,5 @@
-let byte_at (b: Bytes) (i: Int): Int = match b.at(i) { Some(v) => v, None => 0 }
+// Private scalar reads are bounded by each decoder's validation scan.
+let bytes_at_raw (b: Bytes) (i: Int): Int = 0
 
 // --- Hex ---
 
@@ -17,13 +18,16 @@ let hex_digit_value (c: Int): Int =
     else if c >= 65 && c <= 70 { c - 65 + 10 }
     else { 0 - 1 }
 
-let hex_acc (b: Bytes) (i: Int) (n: Int) (acc: Array[Int]): Result[Array[Int], String] =
-    if i >= n { Ok(acc) }
+// The constructor borrows bytes already checked for even length and hex syntax.
+let plum__hex_decode_validated_raw (b: Bytes): Bytes = Bytes.empty()
+
+let hex_validate (b: Bytes) (i: Int) (n: Int): Result[Unit, String] =
+    if i >= n { Ok(()) }
     else {
-        let hi = hex_digit_value(byte_at(b, i));
-        let lo = hex_digit_value(byte_at(b, i + 1));
+        let hi = hex_digit_value(bytes_at_raw(b, i));
+        let lo = hex_digit_value(bytes_at_raw(b, i + 1));
         if hi < 0 || lo < 0 { Err("Encoding.hex_decode: not a hex digit at byte ".concat(i.to_string())) }
-        else { hex_acc(b, i + 2, n, acc.push(hi * 16 + lo)) }
+        else { hex_validate(b, i + 2, n) }
     }
 
 /// Decodes a hex string to bytes, accepting upper and lower case.
@@ -36,11 +40,19 @@ let hex_acc (b: Bytes) (i: Int) (n: Int) (acc: Array[Int]): Result[Array[Int], S
 /// `Err` on any character that is not a hex digit, and on an odd
 /// length. Hex usually arrives from somewhere else, so both are
 /// ordinary outcomes rather than programmer error.
+/// Validates before allocating output. Nonempty success uses one exact-sized
+/// Bytes cell plus Result bookkeeping; invalid input builds no output buffer.
 pub let hex_decode (s: String): Result[Bytes, String] = {
     let b = s.as_bytes();
     let n = b.len();
     if n % 2 != 0 { Err("Encoding.hex_decode: odd number of hex digits") }
-    else { Result.map(hex_acc(b, 0, n, []), |vals| Bytes.from_array(vals)) }
+    else if n == 0 { Ok(Bytes.empty()) }
+    else {
+        match hex_validate(b, 0, n) {
+            Err(e) => Err(e),
+            Ok(_) => Ok(plum__hex_decode_validated_raw(b)),
+        }
+    }
 }
 
 // --- Base64 ---
@@ -71,7 +83,6 @@ pub let base64_url_encode (b: Bytes): String = plum__base64_encode_raw(b, true)
 /// overlap, so no input has two readings. What is NOT lenient is an
 /// unrecognised character, which is a real error and reported as one.
 // Validation and the writer share the same scalar byte classifier.
-let bytes_at_raw (b: Bytes) (i: Int): Int = 0
 let plum__base64_value_raw (c: Int): Int = 0
 // This bridge accepts only a prefix validated by b64_scan.
 let plum__base64_decode_validated_raw (b: Bytes) (count: Int): Bytes = Bytes.empty()

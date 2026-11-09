@@ -22,6 +22,8 @@ intended.
 `Err` on any character that is not a hex digit, and on an odd
 length. Hex usually arrives from somewhere else, so both are
 ordinary outcomes rather than programmer error.
+Validates before allocating output. Nonempty success uses one exact-sized
+Bytes cell plus Result bookkeeping; invalid input builds no output buffer.
 
 ## `let base64_encode (b: Bytes): String`
 
