@@ -70,55 +70,43 @@ pub let base64_url_encode (b: Bytes): String = plum__base64_encode_raw(b, true)
 /// wrong, and rejecting it buys nothing; the two alphabets do not
 /// overlap, so no input has two readings. What is NOT lenient is an
 /// unrecognised character, which is a real error and reported as one.
-let b64_value (c: Int): Int =
-    if c >= 65 && c <= 90 { c - 65 }
-    else if c >= 97 && c <= 122 { c - 97 + 26 }
-    else if c >= 48 && c <= 57 { c - 48 + 52 }
-    else if c == 43 || c == 45 { 62 }
-    else if c == 47 || c == 95 { 63 }
-    else { 0 - 1 }
+// Validation and the writer share the same scalar byte classifier.
+let bytes_at_raw (b: Bytes) (i: Int): Int = 0
+let plum__base64_value_raw (c: Int): Int = 0
+// This bridge accepts only a prefix validated by b64_scan.
+let plum__base64_decode_validated_raw (b: Bytes) (count: Int): Bytes = Bytes.empty()
 
-// Six-bit values, stopping only at a valid optional padding suffix.
-let b64_vals (b: Bytes) (i: Int) (n: Int) (acc: Array[Int]): Result[Array[Int], String] =
-    if i >= n { Ok(acc) }
+let b64_value (c: Int): Int = plum__base64_value_raw(c)
+
+// Check tail bits only after the lexical scan succeeds. A later invalid
+// character/padding error takes precedence over an earlier partial group.
+let b64_finish (b: Bytes) (count: Int): Result[Int, String] = {
+    let rem = count % 4;
+    if rem == 1 { Err("Encoding.base64_decode: truncated input") }
+    else if (rem == 2 && b64_value(bytes_at_raw(b, count - 1)) % 16 != 0)
+        || (rem == 3 && b64_value(bytes_at_raw(b, count - 1)) % 4 != 0) {
+            Err("Encoding.base64_decode: nonzero pad bits")
+        }
+    else { Ok(count) }
+}
+
+// Keep validation in Plum: errors remain typed Results, and no sextet
+// array or output buffer is built while scanning untrusted input.
+let b64_scan (b: Bytes) (i: Int) (n: Int): Result[Int, String] =
+    if i >= n { b64_finish(b, i) }
     else {
-        let c = byte_at(b, i);
+        let c = bytes_at_raw(b, i);
         if c == 61 {
             let pad = n - i;
             let valid = n % 4 == 0 && ((pad == 1 && i % 4 == 3)
-                || (pad == 2 && i % 4 == 2 && byte_at(b, i + 1) == 61));
-            if !valid {
-                Err("Encoding.base64_decode: invalid padding")
-            } else { Ok(acc) }
+                || (pad == 2 && i % 4 == 2 && bytes_at_raw(b, i + 1) == 61));
+            if valid { b64_finish(b, i) }
+            else { Err("Encoding.base64_decode: invalid padding") }
         }
-        else {
-            let v = b64_value(c);
-            if v < 0 { Err("Encoding.base64_decode: invalid character at byte ".concat(i.to_string())) }
-            else { b64_vals(b, i + 1, n, acc.push(v)) }
+        else if b64_value(c) < 0 {
+            Err("Encoding.base64_decode: invalid character at byte ".concat(i.to_string()))
         }
-    }
-
-/// Four 6-bit values make three bytes. A tail of three makes two, a
-/// tail of two makes one, and a tail of ONE is impossible: six bits
-/// cannot encode a byte, so that input was truncated.
-let b64_bytes (vals: Array[Int]) (i: Int) (n: Int) (acc: Array[Int]): Result[Array[Int], String] =
-    if i >= n { Ok(acc) }
-    else {
-        let rem = n - i;
-        let nonzero_pad_bits = (rem == 2 && vals[i + 1] % 16 != 0)
-            || (rem == 3 && vals[i + 2] % 4 != 0);
-        if rem == 1 { Err("Encoding.base64_decode: truncated input") }
-        else if nonzero_pad_bits {
-            Err("Encoding.base64_decode: nonzero pad bits")
-        }
-        else {
-            let v0 = vals[i];
-            let v1 = vals[i + 1];
-            let with1 = acc.push(v0 * 4 + v1 / 16);
-            let with2 = if rem > 2 { with1.push((v1 % 16) * 16 + vals[i + 2] / 4) } else { with1 };
-            let with3 = if rem > 3 { with2.push((vals[i + 2] % 4) * 64 + vals[i + 3]) } else { with2 };
-            b64_bytes(vals, i + 4, n, with3)
-        }
+        else { b64_scan(b, i + 1, n) }
     }
 
 /// Decodes base64 to bytes, accepting EITHER alphabet and treating
@@ -134,11 +122,16 @@ let b64_bytes (vals: Array[Int]) (i: Int) (n: Int) (acc: Array[Int]): Result[Arr
 /// malformed padding, or nonzero unused tail bits. If present, padding
 /// must be a suffix of one or two `=` characters completing a group
 /// of four. Unused tail bits must be zero, with or without padding.
+/// Validates before allocating output. Nonempty success uses one exact-sized
+/// Bytes cell plus Result bookkeeping; invalid input builds no output buffer.
 pub let base64_decode (s: String): Result[Bytes, String] = {
     let b = s.as_bytes();
-    match b64_vals(b, 0, b.len(), []) {
-        Err(e) => Err(e),
-        Ok(vals) => Result.map(b64_bytes(vals, 0, vals.len(), []), |out| Bytes.from_array(out)),
+    if b.len() == 0 { Ok(Bytes.empty()) }
+    else {
+        match b64_scan(b, 0, b.len()) {
+            Err(e) => Err(e),
+            Ok(count) => Ok(plum__base64_decode_validated_raw(b, count)),
+        }
     }
 }
 
