@@ -86,7 +86,8 @@ The bytes as numbers 0-255.
 ## `let Bytes.to_hex (b: Bytes): String`
 
 Lowercase hex, two characters per byte. `Encoding.hex_decode`
-reads it back.
+reads it back. A nonempty result uses one exact-sized allocation;
+an empty result uses shared static storage.
 
 ## `let Bytes.as_cstr (self: Bytes): CStr`
 

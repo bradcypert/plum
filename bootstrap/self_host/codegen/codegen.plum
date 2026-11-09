@@ -3081,6 +3081,7 @@ let cg_runtime_fn (name: String): Option[String] =
     else if name == "round_raw" { Some("@plum_round_raw") }
     else if name == "random_raw" { Some("@plum_random_raw") }
     else if name == "string_cmp_raw" { Some("@plum_str_cmp_raw") }
+    else if name == "plum__bytes_to_hex_raw" { Some("@plum_bytes_to_hex") }
     else if name == "plum__string_repeat_raw" { Some("@plum_str_repeat") }
     else if name == "string_concat_all_raw" { Some("@plum_str_concat_all") }
     else if name == "process_run_raw" { Some("@plum_process_run_raw") }
