@@ -18,6 +18,8 @@ extern void *plum_alloc_preferred(int64_t, int64_t, int64_t);
 extern int64_t plum_str_concat_length(int64_t, int64_t);
 extern int64_t plum_str_growth_bytes(int64_t, int64_t);
 extern void *plum_str_concat(void *, void *);
+extern int64_t plum_str_replace_length(int64_t, int64_t, int64_t, int64_t);
+extern void *plum_str_replace(void *, void *, void *);
 extern void *plum_str_repeat(void *, int64_t);
 extern void *plum_bytes_to_hex(void *);
 extern void *plum_bytes_percent_encode(void *);
@@ -582,6 +584,82 @@ static void hex_decoding(void) {
 #endif
 }
 
+
+static int replace_reference(char *out, const char *src, int n, const char *from, int m, const char *to, int t, int *matches) {
+    int i = 0, j = 0; *matches = 0;
+    while (i < n) {
+        if (m && m <= n-i && !memcmp(src+i, from, (size_t)m)) {
+            memcpy(out+j, to, (size_t)t); j += t; i += m; ++*matches;
+        } else out[j++] = src[i++];
+    }
+    return j;
+}
+static void replacement(void) {
+    uint64_t state = 492;
+    for (int trial = 0; trial < 2048; ++trial) {
+        state = state * UINT64_C(6364136223846793005) + 1;
+        int n = (int)(state % 65), m = (int)((state >> 8) % 9), t = (int)((state >> 16) % 9);
+        char src[65], from[9], to[9], expected[1024];
+        for (int i = 0; i < n; ++i) src[i] = (char)((state >> (i % 32)) % 5);
+        for (int i = 0; i < m; ++i) from[i] = (char)((state >> ((i+3) % 32)) % 5);
+        for (int i = 0; i < t; ++i) to[i] = (char)((state >> ((i+9) % 32)) % 5);
+        if (trial % 3 == 0 && m <= n) memcpy(from, src, (size_t)m);
+        if (trial % 4 == 0) { t = m; memcpy(to, from, (size_t)m); }
+        int count, length = replace_reference(expected, src, n, from, m, to, t, &count);
+        CHECK(plum_str_replace_length(n, m, t, count) == length);
+        void *source = text(src, n, 4096), *pattern = text(from, m, m), *target = text(to, t, t);
+        int identity = n && (!m || !count || (m == t && !memcmp(from, to, (size_t)m)));
+        int changed = !identity && length;
+        int64_t allocs = plum_n_alloc, bytes = plum_b_alloc, live = field(3), origin = origin_field(3);
+        attempts = 0;
+        void *out = plum_str_replace(source, pattern, target);
+        int64_t request = changed ? length + 17 : 0;
+        CHECK(attempts == changed && plum_n_alloc == allocs + changed && plum_b_alloc == bytes + request);
+        if (changed) CHECK(requests[0] == request && *(int64_t *)out == 1);
+        CHECK((out == source) == identity && *(int64_t *)source == 1 + identity);
+        value(source, src, n); value(pattern, from, m); value(target, to, t); value(out, expected, length);
+        CHECK(*(int64_t *)pattern == 1 && *(int64_t *)target == 1);
+#ifdef PLUM_HEAP_STATS
+        CHECK(field(3) == live + request && origin_field(3) == origin + request);
+#else
+        (void)origin;
+#endif
+        plum_rel_str(out); CHECK(field(3) == live);
+        plum_rel_str(source); plum_rel_str(pattern); plum_rel_str(target);
+    }
+    void *source = text("abcabc", 6, 4096), *pattern = text("abc", 3, 3);
+    void *out = plum_str_replace(source, pattern, source);
+    value(out, "abcabcabcabc", 12); value(source, "abcabc", 6); CHECK(*(int64_t *)source == 1);
+    plum_rel_str(out); plum_rel_str(pattern);
+    failures = 1; attempts = 0;
+    out = plum_str_replace(source, source, source);
+    CHECK(out == source && attempts == 0 && *(int64_t *)source == 2);
+    failures = 0; plum_rel_str(out); plum_rel_str(source);
+    source = text("abc", 3, 4096); void *target = text("XY", 2, 2);
+    out = plum_str_replace(source, source, target); value(out, "XY", 2); value(source, "abc", 3);
+    plum_rel_str(out); plum_rel_str(target); plum_rel_str(source);
+    /* Identity owns the original capacity after the caller drops its reference. */
+    source = text("abc", 3, 4096); pattern = text("z", 1, 1); target = text("q", 1, 1);
+    out = plum_str_replace(source, pattern, target);
+    CHECK(out == source && *(int64_t *)out == 2);
+    plum_rel_str(source); plum_rel_str(pattern); plum_rel_str(target);
+    value(out, "abc", 3); CHECK(*(int64_t *)out == 1);
+#ifdef PLUM_HEAP_STATS
+    CHECK(field(3) == 4113 && origin_field(3) == 4113);
+#endif
+    plum_rel_str(out);
+    const int64_t max = INT64_MAX - 17;
+    CHECK(plum_str_replace_length(max, 0, max, 0) == max);
+    CHECK(plum_str_replace_length(max, max, 0, 1) == 0);
+    CHECK(plum_str_replace_length(max, max, max, 1) == max);
+    CHECK(plum_str_replace_length(max, 1, 1, max) == max);
+    CHECK(plum_str_replace_length(max, 1, 0, max) == 0);
+    CHECK(plum_str_replace_length(max - 1, 1, 2, 1) == max);
+#ifdef PLUM_HEAP_STATS
+    CHECK(field(2) == 0 && field(3) == 0);
+#endif
+}
+
 int main(int argc, char **argv) {
     if (argc > 1) {
         if (!strcmp(argv[1], "negative")) plum_str_concat_length(-1, 0);
@@ -706,6 +784,29 @@ int main(int argc, char **argv) {
             /* Header only: invalid sizes/OOM must fail before any payload read. */
             plum_hex_decode_validated(input);
         }
+        else if (!strncmp(argv[1], "replace-", 8)) {
+            int64_t source[] = {1, 2}, from[] = {1, 1}, to[] = {1, 2};
+            const int64_t max = INT64_MAX - 17;
+            if (!strcmp(argv[1], "replace-negative-input")) source[1] = -1;
+            else if (!strcmp(argv[1], "replace-large-input")) source[1] = INT64_MAX;
+            else if (!strcmp(argv[1], "replace-negative-pattern")) from[1] = -1;
+            else if (!strcmp(argv[1], "replace-negative-target")) to[1] = -1;
+            else if (!strcmp(argv[1], "replace-large-pattern")) from[1] = INT64_MAX;
+            else if (!strcmp(argv[1], "replace-large-target")) to[1] = INT64_MAX;
+            else if (!strcmp(argv[1], "replace-negative-count")) { plum_str_replace_length(2, 1, 2, -1); return 4; }
+            else if (!strcmp(argv[1], "replace-large-count")) { plum_str_replace_length(2, 1, 2, 3); return 4; }
+            else if (!strcmp(argv[1], "replace-empty-pattern-count")) { plum_str_replace_length(2, 0, 2, 1); return 4; }
+            else if (!strcmp(argv[1], "replace-product-overflow")) { plum_str_replace_length(max, 1, max, 2); return 4; }
+            else if (!strcmp(argv[1], "replace-header-overflow")) { plum_str_replace_length(max, 1, 2, 1); return 4; }
+            else if (!strcmp(argv[1], "replace-signed-overflow")) { plum_str_replace_length(max, 1, max, 1); return 4; }
+            else if (!strcmp(argv[1], "replace-oom")) {
+                struct {int64_t rc, n; char data[3];} s = {1, 1, "a"}, f = {1, 1, "a"}, t = {1, 2, "bb"};
+                failures = 1; plum_str_replace(&s, &f, &t); return 4;
+            }
+            else return 3;
+            /* Invalid headers fail before any payload or reference update. */
+            plum_str_replace(source, from, to);
+        }
         else if (!strcmp(argv[1], "oom")) { failures = 2; plum_alloc_preferred(33, 80, 1); }
         else if (!strcmp(argv[1], "exact-oom")) { failures = 1; plum_alloc_preferred(33, 33, 1); }
         else return 3;
@@ -713,6 +814,6 @@ int main(int argc, char **argv) {
     }
     arithmetic(); fallback(); ownership(); growth_fallback(); snapshots();
     for (int steps = 512; steps <= 4096; steps *= 2) traffic(steps);
-    repetition(); hexadecimal(); joining(); percent_encoding(); base64_encoding(); base64_decoding(); percent_decoding(); hex_decoding();
+    repetition(); hexadecimal(); joining(); percent_encoding(); base64_encoding(); base64_decoding(); percent_decoding(); hex_decoding(); replacement();
     return 0;
 }

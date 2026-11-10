@@ -632,6 +632,8 @@ pub let String.starts_with (s: String) (prefix: String): Bool = s.starts_with(pr
 pub let String.ends_with (s: String) (suffix: String): Bool = s.ends_with(suffix)
 /// Every occurrence of `from` replaced with `to`. An empty `from`
 /// leaves the string alone rather than looping.
+/// Unchanged nonempty results share the input cell. Changed nonempty results
+/// use one exact-sized allocation; empty results use static storage.
 pub let String.replace (s: String) (from: String) (to: String): String = s.replace(from, to)
 /// Uppercased. ASCII only: letters outside it are left as they are,
 /// so this is not a general Unicode case mapping.

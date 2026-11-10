@@ -1,0 +1,56 @@
+// Byte-level reference: left-to-right, nonoverlapping matches; empty pattern is identity.
+let reference_replace (s: String) (pattern: String) (target: String): Bytes = {
+    let b = s.as_bytes(); let p = pattern.as_bytes(); let t = target.as_bytes();
+    let mut result = []; let mut i = 0;
+    for step in 0..b.len() {
+        if i < b.len() {
+            let mut matches = p.len() > 0 && p.len() <= b.len() - i;
+            for j in 0..p.len() { if matches { matches = b.at(i + j) == p.at(j); }; };
+            if matches {
+                for k in 0..t.len() { result = result.push(t.at(k).unwrap_or(0)); };
+                i = i + p.len();
+            } else { result = result.push(b.at(i).unwrap_or(0)); i = i + 1; };
+        };
+    };
+    Bytes.from_array(result)
+}
+let compare (s: String) (pattern: String) (target: String): Unit = {
+    let expected = reference_replace(s, pattern, target).to_hex();
+    assert_eq(s.replace(pattern, target).as_bytes().to_hex(), expected);
+    assert_eq(String.replace(s, pattern, target).as_bytes().to_hex(), expected);
+}
+let main (): Unit = {
+    for s in ["", "a", "aa", "aaa", "aaaaa", "ababa", "abcabc", "a\x00b\x00", "aé🙂é", "éé", "a\r\nb"] {
+        for pattern in ["", "a", "aa", "aba", "abc", "a\x00", "\x00", "é", "🙂", "missing-long"] {
+            for target in ["", "a", "X", "XX", "é🙂", "\x00!"] { compare(s, pattern, target); };
+        };
+    };
+    assert_eq("aaaaa".replace("aa", "X"), "XXa");
+    assert_eq("abc".replace("", "-"), "abc");
+    let mut text = "aé\x00🙂".repeat(50);
+    let alias = text; let bytes = text.as_bytes(); let view = unsafe { text.as_cstr() };
+    let unchanged = text.replace("missing", "X");
+    let changed = text.replace("é", "[é]");
+    text = text.concat("!");
+    assert_eq(unchanged, alias);
+    assert_eq(unchanged.as_bytes().to_array(), bytes.to_array());
+    assert_eq(changed, "a[é]\x00🙂".repeat(50));
+    assert_eq(unsafe { view.as_string() }, "aé");
+    assert_eq(text, alias.concat("!"));
+    let mut target = "LONG".repeat(50);
+    let output = "xxx".replace("x", target);
+    let target_view = unsafe { target.as_cstr() };
+    target = target.concat("!");
+    assert_eq(output, "LONG".repeat(150));
+    assert_eq(unsafe { target_view.as_string() }, "LONG".repeat(50));
+    let source = "abcabc";
+    assert_eq(source.replace("abc", source), "abcabcabcabc");
+    assert_eq(source.replace(source, ""), "");
+    assert_eq(source.replace(source, source), source);
+    let mut output = "abc".replace("b", "Z");
+    let output_view = unsafe { output.as_cstr() };
+    output = output.concat("!");
+    assert_eq(unsafe { output_view.as_string() }, "aZc"); assert_eq(output, "aZc!");
+    assert_eq("abc\x00é".repeat(16384).replace("\x00", "--"), "abc--é".repeat(16384));
+    println("String replacement: nonoverlap, empty patterns, UTF-8/NUL bytes, independent changes and immutable aliases")
+}
