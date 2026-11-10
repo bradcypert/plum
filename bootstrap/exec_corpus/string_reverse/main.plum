@@ -1,0 +1,32 @@
+let reference (s: String): String = Array.concat_all(Array.reverse(chars_of(s)))
+let raw_string (bytes: Array[Int]): String = unsafe { Bytes.from_array(bytes).as_cstr().as_string() }
+let main (): Unit = {
+    let reverse = String.reverse;
+    let inputs = ["", "a", "é", "中", "🙂", "\x00", "aé中🙂\x00", "é", "abccba", "aaaa", "\x00a\x00",
+        raw_string([128]), raw_string([128, 191]), raw_string([128, 97, 191]),
+        raw_string([255, 128, 97, 240, 159]), raw_string([226]), raw_string([240, 159])];
+    for s in inputs {
+        assert_eq(reverse(s).as_bytes().to_hex(), reference(s).as_bytes().to_hex());
+        assert_eq(String.reverse(s).len(), s.len());
+    };
+    assert_eq(String.reverse("é"), "́e");
+    for n in 0..100 {
+        let s = "aé\x00🙂".repeat(n);
+        let result = reverse(s);
+        assert_eq(result, "🙂\x00éa".repeat(n));
+        assert_eq(reverse(result), s);
+    };
+    let mut source = "aé\x00🙂".repeat(64);
+    let alias = source; let bytes = source.as_bytes(); let view = unsafe { source.as_cstr() };
+    let mut result = reverse(source); let result_view = unsafe { result.as_cstr() };
+    source = source.concat("!"); result = result.concat("?");
+    assert_eq(alias, "aé\x00🙂".repeat(64));
+    assert_eq(bytes.to_hex(), alias.as_bytes().to_hex());
+    assert_eq(unsafe { view.as_string() }, "aé");
+    assert_eq(unsafe { result_view.as_string() }, "🙂");
+    assert_eq(source, alias.concat("!")); assert_eq(result, "🙂\x00éa".repeat(64).concat("?"));
+    let mut single = "é".repeat(1); let kept = reverse(single);
+    single = single.concat("!"); assert_eq(kept, "é"); assert_eq(single, "é!");
+    assert_eq(reverse("aé\x00🙂".repeat(32768)), "🙂\x00éa".repeat(32768));
+    println("String reversal: codepoint groups, raw bytes, NULs, immutable aliases and large inputs")
+}

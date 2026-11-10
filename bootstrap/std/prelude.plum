@@ -200,9 +200,14 @@ pub let Float.clamp (x: Float) (lo: Float) (hi: Float): Float = Float.min(Float.
 /// String operations use codepoint boundaries rather than byte
 /// indices. `String.slice` scans those boundaries directly; operations
 /// that need individual characters can materialize them with `chars_of`.
-/// The string with its CHARACTERS reversed, not its bytes — so text
-/// outside ASCII survives.
-pub let String.reverse (s: String): String = Array.concat_all(Array.reverse(chars_of(s)))
+// Borrow input and return an owned result through the runtime constructor.
+let plum__string_reverse_raw (s: String): String = ""
+
+/// The string with its CHARACTERS (codepoints) reversed, not its bytes.
+/// Combining marks reverse independently; this does not reverse graphemes.
+/// Uses one exact-sized output allocation without character arrays or strings.
+/// Empty output uses static storage; a single character shares input storage.
+pub let String.reverse (s: String): String = plum__string_reverse_raw(s)
 /// Whether the string has no bytes.
 pub let String.is_empty (s: String): Bool = s.len() == 0
 /// Characters from `start` up to but not including `end`, counted in

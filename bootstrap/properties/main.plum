@@ -2396,3 +2396,16 @@ pub let test_case_storage_semantics (): Unit = {
     assert_eq("", String.to_upper(""));
     assert_eq("ß", String.to_upper("ß"))
 }
+
+// Valid UTF-8 reverses by codepoint, including independent combining marks.
+pub let test_string_reverse_laws (): Unit = {
+    for n in 0..100 {
+        let s = "aé\x00🙂é".repeat(n);
+        let reversed = String.reverse(s);
+        assert_eq(String.reverse(reversed), s);
+        assert_eq(reversed.len(), s.len());
+        assert_eq(reversed, Array.concat_all(Array.reverse(chars_of(s))));
+        assert_eq(String.reverse(s.concat("中")), "中".concat(reversed));
+    };
+    assert_eq(String.reverse(""), ""); assert_eq(String.reverse("🙂"), "🙂")
+}

@@ -3088,6 +3088,7 @@ let cg_runtime_fn (name: String): Option[String] =
     else if name == "plum__percent_decode_validated_raw" { Some("@plum_percent_decode_validated") }
     else if name == "plum__hex_decode_validated_raw" { Some("@plum_hex_decode_validated") }
     else if name == "plum__bytes_to_hex_raw" { Some("@plum_bytes_to_hex") }
+    else if name == "plum__string_reverse_raw" { Some("@plum_str_reverse") }
     else if name == "plum__string_repeat_raw" { Some("@plum_str_repeat") }
     else if name == "plum__string_join_raw" { Some("@plum_str_join") }
     else if name == "string_concat_all_raw" { Some("@plum_str_concat_all") }
