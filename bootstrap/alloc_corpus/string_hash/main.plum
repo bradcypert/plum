@@ -1,0 +1,7 @@
+let main (): Unit = {
+    let hash = String.hash;
+    for i in 0..1000 {
+        assert_eq(String.hash("aé\x00🙂"), "aé\x00🙂".hash());
+        assert_eq(hash("aé\x00🙂"), "aé\x00🙂".hash());
+    };
+}

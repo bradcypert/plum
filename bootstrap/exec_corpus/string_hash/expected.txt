@@ -3,3 +3,4 @@
 2607821981565500683
 775207407765167617
 3731286275530870772
+String hashing: named, method and function forms preserve FNV bytes, NULs, aliases and collection behavior
