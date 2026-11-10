@@ -2312,3 +2312,29 @@ pub let test_percent_decode_laws (): Unit = {
     assert_eq(Encoding.percent_decode("a+b%2Bc").unwrap_or(Bytes.empty()).to_array(), "a+b+c".as_bytes().to_array());
     assert_eq(Encoding.percent_decode("%2520").unwrap_or(Bytes.empty()).to_array(), "%20".as_bytes().to_array());
 }
+
+// Hex length is checked before digits; invalid pairs report the first byte of the pair.
+pub let test_hex_decode_laws (): Unit = {
+    let upper = ["0", "1", "2", "3", "4", "5", "6", "7", "8", "9", "A", "B", "C", "D", "E", "F"];
+    let lower = ["0", "1", "2", "3", "4", "5", "6", "7", "8", "9", "a", "b", "c", "d", "e", "f"];
+    for c in 0..256 {
+        for text in [upper[c / 16].concat(lower[c % 16]), lower[c / 16].concat(upper[c % 16])] {
+            assert_eq(Encoding.hex_decode(text).unwrap_or(Bytes.empty()).to_array(), [c]);
+        };
+    };
+    for n in 0..60 {
+        let prefix = "00".repeat(n);
+        for suffix in ["G", "GG0"] {
+            match Encoding.hex_decode(prefix.concat(suffix)) {
+                Err(e) => assert_eq(e, "Encoding.hex_decode: odd number of hex digits"),
+                Ok(_) => assert(false),
+            };
+        };
+        for suffix in ["AG", "G0", "é", "\x000"] {
+            match Encoding.hex_decode(prefix.concat(suffix)) {
+                Err(e) => assert_eq(e, "Encoding.hex_decode: not a hex digit at byte ".concat(prefix.len().to_string())),
+                Ok(_) => assert(false),
+            };
+        };
+    };
+}
