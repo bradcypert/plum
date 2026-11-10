@@ -419,35 +419,72 @@ let plum__inc_acc (s: String) (i: Int) (acc: String): String =
 /// bit pattern, `Int.to_bits` says so in its name.
 ///
 /// Radix is clamped to 2..36: one digit per character, `0-9a-z`.
+/// Digit values select static strings. Multi-digit conversion grows a unique
+/// accumulator through Perceus reuse, then reverses it into an exact-sized result.
 pub let Int.to_radix (n: Int) (radix: Int): String = {
     let r = Int.clamp(radix, 2, 36);
-    if n == 0 { "0" }
-    // The most negative Int has no positive counterpart, so it cannot
-    // be negated before conversion. Its last digit is peeled off first,
-    // in the negative, and the rest divides safely.
-    else if n < 0 { "-".concat(plum__radix_acc(0 - (n / r), r, plum__radix_digit(0 - (n - (n / r) * r)))) }
-    else { plum__radix_acc(n, r, "") }
+    if n == 0 { "0" } else {
+        // Peel the last digit before negating: Int::MIN has no positive
+        // counterpart, but its quotient and remainder both do (r >= 2).
+        let q = n / r;
+        let tail = n - q * r;
+        let digit = plum__radix_digit(if n < 0 { 0 - tail } else { tail });
+        if q == 0 { if n < 0 { "-".concat(digit) } else { digit } }
+        else {
+            let backwards = plum__radix_acc(if n < 0 { 0 - q } else { q }, r, digit);
+            String.reverse(if n < 0 { backwards.concat("-") } else { backwards })
+        }
+    }
 }
 
+// Remaining magnitude is nonnegative. Append least-significant digits into
+// one owned accumulator; prepending would copy the growing suffix each time.
 let plum__radix_acc (n: Int) (r: Int) (acc: String): String =
-    if n == 0 { acc } else { plum__radix_acc(n / r, r, plum__radix_digit(n - (n / r) * r).concat(acc)) }
+    if n == 0 { acc } else { plum__radix_acc(n / r, r, acc.concat(plum__radix_digit(n - (n / r) * r))) }
 
-/// Built from the digit's VALUE rather than looked up in a table.
-///
-/// A global `chars_of("0123..z")` is the obvious spelling and cost
-/// every program 37 allocations at startup, 36 strings and the
-/// array, whether or not it ever formatted a number, because
-/// globals are initialised eagerly and are not dead-code eliminated.
-/// `bootstrap/alloc-check` caught it as a uniform +37 across every
-/// fixture, which is what a constant offset in that harness means.
-///
-/// This pays about two allocations per digit instead, and only when
-/// a conversion actually happens. 48 is '0' and 87 is 'a' - 10.
-let plum__radix_digit (v: Int): String =
-    match Bytes.as_string(Bytes.from_array([if v < 10 { 48 + v } else { 87 + v }])) {
-        Ok(c) => c,
-        Err(_) => "?",
-    }
+// A finite formatting alphabet needs no per-call arrays, byte buffers or
+// Result cells. Each arm returns an immutable String literal. A global
+// chars_of table would eagerly allocate all 36 digit cells and its array.
+// Callers prove 0 <= v < 36; the fallback remains defensive.
+let plum__radix_digit (v: Int): String = match v {
+    0 => "0",
+    1 => "1",
+    2 => "2",
+    3 => "3",
+    4 => "4",
+    5 => "5",
+    6 => "6",
+    7 => "7",
+    8 => "8",
+    9 => "9",
+    10 => "a",
+    11 => "b",
+    12 => "c",
+    13 => "d",
+    14 => "e",
+    15 => "f",
+    16 => "g",
+    17 => "h",
+    18 => "i",
+    19 => "j",
+    20 => "k",
+    21 => "l",
+    22 => "m",
+    23 => "n",
+    24 => "o",
+    25 => "p",
+    26 => "q",
+    27 => "r",
+    28 => "s",
+    29 => "t",
+    30 => "u",
+    31 => "v",
+    32 => "w",
+    33 => "x",
+    34 => "y",
+    35 => "z",
+    _ => "?",
+}
 
 /// Lowercase hex, SIGNED: `-255` is `-ff`, not a two's-complement bit
 /// pattern. `Int.to_hex_bits` is the one that shows the bits.

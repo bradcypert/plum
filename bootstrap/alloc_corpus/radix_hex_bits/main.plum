@@ -1,0 +1,1 @@
+let main (): Unit = { for i in 0..1000 { assert_eq(Int.to_hex_bits(0 - 1), "ffffffffffffffff"); }; }
