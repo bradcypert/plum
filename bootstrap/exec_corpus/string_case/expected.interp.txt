@@ -3,3 +3,4 @@ world
 ÄÖÜ
 äöü
 GRUSSE
+String case: platform Unicode mapping, NUL bytes, static empties, immutable aliases and large inputs

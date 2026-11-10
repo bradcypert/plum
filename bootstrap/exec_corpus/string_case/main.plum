@@ -25,5 +25,30 @@ let main (): Unit = {
     println("ÄÖÜ".to_lower());
     // The divergent one is built at runtime so no constant folding can
     // reach it.
-    println(sharp().to_upper())
+    println(sharp().to_upper());
+    storage_checks()
+}
+
+let storage_checks (): Unit = {
+    assert_eq("", "".to_upper()); assert_eq("", String.to_lower(""));
+    assert_eq("AÉÄÖÜ\x00🙂123", "aéäöü\x00🙂123".to_upper());
+    assert_eq("aéäöü\x00🙂123", String.to_lower("AÉÄÖÜ\x00🙂123"));
+    assert_eq("ß", "ß".to_upper());
+    let upper = String.to_upper; let lower = String.to_lower;
+    assert_eq(upper("aZ"), "AZ"); assert_eq(lower("aZ"), "az");
+    for n in 0..80 {
+        let original = "aé\x00🙂".repeat(n);
+        let bytes = original.as_bytes(); let cstr = unsafe { original.as_cstr() };
+        let changed = original.to_upper(); let identity = original.to_lower();
+        assert_eq(changed, "AÉ\x00🙂".repeat(n)); assert_eq(identity, original);
+        let appended = original.concat("!"); let result_append = identity.concat("?");
+        assert_eq(appended, "aé\x00🙂".repeat(n).concat("!"));
+        assert_eq(result_append, "aé\x00🙂".repeat(n).concat("?"));
+        assert_eq(bytes.as_string().unwrap_or("INVALID"), "aé\x00🙂".repeat(n));
+        assert_eq(unsafe { cstr.as_string() }, if n == 0 { "" } else { "aé" });
+        assert_eq(changed, "AÉ\x00🙂".repeat(n));
+    };
+    // A large changed result exercises both decoder passes.
+    assert_eq("aé\x00🙂".repeat(32768).to_upper(), "AÉ\x00🙂".repeat(32768));
+    println("String case: platform Unicode mapping, NUL bytes, static empties, immutable aliases and large inputs")
 }

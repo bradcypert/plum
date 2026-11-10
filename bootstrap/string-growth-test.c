@@ -5,15 +5,10 @@
 #include <stdlib.h>
 #include <string.h>
 #include "../native_stdlib/memory_shim.h"
-#if defined(__APPLE__)
-#include <malloc/malloc.h>
-uint64_t malloc_usable_size(void *p) { return malloc_size(p); }
-#elif defined(_WIN32)
-#include <malloc.h>
-uint64_t malloc_usable_size(void *p) { return _msize(p); }
-#else
-#include <malloc.h>
-#endif
+extern size_t malloc_usable_size(void *);
+extern int plum_toupper_cp(int), plum_tolower_cp(int);
+extern void plum_set_utf8_locale(void);
+extern void *plum_str_case(void *, int64_t);
 extern void *plum_alloc_preferred(int64_t, int64_t, int64_t);
 extern int64_t plum_str_concat_length(int64_t, int64_t);
 extern int64_t plum_str_growth_bytes(int64_t, int64_t);
@@ -47,7 +42,15 @@ extern int64_t plum_heap_snapshot(void);
 extern int64_t plum_heap_snapshot_field(int64_t, int64_t);
 extern int64_t plum_heap_origin_snapshot(void);
 extern int64_t plum_heap_origin_field(int64_t, int64_t, int64_t);
-static int failures, attempts;
+static int failures, attempts, case_fault, case_calls;
+int growth_test_toupper_cp(int cp) {
+    if (case_fault) {
+        int first = case_calls++ == 0;
+        return (case_fault == 1 ? !first : first) ? 0x23F : 'A';
+    }
+    return plum_toupper_cp(cp);
+}
+int growth_test_tolower_cp(int cp) { return plum_tolower_cp(cp); }
 static int64_t requests[8];
 void *growth_test_malloc(int64_t size) {
     if (attempts < 8) requests[attempts] = size;
@@ -660,9 +663,82 @@ static void replacement(void) {
 #endif
 }
 
+
+/* Independent UTF-8 encoding, with the real platform shim as mapping oracle. */
+static int encode_cp(unsigned char *out, uint32_t cp) {
+    if (cp < 128) { out[0]=(unsigned char)cp; return 1; }
+    if (cp < 2048) { out[0]=(unsigned char)(0xC0|(cp>>6));out[1]=(unsigned char)(0x80|(cp&63));return 2; }
+    if (cp < 65536) { out[0]=(unsigned char)(0xE0|(cp>>12));out[1]=(unsigned char)(0x80|((cp>>6)&63));out[2]=(unsigned char)(0x80|(cp&63));return 3; }
+    out[0]=(unsigned char)(0xF0|(cp>>18));out[1]=(unsigned char)(0x80|((cp>>12)&63));out[2]=(unsigned char)(0x80|((cp>>6)&63));out[3]=(unsigned char)(0x80|(cp&63));return 4;
+}
+static void case_conversion(void) {
+    plum_set_utf8_locale();
+    /* Include shrink (dotless i, long s), growth (U+023F), NUL, supplementary
+       cased characters and randomized valid scalar values. OS mapping differs. */
+    const uint32_t special[]={0, 'a', 'A', 0xE9, 0xC9, 0xDF, 0x131, 0x17F, 0x23F, 0x2C7E, 0x10428, 0x10400, 0x1F642};
+    uint32_t state=492;
+    for(int trial=0;trial<4096;trial++) {
+        unsigned char input[5]={0}, expected[5]={0};
+        state=state*1664525u+1013904223u;
+        uint32_t cp=trial<(int)(sizeof(special)/sizeof(special[0]))?special[trial]:state%0x110000;
+        if(cp>=0xD800 && cp<=0xDFFF)cp='a';
+        int n=encode_cp(input,cp);
+        for(int upper=0;upper<2;upper++) {
+            uint32_t mapped=(uint32_t)(upper?plum_toupper_cp((int)cp):plum_tolower_cp((int)cp));
+            int m=encode_cp(expected,mapped);
+            void *src=text((char *)input,n,4096);
+            int64_t allocations=plum_n_alloc, traffic=plum_b_alloc;
+            attempts=0;
+            void *out=plum_str_case(src,upper);
+            value(out,(char *)expected,m);value(src,(char *)input,n);
+            if(mapped==cp) {
+                CHECK(out==src && *(int64_t *)src==2 && attempts==0);
+                CHECK(plum_n_alloc==allocations && plum_b_alloc==traffic);
+            } else {
+                CHECK(out!=src && *(int64_t *)src==1 && attempts==1 && requests[0]==m+17);
+                CHECK(plum_n_alloc==allocations+1 && plum_b_alloc==traffic+m+17);
+            }
+            plum_rel_str(src);value(out,(char *)expected,m);plum_rel_str(out);
+        }
+    }
+    void *src=text("A",1,4096); failures=1;attempts=0;
+    void *out=plum_str_case(src,1);CHECK(out==src && attempts==0);failures=0;
+    plum_rel_str(src);
+#ifdef PLUM_HEAP_STATS
+    CHECK(field(3)==4113 && origin_field(3)==4113);
+#endif
+    plum_rel_str(out);
+    src=text("",0,4096);attempts=0;out=plum_str_case(src,0);
+    CHECK(out!=src && *(int64_t *)out==-1 && attempts==0);value(out,"",0);
+    plum_rel_str(src);plum_rel_str(out);
+    /* One million codepoints at O0: catches an alloca inside either loop. */
+    const int64_t n=1024*1024;
+    char *large=malloc((size_t)n);CHECK(large);memset(large,'a',(size_t)n);
+    src=text(large,n,n);out=plum_str_case(src,1);memset(large,'A',(size_t)n);value(out,large,n);
+    plum_rel_str(src);plum_rel_str(out);free(large);
+#ifdef PLUM_HEAP_STATS
+    CHECK(field(2)==0 && field(3)==0);
+#endif
+}
+
 int main(int argc, char **argv) {
     if (argc > 1) {
-        if (!strcmp(argv[1], "negative")) plum_str_concat_length(-1, 0);
+        if (!strncmp(argv[1], "case-", 5)) {
+            const char error[]="Plum String: invalid case-conversion size\n";
+            int64_t input[]={1,-1};
+            if (!strcmp(argv[1],"case-negative")) plum_str_case(input,1);
+            else if (!strcmp(argv[1],"case-large")) { input[1]=INT64_MAX;plum_str_case(input,0); }
+            else if (!strcmp(argv[1],"case-sum-overflow")) plum_str_added_length(INT64_MAX-2,3,error,sizeof(error)-1);
+            else if (!strcmp(argv[1],"case-header-overflow")) plum_str_added_length(INT64_MAX-17,1,error,sizeof(error)-1);
+            else if (!strcmp(argv[1],"case-truncated")) { struct {int64_t rc,n;char bytes[1];} s={1,1,{(char)0xC3}};plum_str_case(&s,1); }
+            else if (!strcmp(argv[1],"case-fill-growth") || !strcmp(argv[1],"case-fill-short")) {
+                struct {int64_t rc,n;char bytes[2];} s={1,1,"a"};
+                case_fault=!strcmp(argv[1],"case-fill-growth")?1:2;plum_str_case(&s,1);
+            }
+            else if (!strcmp(argv[1],"case-oom")) { struct {int64_t rc,n;char bytes[2];} s={1,1,"a"};failures=1;plum_str_case(&s,1); }
+            else return 3;
+        }
+        else if (!strcmp(argv[1], "negative")) plum_str_concat_length(-1, 0);
         else if (!strcmp(argv[1], "negative-b")) plum_str_concat_length(0, -1);
         else if (!strcmp(argv[1], "overflow")) plum_str_concat_length(INT64_MAX, 1);
         else if (!strcmp(argv[1], "header-overflow")) plum_str_concat_length(INT64_MAX - 17, 1);
@@ -814,6 +890,6 @@ int main(int argc, char **argv) {
     }
     arithmetic(); fallback(); ownership(); growth_fallback(); snapshots();
     for (int steps = 512; steps <= 4096; steps *= 2) traffic(steps);
-    repetition(); hexadecimal(); joining(); percent_encoding(); base64_encoding(); base64_decoding(); percent_decoding(); hex_decoding(); replacement();
+    repetition(); hexadecimal(); joining(); percent_encoding(); base64_encoding(); base64_decoding(); percent_decoding(); hex_decoding(); replacement(); case_conversion();
     return 0;
 }
