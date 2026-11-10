@@ -1,0 +1,3 @@
+let main (): Unit = {
+    for i in 0..1000 { assert_eq("aé\x00🙂".replace("é", "[é]").len(), 10); };
+}

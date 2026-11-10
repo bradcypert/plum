@@ -1,0 +1,1 @@
+String replacement: nonoverlap, empty patterns, UTF-8/NUL bytes, independent changes and immutable aliases

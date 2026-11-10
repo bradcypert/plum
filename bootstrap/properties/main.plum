@@ -2358,3 +2358,24 @@ pub let test_string_hash_forms_laws (): Unit = {
         assert(expected >= 0);
     };
 }
+
+// Replacement obeys bytewise nonoverlap, preserves identities and never revisits inserted text.
+pub let test_string_replace_laws (): Unit = {
+    let mut seed = 492;
+    for trial in 0..200 {
+        seed = next_seed(seed);
+        let prefix = ascii_string(seed, rand_between(seed, 0, 128), "");
+        let s = prefix.concat("é\x00🙂");
+        assert_eq(s.replace("", "anything"), s);
+        assert_eq(s.replace("é", "é"), s);
+        assert_eq(s.replace("impossible🙂pattern", "X"), s);
+        assert_eq(s.replace(s, ""), "");
+        assert_eq(s.replace(s, s), s);
+        assert_eq(s.replace("\x00", "\x00\x00"), prefix.concat("é\x00\x00🙂"));
+    };
+    for n in 0..100 {
+        assert_eq("a".repeat(n).replace("aa", "X"), "X".repeat(n / 2).concat(if n % 2 == 0 { "" } else { "a" }));
+        assert_eq("a".repeat(n).replace("a", "aa"), "a".repeat(n * 2));
+        assert_eq("a".repeat(n).replace("a", ""), "");
+    };
+}

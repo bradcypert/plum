@@ -139,6 +139,8 @@ Whether the string ends with `suffix`.
 
 Every occurrence of `from` replaced with `to`. An empty `from`
 leaves the string alone rather than looping.
+Unchanged nonempty results share the input cell. Changed nonempty results
+use one exact-sized allocation; empty results use static storage.
 
 ## `let String.to_upper (s: String): String`
 
