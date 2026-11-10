@@ -2338,3 +2338,23 @@ pub let test_hex_decode_laws (): Unit = {
         };
     };
 }
+
+// Public hashing forms agree with bytewise FNV-1a, including NUL/high UTF-8 bytes.
+pub let test_string_hash_forms_laws (): Unit = {
+    let named = String.hash;
+    let mut seed = 491;
+    for trial in 0..200 {
+        seed = next_seed(seed);
+        let text = ascii_string(seed, rand_between(seed, 0, 256), "").concat("é\x00🙂");
+        let bytes = text.as_bytes();
+        let mut expected = 0 - 3750763034362895579;
+        for i in 0..bytes.len() {
+            expected = Int.wrapping_mul(expected ^ bytes.at(i).unwrap_or(0), 1099511628211);
+        };
+        expected = expected & 9223372036854775807;
+        assert_eq(String.hash(text), expected);
+        assert_eq(text.hash(), expected);
+        assert_eq(named(text), expected);
+        assert(expected >= 0);
+    };
+}

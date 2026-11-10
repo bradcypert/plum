@@ -5,7 +5,7 @@
 
 let show (s: String): Unit = println(String.hash(s).to_string())
 
-let main (): Unit = {
+let legacy_vectors (): Unit = {
     show("");
     show("a");
     show("hello");
@@ -14,4 +14,66 @@ let main (): Unit = {
         Ok(s) => show(s),
         Err(_) => (),
     }
+}
+
+// The original public algorithm remains an independent compatibility oracle.
+let oracle_hash (s: String): Int = {
+    let bytes = s.as_bytes();
+    let mut h = 0 - 3750763034362895579;
+    for i in 0..bytes.len() { h = Int.wrapping_mul(h ^ bytes.at(i).unwrap_or(0), 1099511628211); };
+    h & 9223372036854775807
+}
+let check (s: String) (expected: Int): Unit = {
+    let hash = String.hash;
+    assert_eq(String.hash(s), expected);
+    assert_eq(s.hash(), expected);
+    assert_eq(hash(s), expected);
+    assert_eq(oracle_hash(s), expected);
+}
+let main (): Unit = {
+    legacy_vectors();
+    check("", 5472609002491880229);
+    check("a", 3414815163700866188);
+    check("hello", 2607821981565500683);
+    check("a\x00b", 7337095075662816946);
+    check("é", 775207407765167617);
+    check("🙂", 9151995282995864139);
+    check("aé\x00🙂", 5161007507256253494);
+    check("\x00", 3414781078840391647);
+    check("abcdef0123456789", 5354021461808465109);
+    check("\n\t\r", 3444478664954417987);
+    // Every non-NUL byte also exercises unsafe strings containing invalid UTF-8.
+    check("\x00", oracle_hash("\x00"));
+    for byte in 1..256 {
+        let bytes = Bytes.from_array([byte]);
+        let text = unsafe { bytes.as_cstr().as_string() };
+        check(text, oracle_hash(text));
+    };
+    for n in 0..128 {
+        let text = "aé\x00🙂".repeat(n).concat(n.to_string());
+        check(text, oracle_hash(text));
+    };
+    let mut text = "aé\x00🙂".repeat(128);
+    let saved = text;
+    let bytes = text.as_bytes();
+    let view = unsafe { text.as_cstr() };
+    let expected = oracle_hash(saved);
+    assert_eq(String.hash(text), expected);
+    text = text.concat("!");
+    assert_eq(saved.as_bytes().to_array(), bytes.to_array());
+    assert_eq(String.hash(saved), expected);
+    assert_eq(unsafe { view.as_string() }, "aé");
+    assert_eq(text, saved.concat("!"));
+    let keys = ["key\x00tail", "keyé", "key🙂", ""];
+    let mut map = Map.new(());
+    let mut set = Set.new(());
+    for i in 0..keys.len() { map = Map.insert(map, keys[i], i); set = Set.insert(set, keys[i]); };
+    for i in 0..keys.len() {
+        assert_eq(String.hash(keys[i]), keys[i].hash());
+        assert_eq(Map.get(map, keys[i]), Some(i));
+        assert(Set.contains(set, keys[i]));
+    };
+    let large = "aé\x00🙂".repeat(32768);
+    check(large, oracle_hash(large));
+    println("String hashing: named, method and function forms preserve FNV bytes, NULs, aliases and collection behavior")
 }

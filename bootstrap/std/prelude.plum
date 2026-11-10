@@ -517,14 +517,17 @@ pub let Int.wrapping_sub (a: Int) (b: Int): Int = wrapping_sub_raw(a, b)
 /// followed by a mix.
 pub let Int.wrapping_mul (a: Int) (b: Int): Int = wrapping_mul_raw(a, b)
 
+// i traverses the borrowed prefix [0, n); no optional byte cell is needed.
 let plum__string_hash_acc (b: Bytes) (i: Int) (n: Int) (h: Int): Int =
     if i >= n { h & 9223372036854775807 }
-    else { plum__string_hash_acc(b, i + 1, n, Int.wrapping_mul(h ^ Option.unwrap_or(Bytes.at(b, i), 0), 1099511628211)) }
+    else { plum__string_hash_acc(b, i + 1, n, Int.wrapping_mul(h ^ bytes_at_raw(b, i), 1099511628211)) }
 
 /// A hash of the string's bytes, for bucketing.
 ///
 /// Not stable across releases and not cryptographic — do not persist
 /// it, and do not use it for anything security-related.
+///
+/// Borrows input and allocates no temporary storage while hashing.
 ///
 /// FNV-1a, kept in Plum now that `Int.wrapping_mul` can express its
 /// modulo-2^64 multiply. The final sign-bit mask is required: `Map`

@@ -1,0 +1,9 @@
+let main (): Unit = {
+    let text = "aé\x00🙂".repeat(32768);
+    let hash = String.hash;
+    for i in 0..10 {
+        assert_eq(String.hash(text), text.hash());
+        assert_eq(hash(text), text.hash());
+    };
+    assert_eq(text.len(), 262144);
+}

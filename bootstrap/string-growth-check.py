@@ -27,7 +27,7 @@ def main():
     with tempfile.TemporaryDirectory(prefix='plum-string-growth-') as work:
         work = Path(work)
         project = root / 'bootstrap/exec_corpus/string_growth'
-        for project_name in ('string_growth', 'string_repeat', 'bytes_hex', 'string_join', 'percent_encode', 'base64_encode', 'base64_decode', 'percent_decode', 'hex_decode'):
+        for project_name in ('string_growth', 'string_repeat', 'bytes_hex', 'string_join', 'percent_encode', 'base64_encode', 'base64_decode', 'percent_decode', 'hex_decode', 'string_hash'):
             project = root / 'bootstrap/exec_corpus' / project_name
             for release in (False, True):
                 for tracked in (False, True):
