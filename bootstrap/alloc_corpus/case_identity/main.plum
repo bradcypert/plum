@@ -1,0 +1,1 @@
+let main (): Unit = { for i in 0..1000 { assert_eq("ÉÄÖÜ\x00🙂".to_upper(), "ÉÄÖÜ\x00🙂"); assert_eq("éäöü\x00🙂".to_lower(), "éäöü\x00🙂"); }; }

@@ -2379,3 +2379,20 @@ pub let test_string_replace_laws (): Unit = {
         assert_eq("a".repeat(n).replace("a", ""), "");
     };
 }
+
+// Stable ASCII/BMP cases only: supplementary mappings vary with the platform.
+pub let test_case_storage_semantics (): Unit = {
+    for n in 0..100 {
+        let source = "aé\x00🙂".repeat(n);
+        let alias = source.as_bytes();
+        let changed = String.to_upper(source);
+        let identity = String.to_lower(source);
+        assert_eq(changed, "AÉ\x00🙂".repeat(n));
+        assert_eq(identity, source);
+        assert_eq(alias.to_hex(), source.as_bytes().to_hex());
+        assert_eq(changed.to_lower(), source);
+        assert_eq(identity.concat("!"), source.concat("!"));
+    };
+    assert_eq("", String.to_upper(""));
+    assert_eq("ß", String.to_upper("ß"))
+}

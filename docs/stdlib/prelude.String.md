@@ -144,12 +144,16 @@ use one exact-sized allocation; empty results use static storage.
 
 ## `let String.to_upper (s: String): String`
 
-Uppercased. ASCII only: letters outside it are left as they are,
-so this is not a general Unicode case mapping.
+Uppercased using the platform's one-codepoint Unicode mapping. This
+does not perform multi-codepoint expansions (for example, ß to SS).
+POSIX uses the initialized UTF-8 locale; Windows maps the BMP only
+and leaves supplementary codepoints unchanged. Mappings can vary by OS.
+Unchanged nonempty results share input storage; changed results use
+one exact-sized allocation. Empty results use static storage.
 
 ## `let String.to_lower (s: String): String`
 
-Lowercased. ASCII only — see `String.to_upper`.
+Lowercased with the same platform mapping and storage rules as `String.to_upper`.
 
 ## `let String.trim (s: String): String`
 
