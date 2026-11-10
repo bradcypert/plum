@@ -820,10 +820,11 @@ pub let Bytes.from_cstr (c: RawCStr) (len: Int): Bytes = unsafe {
     if len <= 0 { Bytes.empty() } else { bytes_from_cstr_raw(c, len) }
 }
 
-let plum__bytes_to_array_acc (b: Bytes) (i: Int) (n: Int) (acc: Array[Int]): Array[Int] =
-    if i >= n { acc } else { plum__bytes_to_array_acc(b, i + 1, n, acc.push(bytes_at_raw(b, i))) }
-/// The bytes as numbers 0-255.
-pub let Bytes.to_array (b: Bytes): Array[Int] = plum__bytes_to_array_acc(b, 0, bytes_len_raw(b), [])
+// Borrows b and returns independent owned Array[Int] storage.
+let plum__bytes_to_array_raw (b: Bytes): Array[Int] = []
+/// The bytes as numbers 0-255, using one exact-sized array allocation.
+/// The result is independent of the input; empty results use static storage.
+pub let Bytes.to_array (b: Bytes): Array[Int] = plum__bytes_to_array_raw(b)
 
 /// Lowercase hex, two characters per byte, no separator.
 ///

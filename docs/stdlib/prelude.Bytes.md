@@ -81,7 +81,8 @@ the source is neither retained nor freed.
 
 ## `let Bytes.to_array (b: Bytes): Array[Int]`
 
-The bytes as numbers 0-255.
+The bytes as numbers 0-255, using one exact-sized array allocation.
+The result is independent of the input; empty results use static storage.
 
 ## `let Bytes.to_hex (b: Bytes): String`
 

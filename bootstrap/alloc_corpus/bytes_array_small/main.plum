@@ -1,0 +1,1 @@
+let main (): Unit = { for i in 0..1000 { assert_eq("aé\x00🙂".as_bytes().to_array().len(), 8); }; }

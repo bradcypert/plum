@@ -2409,3 +2409,20 @@ pub let test_string_reverse_laws (): Unit = {
     };
     assert_eq(String.reverse(""), ""); assert_eq(String.reverse("🙂"), "🙂")
 }
+
+// Every byte widens unsigned and the result has independent Array storage.
+pub let test_bytes_array_conversion (): Unit = {
+    let mut values: Array[Int] = [];
+    for i in 0..256 { values = values.push(i); };
+    assert_eq(Bytes.from_array(values).to_array(), values);
+    for n in 0..128 {
+        let b = "aé\x00🙂".repeat(n).as_bytes(); let a = Bytes.to_array(b);
+        assert_eq(a.len(), b.len()); assert_eq(Bytes.from_array(a) == b, true);
+        if n > 0 {
+            let changed = a.set(0, 255).push(7);
+            assert_eq(changed[0], 255); assert_eq(a[0], 97);
+            assert_eq(b.at(0).unwrap_or(0), 97);
+        };
+    };
+    assert_eq(Bytes.to_array(Bytes.empty()), [])
+}
