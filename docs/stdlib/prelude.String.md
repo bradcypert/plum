@@ -6,13 +6,10 @@ Part of [`prelude`](prelude.md).
 
 ## `let String.reverse (s: String): String`
 
---- Strings ---
-
-String operations use codepoint boundaries rather than byte
-indices. `String.slice` scans those boundaries directly; operations
-that need individual characters can materialize them with `chars_of`.
-The string with its CHARACTERS reversed, not its bytes — so text
-outside ASCII survives.
+The string with its CHARACTERS (codepoints) reversed, not its bytes.
+Combining marks reverse independently; this does not reverse graphemes.
+Uses one exact-sized output allocation without character arrays or strings.
+Empty output uses static storage; a single character shares input storage.
 
 ## `let String.is_empty (s: String): Bool`
 

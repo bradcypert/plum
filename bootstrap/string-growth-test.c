@@ -9,6 +9,7 @@ extern size_t malloc_usable_size(void *);
 extern int plum_toupper_cp(int), plum_tolower_cp(int);
 extern void plum_set_utf8_locale(void);
 extern void *plum_str_case(void *, int64_t);
+extern void *plum_str_reverse(void *);
 extern void *plum_alloc_preferred(int64_t, int64_t, int64_t);
 extern int64_t plum_str_concat_length(int64_t, int64_t);
 extern int64_t plum_str_growth_bytes(int64_t, int64_t);
@@ -721,9 +722,60 @@ static void case_conversion(void) {
 #endif
 }
 
+
+/* Independent grouping oracle: one initial byte plus following continuations. */
+static void reversal(void) {
+    uint32_t state=493;
+    for(int trial=0;trial<4096;trial++) {
+        unsigned char input[128],expected[128];size_t starts[129],units=0;
+        size_t n=(size_t)trial%129;
+        for(size_t i=0;i<n;i++) {state=state*1664525u+1013904223u;input[i]=(unsigned char)(state>>24);}
+        for(size_t i=0;i<n;i++)if(i==0 || (input[i]&0xC0)!=0x80)starts[units++]=i;
+        starts[units]=n;
+        size_t at=0;
+        for(size_t j=units;j>0;j--) {
+            size_t width=starts[j]-starts[j-1];memcpy(expected+at,input+starts[j-1],width);at+=width;
+        }
+        CHECK(at==n);
+        for(int shared=0;shared<2;shared++) {
+            void *src=text((char *)input,(int64_t)n,4096);if(shared)plum_rc_inc(src);
+            int64_t allocs=plum_n_alloc,traffic=plum_b_alloc,rc=*(int64_t *)src;attempts=0;
+            void *out=plum_str_reverse(src);value(out,(char *)expected,(int64_t)n);value(src,(char *)input,(int64_t)n);
+            if(!n) {CHECK(out!=src && *(int64_t *)out==-1 && attempts==0);}
+            else if(units==1) {CHECK(out==src && *(int64_t *)src==rc+1 && attempts==0);}
+            else {CHECK(out!=src && *(int64_t *)src==rc && attempts==1 && requests[0]==(int64_t)n+17);}
+            CHECK(plum_n_alloc-allocs==(units>1?1:0));CHECK(plum_b_alloc-traffic==(units>1?(int64_t)n+17:0));
+            plum_rel_str(src);if(shared)plum_rel_str(src);value(out,(char *)expected,(int64_t)n);plum_rel_str(out);
+        }
+    }
+    /* One malformed unit can be arbitrarily long; no backward decoder or stack. */
+    const int64_t n=1024*1024;char *large=malloc((size_t)n);CHECK(large);memset(large,0x80,(size_t)n);
+    void *src=text(large,n,n);failures=1;attempts=0;void *out=plum_str_reverse(src);
+    CHECK(out==src && attempts==0);failures=0;plum_rel_str(src);plum_rel_str(out);
+    memset(large,'a',(size_t)n);large[n-1]='Z';src=text(large,n,n);out=plum_str_reverse(src);
+    large[n-1]='a';large[0]='Z';value(out,large,n);plum_rel_str(src);plum_rel_str(out);free(large);
+    src=text("x",1,4096);out=plum_str_reverse(src);plum_rel_str(src);
+#ifdef PLUM_HEAP_STATS
+    CHECK(field(3)==4113 && origin_field(3)==4113);
+#endif
+    value(out,"x",1);plum_rel_str(out);
+#ifdef PLUM_HEAP_STATS
+    CHECK(field(2)==0 && field(3)==0);
+#endif
+}
+
 int main(int argc, char **argv) {
     if (argc > 1) {
-        if (!strncmp(argv[1], "case-", 5)) {
+        if (!strncmp(argv[1], "reverse-", 8)) {
+            int64_t input[]={1,-1};
+            if (!strcmp(argv[1],"reverse-negative")) plum_str_reverse(input);
+            else if (!strcmp(argv[1],"reverse-large")) { input[1]=INT64_MAX;plum_str_reverse(input); }
+            else if (!strcmp(argv[1],"reverse-oom")) {
+                struct {int64_t rc,n;char bytes[3];} s={1,2,"ab"};failures=1;plum_str_reverse(&s);
+            }
+            else return 3;
+        }
+        else if (!strncmp(argv[1], "case-", 5)) {
             const char error[]="Plum String: invalid case-conversion size\n";
             int64_t input[]={1,-1};
             if (!strcmp(argv[1],"case-negative")) plum_str_case(input,1);
@@ -890,6 +942,6 @@ int main(int argc, char **argv) {
     }
     arithmetic(); fallback(); ownership(); growth_fallback(); snapshots();
     for (int steps = 512; steps <= 4096; steps *= 2) traffic(steps);
-    repetition(); hexadecimal(); joining(); percent_encoding(); base64_encoding(); base64_decoding(); percent_decoding(); hex_decoding(); replacement(); case_conversion();
+    repetition(); hexadecimal(); joining(); percent_encoding(); base64_encoding(); base64_decoding(); percent_decoding(); hex_decoding(); replacement(); case_conversion(); reversal();
     return 0;
 }
