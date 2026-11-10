@@ -10,6 +10,8 @@ extern int plum_toupper_cp(int), plum_tolower_cp(int);
 extern void plum_set_utf8_locale(void);
 extern void *plum_str_case(void *, int64_t);
 extern void *plum_str_reverse(void *);
+extern void *plum_bytes_to_array(void *);
+extern int64_t plum_bytes_array_size(int64_t);
 extern void *plum_alloc_preferred(int64_t, int64_t, int64_t);
 extern int64_t plum_str_concat_length(int64_t, int64_t);
 extern int64_t plum_str_growth_bytes(int64_t, int64_t);
@@ -764,9 +766,60 @@ static void reversal(void) {
 #endif
 }
 
+
+/* Array[Int] has scalar elements: the RC/free boundary needs no child release. */
+static void array_bytes_value(void *p,const unsigned char *bytes,int64_t n) {
+    CHECK(((int64_t *)p)[1]==n);
+    for(int64_t i=0;i<n;i++)CHECK(((int64_t *)p)[2+i]==bytes[i]);
+}
+static int64_t array_origin_field(int f) {
+    return plum_heap_origin_field(plum_heap_origin_snapshot(),PLUM_ORIGIN_ARRAY,f);
+}
+static void bytes_array_conversion(void) {
+    const int64_t max=(INT64_MAX-16)/8;
+    CHECK(plum_bytes_array_size(0)==16);CHECK(plum_bytes_array_size(1)==24);
+    CHECK(plum_bytes_array_size(max)==max*8+16);
+    unsigned char bytes[256];for(int i=0;i<256;i++)bytes[i]=(unsigned char)i;
+    for(int64_t n=0;n<=256;n++)for(int shared=0;shared<2;shared++) {
+        void *src=text((char *)bytes,n,4096);if(shared)plum_rc_inc(src);
+        int64_t rc=*(int64_t *)src,allocs=plum_n_alloc,traffic=plum_b_alloc;
+        attempts=0;void *out=plum_bytes_to_array(src);
+        CHECK(out!=src && *(int64_t *)src==rc);value(src,(char *)bytes,n);array_bytes_value(out,bytes,n);
+        if(n==0) {CHECK(*(int64_t *)out==-1 && attempts==0);}
+        else {CHECK(*(int64_t *)out==1 && attempts==1 && requests[0]==16+8*n);}
+        CHECK(plum_n_alloc-allocs==(n?1:0));CHECK(plum_b_alloc-traffic==(n?16+8*n:0));
+#ifdef PLUM_HEAP_STATS
+        CHECK(origin_field(3)==4113);CHECK(array_origin_field(3)==(n?16+8*n:0));
+#endif
+        plum_rel_str(src);if(shared)plum_rel_str(src);
+        array_bytes_value(out,bytes,n);
+#ifdef PLUM_HEAP_STATS
+        CHECK(origin_field(3)==0);CHECK(array_origin_field(3)==(n?16+8*n:0));
+#endif
+        plum_rel_str(out);
+    }
+    void *src=text("",0,4096);failures=1;attempts=0;void *out=plum_bytes_to_array(src);
+    CHECK(*(int64_t *)out==-1 && attempts==0);failures=0;plum_rel_str(out);plum_rel_str(src);
+    const int64_t n=1024*1024;unsigned char *large=malloc((size_t)n);CHECK(large);
+    for(int64_t i=0;i<n;i++)large[i]=(unsigned char)i;
+    src=text((char *)large,n,n);out=plum_bytes_to_array(src);plum_rel_str(src);
+    array_bytes_value(out,large,n);plum_rel_str(out);free(large);
+#ifdef PLUM_HEAP_STATS
+    CHECK(field(2)==0 && field(3)==0 && array_origin_field(3)==0);
+#endif
+}
+
 int main(int argc, char **argv) {
     if (argc > 1) {
-        if (!strncmp(argv[1], "reverse-", 8)) {
+        if (!strncmp(argv[1], "barray-", 7)) {
+            int64_t input[]={1,-1};
+            if (!strcmp(argv[1],"barray-negative")) plum_bytes_to_array(input);
+            else if (!strcmp(argv[1],"barray-product-overflow")) { input[1]=INT64_MAX;plum_bytes_to_array(input); }
+            else if (!strcmp(argv[1],"barray-header-overflow")) { input[1]=(INT64_MAX-16)/8+1;plum_bytes_to_array(input); }
+            else if (!strcmp(argv[1],"barray-oom")) { input[1]=2;failures=1;plum_bytes_to_array(input); }
+            else return 3;
+        }
+        else if (!strncmp(argv[1], "reverse-", 8)) {
             int64_t input[]={1,-1};
             if (!strcmp(argv[1],"reverse-negative")) plum_str_reverse(input);
             else if (!strcmp(argv[1],"reverse-large")) { input[1]=INT64_MAX;plum_str_reverse(input); }
@@ -942,6 +995,6 @@ int main(int argc, char **argv) {
     }
     arithmetic(); fallback(); ownership(); growth_fallback(); snapshots();
     for (int steps = 512; steps <= 4096; steps *= 2) traffic(steps);
-    repetition(); hexadecimal(); joining(); percent_encoding(); base64_encoding(); base64_decoding(); percent_decoding(); hex_decoding(); replacement(); case_conversion(); reversal();
+    repetition(); hexadecimal(); joining(); percent_encoding(); base64_encoding(); base64_decoding(); percent_decoding(); hex_decoding(); replacement(); case_conversion(); reversal(); bytes_array_conversion();
     return 0;
 }

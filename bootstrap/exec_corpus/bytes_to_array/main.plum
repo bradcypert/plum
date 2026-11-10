@@ -1,0 +1,29 @@
+let main (): Unit = {
+    let convert = Bytes.to_array;
+    let mut numbers: Array[Int] = [];
+    for i in 0..256 { numbers = numbers.push(i); };
+    let all = Bytes.from_array(numbers);
+    assert_eq(convert(all), numbers);
+    assert_eq(all.to_array(), numbers);
+    assert_eq(convert(Bytes.empty()), []);
+    assert_eq(Bytes.from_array([-1, 256, 511, 128, 0]).to_array(), [255, 0, 255, 128, 0]);
+    for n in 0..100 {
+        let text = "aé\x00🙂".repeat(n);
+        let out = text.as_bytes().to_array();
+        assert_eq(out.len(), text.len());
+        assert_eq(Bytes.from_array(out) == text.as_bytes(), true);
+    };
+    let mut source = Bytes.from_array([0, 128, 255]); let alias = source;
+    let view = unsafe { source.as_cstr() }; let mut result = convert(source); let result_alias = result;
+    source = source.concat(Bytes.from_array([7])); result = result.set(0, 42).push(99);
+    assert_eq(source.to_array(), [0, 128, 255, 7]); assert_eq(alias.to_array(), [0, 128, 255]);
+    assert_eq(unsafe { view.as_string() }, "");
+    assert_eq(result, [42, 128, 255, 99]); assert_eq(result_alias, [0, 128, 255]);
+    let empty = convert(Bytes.empty()); let empty_alias = empty;
+    assert_eq(empty.push(255).set(0, 128), [128]); assert_eq(empty_alias, []);
+    // A large output must preserve byte order and widen high bits unsigned.
+    let large = "aé\x00🙂".repeat(32768).as_bytes(); let values = convert(large);
+    assert_eq(values.len(), 262144); assert_eq(values[0], 97); assert_eq(values[2], 169);
+    assert_eq(values[262143], 130); assert_eq(Bytes.from_array(values) == large, true);
+    println("Bytes to array: unsigned widening, byte order, independent aliases, static empties and large outputs")
+}

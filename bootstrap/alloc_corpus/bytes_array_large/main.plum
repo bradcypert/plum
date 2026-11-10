@@ -1,0 +1,1 @@
+let main (): Unit = { let a="aé\x00🙂".repeat(32768).as_bytes().to_array(); assert_eq(a.len(), 262144); assert_eq(a[2], 169); }
