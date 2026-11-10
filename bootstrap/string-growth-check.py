@@ -19,8 +19,10 @@ def main():
                ASAN_OPTIONS='detect_leaks=1:halt_on_error=1', LSAN_OPTIONS='exitcode=23')
     env.pop('PLUM_CC', None)
     def run(command):
+        # Plum text and emitted LLVM are UTF-8, including source comments;
+        # Python's default codec on Windows can instead be a legacy code page.
         r = subprocess.run([str(x) for x in command], cwd=root, env=env,
-                           capture_output=True, text=True, timeout=300)
+                           capture_output=True, text=True, encoding='utf-8', timeout=300)
         if r.returncode:
             raise RuntimeError(f'{command}: exit {r.returncode}\n{r.stdout}\n{r.stderr}')
         return r.stdout
@@ -36,7 +38,7 @@ def main():
                         flags += ['--sanitize=address']
                     binary = work / 'public.exe'
                     run([compiler, 'build', project, *flags, '-o', binary])
-                    if run([binary]) != (project / 'expected.txt').read_text():
+                    if run([binary]) != (project / 'expected.txt').read_text(encoding='utf-8'):
                         raise RuntimeError('incorrect public String/Bytes/CStr output')
 
         for tracked in (False, True):
@@ -84,7 +86,8 @@ entry:
 }
 '''
             source = work / 'runtime.ll'
-            source.write_text(declarations + '\n'.join(constants + definitions) + '\n' + bridge)
+            source.write_text(declarations + '\n'.join(constants + definitions) + '\n' + bridge,
+                              encoding='utf-8')
             for optimization in ('-O0', '-O2'):
                 binary = work / 'native.exe'
                 command = ['clang', optimization, '-g', '-Wno-override-module', '-pthread']
@@ -97,7 +100,7 @@ entry:
                 print(f'{optimization} tracked={tracked}: {run([binary]).strip()}')
                 for case in ('negative', 'negative-b', 'overflow', 'header-overflow', 'concat-negative', 'reuse-overflow', 'oom', 'exact-oom', 'repeat-negative-length', 'repeat-overflow', 'repeat-header-overflow', 'repeat-oom', 'hex-negative-length', 'hex-overflow', 'hex-header-overflow', 'hex-oom', 'join-negative-count', 'join-large-count', 'join-negative-part', 'join-header-overflow', 'join-sum-overflow', 'join-negative-separator', 'join-product-overflow', 'join-separator-header-overflow', 'join-combined-overflow', 'join-oom', 'concat-all-oom', 'percent-negative-length', 'percent-large-length', 'percent-sum-overflow', 'percent-header-overflow', 'percent-oom', 'base64-negative-length', 'base64-large-length', 'base64-product-overflow', 'base64-header-overflow', 'base64-url-header-overflow', 'base64-oom', 'b64decode-negative-input', 'b64decode-large-input', 'b64decode-negative-count', 'b64decode-count-overflow', 'b64decode-short-group', 'b64decode-padding-shape', 'b64decode-extra-padding', 'b64decode-oom', 'pctdecode-negative-input', 'pctdecode-large-input', 'pctdecode-negative-count', 'pctdecode-count-overflow', 'pctdecode-short-group', 'pctdecode-oom', 'hexdecode-negative-input', 'hexdecode-large-input', 'hexdecode-header-overflow', 'hexdecode-odd-input', 'hexdecode-oom', 'replace-negative-input', 'replace-large-input', 'replace-negative-pattern', 'replace-negative-target', 'replace-large-pattern', 'replace-large-target', 'replace-negative-count', 'replace-large-count', 'replace-empty-pattern-count', 'replace-product-overflow', 'replace-header-overflow', 'replace-signed-overflow', 'replace-oom'):
                     r = subprocess.run([str(binary), case], cwd=root, env=env,
-                                       capture_output=True, text=True, timeout=30)
+                                       capture_output=True, text=True, encoding='utf-8', timeout=30)
                     message = 'cannot allocate storage' if 'oom' in case else 'invalid replacement size' if case.startswith('replace-') else 'invalid validated hex size' if case.startswith('hexdecode-') else 'invalid validated percent size' if case.startswith('pctdecode-') else 'invalid validated base64 size' if case.startswith('b64decode-') else 'invalid base64 size' if case.startswith('base64-') else 'invalid percent-encoding size' if case.startswith('percent-') else 'invalid hexadecimal size' if case.startswith('hex-') else 'invalid repetition size' if case.startswith('repeat-') else 'invalid concatenation size'
                     prefix = 'Plum Bytes' if case.startswith(('b64decode-', 'pctdecode-', 'hexdecode-')) and 'oom' not in case else 'Plum String'
                     if r.returncode != 1 or r.stderr != f'{prefix}: {message}\n':
