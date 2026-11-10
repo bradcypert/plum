@@ -276,8 +276,11 @@ jobs:
           name: plum-linux-compiler
       - name: restore freshly built compiler
         run: tar -xzf plum-linux-compiler.tar.gz
+      # The Python harness enforces its own per-command deadlines. Invoke the
+      # compiler directly, as the other platform jobs do: a timeout utility in
+      # ./sh can reject the non-UTF-8 POSIX filenames this suite must test.
       - name: build cache preserves program behavior
-        run: ./bootstrap/build-cache-check
+        run: ./bootstrap/build-cache-check ./sh.real
 
   cache_objects:
     name: Linux required object cache and debug locations
@@ -299,7 +302,7 @@ jobs:
       - name: restore freshly built compiler
         run: tar -xzf plum-linux-compiler.tar.gz
       - name: supported adapter must reuse objects
-        run: ./bootstrap/build-cache-check --require-objects
+        run: ./bootstrap/build-cache-check ./sh.real --require-objects
 
   # Preserve the existing Linux check name for branch protection. A failed
   # or skipped dependency must fail this check, rather than appear green.
