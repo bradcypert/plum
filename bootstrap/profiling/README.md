@@ -59,6 +59,18 @@ records if exhausted. Reported exit bytes may include intentionally retained
 global compiler state; they are not a leak verdict. Peak payload bytes, RSS,
 and cumulative allocation traffic answer different questions.
 
+The default registry holds 2^20 active allocations. For larger debug-emission
+workloads, add `-DPLUM_PROFILE_HEAP_CAP=4194304` to the CC wrapper to use 2^22
+slots. The capacity must be a positive power of two. This changes only the
+probe's excluded bookkeeping storage, not the measured compiler's allocator.
+
+The optional report also includes successful allocation requests and their
+cumulative requested bytes (a successful reallocation counts as a new request).
+These include raw runtime scratch omitted by `PLUM_RT_STATS`. The profile JSON
+keeps them as `direct_heap_allocations` and `direct_heap_requested_bytes`,
+separate from the ordinary Plum cell counters. Older probes without these
+fields still work.
+
 Instrumented runs occur after all ordinary measurements. Their timings and RSS
 include instrumentation overhead and must not be used as performance results.
 

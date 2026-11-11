@@ -1,0 +1,5 @@
+let main (): Unit = {
+    for i in 0..1000 {
+        assert_eq((i < 500).to_string(), if i < 500 { "true" } else { "false" });
+    }
+}

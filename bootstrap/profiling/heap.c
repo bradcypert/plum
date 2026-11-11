@@ -3,9 +3,13 @@
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
-#define CAP (1u << 20)
+#ifndef PLUM_PROFILE_HEAP_CAP
+#define PLUM_PROFILE_HEAP_CAP (1u << 20)
+#endif
+#define CAP PLUM_PROFILE_HEAP_CAP
+_Static_assert(CAP > 0 && (CAP & (CAP - 1)) == 0, "heap probe capacity must be a power of two");
 static void *pointers[CAP];
-static size_t sizes[CAP], live, peak;
+static size_t sizes[CAP], live, peak, allocations, requested;
 void *__real_malloc(size_t);
 void *__real_calloc(size_t, size_t);
 void *__real_realloc(void *, size_t);
@@ -22,6 +26,7 @@ static unsigned find(void *p) {
 }
 static void add(void *p, size_t n) {
     if (!p) return;
+    allocations++; requested += n;
     unsigned i = slot(p), start = i;
     while (pointers[i] && pointers[i] != (void *)1) {
         i = (i + 1) & (CAP - 1);
@@ -45,5 +50,6 @@ void *__wrap_realloc(void *p, size_t n) {
 }
 void __wrap_free(void *p) { if (p) remove_slot(find(p)); __real_free(p); }
 __attribute__((destructor)) static void report(void) {
-    fprintf(stderr, "compiler-heap: peak_bytes=%zu exit_bytes=%zu\n", peak, live);
+    fprintf(stderr, "compiler-heap: peak_bytes=%zu exit_bytes=%zu allocations=%zu requested_bytes=%zu\n",
+            peak, live, allocations, requested);
 }
