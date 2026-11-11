@@ -40,6 +40,11 @@ entry:
   %text = call ptr @plum_bool_to_string(i1 %value)
   ret ptr %text
 }
+; Obtain the runtime's exact external symbol, bypassing C header redirects.
+define ptr @format_test_runtime_snprintf() {
+entry:
+  ret ptr @snprintf
+}
 '''
     return declarations + '\n'.join(constants + definitions) + '\n' + bridge
 

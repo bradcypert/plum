@@ -16,6 +16,12 @@ extern void *plum_int_to_string(int64_t), *plum_float_to_string(double);
 extern void *plum_float_fixed_raw(double, int64_t), *format_test_bool(int64_t);
 extern void plum_rc_inc(void *), plum_rel_str(void *);
 extern int64_t plum_n_alloc, plum_b_alloc;
+/* MinGW's stdio headers may route a C snprintf call to __mingw_snprintf,
+   while generated LLVM calls the CRT symbol directly. Compare raw expansion
+   with that same formatter, using an address supplied by the emitted-IR probe. */
+typedef int (*FormatSnprintf)(char *, size_t, const char *, ...);
+extern FormatSnprintf format_test_runtime_snprintf(void);
+static FormatSnprintf runtime_snprintf;
 static struct { void *ptr; int64_t size; } active[8];
 static int64_t allocations, requested, live, peak;
 static int measuring;
@@ -54,6 +60,10 @@ static int64_t length(void *ptr) { return ((int64_t *)ptr)[1]; }
 static char *data(void *ptr) { return (char *)ptr + 16; }
 static void reset(void) { CHECK(live == 0); allocations = requested = peak = 0; }
 static void same(void *ptr, const char *text) {
+    if (length(ptr) != (int64_t)strlen(text) || memcmp(data(ptr), text, (size_t)length(ptr) + 1)) {
+        fprintf(stderr, "primitive-format: expected '%s', got '%.*s' (length %" PRId64 ")\n",
+                text, (int)length(ptr), data(ptr), length(ptr));
+    }
     CHECK(length(ptr) == (int64_t)strlen(text));
     CHECK(memcmp(data(ptr), text, (size_t)length(ptr) + 1) == 0);
 }
@@ -85,7 +95,7 @@ static void record(void *ptr, const char *kind, int cap, int64_t cells, int64_t 
 static void integers(void) {
     int64_t values[] = {INT64_MIN, INT64_MIN + 1, -1000, -1, 0, 1, 1000, INT64_MAX};
     for (unsigned i = 0; i < sizeof values / sizeof *values; i++) {
-        char want[32]; snprintf(want, sizeof want, "%" PRId64, values[i]); reset();
+        char want[32]; runtime_snprintf(want, sizeof want, "%" PRId64, values[i]); reset();
         int64_t cells = plum_n_alloc, bytes = plum_b_alloc;
         void *ptr = plum_int_to_string(values[i]); same(ptr, want);
         record(ptr, i == 0 ? "int-min" : NULL, 32, cells, bytes);
@@ -109,7 +119,7 @@ static void floats(void) {
 
         /* Raw expansion deliberately remains the platform's existing formatter;
            public fixtures independently check Plum's half-even rounding. */
-        char want[512]; int n = snprintf(want, sizeof want, "%.18f", values[i]);
+        char want[512]; int n = runtime_snprintf(want, sizeof want, "%.18f", values[i]);
         CHECK(n >= 0 && n < (int)sizeof want);
         reset(); cells = plum_n_alloc; bytes = plum_b_alloc;
         ptr = plum_float_fixed_raw(values[i], 18); same(ptr, want);
@@ -124,6 +134,7 @@ static void booleans(void) {
     }
 }
 int main(int argc, char **argv) {
+    runtime_snprintf = format_test_runtime_snprintf();
     measuring = argc == 2 && strcmp(argv[1], "--measure") == 0;
     integers(); floats(); booleans();
     /* Repeated calls must return compact independent results at -O0 as well;

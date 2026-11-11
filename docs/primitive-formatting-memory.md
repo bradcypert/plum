@@ -122,7 +122,10 @@ Instrumented timings/RSS include that overhead and are not performance results.
 
 The native check verifies full-range integers, round-trip floats, signed zero,
 subnormals, maximum finite values, infinities and NaN. Raw fixed text is checked
-against the same platform formatter; public fixtures independently preserve
+against the exact CRT symbol used by emitted LLVM, obtained through a small
+IR function-address bridge. [MinGW's C headers](https://github.com/mirror/mingw-w64/blob/master/mingw-w64-headers/crt/stdio.h) can redirect an ordinary C
+`snprintf` reference to a different formatter with different final digits;
+that is not an oracle for the unchanged raw runtime path. Public fixtures preserve
 Plum's explicit half-even expectations. Surviving results are retained across
 other conversions, and 10,000 fixed conversions check bounded lifetimes.
 Every native allocation is matched to its final release. An explicit i64-to-i1
