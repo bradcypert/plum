@@ -1,0 +1,38 @@
+extern "C" { fn bit_text_check(text: CStr, value: Int, hex: Int) -> Int; }
+
+let preserve (text: String) (n: Int) (hex: Int): Unit = {
+    assert_eq(unsafe { bit_text_check(text.as_cstr(), n, hex) }, 1);
+    let alias = text;
+    let bytes = text.as_bytes();
+    let view = unsafe { text.as_cstr() };
+    let changed = text.concat("!");
+    assert_eq(changed, alias.concat("!"));
+    assert_eq(bytes.to_hex(), alias.as_bytes().to_hex());
+    assert_eq(unsafe { view.as_string() }, alias);
+}
+
+let worker (n: Int): Unit = {
+    let bits = Int.to_bits;
+    let hex = Int.to_hex_bits;
+    for i in 0..64 {
+        let x = n ^ (1 << i);
+        preserve(bits(x), x, 0);
+        preserve(hex(x), x, 1);
+    }
+}
+
+let main (): Unit = {
+    let min = 0 - 9223372036854775807 - 1;
+    assert_eq(Int.to_bits(0), "0".repeat(64));
+    assert_eq(Int.to_bits(0 - 1), "1".repeat(64));
+    assert_eq(Int.to_bits(min), "1".concat("0".repeat(63)));
+    assert_eq(Int.to_hex_bits(0), "0000000000000000");
+    assert_eq(Int.to_hex_bits(min), "8000000000000000");
+    assert_eq(Int.to_hex_bits(9223372036854775807), "7fffffffffffffff");
+    assert_eq(Int.to_hex_bits(0 - 1), "ffffffffffffffff");
+    for n in [min, min + 1, 0 - 1, 0, 1, 9223372036854775807] { worker(n); };
+    let first = spawn { worker(min) };
+    let second = spawn { worker(9223372036854775807) };
+    first.join(); second.join();
+    println("Integer bit patterns: fixed width, signed extremes, native bytes, function values and immutable concurrent results")
+}

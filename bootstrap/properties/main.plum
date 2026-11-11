@@ -2481,3 +2481,28 @@ pub let test_fixed_half_even_range (): Unit = {
         check_eq("negative half-even range", i.to_string(), Float.to_fixed(0.0 - x, 0), "-".concat(expected));
     }
 }
+
+// Decode all digits with wrapping arithmetic, independently of formatting.
+// The signed generator visits both halves of the full 64-bit input space.
+pub let test_fixed_width_integer_bits (): Unit = {
+    let mut seed = 0;
+    for sample in 0..512 {
+        seed = next_seed(seed);
+        let n = Int.wrapping_mul(seed, PRNG_MIX_1);
+        for hex in [false, true] {
+            let text = if hex { Int.to_hex_bits(n) } else { Int.to_bits(n) };
+            let width = if hex { 16 } else { 64 };
+            assert_eq(text.len(), width);
+            let bytes = text.as_bytes();
+            let mut decoded = 0;
+            for i in 0..width {
+                let c = bytes.at(i).unwrap_or(0);
+                let digit = if c >= 48 && c <= 57 { c - 48 }
+                    else if c >= 97 && c <= 102 { c - 87 } else { 0 - 1 };
+                assert_eq(digit >= 0 && digit < if hex { 16 } else { 2 }, true);
+                decoded = Int.wrapping_add(Int.wrapping_mul(decoded, if hex { 16 } else { 2 }), digit);
+            };
+            assert_eq(decoded, n);
+        };
+    }
+}
