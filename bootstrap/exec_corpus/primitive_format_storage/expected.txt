@@ -1,0 +1,1 @@
+Primitive formatting: compact results, static booleans, immutable aliases and concurrent local scratch

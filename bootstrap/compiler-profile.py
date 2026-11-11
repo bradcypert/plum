@@ -94,6 +94,9 @@ def main():
         if heap:
             peak, live = re.search(r'compiler-heap: peak_bytes=(\d+) exit_bytes=(\d+)', text).groups()
             row.update(peak_heap_bytes=int(peak), exit_heap_bytes=int(live))
+            traffic = re.search(r'^compiler-heap: .* allocations=(\d+) requested_bytes=(\d+)$', text, re.M)
+            if traffic:
+                row.update(direct_heap_allocations=int(traffic[1]), direct_heap_requested_bytes=int(traffic[2]))
         if case == 'build-compiler':
             subprocess.run([str(executable), 'check', 'bootstrap/exec_corpus/collections'], cwd=root, check=True, capture_output=True, timeout=600)
         if case == 'build-collections':

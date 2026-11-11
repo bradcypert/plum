@@ -244,8 +244,10 @@ pub let cg_runtime (heap: Bool): String = cg_lines([
     "",
     "@.plum_fmt_int = private constant [5 x i8] c\"%lld\\00\"",
     "@.plum_fmt_line = private constant [4 x i8] c\"%s\\0A\\00\"",
-    "@.plum_true = private constant [5 x i8] c\"true\\00\"",
-    "@.plum_false = private constant [6 x i8] c\"false\\00\"",
+    // Finite results use the same immortal-cell convention as String literals.
+    // Perceus can retain/release them; consuming append copies their storage.
+    "@.plum_true = private global { i64, i64, [5 x i8] } { i64 -1, i64 4, [5 x i8] c\"true\\00\" }",
+    "@.plum_false = private global { i64, i64, [6 x i8] } { i64 -1, i64 5, [6 x i8] c\"false\\00\" }",
     "",
     // A stand-in cell for a payload load that is about to be
     // DEREFERENCED by a nested pattern while the enclosing tag has
@@ -1578,15 +1580,12 @@ pub let cg_runtime (heap: Bool): String = cg_lines([
     "",
     "define ptr @plum_int_to_string(i64 %n) {",
     "entry:",
-    "  %buf = call ptr @malloc(i64 32)",
+    // A signed i64 needs at most 20 bytes plus NUL. Scratch never escapes:
+    // plum_str_new copies into the compact, normally owned result cell.
+    "  %buf = alloca [32 x i8], align 16",
     "  %len32 = call i32 (ptr, i64, ptr, ...) @snprintf(ptr %buf, i64 32, ptr @.plum_fmt_int, i64 %n)",
     "  %len = sext i32 %len32 to i64",
     "  %s = call ptr @plum_str_new(ptr %buf, i64 %len)",
-    // `plum_str_new` COPIES the bytes into the new cell, so the
-    // scratch buffer is dead the moment it returns. Leaving it
-    // unfreed leaked 32 bytes per `.to_string()` call -- invisible in
-    // a fixture, unbounded in a loop.
-    "  call void @plum_free(ptr %buf)",
     "  ret ptr %s",
     "}",
     "",
@@ -1664,30 +1663,26 @@ pub let cg_runtime (heap: Bool): String = cg_lines([
     "; value and is correctly rounded; matching it is free and being",
     "; subtly different from every other language is not.",
     ";",
-    "; 512 bytes covers `%.17f` of any finite double -- the largest is",
+    "; 512 bytes covers the prelude's `%.18f` of any finite double -- the largest is",
     "; about 309 digits before the point -- and infinities and NaN print",
-    "; short. `snprintf` truncates rather than overruns either way.",
+    "; short. Scratch is fixed-size, local to this call, and copied before return.",
     "define ptr @plum_float_fixed_raw(double %f, i64 %d) {",
     "entry:",
-    "  %buf = call ptr @malloc(i64 512)",
+    "  %buf = alloca [512 x i8], align 16",
     "  %dc = trunc i64 %d to i32",
     "  %n32 = call i32 (ptr, i64, ptr, ...) @snprintf(ptr %buf, i64 512, ptr @.plum_fmt_fixed, i32 %dc, double %f)",
     "  %len = sext i32 %n32 to i64",
     "  %s = call ptr @plum_str_new(ptr %buf, i64 %len)",
-    "  call void @plum_free(ptr %buf)",
     "  ret ptr %s",
     "}",
     "",
     "define ptr @plum_float_to_string(double %f) {",
     "entry:",
-    "  %buf = call ptr @malloc(i64 64)",
+    // At most 17 significant digits, sign, point, exponent and NUL; all
+    // retries share one entry-block buffer, never heap or shared scratch.
+    "  %buf = alloca [64 x i8], align 16",
     "  %len = call i64 @plum_fmt_double(double %f, ptr %buf)",
     "  %s = call ptr @plum_str_new(ptr %buf, i64 %len)",
-    // `plum_str_new` COPIES the bytes into the new cell, so the
-    // scratch buffer is dead the moment it returns. Leaving it
-    // unfreed leaked 32 bytes per `.to_string()` call -- invisible in
-    // a fixture, unbounded in a loop.
-    "  call void @plum_free(ptr %buf)",
     "  ret ptr %s",
     "}",
     "",
@@ -1695,11 +1690,9 @@ pub let cg_runtime (heap: Bool): String = cg_lines([
     "entry:",
     "  br i1 %b, label %t, label %f",
     "t:",
-    "  %st = call ptr @plum_str_new(ptr @.plum_true, i64 4)",
-    "  ret ptr %st",
+    "  ret ptr @.plum_true",
     "f:",
-    "  %sf = call ptr @plum_str_new(ptr @.plum_false, i64 5)",
-    "  ret ptr %sf",
+    "  ret ptr @.plum_false",
     "}",
     "",
     "; Array cell: { i64 rc, i64 len, elem0, elem1, ... } -- 8-byte slots",
