@@ -3655,24 +3655,23 @@ let cg_array_push (p: CgProgram) (env: Array[CgSlot]) (n: Int) (base: typecheck.
 }
 
 let cg_array_set (p: CgProgram) (env: Array[CgSlot]) (n: Int) (base: typecheck.TExpr) (idx: typecheck.TExpr) (value: typecheck.TExpr) (ty: CgTy): Emit = {
-    let b = cg_expr(p, env, n, base);
+    let bty = cg_concrete(p, typecheck.texpr_ty(p.subst, base));
+    let b = cg_move_or_own(p, env, n, base);
     let i = cg_expr(p, env, b.n, idx);
     let v = cg_expr(p, env, i.n, value);
     let len = cg_reg(v.n);
     let cell = cg_reg(v.n + 1);
-    let copied = cg_reg(v.n + 2);
     let code = b.code.concat(i.code).concat(v.code)
         .concat("  ${len} = call i64 @plum_array_check_index(ptr ${b.val}, i64 ${i.val})\n")
-        .concat("  ").concat(cell).concat(" = call ptr @plum_array_new(i64 ").concat(len).concat(")\n")
-        .concat("  ").concat(copied).concat(" = call i1 @plum_array_copy(ptr ").concat(cell).concat(", ptr ").concat(b.val).concat(", i64 ").concat(len).concat(")\n")
-        .concat(cg_inc_elems(v.ty, cell, len, cell.concat("_ie")))
-        // The slot being overwritten already had a reference from the
-        // copy; releasing it keeps the new cell's count exact.
+        .concat("  ${cell} = call ptr @plum_array_ensure_unique(ptr ${b.val}, i1 ")
+        .concat(if cg_is_heap(cg_elem_ty(ty)) { "1" } else { "0" })
+        .concat(", ptr ${cg_rel_sym(bty)})\n")
+        // Both paths own the old slot. Release it before transferring the
+        // replacement's owned reference, including when it aliases that slot.
         .concat(cg_elem_ptr_lines(cell, i.val, v.n + 3))
         .concat("  ${cell}_old = load ${cg_llvm_ty(v.ty)}, ptr ${cg_elem_ptr_reg(v.n + 3)}\n")
         .concat(cg_dec(cg_concrete(p, typecheck.texpr_ty(p.subst, value)), cell.concat("_old")))
-        .concat("  store ").concat(cg_llvm_ty(v.ty)).concat(" ").concat(v.val).concat(", ptr ").concat(cg_elem_ptr_reg(v.n + 3)).concat("\n")
-        .concat(cg_dec(cg_concrete(p, typecheck.texpr_ty(p.subst, base)), b.val));
+        .concat("  store ").concat(cg_llvm_ty(v.ty)).concat(" ").concat(v.val).concat(", ptr ").concat(cg_elem_ptr_reg(v.n + 3)).concat("\n");
     Emit { code: code, allocas: b.allocas.concat(i.allocas).concat(v.allocas), releases: b.releases.concat(i.releases).concat(v.releases), globals: b.globals.concat(i.globals).concat(v.globals), val: cell, ty: ty, n: v.n + 6 }
 }
 
@@ -3680,7 +3679,7 @@ let cg_array_set (p: CgProgram) (env: Array[CgSlot]) (n: Int) (base: typecheck.T
 // Every element that SURVIVES into the new array gains a reference, and
 // the source array is then released -- which drops the removed
 // element's last reference along with the source's own. Same ownership
-// shape as `cg_array_set`, which likewise copies and then rebalances.
+// shape as the shared-input branch of `cg_array_set`.
 let cg_array_remove (p: CgProgram) (env: Array[CgSlot]) (n: Int) (base: typecheck.TExpr) (idx: typecheck.TExpr) (ty: CgTy): Emit = {
     let b = cg_expr(p, env, n, base);
     let i = cg_expr(p, env, b.n, idx);
@@ -5102,9 +5101,8 @@ let cg_ref_get (p: CgProgram) (env: Array[CgSlot]) (n: Int) (base: typecheck.TEx
     }
 }
 
-// `r.set(v)`: store IN PLACE, which is the entire point of `Ref` and
-// the one way it differs from `Array.set` (which copies). The value
-// being overwritten owned a reference, so it is released first.
+// `r.set(v)` changes the shared reference itself. Array.set preserves
+// snapshots by copying shared storage. Both release the overwritten owner.
 let cg_ref_set (p: CgProgram) (env: Array[CgSlot]) (n: Int) (base: typecheck.TExpr) (value: typecheck.TExpr): Emit = {
     let b = cg_borrow_across(p, env, n, base, [value]);
     let v = cg_expr(p, env, b.n, value);

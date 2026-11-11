@@ -1,0 +1,6 @@
+let update (xs: Array[String]) (value: String) (n: Int): Array[String] =
+    if n <= 0 { xs } else { update(xs.set(n % 4, value), value, n - 1) }
+let main (): Unit = {
+    let xs = update(["a", "b", "c", "d"], "x".repeat(32), 1000);
+    for i in 0..4 { assert_eq(xs[i].len(), 32); };
+}

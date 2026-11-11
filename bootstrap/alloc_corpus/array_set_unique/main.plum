@@ -1,0 +1,9 @@
+let update (xs: Array[Int]) (n: Int): Array[Int] =
+    if n <= 0 { xs } else { update(xs.set(n % 4, n), n - 1) }
+let main (): Unit = {
+    let first = update([0, 1, 2, 3], 1000);
+    assert_eq(first, [4, 1, 2, 3]);
+    let mut xs = first;
+    for i in 0..1000 { xs = xs.set(i % xs.len(), i); };
+    assert_eq(xs, [996, 997, 998, 999]);
+}

@@ -2506,3 +2506,24 @@ pub let test_fixed_width_integer_bits (): Unit = {
         };
     }
 }
+
+pub let test_array_set_persistence (): Unit = {
+    let mut seed = 11501;
+    for trial in 0..32 {
+        let original = int_array(seed, 16, []);
+        let before = original.to_string();
+        let mut xs = original;
+        let mut model = Array.map(original, |x| x);
+        for step in 0..64 {
+            seed = next_seed(seed);
+            let at = random_bits(seed) % xs.len();
+            let value = rand_between(seed, 0 - 1000, 1000);
+            xs = xs.set(at, value);
+            let mut rebuilt: Array[Int] = [];
+            for i in 0..model.len() { rebuilt = rebuilt.push(if i == at { value } else { model[i] }); };
+            model = rebuilt;
+            assert_eq(xs, model);
+            assert_eq(original.to_string(), before);
+        };
+    }
+}
