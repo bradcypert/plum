@@ -1,0 +1,6 @@
+let main (): Unit = {
+    for i in 0..1000 {
+        assert_eq(Int.to_bits(i).len(), 64);
+        assert_eq(Int.to_hex_bits(i).len(), 16);
+    }
+}

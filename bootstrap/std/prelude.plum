@@ -508,18 +508,13 @@ pub let Int.to_octal (n: Int): String = Int.to_radix(n, 8)
 /// reading is not what is wanted. `Int.to_bits(-1)` is sixty-four
 /// ones, while `Int.to_binary(-1)` is "-1". Both are right about
 /// different questions.
-pub let Int.to_bits (n: Int): String = plum__bits_acc(n, 63, "")
-
-let plum__bits_acc (n: Int) (i: Int) (acc: String): String =
-    if i < 0 { acc }
-    else { plum__bits_acc(n, i - 1, acc.concat(if Int.shr_logical(n, i) & 1 == 1 { "1" } else { "0" })) }
+pub let Int.to_bits (n: Int): String = plum__int_bits_raw(n, false)
 
 /// The same, in hex: sixteen digits, two's complement, zero padded.
-pub let Int.to_hex_bits (n: Int): String = plum__hex_bits_acc(n, 60, "")
+pub let Int.to_hex_bits (n: Int): String = plum__int_bits_raw(n, true)
 
-let plum__hex_bits_acc (n: Int) (i: Int) (acc: String): String =
-    if i < 0 { acc }
-    else { plum__hex_bits_acc(n, i - 4, acc.concat(plum__radix_digit(Int.shr_logical(n, i) & 15))) }
+// Fixed-width bit patterns need one owned result, with no growth buffers.
+let plum__int_bits_raw (n: Int) (hex: Bool): String = ""
 
 // The kernel consumes s and borrows fill, following Perceus argument ownership.
 let plum__string_pad_raw (s: String) (fill: String) (left: Int) (right: Int): String = ""
