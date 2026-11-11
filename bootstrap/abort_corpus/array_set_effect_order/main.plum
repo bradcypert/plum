@@ -1,0 +1,3 @@
+let index (): Int = { println("index evaluated"); 0 - 1 }
+let value (): Int = { println("value evaluated"); 99 }
+let main (): Unit = { let changed = [1, 2, 3].set(index(), value()); println(changed.len().to_string()); }

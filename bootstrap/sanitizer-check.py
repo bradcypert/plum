@@ -83,6 +83,7 @@ def main():
             run([compiler, 'build', root / 'bootstrap/exec_corpus/literal_emission', '--sanitize=address', '--memory-stats', *flags, '-o', literal])
             run([literal], contains='literal emission preserves sections, order, aliases and reuse')
             for name, message in [('string_slice', 'slices preserve codepoint bounds, raw bytes, aliases and bounded stack'),
+                                  ('array_set_ownership', 'Array.set: consuming reuse, persistent snapshots, operand aliases and scalar/heap ownership'),
                                   ('string_char_len', 'character counts preserve UTF-8, NULs, aliases and bounded stack'),
                                   ('statement_cleanup_order', 'statement cleanup preserves LIFO groups, tail calls and escaped owners'),
                                   ('branch_emission', 'branch emission preserves guards, sections, effects and tail calls'),
