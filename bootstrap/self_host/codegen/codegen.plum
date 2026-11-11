@@ -2975,7 +2975,12 @@ let cg_fn_call_real (p: CgProgram) (env: Array[CgSlot]) (n: Int) (module_name: S
         "musttail call "
     } else { "call " };
     let call = "  ${reg} = call ${cg_llvm_ty(ret)} ${sym}(${cg_join_commas(a.vals)})\n"
-        .concat(if Option.is_some(cg_runtime_fn(name)) || name == "Array.concat" { cg_dec_args(p, args, a.vals, 0, "") } else { "" });
+        // Runtime calls normally borrow every prepared owned argument. Padding
+        // consumes its first argument and returns that ownership (or releases
+        // it after copying); only the remaining arguments are released here.
+        .concat(if Option.is_some(cg_runtime_fn(name)) || name == "Array.concat" {
+            cg_dec_args(p, args, a.vals, if name == "plum__string_pad_raw" { 1 } else { 0 }, "")
+        } else { "" });
     let code = if cyclic {
         // Releases first, then return the call's own result -- see
         // `cg_tail_site` for why this shape and why the dead label.
@@ -3091,6 +3096,7 @@ let cg_runtime_fn (name: String): Option[String] =
     else if name == "plum__bytes_to_hex_raw" { Some("@plum_bytes_to_hex") }
     else if name == "plum__string_reverse_raw" { Some("@plum_str_reverse") }
     else if name == "plum__string_repeat_raw" { Some("@plum_str_repeat") }
+    else if name == "plum__string_pad_raw" { Some("@plum_str_pad") }
     else if name == "plum__string_join_raw" { Some("@plum_str_join") }
     else if name == "string_concat_all_raw" { Some("@plum_str_concat_all") }
     else if name == "process_run_raw" { Some("@plum_process_run_raw") }

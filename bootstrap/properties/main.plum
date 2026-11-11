@@ -2450,3 +2450,22 @@ pub let test_radix_full_range (): Unit = {
         assert_eq(Int.to_radix(n, 9223372036854775807), Int.to_radix(n, 36));
     };
 }
+
+// Public padding composes the same bytes as repetition and concatenation,
+// including Unicode/NUL fills; widths continue to count codepoints.
+pub let test_padding_placement (): Unit = {
+    for text in ["", "a", "é", "a\x00🙂", "日本"] {
+        for fill in [".", "日", "🙂", "\x00", "́", "", "ab"] {
+            for width in (0 - 2)..24 {
+                let count = Int.max(0, width - String.char_len(text));
+                let valid = String.char_len(fill) == 1;
+                let padding = if valid { fill.repeat(count) } else { "" };
+                let left = count / 2;
+                let center = if valid { fill.repeat(left).concat(text).concat(fill.repeat(count - left)) } else { text };
+                check_eq("left padding bytes", text, String.pad_left(text, width, fill), padding.concat(text));
+                check_eq("right padding bytes", text, String.pad_right(text, width, fill), text.concat(padding));
+                check_eq("center padding bytes", text, String.pad_center(text, width, fill), center);
+            };
+        };
+    }
+}

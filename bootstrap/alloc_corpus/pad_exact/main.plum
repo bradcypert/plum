@@ -1,0 +1,9 @@
+let main (): Unit = {
+    for i in 0..100 {
+        let mode = i - (i / 3) * 3;
+        let text = if mode == 0 { String.pad_left("data", 4096, ".") }
+            else if mode == 1 { String.pad_right("data", 4096, ".") }
+            else { String.pad_center("data", 4096, ".") };
+        assert_eq(text.len(), 4096);
+    }
+}
