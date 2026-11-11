@@ -2527,3 +2527,18 @@ pub let test_array_set_persistence (): Unit = {
         };
     }
 }
+
+let callback_map (xs: Array[Int]): Array[Int] = Array.map(xs, |v| v + xs[0])
+let callback_filter (xs: Array[Int]): Array[Int] = Array.filter(xs, |v| v > xs[0])
+pub let test_array_callback_captures (): Unit = {
+    let mut seed = 65407;
+    for trial in 0..128 {
+        seed = next_seed(seed);
+        let xs = int_array(seed, 1 + trial % 32, []);
+        let head = xs[0];
+        let mapped = Array.map(xs, |v| v + head);
+        let filtered = Array.filter(xs, |v| v > head);
+        assert_eq(callback_map(xs), mapped);
+        assert_eq(callback_filter(xs), filtered);
+    }
+}

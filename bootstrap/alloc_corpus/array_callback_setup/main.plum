@@ -1,0 +1,8 @@
+let mapped (xs: Array[Int]) (n: Int): Array[Int] =
+    if n <= 0 { xs } else { mapped(Array.map(xs, { let k = xs.len(); |v| v + k }), n - 1) }
+let filtered (xs: Array[Int]) (n: Int): Array[Int] =
+    if n <= 0 { xs } else { filtered(Array.filter(xs, { let k = xs.len(); |v| v < k }), n - 1) }
+let main (): Unit = {
+    assert_eq(mapped([0, 1, 2, 3], 1000), [4000, 4001, 4002, 4003]);
+    assert_eq(filtered([0, 1, 2, 3], 1000), [0, 1, 2, 3]);
+}

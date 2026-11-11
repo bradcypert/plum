@@ -1,0 +1,75 @@
+let ints (n: Int): Array[Int] = [n, n + 1, n + 2]
+let texts (): Array[String] = ["a".repeat(2), "a".repeat(3), "a".repeat(3)]
+let mapper (xs: Array[Int]): (Int) -> Int = |v| v + xs[0]
+let predicate (xs: Array[Int]): (Int) -> Bool = |v| v > xs[0]
+let rebound_map (initial: Array[Int]): Array[Int] = {
+    let mut xs = initial;
+    Array.map(xs, { xs = ints(20); |v| v + xs[0] })
+}
+let rebound_filter (initial: Array[Int]): Array[Int] = {
+    let mut xs = initial;
+    Array.filter(xs, { xs = ints(20); |v| v < xs[0] })
+}
+let callbacks (xs: Array[Int]): Array[(Int) -> Int] =
+    Array.map(xs, |v| { |delta: Int| xs[0] + v + delta })
+
+let main (): Unit = {
+    let xs = [10, 20];
+    assert_eq(Array.map(xs, |v| v + xs[0]), [20, 30]);
+    let xs = [1, 2, 2];
+    assert_eq(Array.filter(xs, |v| v > xs[0]), [2, 2]);
+    let xs = ints(10);
+    assert_eq(xs.map(|v| v + xs[0]), [20, 21, 22]);
+    let xs = ints(10);
+    assert_eq(xs.filter(|v| v > xs[0]), [11, 12]);
+    let xs = ints(10);
+    assert_eq(Array.map(xs, mapper(xs)), [20, 21, 22]);
+    let xs = ints(10);
+    assert_eq(Array.filter(xs, predicate(xs)), [11, 12]);
+
+    // Callback factories run after acquiring the original receiver.
+    assert_eq(rebound_map(ints(10)), [30, 31, 32]);
+    assert_eq(rebound_filter(ints(10)), [10, 11, 12]);
+    let xs = ints(10);
+    assert_eq(Array.map(xs, { let head = xs[0]; |v| v + head }), [20, 21, 22]);
+    let xs = ints(10);
+    assert_eq(Array.filter(xs, { let head = xs[0]; |v| v > head }), [11, 12]);
+    let xs: Array[Int] = [];
+    assert_eq(Array.map(xs, { let n = xs.len(); |v| v + n }), []);
+    let xs: Array[Int] = [];
+    assert_eq(Array.filter(xs, { let n = xs.len(); |v| v > n }), []);
+
+    // A factory can publish the input without capturing it in the callback.
+    let saved = ref(ints(0));
+    let xs = ints(10);
+    let out = Array.map(xs, { saved.set(xs); |v| v + 1 });
+    assert_eq(out, [11, 12, 13]); assert_eq(saved.get(), [10, 11, 12]);
+    let xs = ints(20);
+    let out = Array.filter(xs, { saved.set(xs); |v| v > 20 });
+    assert_eq(out, [21, 22]); assert_eq(saved.get(), [20, 21, 22]);
+
+    let xs = texts();
+    assert_eq(Array.map(xs, |s| s.concat(xs[0])), ["aaaa", "aaaaa", "aaaaa"]);
+    let xs = texts();
+    assert_eq(Array.filter(xs, |s| s.len() > xs[0].len()), ["aaa", "aaa"]);
+    let xs = texts();
+    assert_eq(Array.map(xs, |s| s.len() + xs[0].len()), [4, 5, 5]);
+    let xs = ints(10);
+    assert_eq(Array.map(xs, |v| (v + xs[0]).to_string()), ["20", "21", "22"]);
+    let xs = texts(); let original = xs;
+    let bytes = xs[0].as_bytes(); let view = unsafe { xs[0].as_cstr() };
+    let out = Array.map(xs, |s| s.concat(xs[0]));
+    assert_eq(out, ["aaaa", "aaaaa", "aaaaa"]); assert_eq(original, ["aa", "aaa", "aaa"]);
+    assert_eq(bytes.to_hex(), "6161"); assert_eq(unsafe { view.as_string() }, "aa");
+    let xs = texts();
+    let views = Array.map(xs, |ignored| unsafe { xs[0].as_cstr() });
+    assert_eq(unsafe { views[0].as_string() }, "aa");
+    assert_eq(unsafe { views[2].as_string() }, "aa");
+    let functions = callbacks(ints(10));
+    assert_eq(functions[0](1), 21); assert_eq(functions[2](3), 25);
+
+    // A prebuilt closure already owns its capture when the call begins.
+    let xs = texts(); let f = |s: String| s.concat(xs[0]);
+    assert_eq(Array.map(xs, f), ["aaaa", "aaaaa", "aaaaa"]);
+    println("Array callbacks: receiver captures, operand order, immutable aliases and consuming reuse")
+}

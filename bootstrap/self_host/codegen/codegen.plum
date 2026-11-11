@@ -4286,8 +4286,9 @@ let cg_array_ns_call (p: CgProgram) (env: Array[CgSlot]) (n: Int) (fn_name: Stri
 // taken its own -- see `cg_reuse_elem_drop`, which is also why `same`
 // is computed BEFORE the loop rather than after it.
 //
-// The source is MOVED out of its slot before anything else, which is
-// what lets its refcount reach 1 and the reuse fire at all.
+// Acquire an owned source through ordinary argument lowering. A later
+// callback operand may read, capture or replace its slot. Its resulting
+// aliases must exist before the runtime decides whether reuse is safe.
 //
 // Reading `src[i]` and writing `out[i]` in the same cell is safe
 // because map is elementwise and in order: element `i` is read before
@@ -4298,8 +4299,9 @@ let cg_array_map_reuse (p: CgProgram) (env: Array[CgSlot]) (n: Int) (nm: String)
         Some(slot) => {
             let elem = cg_elem_ty(slot.ty);
             let elem_ity = cg_array_elem_ity(p, slot.ity);
-            let old = cg_reg(n);
-            let f = cg_expr(p, env, n + 1, args[1]);
+            let a = cg_move_or_own(p, env, n, args[0]);
+            let old = a.val;
+            let f = cg_expr(p, env, a.n, args[1]);
             let ret = cg_closure_ret(f.ty);
             let len = cg_reg(f.n);
             let out = cg_reg(f.n + 1);
@@ -4323,9 +4325,7 @@ let cg_array_map_reuse (p: CgProgram) (env: Array[CgSlot]) (n: Int) (nm: String)
             let ldrop = cg_label(b + 11);
             let lskip = cg_label(b + 12);
             Emit {
-                code: "  ${old} = load ptr, ptr ${slot.ptr}\n"
-                    .concat("  store ptr null, ptr ").concat(slot.ptr).concat("\n")
-                    .concat(f.code)
+                code: a.code.concat(f.code)
                     .concat("  ").concat(len).concat(" = call i64 @plum_array_len(ptr ").concat(old).concat(")\n")
                     .concat("  ").concat(out).concat(" = call ptr @plum_array_reuse(ptr ").concat(old).concat(", i64 ").concat(len).concat(")\n")
                     // Hoisted above the loop because the BODY needs it
@@ -4343,8 +4343,8 @@ let cg_array_map_reuse (p: CgProgram) (env: Array[CgSlot]) (n: Int) (nm: String)
                     .concat("  br label %").concat(lskip).concat("\n")
                     .concat(lskip).concat(":\n")
                     .concat(cg_dec_cg(f.ty, f.val)),
-                allocas: "  ${iv} = alloca i64\n${f.allocas}",
-                releases: f.releases, globals: f.globals, val: out, ty: CgArray(ret), n: b + 13,
+                allocas: "  ${iv} = alloca i64\n${a.allocas}${f.allocas}",
+                releases: a.releases.concat(f.releases), globals: a.globals.concat(f.globals), val: out, ty: CgArray(ret), n: b + 13,
             }
         },
     }
@@ -4421,8 +4421,9 @@ let cg_array_filter_reuse (p: CgProgram) (env: Array[CgSlot]) (n: Int) (nm: Stri
         Some(slot) => {
             let elem = cg_elem_ty(slot.ty);
             let elem_ity = cg_array_elem_ity(p, slot.ity);
-            let old = cg_reg(n);
-            let f = cg_expr(p, env, n + 1, args[1]);
+            let a = cg_move_or_own(p, env, n, args[0]);
+            let old = a.val;
+            let f = cg_expr(p, env, a.n, args[1]);
             let len = cg_reg(f.n);
             let out = cg_reg(f.n + 1);
             let iv = cg_reg(f.n + 2);
@@ -4457,9 +4458,7 @@ let cg_array_filter_reuse (p: CgProgram) (env: Array[CgSlot]) (n: Int) (nm: Stri
             let ldrop = cg_label(b + 16);
             let lskip = cg_label(b + 17);
             Emit {
-                code: "  ${old} = load ptr, ptr ${slot.ptr}\n"
-                    .concat("  store ptr null, ptr ").concat(slot.ptr).concat("\n")
-                    .concat(f.code)
+                code: a.code.concat(f.code)
                     .concat("  ").concat(len).concat(" = call i64 @plum_array_len(ptr ").concat(old).concat(")\n")
                     .concat("  ").concat(out).concat(" = call ptr @plum_array_reuse(ptr ").concat(old).concat(", i64 ").concat(len).concat(")\n")
                     .concat("  ").concat(same).concat(" = icmp eq ptr ").concat(out).concat(", ").concat(old).concat("\n")
@@ -4476,8 +4475,8 @@ let cg_array_filter_reuse (p: CgProgram) (env: Array[CgSlot]) (n: Int) (nm: Stri
                     .concat("  br label %").concat(lskip).concat("\n")
                     .concat(lskip).concat(":\n")
                     .concat(cg_dec_cg(f.ty, f.val)),
-                allocas: "  ${iv} = alloca i64\n  ${cnt} = alloca i64\n${f.allocas}",
-                releases: f.releases, globals: f.globals, val: out, ty: CgArray(elem), n: b + 18,
+                allocas: "  ${iv} = alloca i64\n  ${cnt} = alloca i64\n${a.allocas}${f.allocas}",
+                releases: a.releases.concat(f.releases), globals: a.globals.concat(f.globals), val: out, ty: CgArray(elem), n: b + 18,
             }
         },
     }
