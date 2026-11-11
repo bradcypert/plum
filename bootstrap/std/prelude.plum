@@ -275,10 +275,12 @@ pub let String.char_len (s: String): Int = {
 ///
 /// `fill` must be a single character. A string already at or past the
 /// width is returned unchanged: this pads, it never truncates.
-pub let String.pad_left (s: String) (width: Int) (fill: String): String = plum__pad(s, width, fill, true)
+/// Unique storage is reused when it already fits; other padded results
+/// use one compact buffer without intermediate repeated-fill strings.
+pub let String.pad_left (s: String) (width: Int) (fill: String): String = plum__pad(s, width, fill, 0)
 /// Padded on the RIGHT to `width` characters — left-aligned text.
 /// Never truncates; see `String.pad_left`.
-pub let String.pad_right (s: String) (width: Int) (fill: String): String = plum__pad(s, width, fill, false)
+pub let String.pad_right (s: String) (width: Int) (fill: String): String = plum__pad(s, width, fill, 1)
 
 // --- Formatting numbers (issue #23) ---
 //
@@ -296,15 +298,7 @@ pub let String.pad_right (s: String) (width: Int) (fill: String): String = plum_
 /// Centred padding, completing the set beside `pad_left`/`pad_right`.
 /// An odd remainder goes on the RIGHT, so a column of centred headings
 /// lines up on its left edge rather than drifting.
-pub let String.pad_center (s: String) (width: Int) (fill: String): String = {
-    let n = String.char_len(s);
-    if String.char_len(fill) != 1 || n >= width { s }
-    else {
-        let total = width - n;
-        let left = total / 2;
-        String.repeat(fill, left).concat(s).concat(String.repeat(fill, total - left))
-    }
-}
+pub let String.pad_center (s: String) (width: Int) (fill: String): String = plum__pad(s, width, fill, 2)
 
 /// `decimals` places after the point, rounded HALF TO EVEN. Precision is
 /// clamped to 0..17: negative values act as 0, and values above 17 act as 17.
@@ -512,12 +506,16 @@ let plum__hex_bits_acc (n: Int) (i: Int) (acc: String): String =
     if i < 0 { acc }
     else { plum__hex_bits_acc(n, i - 4, acc.concat(plum__radix_digit(Int.shr_logical(n, i) & 15))) }
 
-let plum__pad (s: String) (width: Int) (fill: String) (left: Bool): String = {
+// The kernel consumes s and borrows fill, following Perceus argument ownership.
+let plum__string_pad_raw (s: String) (fill: String) (left: Int) (right: Int): String = ""
+
+let plum__pad (s: String) (width: Int) (fill: String) (mode: Int): String = {
     let n = String.char_len(s);
     if String.char_len(fill) != 1 || n >= width { s }
     else {
-        let padding = String.repeat(fill, width - n);
-        if left { padding.concat(s) } else { s.concat(padding) }
+        let total = width - n;
+        let left = if mode == 0 { total } else if mode == 1 { 0 } else { total / 2 };
+        plum__string_pad_raw(s, fill, left, total - left)
     }
 }
 

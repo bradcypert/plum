@@ -54,6 +54,8 @@ Padded on the LEFT to `width` characters — right-aligned text.
 
 `fill` must be a single character. A string already at or past the
 width is returned unchanged: this pads, it never truncates.
+Unique storage is reused when it already fits; other padded results
+use one compact buffer without intermediate repeated-fill strings.
 
 ## `let String.pad_right (s: String) (width: Int) (fill: String): String`
 

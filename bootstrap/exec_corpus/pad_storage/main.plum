@@ -1,0 +1,90 @@
+extern "C" {
+    fn padding_raw(which: Int) -> RawCStr;
+    fn padding_capacity(s: CStr) -> Int;
+    fn padding_begin(length: Int) -> Unit;
+    fn padding_end(s: CStr, length: Int, mode: Int, expected_allocations: Int) -> Unit;
+}
+
+// Ask the allocator rather than assuming its rounding supplies spare bytes.
+let reserved_acc (s: String): String =
+    if s.len() >= 8 && unsafe { padding_capacity(s.as_cstr()) } > s.len() { s }
+    else { reserved_acc(s.concat("x")) }
+
+let reserved (): String = reserved_acc("")
+
+let reuse (mode: Int): Unit = {
+    let input = reserved(); let width = input.len() + 1; unsafe { padding_begin(input.len()); };
+    let text = pad(input, width, ".", mode);
+    unsafe { padding_end(text.as_cstr(), text.len(), mode, 0); };
+}
+
+let shared (mode: Int): Unit = {
+    let input = reserved(); let width = input.len() + 1; let alias = input;
+    unsafe { padding_begin(input.len()); };
+    let text = pad(input, width, ".", mode);
+    unsafe { padding_end(text.as_cstr(), text.len(), mode, 1); };
+    assert_eq(alias, "x".repeat(width - 1));
+}
+
+let pad (s: String) (width: Int) (fill: String) (mode: Int): String =
+    if mode == 0 { String.pad_left(s, width, fill) }
+    else if mode == 1 { String.pad_right(s, width, fill) }
+    else { String.pad_center(s, width, fill) }
+
+let reference (s: String) (width: Int) (fill: String) (mode: Int): String = {
+    let n = String.char_len(s);
+    if String.char_len(fill) != 1 || n >= width { s }
+    else {
+        let total = width - n;
+        let left = if mode == 0 { total } else if mode == 1 { 0 } else { total / 2 };
+        String.repeat(fill, left).concat(s).concat(String.repeat(fill, total - left))
+    }
+}
+
+let check (s: String) (width: Int) (fill: String) (mode: Int): Unit = {
+    let want = reference(s, width, fill, mode);
+    let source_hex = s.as_bytes().to_hex();
+    // C-string conversion stops at NUL; the Bytes alias checks the full data.
+    let source_prefix = String.slice(s, 0, Option.unwrap_or(String.index_of(s, "\x00"), String.char_len(s))).as_bytes().to_hex();
+    let result_prefix = String.slice(want, 0, Option.unwrap_or(String.index_of(want, "\x00"), String.char_len(want)));
+    let bytes = s.as_bytes(); let view = unsafe { s.as_cstr() };
+    let result = pad(s, width, fill, mode);
+    assert_eq(result, want);
+    assert_eq(bytes.to_hex(), source_hex); assert_eq(s.as_bytes().to_hex(), source_hex);
+    assert_eq(unsafe { view.as_string() }.as_bytes().to_hex(), source_prefix);
+    let alias = result; let result_view = unsafe { result.as_cstr() };
+    let extended = result.concat("!");
+    assert_eq(extended, want.concat("!")); assert_eq(alias, want);
+    assert_eq(unsafe { result_view.as_string() }, result_prefix);
+}
+
+let observe (s: String) (events: Ref[Int]): String = {
+    assert_eq(s, "abcabc"); events.set(events.get() + 1); "."
+}
+
+let main (): Unit = {
+    for mode in 0..3 { reuse(mode); shared(mode); };
+    for s in ["", "a", "abc", "é", "a\x00é🙂", "日é"] {
+        for fill in [".", "日", "🙂", "\x00", "́", "", "ab"] {
+            for width in (0 - 2)..12 { for mode in 0..3 { check(s, width, fill, mode); }; };
+        };
+    };
+    let raw = unsafe { padding_raw(0).as_string() };
+    let fill = unsafe { padding_raw(1).as_string() };
+    for mode in 0..3 { check(raw, 7, fill, mode); };
+    assert_eq(String.pad_center("a", 4, "."), ".a..");
+    let min = 0 - 9223372036854775807 - 1;
+    for mode in 0..3 {
+        check("data", min, ".", mode);
+        check("data", 9223372036854775807, "ab", mode);
+        let one = String.slice("a!", 0, 1);
+        assert_eq(pad(one, 5, one, mode), "aaaaa"); assert_eq(one, "a");
+    };
+    let center = String.pad_center; assert_eq(center("a", 4, "."), ".a..");
+    let left = String.pad_left("é", 4); assert_eq(left("."), "...é");
+    let events = ref(0); let s = "abc".repeat(2);
+    assert_eq(String.pad_right(s, 9, observe(s, events)), "abcabc...");
+    assert_eq(events.get(), 1);
+    assert_eq(String.pad_center("a", 1048576, ".").len(), 1048576);
+    println("Padding: codepoints, checked construction, odd alignment, binary fills, aliases and consuming ownership")
+}
