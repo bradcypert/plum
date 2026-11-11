@@ -79,4 +79,3 @@ let plum__inc_acc (s: String) (i: Int) (acc: String): String =
         if v < 10 { String.slice(s, 0, i).concat(plum__radix_digit(v)).concat(acc) }
         else { plum__inc_acc(s, i - 1, "0".concat(acc)) }
     }
-
