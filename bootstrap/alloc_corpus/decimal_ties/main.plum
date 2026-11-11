@@ -1,0 +1,6 @@
+let main (): Unit = {
+    for i in 0..1000 {
+        assert_eq(Float.to_fixed(1.5, 0), "2");
+        assert_eq(Float.to_fixed(0.375, 2), "0.38");
+    }
+}

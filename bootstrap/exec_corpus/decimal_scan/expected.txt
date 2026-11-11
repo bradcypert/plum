@@ -1,0 +1,1 @@
+Decimal scans: half-even ties, near misses, carries, signed zero, precision limits and immutable results

@@ -1,0 +1,82 @@
+// Frozen source model for allocation comparisons, not a production implementation.
+// These declarations recreate compiler primitives available inside the prelude.
+let float_fixed_raw(x:Float)(d:Int):String=""
+let bytes_of_str_raw(s:String):Bytes=Bytes.empty()
+let bytes_at_raw(b:Bytes)(i:Int):Int=0
+let plum__radix_digit(v:Int):String=match v {
+    0 => "0",
+    1 => "1",
+    2 => "2",
+    3 => "3",
+    4 => "4",
+    5 => "5",
+    6 => "6",
+    7 => "7",
+    8 => "8",
+    9 => "9",
+    _ => "?",
+}
+let model (x: Float) (decimals: Int): String = {
+    let d = Int.clamp(decimals, 0, 17);
+    let raw = float_fixed_raw(x, 18);
+    // `inf` and `nan` have no digits to round.
+    if !String.contains(raw, ".") { raw } else { plum__round_decimals(raw, d) }
+}
+
+let plum__round_decimals (s: String) (d: Int): String = {
+    let neg = String.starts_with(s, "-");
+    let body = if neg { String.slice(s, 1, String.char_len(s)) } else { s };
+    let dot = Option.unwrap_or(String.index_of(body, "."), String.char_len(body));
+    let ip = String.slice(body, 0, dot);
+    let fp = String.slice(body, dot + 1, String.char_len(body));
+    let keep = String.slice(fp, 0, d);
+    let rest = String.slice(fp, d, String.char_len(fp));
+    let digits = ip.concat(keep);
+    let bumped = if plum__rounds_up(digits, rest) { plum__inc_decimal(digits) } else { digits };
+    let n = String.char_len(bumped);
+    let out_ip = String.slice(bumped, 0, n - d);
+    let out_fp = String.slice(bumped, n - d, n);
+    let text = if d == 0 { out_ip } else { out_ip.concat(".").concat(out_fp) };
+    // The sign survives a value that rounds to zero: `-0.00` says the
+    // value was below zero, which is information. C does this too.
+    if neg { "-".concat(text) } else { text }
+}
+
+/// `rest` is everything being discarded. Above half rounds up, below
+/// half rounds down, and an EXACT half goes to whichever direction
+/// leaves the last kept digit even.
+let plum__rounds_up (kept: String) (rest: String): Bool =
+    if String.is_empty(rest) { false }
+    else {
+        let first = plum__digit_at(rest, 0);
+        if first > 5 { true }
+        else if first < 5 { false }
+        else if plum__any_nonzero(rest, 1) { true }
+        else {
+            // An exact tie. Round to even.
+            let last = if String.is_empty(kept) { 0 } else { plum__digit_at(kept, String.char_len(kept) - 1) };
+            last - (last / 2) * 2 == 1
+        }
+    }
+
+let plum__digit_at (s: String) (i: Int): Int =
+    Option.unwrap_or(String.index_of("0123456789", String.slice(s, i, i + 1)), 0)
+
+let plum__any_nonzero (s: String) (i: Int): Bool =
+    if i >= String.char_len(s) { false }
+    else if plum__digit_at(s, i) != 0 { true }
+    else { plum__any_nonzero(s, i + 1) }
+
+/// Adds one to a decimal digit string, growing it when every digit
+/// carries: "999" becomes "1000", which is what makes 9.99 round to
+/// 10.0 without a special case.
+let plum__inc_decimal (s: String): String = plum__inc_acc(s, String.char_len(s) - 1, "")
+
+let plum__inc_acc (s: String) (i: Int) (acc: String): String =
+    if i < 0 { "1".concat(acc) }
+    else {
+        let v = plum__digit_at(s, i) + 1;
+        if v < 10 { String.slice(s, 0, i).concat(plum__radix_digit(v)).concat(acc) }
+        else { plum__inc_acc(s, i - 1, "0".concat(acc)) }
+    }
+
