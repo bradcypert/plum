@@ -46405,7 +46405,7 @@ define i1 @plum.f.$3cprelude$3e.print.0.(ptr %p0) !dbg !114 {
 entry:
   %s0 = alloca ptr, !dbg !115
   store ptr %p0, ptr %s0, !dbg !115
-  ; plum.off 26502
+  ; plum.off 27091
   %t1688 = load ptr, ptr %s0, !dbg !116
   store ptr null, ptr %s0, !dbg !116
   %t1689 = call i1 @plum_print_raw(ptr %t1688), !dbg !116
@@ -49872,7 +49872,7 @@ entry:
   %t3361 = alloca i1, !dbg !235
   %t3366 = alloca i1, !dbg !235
   %t3378 = alloca i64, !dbg !235
-  ; plum.off 46507
+  ; plum.off 47096
   %t3343 = load ptr, ptr %s0, !dbg !236
   call void @plum_rc_inc(ptr %t3343), !dbg !236
   %t3344 = call ptr @plum_bytes_retag(ptr %t3343), !dbg !236
@@ -49881,7 +49881,7 @@ entry:
   call void @plum_rel_str(ptr %t3342_pre), !dbg !236
   store ptr null, ptr %t3342, !dbg !236
   store ptr %t3344, ptr %t3342, !dbg !236
-  ; plum.off 46544
+  ; plum.off 47133
   %t3346 = load ptr, ptr %t3342, !dbg !236
   call void @plum_rc_inc(ptr %t3346), !dbg !236
   %t3347 = call i64 @plum_str_len(ptr %t3346), !dbg !236
@@ -49894,7 +49894,7 @@ L3351:
   store ptr @.const3356, ptr %t3350, !dbg !236
   br label %L3353, !dbg !236
 L3352:
-  ; plum.off 46627
+  ; plum.off 47216
   %t3358 = load ptr, ptr %t3342, !dbg !236
   call void @plum_rc_inc(ptr %t3358), !dbg !236
   %t3359 = call i64 @plum_bytes_at(ptr %t3358, i64 0), !dbg !236
@@ -52787,7 +52787,7 @@ entry:
   store ptr null, ptr %match_owner4535, !dbg !384
   %match_token4535 = alloca ptr, !dbg !384
   store ptr null, ptr %match_token4535, !dbg !384
-  ; plum.off 89249
+  ; plum.off 89838
   %t4527 = load ptr, ptr %s0, !dbg !385
   store ptr null, ptr %s0, !dbg !385
   %t4528 = call ptr @plum_bytes_retag(ptr %t4527), !dbg !385
@@ -52796,7 +52796,7 @@ entry:
   call void @plum_rel_str(ptr %t4526_pre), !dbg !385
   store ptr null, ptr %t4526, !dbg !385
   store ptr %t4528, ptr %t4526, !dbg !385
-  ; plum.off 89286
+  ; plum.off 89875
   %t4530 = load ptr, ptr %t4526, !dbg !385
   call void @plum_rc_inc(ptr %t4530), !dbg !385
   %t4531 = call i64 @plum.f.$3cprelude$3e.skip_ws.0.(ptr %t4530, i64 0), !dbg !385
@@ -52884,7 +52884,7 @@ reset_no4563:
   call void @plum.h.rel.E$3cprelude$3e$2eResult.2.S$3cprelude$3e$2eParseResult.1.E$3cprelude$3e$2eJsonValue.0.s(ptr %reset_old4563), !dbg !385
   br label %reset_done4563, !dbg !385
 reset_done4563:
-  ; plum.off 89415
+  ; plum.off 90004
   %t4565 = load ptr, ptr %t4526, !dbg !385
   call void @plum_rc_inc(ptr %t4565), !dbg !385
   %t4566 = load ptr, ptr %t4561, !dbg !385
@@ -61159,7 +61159,7 @@ entry:
   store i64 %p1, ptr %s1, !dbg !689
   %t8279 = alloca i64, !dbg !689
   %t8285 = alloca i1, !dbg !689
-  ; plum.off 36579
+  ; plum.off 37168
   %t8280 = load ptr, ptr %s0, !dbg !690
   store ptr null, ptr %s0, !dbg !690
   %t8281 = load i64, ptr %s1, !dbg !690
@@ -61247,7 +61247,7 @@ L8302:
   store ptr %t8309, ptr %t8294, !dbg !692
   br label %L8297, !dbg !692
 L8296:
-  ; plum.off 44830
+  ; plum.off 45419
   %t8311 = load ptr, ptr %s1, !dbg !693
   call void @plum_rc_inc(ptr %t8311), !dbg !693
   %t8312 = load i64, ptr %s3, !dbg !693
@@ -61330,7 +61330,7 @@ L8361:
   store ptr %t8365, ptr %t8348, !dbg !693
   br label %L8351, !dbg !693
 L8350:
-  ; plum.off 45277
+  ; plum.off 45866
   %t8368 = load i64, ptr %t8310, !dbg !693
   %t8369 = call { i64, i1 } @llvm.ssub.with.overflow.i64(i64 %t8368, i64 48), !dbg !693
   %t8370 = extractvalue { i64, i1 } %t8369, 0, !dbg !693
@@ -63818,7 +63818,7 @@ entry:
   ret ptr %t9882, !dbg !745
 }
 
-@.str9883 = private global { i64, i64, [94701 x i8] } { i64 -1, i64 94700, [94701 x i8] c"/// A value that may not be there.\0A///\0A/// Plum has no null, so absence is spelled here and the checker makes\0A/// you handle it.\0Apub enum Option[T] { Some(T), None }\0A/// A value, or an explanation of why there isn't one.\0A///\0A/// Failure is an ordinary value: no exceptions, so a function that can\0A/// fail says so in its type.\0Apub enum Result[T, E] { Ok(T), Err(E) }\0A\0A/// Whether there is a value.\0Apub let Option.is_some[T] (o: Option[T]): Bool = match o { Some(_) => true, None => false }\0A/// Whether there is no value.\0Apub let Option.is_none[T] (o: Option[T]): Bool = match o { Some(_) => false, None => true }\0A/// The first option when it contains a value, or `fallback` otherwise.\0A///\0A/// `fallback` is evaluated whether or not it is needed. Use `or_else`\0A/// when finding the fallback costs something.\0Apub let Option.or[T] (o: Option[T]) (fallback: Option[T]): Option[T] = match o { Some(_) => o, None => fallback }\0A/// The first option when it contains a value, or the result of calling\0A/// `f` otherwise. The lazy `or`: `f` runs only when it has to.\0Apub let Option.or_else[T] (o: Option[T]) (f: () -> Option[T]): Option[T] = match o { Some(_) => o, None => f() }\0A/// The value, or `fallback` when there is none.\0A///\0A/// `fallback` is evaluated whether or not it is needed. Use\0A/// `unwrap_or_else` when computing it costs something.\0Apub let Option.unwrap_or[T] (o: Option[T]) (fallback: T): T = match o { Some(v) => v, None => fallback }\0A/// The value, or the result of calling `f` when there is none. The\0A/// lazy `unwrap_or`: `f` runs only when it has to.\0Apub let Option.unwrap_or_else[T] (o: Option[T]) (f: () -> T): T = match o { Some(v) => v, None => f() }\0A/// Transforms the value if there is one, leaving `None` alone.\0Apub let Option.map[T, U] (o: Option[T]) (f: (T) -> U): Option[U] = match o { Some(v) => Some(f(v)), None => None }\0A/// Chains an operation that may itself find nothing.\0A///\0A/// `map` with a function returning `Option` would give\0A/// `Option[Option[U]]`; this is the one that keeps it flat.\0Apub let Option.and_then[T, U] (o: Option[T]) (f: (T) -> Option[U]): Option[U] = match o { Some(v) => f(v), None => None }\0A/// Turns nothing into an error, so an `Option` can join a chain of\0A/// `Result`s.\0Apub let Option.ok_or[T, E] (o: Option[T]) (err: E): Result[T, E] = match o { Some(v) => Ok(v), None => Err(err) }\0A\0A/// Whether this succeeded.\0Apub let Result.is_ok[T, E] (r: Result[T, E]): Bool = match r { Ok(_) => true, Err(_) => false }\0A/// Whether this failed.\0Apub let Result.is_err[T, E] (r: Result[T, E]): Bool = match r { Ok(_) => false, Err(_) => true }\0A/// The value, or `fallback` on failure — DISCARDING the error. Reach\0A/// for `unwrap_or_else` when the error should shape the answer.\0Apub let Result.unwrap_or[T, E] (r: Result[T, E]) (fallback: T): T = match r { Ok(v) => v, Err(_) => fallback }\0A/// The value, or the result of calling `f` with the error. The\0A/// recovery that gets to see what went wrong.\0Apub let Result.unwrap_or_else[T, E] (r: Result[T, E]) (f: (E) -> T): T = match r { Ok(v) => v, Err(e) => f(e) }\0A/// Transforms the value on success, leaving an error untouched.\0Apub let Result.map[T, E, U] (r: Result[T, E]) (f: (T) -> U): Result[U, E] = match r { Ok(v) => Ok(f(v)), Err(e) => Err(e) }\0A/// Transforms the ERROR, leaving a success untouched. For adding\0A/// context to a failure on its way up.\0Apub let Result.map_err[T, E, F] (r: Result[T, E]) (f: (E) -> F): Result[T, F] = match r { Ok(v) => Ok(v), Err(e) => Err(f(e)) }\0A/// Chains an operation that may itself fail, stopping at the first\0A/// error. The flat version of `map` over a fallible step.\0Apub let Result.and_then[T, E, U] (r: Result[T, E]) (f: (T) -> Result[U, E]): Result[U, E] = match r { Ok(v) => f(v), Err(e) => Err(e) }\0A\0A/// Whether the array has no elements.\0Apub let Array.is_empty[T] (xs: Array[T]): Bool = xs.len() == 0\0A\0Alet plum__array_concat_acc[T] (a: Array[T]) (b: Array[T]) (i: Int): Array[T] =\0A    if i >= b.len() { a } else { plum__array_concat_acc(a.push(b[i]), b, i + 1) }\0A/// A new array with `b`'s elements after `a`'s. Neither input is\0A/// changed.\0Apub let Array.concat[T] (a: Array[T]) (b: Array[T]): Array[T] = plum__array_concat_acc(a, b, 0)\0A\0Alet plum__array_contains_acc[T] (xs: Array[T]) (needle: T) (i: Int): Bool =\0A    if i >= xs.len() { false } else if xs[i] == needle { true } else { plum__array_contains_acc(xs, needle, i + 1) }\0A/// Whether any element equals `needle`, compared structurally.\0Apub let Array.contains[T] (xs: Array[T]) (needle: T): Bool = plum__array_contains_acc(xs, needle, 0)\0A\0Alet plum__array_any_acc[T] (xs: Array[T]) (f: (T) -> Bool) (i: Int): Bool =\0A    if i >= xs.len() { false } else if f(xs[i]) { true } else { plum__array_any_acc(xs, f, i + 1) }\0A/// Whether `f` holds for at least one element. Stops at the first\0A/// that passes; false for an empty array.\0Apub let Array.any[T] (xs: Array[T]) (f: (T) -> Bool): Bool = plum__array_any_acc(xs, f, 0)\0A\0A/// Clamped at both ends, like the real prelude's own: a slice past\0A/// the end is the tail, not a crash, which matters because this\0A/// backend emits no bounds check of its own.\0Alet plum__array_slice_acc[T] (xs: Array[T]) (i: Int) (end: Int) (acc: Array[T]): Array[T] =\0A    if i >= end { acc } else if i >= xs.len() { acc } else { plum__array_slice_acc(xs, i + 1, end, acc.push(xs[i])) }\0A/// The elements from `start` up to but NOT including `end`.\0A///\0A/// Out-of-range bounds are clamped rather than an error, and a `start`\0A/// past `end` gives an empty array — so slicing near the end of an\0A/// array needs no arithmetic to stay safe.\0Apub let Array.slice[T] (xs: Array[T]) (start: Int) (end: Int): Array[T] =\0A    plum__array_slice_acc(xs, if start < 0 { 0 } else { start }, end, [])\0A\0Alet plum__array_reverse_acc[T] (xs: Array[T]) (i: Int) (acc: Array[T]): Array[T] =\0A    if i < 0 { acc } else { plum__array_reverse_acc(xs, i - 1, acc.push(xs[i])) }\0A/// A new array in the opposite order.\0Apub let Array.reverse[T] (xs: Array[T]): Array[T] = plum__array_reverse_acc(xs, xs.len() - 1, [])\0A\0Alet plum__array_all_acc[T] (xs: Array[T]) (f: (T) -> Bool) (i: Int): Bool =\0A    if i >= xs.len() { true } else if f(xs[i]) { plum__array_all_acc(xs, f, i + 1) } else { false }\0A/// Whether `f` holds for every element. Stops at the first that\0A/// fails; TRUE for an empty array, which is the convention everywhere\0A/// and still surprises people.\0Apub let Array.all[T] (xs: Array[T]) (f: (T) -> Bool): Bool = plum__array_all_acc(xs, f, 0)\0A\0Alet plum__array_find_acc[T] (xs: Array[T]) (f: (T) -> Bool) (i: Int): Option[T] =\0A    if i >= xs.len() { None } else if f(xs[i]) { Some(xs[i]) } else { plum__array_find_acc(xs, f, i + 1) }\0A/// The first element `f` accepts, or `None`.\0Apub let Array.find[T] (xs: Array[T]) (f: (T) -> Bool): Option[T] = plum__array_find_acc(xs, f, 0)\0A\0Alet plum__array_find_index_acc[T] (xs: Array[T]) (f: (T) -> Bool) (i: Int): Option[Int] =\0A    if i >= xs.len() { None } else if f(xs[i]) { Some(i) } else { plum__array_find_index_acc(xs, f, i + 1) }\0A/// The index of the first element `f` accepts, or `None`.\0Apub let Array.find_index[T] (xs: Array[T]) (f: (T) -> Bool): Option[Int] = plum__array_find_index_acc(xs, f, 0)\0A\0A/// The index of the first element equal to `needle`, or `None`.\0Apub let Array.index_of[T] (xs: Array[T]) (needle: T): Option[Int] = Array.find_index(xs, |x| x == needle)\0A/// The first element, or `None` when the array is empty.\0Apub let Array.first[T] (xs: Array[T]): Option[T] = if Array.is_empty(xs) { None } else { Some(xs[0]) }\0A/// The last element, or `None` when the array is empty.\0Apub let Array.last[T] (xs: Array[T]): Option[T] = if Array.is_empty(xs) { None } else { Some(xs[xs.len() - 1]) }\0A/// The first `n` elements, or all of them if there are fewer. Never\0A/// an error.\0Apub let Array.take[T] (xs: Array[T]) (n: Int): Array[T] = Array.slice(xs, 0, n)\0A/// Everything after the first `n` elements, or nothing if there are\0A/// fewer.\0Apub let Array.drop[T] (xs: Array[T]) (n: Int): Array[T] = Array.slice(xs, n, xs.len())\0A\0A/// The sum, which OVERFLOWS like any other addition and stops the\0A/// program rather than wrapping.\0Apub let Array.sum_int (xs: Array[Int]): Int = Array.fold(xs, 0, |acc, x| acc + x)\0A/// The sum, left to right. Floating-point addition is not\0A/// associative, so a different order can give a different last digit.\0Apub let Array.sum_float (xs: Array[Float]): Float = Array.fold(xs, 0.0, |acc, x| acc + x)\0A\0A// --- Numbers ---\0A\0A/// The absolute value.\0A///\0A/// `Int.abs` of the most negative `Int` cannot be represented and\0A/// overflows, which stops the program rather than returning a negative\0A/// \22absolute\22 value.\0Apub let Int.abs (a: Int): Int = if a < 0 { 0 - a } else { a }\0A/// The smaller of two.\0Apub let Int.min (a: Int) (b: Int): Int = if a < b { a } else { b }\0A/// The larger of two.\0Apub let Int.max (a: Int) (b: Int): Int = if a > b { a } else { b }\0A/// `x` held between `lo` and `hi` inclusive. A `lo` above `hi` gives\0A/// `hi`, since the upper bound is applied last.\0Apub let Int.clamp (x: Int) (lo: Int) (hi: Int): Int = Int.min(Int.max(x, lo), hi)\0A\0A/// An UNSIGNED right shift: zeros are shifted in, never the sign\0A/// bit. `>>` is arithmetic, because `Int` is signed and `-8 >> 1`\0A/// should be -4; hashing wants the other one, and writing it by\0A/// hand is exactly the sort of thing that is wrong at n = 0 and\0A/// n = 64 in every codebase that tries.\0A///\0A/// The mask is `~(-1 << (64 - n))` and NOT `(1 << (64 - n)) - 1`,\0A/// which is the spelling everyone reaches for first and which traps\0A/// here: at n = 1 that is `(1 << 63) - 1`, and `1 << 63` is\0A/// `Int`'s most negative value, so subtracting one from it is an\0A/// integer overflow. The complement builds the same mask out of a\0A/// shift and a NOT, neither of which can overflow.\0A///\0A/// The two ends are handled before the mask because the mask cannot\0A/// express them: at n = 0 it would need all 64 bits, and `64 - 0`\0A/// is a shift of 64, which this language defines as zero.\0Apub let Int.shr_logical (x: Int) (n: Int): Int =\0A    if n <= 0 { x }\0A    else if n >= 64 { 0 }\0A    else { (x >> n) & ~((0 - 1) << (64 - n)) }\0A\0A/// The number of one bits. Counted a nibble at a time through a\0A/// lookup rather than bit by bit, so it is 16 steps and not 64.\0Apub let Int.count_ones (x: Int): Int = plum__popcount(x, 0, 0)\0A\0Alet plum__popcount (x: Int) (i: Int) (acc: Int): Int =\0A    if i >= 16 { acc }\0A    else { plum__popcount(x, i + 1, acc + PLUM_NIBBLE_ONES[Int.shr_logical(x, i * 4) & 15]) }\0A\0Alet PLUM_NIBBLE_ONES: Array[Int] = [0, 1, 1, 2, 1, 2, 2, 3, 1, 2, 2, 3, 2, 3, 3, 4]\0A\0A/// The absolute value, clearing the sign bit (including on negative zero).\0A/// NaN remains NaN.\0Apub let Float.abs (a: Float): Float = abs_raw(a)\0A/// Whether `x` is neither infinity nor NaN. Includes both signed zeros\0A/// and subnormal values.\0Apub let Float.is_finite (x: Float): Bool = x - x == 0.0\0A/// The smaller of two. NaN does not compare, so a NaN argument gives\0A/// an answer that is not meaningful.\0Apub let Float.min (a: Float) (b: Float): Float = if a < b { a } else { b }\0A/// The larger of two. See `Float.min` on NaN.\0Apub let Float.max (a: Float) (b: Float): Float = if a > b { a } else { b }\0A/// `x` held between `lo` and `hi` inclusive.\0Apub let Float.clamp (x: Float) (lo: Float) (hi: Float): Float = Float.min(Float.max(x, lo), hi)\0A\0A/// --- Strings ---\0A///\0A/// String operations use codepoint boundaries rather than byte\0A/// indices. `String.slice` scans those boundaries directly; operations\0A/// that need individual characters can materialize them with `chars_of`.\0A// Borrow input and return an owned result through the runtime constructor.\0Alet plum__string_reverse_raw (s: String): String = \22\22\0A\0A/// The string with its CHARACTERS (codepoints) reversed, not its bytes.\0A/// Combining marks reverse independently; this does not reverse graphemes.\0A/// Uses one exact-sized output allocation without character arrays or strings.\0A/// Empty output uses static storage; a single character shares input storage.\0Apub let String.reverse (s: String): String = plum__string_reverse_raw(s)\0A/// Whether the string has no bytes.\0Apub let String.is_empty (s: String): Bool = s.len() == 0\0A/// Characters from `start` up to but not including `end`, counted in\0A/// CODEPOINTS rather than bytes. Out-of-range bounds are clamped.\0A/// Scans only as far as the requested boundaries and copies the selected\0A/// bytes once, without allocating an array or individual characters.\0Apub let String.slice (s: String) (start: Int) (end: Int): String = {\0A    let lo = if start < 0 { 0 } else { start };\0A    if end <= lo { \22\22 } else {\0A        let bytes = bytes_of_str_raw(s);\0A        let n = bytes_len_raw(bytes);\0A        let first = if lo == 0 { 0 } else { plum__string_slice_boundary(bytes, n, 1, lo - 1) };\0A        if first >= n { \22\22 } else {\0A            let last = plum__string_slice_boundary(bytes, n, first + 1, end - lo - 1);\0A            str_of_bytes_raw(bytes_slice_raw(bytes, first, last))\0A        }\0A    }\0A}\0A\0A// The first byte of a character was already consumed. Skip its\0A// continuation bytes, then count further character starts until the\0A// requested boundary. This also preserves chars_of's grouping for\0A// malformed raw byte sequences, including a leading continuation run.\0Alet plum__string_slice_boundary (bytes: Bytes) (n: Int) (i: Int) (left: Int): Int =\0A    if i >= n { n } else {\0A        let byte = bytes_at_raw(bytes, i);\0A        if byte >= 128 && byte < 192 { plum__string_slice_boundary(bytes, n, i + 1, left) }\0A        else if left <= 0 { i }\0A        else { plum__string_slice_boundary(bytes, n, i + 1, left - 1) }\0A    }\0A// Borrows the input and returns an owned result; lowered to the runtime.\0Alet plum__string_repeat_raw (s: String) (n: Int): String = \22\22\0A\0A/// The string joined to itself `n` times. Zero or negative counts and\0A/// empty input give an empty string. Repeating nonempty input once shares\0A/// its storage; larger results allocate one buffer without spare capacity.\0Apub let String.repeat (s: String) (n: Int): String = plum__string_repeat_raw(s, n)\0A\0A/// The number of CHARACTERS in `s`, which is not `s.len()`.\0A///\0A/// `.len()` is bytes; everything else in this section is codepoints.\0A/// The two agree on ASCII and part company on anything else, so a\0A/// program that lines text up in columns wants this one; padding\0A/// computed from a byte count puts an accented name in the wrong place.\0A/// The number of CHARACTERS (codepoints). `String.len` is the number\0A/// of BYTES, and the two differ for anything outside ASCII.\0A/// Scans the UTF-8 bytes in linear time and constant space, without\0A/// allocating an array or a string for each character.\0Apub let String.char_len (s: String): Int = {\0A    let bytes = bytes_of_str_raw(s);\0A    let n = bytes_len_raw(bytes);\0A    // chars_of groups the first byte with any following continuation\0A    // bytes, even for malformed text supplied through unsafe code.\0A    if n == 0 { 0 } else { plum__string_count_starts(bytes, n, 1, 1) }\0A}\0A\0A/// Pad `s` to `width` CHARACTERS with `fill`, on the left or the right.\0A///\0A/// A `fill` that is not exactly one character returns `s` untouched, as\0A/// does a string already at least `width` wide. Both are deliberate: a\0A/// formatting helper that returns a `Result` is a formatting helper\0A/// nobody uses, and truncating to fit loses data that padding was never\0A/// asked to remove.\0A/// Padded on the LEFT to `width` characters — right-aligned text.\0A///\0A/// `fill` must be a single character. A string already at or past the\0A/// width is returned unchanged: this pads, it never truncates.\0A/// Unique storage is reused when it already fits; other padded results\0A/// use one compact buffer without intermediate repeated-fill strings.\0Apub let String.pad_left (s: String) (width: Int) (fill: String): String = plum__pad(s, width, fill, 0)\0A/// Padded on the RIGHT to `width` characters — left-aligned text.\0A/// Never truncates; see `String.pad_left`.\0Apub let String.pad_right (s: String) (width: Int) (fill: String): String = plum__pad(s, width, fill, 1)\0A\0A// --- Formatting numbers (issue #23) ---\0A//\0A// String interpolation already exists -- `\22${a} + ${b} = ${a + b}\22` --\0A// so building output is not the gap. What was missing is CONTROL over\0A// how a number renders inside one: `${1.0 / 3.0}` gives\0A// 0.3333333333333333 and there was no way to ask for two places, and\0A// `${flags}` printing 20 is the wrong view of a bit field.\0A//\0A// These are the functions a `${x:.2}` syntax would lower to. Shipping\0A// them first means that syntax, if it ever arrives, can be designed\0A// against real usage rather than guessed -- and it stays purely\0A// additive, since it would be sugar over exactly these.\0A\0A/// Centred padding, completing the set beside `pad_left`/`pad_right`.\0A/// An odd remainder goes on the RIGHT, so a column of centred headings\0A/// lines up on its left edge rather than drifting.\0Apub let String.pad_center (s: String) (width: Int) (fill: String): String = plum__pad(s, width, fill, 2)\0A\0A/// `decimals` places after the point, rounded HALF TO EVEN. Precision is\0A/// clamped to 0..17: negative values act as 0, and values above 17 act as 17.\0A/// The limit leaves one guard digit for deterministic tie handling while\0A/// staying within the precision of a `Float`.\0A///\0A/// --- Why the rounding is done here and not by the C library ---\0A///\0A/// `snprintf(\22%.*f\22)` is correctly rounded on every platform and does\0A/// not give the same answer on all of them. glibc and Microsoft's CRT\0A/// agree on every value whose expansion is not an exact tie (2.675 is\0A/// really 2.674999..., and both render it 2.67) and disagree on ties:\0A/// glibc rounds 0.5, 1.5, 2.5, 3.5 to 0, 2, 2, 4 and the Microsoft CRT\0A/// to 1, 2, 3, 4.\0A///\0A/// A language whose programs print different\0A/// numbers depending on the machine has a worse problem than one whose\0A/// rounding is a line longer, so the decision is made here: the library\0A/// is asked for a high-precision expansion, and the rounding is applied\0A/// to the digits.\0A///\0A/// --- Why half to EVEN ---\0A///\0A/// It is IEEE 754's default (`roundTiesToEven`), which is what glibc\0A/// inherits from the ambient rounding mode rather than choosing, and it\0A/// is unbiased: rounding every tie away from zero accumulates. Summing\0A/// the thousand ties 0.5 .. 999.5 gives 500,500 rounded away and\0A/// 500,000 rounded to even, against an exact 500,000.\0A///\0A/// **`Float.round` rounds half AWAY from zero and that is not an\0A/// inconsistency.** C specifies `round()` that way regardless of the FP\0A/// mode, because it is arithmetic: \22the nearest integer, ties away\22,\0A/// while this is rendering. Every language with both has this pair.\0A///\0A/// --- Why 18 digits is enough to tell a tie from a near-miss ---\0A///\0A/// A tie has to be exact. The gap between neighbouring doubles near any\0A/// value whose fractional digits matter is enormously larger than\0A/// 1e-18: next to 2.5 it is about 4.4e-16, so the value after 2.5\0A/// renders as 2.500000000000000444 and is visibly not a tie. Above\0A/// about 1e3 the fraction is all zeros anyway.\0Apub let Float.to_fixed (x: Float) (decimals: Int): String = {\0A    let d = Int.clamp(decimals, 0, 17);\0A    let raw = float_fixed_raw(x, 18);\0A    // `inf` and `nan` have no digits to round.\0A    if !String.contains(raw, \22.\22) { raw } else { plum__round_decimals(raw, d) }\0A}\0A\0Alet plum__round_decimals (s: String) (d: Int): String = {\0A    let neg = String.starts_with(s, \22-\22);\0A    let body = if neg { String.slice(s, 1, String.char_len(s)) } else { s };\0A    let dot = Option.unwrap_or(String.index_of(body, \22.\22), String.char_len(body));\0A    let ip = String.slice(body, 0, dot);\0A    let fp = String.slice(body, dot + 1, String.char_len(body));\0A    let keep = String.slice(fp, 0, d);\0A    let rest = String.slice(fp, d, String.char_len(fp));\0A    let digits = ip.concat(keep);\0A    let bumped = if plum__rounds_up(digits, rest) { plum__inc_decimal(digits) } else { digits };\0A    let n = String.char_len(bumped);\0A    let out_ip = String.slice(bumped, 0, n - d);\0A    let out_fp = String.slice(bumped, n - d, n);\0A    let text = if d == 0 { out_ip } else { out_ip.concat(\22.\22).concat(out_fp) };\0A    // The sign survives a value that rounds to zero: `-0.00` says the\0A    // value was below zero, which is information. C does this too.\0A    if neg { \22-\22.concat(text) } else { text }\0A}\0A\0A/// `rest` is everything being discarded. Above half rounds up, below\0A/// half rounds down, and an EXACT half goes to whichever direction\0A/// leaves the last kept digit even.\0Alet plum__rounds_up (kept: String) (rest: String): Bool =\0A    if String.is_empty(rest) { false }\0A    else {\0A        let first = plum__digit_at(rest, 0);\0A        if first > 5 { true }\0A        else if first < 5 { false }\0A        else if plum__any_nonzero(rest, 1) { true }\0A        else {\0A            // An exact tie. Round to even.\0A            let last = if String.is_empty(kept) { 0 } else { plum__digit_at(kept, String.char_len(kept) - 1) };\0A            last - (last / 2) * 2 == 1\0A        }\0A    }\0A\0Alet plum__digit_at (s: String) (i: Int): Int =\0A    Option.unwrap_or(String.index_of(\220123456789\22, String.slice(s, i, i + 1)), 0)\0A\0Alet plum__any_nonzero (s: String) (i: Int): Bool =\0A    if i >= String.char_len(s) { false }\0A    else if plum__digit_at(s, i) != 0 { true }\0A    else { plum__any_nonzero(s, i + 1) }\0A\0A/// Adds one to a decimal digit string, growing it when every digit\0A/// carries: \22999\22 becomes \221000\22, which is what makes 9.99 round to\0A/// 10.0 without a special case.\0Alet plum__inc_decimal (s: String): String = plum__inc_acc(s, String.char_len(s) - 1, \22\22)\0A\0Alet plum__inc_acc (s: String) (i: Int) (acc: String): String =\0A    if i < 0 { \221\22.concat(acc) }\0A    else {\0A        let v = plum__digit_at(s, i) + 1;\0A        if v < 10 { String.slice(s, 0, i).concat(plum__radix_digit(v)).concat(acc) }\0A        else { plum__inc_acc(s, i - 1, \220\22.concat(acc)) }\0A    }\0A\0A/// --- Radix ---\0A///\0A/// SIGNED, and reversible: `Int.to_radix(-255, 16)` is \22-ff\22, which\0A/// `String.parse_int` would read back. That is the opposite of what C\0A/// and Rust print for `%x` on a negative, and it is the choice that\0A/// keeps `to_radix` a number conversion rather than a bit dump. For the\0A/// bit pattern, `Int.to_bits` says so in its name.\0A///\0A/// Radix is clamped to 2..36: one digit per character, `0-9a-z`.\0A/// Digit values select static strings. Multi-digit conversion grows a unique\0A/// accumulator through Perceus reuse, then reverses it into an exact-sized result.\0Apub let Int.to_radix (n: Int) (radix: Int): String = {\0A    let r = Int.clamp(radix, 2, 36);\0A    if n == 0 { \220\22 } else {\0A        // Peel the last digit before negating: Int::MIN has no positive\0A        // counterpart, but its quotient and remainder both do (r >= 2).\0A        let q = n / r;\0A        let tail = n - q * r;\0A        let digit = plum__radix_digit(if n < 0 { 0 - tail } else { tail });\0A        if q == 0 { if n < 0 { \22-\22.concat(digit) } else { digit } }\0A        else {\0A            let backwards = plum__radix_acc(if n < 0 { 0 - q } else { q }, r, digit);\0A            String.reverse(if n < 0 { backwards.concat(\22-\22) } else { backwards })\0A        }\0A    }\0A}\0A\0A// Remaining magnitude is nonnegative. Append least-significant digits into\0A// one owned accumulator; prepending would copy the growing suffix each time.\0Alet plum__radix_acc (n: Int) (r: Int) (acc: String): String =\0A    if n == 0 { acc } else { plum__radix_acc(n / r, r, acc.concat(plum__radix_digit(n - (n / r) * r))) }\0A\0A// A finite formatting alphabet needs no per-call arrays, byte buffers or\0A// Result cells. Each arm returns an immutable String literal. A global\0A// chars_of table would eagerly allocate all 36 digit cells and its array.\0A// Callers prove 0 <= v < 36; the fallback remains defensive.\0Alet plum__radix_digit (v: Int): String = match v {\0A    0 => \220\22,\0A    1 => \221\22,\0A    2 => \222\22,\0A    3 => \223\22,\0A    4 => \224\22,\0A    5 => \225\22,\0A    6 => \226\22,\0A    7 => \227\22,\0A    8 => \228\22,\0A    9 => \229\22,\0A    10 => \22a\22,\0A    11 => \22b\22,\0A    12 => \22c\22,\0A    13 => \22d\22,\0A    14 => \22e\22,\0A    15 => \22f\22,\0A    16 => \22g\22,\0A    17 => \22h\22,\0A    18 => \22i\22,\0A    19 => \22j\22,\0A    20 => \22k\22,\0A    21 => \22l\22,\0A    22 => \22m\22,\0A    23 => \22n\22,\0A    24 => \22o\22,\0A    25 => \22p\22,\0A    26 => \22q\22,\0A    27 => \22r\22,\0A    28 => \22s\22,\0A    29 => \22t\22,\0A    30 => \22u\22,\0A    31 => \22v\22,\0A    32 => \22w\22,\0A    33 => \22x\22,\0A    34 => \22y\22,\0A    35 => \22z\22,\0A    _ => \22?\22,\0A}\0A\0A/// Lowercase hex, SIGNED: `-255` is `-ff`, not a two's-complement bit\0A/// pattern. `Int.to_hex_bits` is the one that shows the bits.\0Apub let Int.to_hex (n: Int): String = Int.to_radix(n, 16)\0A/// Binary, SIGNED: `-1` is `-1`. `Int.to_bits` shows all 64 bits.\0Apub let Int.to_binary (n: Int): String = Int.to_radix(n, 2)\0A/// Octal, signed. See `Int.to_radix` for other bases.\0Apub let Int.to_octal (n: Int): String = Int.to_radix(n, 8)\0A\0A/// The BIT PATTERN: all 64 bits, two's complement, most significant\0A/// first. This is the one to reach for with a bit field, where a signed\0A/// reading is not what is wanted. `Int.to_bits(-1)` is sixty-four\0A/// ones, while `Int.to_binary(-1)` is \22-1\22. Both are right about\0A/// different questions.\0Apub let Int.to_bits (n: Int): String = plum__bits_acc(n, 63, \22\22)\0A\0Alet plum__bits_acc (n: Int) (i: Int) (acc: String): String =\0A    if i < 0 { acc }\0A    else { plum__bits_acc(n, i - 1, acc.concat(if Int.shr_logical(n, i) & 1 == 1 { \221\22 } else { \220\22 })) }\0A\0A/// The same, in hex: sixteen digits, two's complement, zero padded.\0Apub let Int.to_hex_bits (n: Int): String = plum__hex_bits_acc(n, 60, \22\22)\0A\0Alet plum__hex_bits_acc (n: Int) (i: Int) (acc: String): String =\0A    if i < 0 { acc }\0A    else { plum__hex_bits_acc(n, i - 4, acc.concat(plum__radix_digit(Int.shr_logical(n, i) & 15))) }\0A\0A// The kernel consumes s and borrows fill, following Perceus argument ownership.\0Alet plum__string_pad_raw (s: String) (fill: String) (left: Int) (right: Int): String = \22\22\0A\0Alet plum__pad (s: String) (width: Int) (fill: String) (mode: Int): String = {\0A    let n = String.char_len(s);\0A    if String.char_len(fill) != 1 || n >= width { s }\0A    else {\0A        let total = width - n;\0A        let left = if mode == 0 { total } else if mode == 1 { 0 } else { total / 2 };\0A        plum__string_pad_raw(s, fill, left, total - left)\0A    }\0A}\0A\0A/// `print` is `println` without the newline. Its `env_var` and\0A/// file/process neighbours moved to the `Os` module in 0.0.9;\0A/// output stayed here, because a program that prints is not\0A/// thereby doing operating-system work.\0Alet print_raw (s: String): Bool = false\0A\0A/// Writes to standard output with NO trailing newline. `println` is\0A/// the one that adds one.\0Apub let print (s: String): Unit = { print_raw(s); () }\0A\0Alet wrapping_add_raw (a: Int) (b: Int): Int = 0\0Alet wrapping_sub_raw (a: Int) (b: Int): Int = 0\0Alet wrapping_mul_raw (a: Int) (b: Int): Int = 0\0A\0A/// Addition that WRAPS on overflow, two's complement, instead of\0A/// stopping the program.\0A///\0A/// `+` is the one to reach for. It aborts on overflow, deliberately,\0A/// because an integer that silently became negative is a wrong\0A/// answer that keeps running. This is for the cases where wrapping is\0A/// the SPECIFICATION rather than an accident: hashes, checksums,\0A/// fixed-width binary protocols, and generators like PCG or\0A/// splitmix64 that are defined mod 2^64.\0A///\0A/// It is a named function and not an operator so that it is visible\0A/// at the call site. Wrapping should be asked for, not defaulted to.\0Apub let Int.wrapping_add (a: Int) (b: Int): Int = wrapping_add_raw(a, b)\0A\0A/// Subtraction that WRAPS on overflow. See `Int.wrapping_add`.\0Apub let Int.wrapping_sub (a: Int) (b: Int): Int = wrapping_sub_raw(a, b)\0A\0A/// Multiplication that WRAPS on overflow. See `Int.wrapping_add`.\0A///\0A/// This is the one most algorithms actually need: FNV-1a, xxHash and\0A/// splitmix64 are all a wrapping multiply by a large constant\0A/// followed by a mix.\0Apub let Int.wrapping_mul (a: Int) (b: Int): Int = wrapping_mul_raw(a, b)\0A\0A// i traverses the borrowed prefix [0, n); no optional byte cell is needed.\0Alet plum__string_hash_acc (b: Bytes) (i: Int) (n: Int) (h: Int): Int =\0A    if i >= n { h & 9223372036854775807 }\0A    else { plum__string_hash_acc(b, i + 1, n, Int.wrapping_mul(h ^ bytes_at_raw(b, i), 1099511628211)) }\0A\0A/// A hash of the string's bytes, for bucketing.\0A///\0A/// Not stable across releases and not cryptographic — do not persist\0A/// it, and do not use it for anything security-related.\0A///\0A/// Borrows input and allocates no temporary storage while hashing.\0A///\0A/// FNV-1a, kept in Plum now that `Int.wrapping_mul` can express its\0A/// modulo-2^64 multiply. The final sign-bit mask is required: `Map`\0A/// uses the result with `%`, which needs a non-negative index.\0Apub let String.hash (s: String): Int = {\0A    let b = s.as_bytes();\0A    plum__string_hash_acc(b, 0, b.len(), -3750763034362895579)\0A}\0A\0A/// Whether a one-character string is an ASCII space, tab, newline or\0A/// carriage return. Unicode spaces are not included.\0Apub let String.is_ascii_ws (c: String): Bool = c == \22 \22 || c == \22\5Ct\22 || c == \22\5Cn\22 || c == \22\5Cr\22\0A\0A// KMP failure links: the longest proper prefix that is also a suffix\0A// of the bytes matched so far. Following a link never advances the\0A// input, and never repeats comparisons for a discarded prefix.\0Alet plum__string_search_fallback (needle: Bytes) (links: Array[Int]) (matched: Int) (byte: Int): Int =\0A    if matched > 0 && bytes_at_raw(needle, matched) != byte {\0A        plum__string_search_fallback(needle, links, links[matched - 1], byte)\0A    } else { matched }\0A\0A// Self-rebinding keeps the table uniquely owned while it grows, so\0A// push reuses storage and total table construction remains linear.\0Alet plum__string_search_links (needle: Bytes): Array[Int] = {\0A    let mut links = [0];\0A    let mut matched = 0;\0A    for i in 1..bytes_len_raw(needle) {\0A        let byte = bytes_at_raw(needle, i);\0A        let prefix = plum__string_search_fallback(needle, links, matched, byte);\0A        matched = if bytes_at_raw(needle, prefix) == byte { prefix + 1 } else { 0 };\0A        links = links.push(matched);\0A    };\0A    links\0A}\0A\0Alet plum__string_search_bytes (s: Bytes) (needle: Bytes) (links: Array[Int]) (i: Int) (matched: Int): Option[Int] =\0A    if i >= bytes_len_raw(s) { None }\0A    else {\0A        let byte = bytes_at_raw(s, i);\0A        let prefix = plum__string_search_fallback(needle, links, matched, byte);\0A        let next = if bytes_at_raw(needle, prefix) == byte { prefix + 1 } else { 0 };\0A        if next == bytes_len_raw(needle) { Some(i + 1 - next) }\0A        else { plum__string_search_bytes(s, needle, links, i + 1, next) }\0A    }\0A\0A// Count non-continuation bytes in a borrowed UTF-8 prefix. Shared by\0A// character counts and the conversion of search offsets to codepoints.\0Alet plum__string_count_starts (s: Bytes) (end: Int) (i: Int) (count: Int): Int =\0A    if i >= end { count }\0A    else {\0A        let byte = bytes_at_raw(s, i);\0A        plum__string_count_starts(s, end, i + 1, count + if byte < 128 || byte >= 192 { 1 } else { 0 })\0A    }\0A\0A/// The CHARACTER index where `needle` first appears, or `None`.\0A/// An empty needle matches at zero. Uses linear time in the UTF-8\0A/// byte lengths and auxiliary storage proportional to the needle's\0A/// byte length; the input text is borrowed without copying.\0Apub let String.index_of (s: String) (needle: String): Option[Int] =\0A    if needle.len() == 0 { Some(0) }\0A    else if needle.len() > s.len() { None }\0A    else {\0A        let text = bytes_of_str_raw(s);\0A        let pattern = bytes_of_str_raw(needle);\0A        let links = plum__string_search_links(pattern);\0A        match plum__string_search_bytes(text, pattern, links, 0, 0) {\0A            Some(offset) => Some(plum__string_count_starts(text, offset, 0, 0)),\0A            None => None,\0A        }\0A    }\0A\0A/// --- Namespaced forms of the string METHODS ---\0A///\0A/// `.len()`, `.split()`, `.replace()` and friends are compiler\0A/// PRIMITIVES lowered straight to IR, so they existed only as\0A/// methods, while `String.slice`/`index_of`/`lines`/`repeat`/\0A/// `trim_start`/`trim_end` are ordinary prelude functions and so\0A/// existed only namespaced. That split tracks how each one happens\0A/// to be implemented, which is invisible from outside and produced\0A/// a genuinely confusing surface: `\22x\22.trim()` worked and\0A/// `String.trim(\22x\22)` did not, while `String.trim_start(\22x\22)`\0A/// worked and `\22x\22.trim_start()` did not. Same family, opposite\0A/// rules, no way to tell which without trying.\0A///\0A/// The rule now: `String.f(s, ..)` always works. Some also have\0A/// method sugar. These wrappers cost nothing when unused --\0A/// dead-function elimination drops them.\0A/// The number of BYTES. `String.char_len` is the character count, and\0A/// the two differ for anything outside ASCII.\0Apub let String.len (s: String): Int = s.len()\0A/// Splits on every occurrence of `sep`.\0A///\0A/// A separator at either end produces an empty piece, so splitting\0A/// `\5C\22,a,\5C\22` on `\5C\22,\5C\22` gives three pieces. Splitting on an empty\0A/// separator gives the characters.\0Apub let String.split (s: String) (sep: String): Array[String] = s.split(sep)\0A/// Whether `needle` appears anywhere.\0Apub let String.contains (s: String) (needle: String): Bool = s.contains(needle)\0A/// Whether the string begins with `prefix`.\0Apub let String.starts_with (s: String) (prefix: String): Bool = s.starts_with(prefix)\0A/// Whether the string ends with `suffix`.\0Apub let String.ends_with (s: String) (suffix: String): Bool = s.ends_with(suffix)\0A/// Every occurrence of `from` replaced with `to`. An empty `from`\0A/// leaves the string alone rather than looping.\0A/// Unchanged nonempty results share the input cell. Changed nonempty results\0A/// use one exact-sized allocation; empty results use static storage.\0Apub let String.replace (s: String) (from: String) (to: String): String = s.replace(from, to)\0A/// Uppercased using the platform's one-codepoint Unicode mapping. This\0A/// does not perform multi-codepoint expansions (for example, ß to SS).\0A/// POSIX uses the initialized UTF-8 locale; Windows maps the BMP only\0A/// and leaves supplementary codepoints unchanged. Mappings can vary by OS.\0A/// Unchanged nonempty results share input storage; changed results use\0A/// one exact-sized allocation. Empty results use static storage.\0Apub let String.to_upper (s: String): String = s.to_upper()\0A/// Lowercased with the same platform mapping and storage rules as `String.to_upper`.\0Apub let String.to_lower (s: String): String = s.to_lower()\0A/// Whitespace removed from both ends, including Unicode spaces.\0A/// Unchanged input shares its owned storage; changed input copies only\0A/// the retained UTF-8 bytes.\0Apub let String.trim (s: String): String = s.trim()\0A\0Alet bytes_of_str_raw (s: String): Bytes = bytes_of_str_raw(s)\0Alet str_of_bytes_raw (b: Bytes): String = \22\22\0Alet bytes_len_raw (b: Bytes): Int = 0\0Alet bytes_at_raw (b: Bytes) (i: Int): Int = 0\0Alet bytes_slice_raw (b: Bytes) (start: Int) (end: Int): Bytes = bytes_slice_raw(b, start, end)\0Alet bytes_concat_raw (a: Bytes) (b: Bytes): Bytes = bytes_concat_raw(a, b)\0Alet bytes_from_array_raw (xs: Array[Int]): Bytes = bytes_from_array_raw(xs)\0A\0A/// No bytes.\0Apub let Bytes.empty (): Bytes = bytes_of_str_raw(\22\22)\0A\0A/// How many bytes.\0Apub let Bytes.len (b: Bytes): Int = bytes_len_raw(b)\0A/// Whether there are no bytes.\0Apub let Bytes.is_empty (b: Bytes): Bool = bytes_len_raw(b) == 0\0A\0A/// Free in both directions at runtime; the DIRECTION is what differs.\0A/// Every String is bytes, so this one is total.\0A/// The string's bytes, as UTF-8. No copy of the text is decoded, so\0A/// this is the cheap direction.\0Apub let String.as_bytes (s: String): Bytes = bytes_of_str_raw(s)\0A/// The string's UTF-8 bytes. The same as `String.as_bytes`, named for\0A/// a caller thinking in bytes.\0Apub let Bytes.from_string (s: String): Bytes = bytes_of_str_raw(s)\0A\0A/// Not every Bytes is a String, so this one is not. This is the ONE\0A/// place the UTF-8 promise is established rather than assumed. The\0A/// reason the two types are distinct at all.\0A/// Written in Plum, not as a runtime primitive, because it needs\0A/// nothing the two byte primitives above do not already provide --\0A/// and this prelude's rule is that only what CANNOT be written here\0A/// goes into hand-written IR.\0A///\0A/// Full UTF-8, not just a lead-byte check: the ranges below reject\0A/// overlong encodings (C0/C1, and E0/F0 with a too-small second\0A/// byte), the UTF-16 surrogate block (ED A0..BF, which is why ED is\0A/// singled out), and anything past U+10FFFF (F5..FF, and F4 with a\0A/// second byte over 8F). A validator that only checked continuation\0A/// bytes would accept all four, and each one is a real way for a\0A/// decoder downstream to disagree about what this buffer says.\0Alet plum__is_cont (b: Bytes) (i: Int): Bool = {\0A    let v = bytes_at_raw(b, i);\0A    v >= 128 && v <= 191\0A}\0A\0Alet plum__utf8_ok (b: Bytes) (i: Int) (n: Int): Bool =\0A    if i >= n { true }\0A    else {\0A        let c = bytes_at_raw(b, i);\0A        // ASCII.\0A        if c < 128 { plum__utf8_ok(b, i + 1, n) }\0A        // A continuation byte with no lead (80..BF), or an overlong\0A        // two-byte form (C0/C1).\0A        else if c < 194 { false }\0A        // Two bytes: C2..DF.\0A        else if c < 224 {\0A            if i + 1 >= n { false }\0A            else if !plum__is_cont(b, i + 1) { false }\0A            else { plum__utf8_ok(b, i + 2, n) }\0A        }\0A        // Three bytes: E0..EF. E0 must not be overlong (second byte\0A        // A0..BF) and ED must not encode a surrogate (second byte\0A        // 80..9F).\0A        else if c < 240 {\0A            if i + 2 >= n { false }\0A            else {\0A                let c1 = bytes_at_raw(b, i + 1);\0A                let lo = if c == 224 { 160 } else { 128 };\0A                let hi = if c == 237 { 159 } else { 191 };\0A                if c1 < lo || c1 > hi { false }\0A                else if !plum__is_cont(b, i + 2) { false }\0A                else { plum__utf8_ok(b, i + 3, n) }\0A            }\0A        }\0A        // Four bytes: F0..F4. F0 must not be overlong (second byte\0A        // 90..BF) and F4 must not exceed U+10FFFF (second byte\0A        // 80..8F).\0A        else if c < 245 {\0A            if i + 3 >= n { false }\0A            else {\0A                let c1 = bytes_at_raw(b, i + 1);\0A                let lo = if c == 240 { 144 } else { 128 };\0A                let hi = if c == 244 { 143 } else { 191 };\0A                if c1 < lo || c1 > hi { false }\0A                else if !plum__is_cont(b, i + 2) { false }\0A                else if !plum__is_cont(b, i + 3) { false }\0A                else { plum__utf8_ok(b, i + 4, n) }\0A            }\0A        }\0A        // F5..FF: past the end of the encodable range.\0A        else { false }\0A    }\0A\0A/// Whether these bytes are valid UTF-8, without building a string.\0Apub let Bytes.is_utf8 (b: Bytes): Bool = plum__utf8_ok(b, 0, bytes_len_raw(b))\0A/// Decodes UTF-8 into a string.\0A///\0A/// `Err` when the bytes are not valid UTF-8 — which is why this is a\0A/// `Result` and `String.as_bytes` is not. Bytes arrive from files and\0A/// sockets, and not all of them are text.\0Apub let Bytes.as_string (b: Bytes): Result[String, String] =\0A    if Bytes.is_utf8(b) { Ok(str_of_bytes_raw(b)) }\0A    else { Err(\22Bytes.as_string: not valid UTF-8\22) }\0A\0A/// BYTE indices, throughout. `Bytes.slice` can and will split a\0A/// multi-byte character in half, which is the operation `String`\0A/// deliberately does not offer, and the reason a program reaching for\0A/// bytes reached for them.\0A///\0A/// Clamped rather than aborting, matching `Array.slice`.\0A/// Bytes from `start` up to but not including `end`, with bounds\0A/// clamped. A slice can split a multi-byte character, so the result is\0A/// not guaranteed to be valid UTF-8.\0Apub let Bytes.slice (b: Bytes) (start: Int) (end: Int): Bytes = {\0A    let n = bytes_len_raw(b);\0A    let lo = if start < 0 { 0 } else if start > n { n } else { start };\0A    let hi = if end < lo { lo } else if end > n { n } else { end };\0A    bytes_slice_raw(b, lo, hi)\0A}\0A\0A/// The two runs of bytes, joined.\0Apub let Bytes.concat (a: Bytes) (b: Bytes): Bytes = bytes_concat_raw(a, b)\0A\0A/// `None` rather than an abort for an out-of-range index: a byte\0A/// buffer is usually being walked by a parser that does not know how\0A/// long it is yet, and `Option` is how the rest of this prelude says\0A/// \22nothing there\22 (`Array.first`, `Map.get`).\0A/// The byte at `i` as a number 0-255, or `None` when out of range.\0Apub let Bytes.at (b: Bytes) (i: Int): Option[Int] =\0A    if i < 0 { None } else if i >= bytes_len_raw(b) { None } else { Some(bytes_at_raw(b, i)) }\0A\0A/// Each element is one byte, 0-255. Values outside that range are\0A/// masked to their low 8 bits rather than rejected. `from_array` is\0A/// a construction helper, and a `Result` here would put error handling\0A/// in front of every literal buffer.\0A/// Bytes from numbers. Values outside 0-255 are truncated to their\0A/// low eight bits.\0Apub let Bytes.from_array (xs: Array[Int]): Bytes = bytes_from_array_raw(xs)\0A\0A/// The way back in from C, and the counterpart to `.as_cstr()`.\0A///\0A/// Takes an explicit LENGTH, which is the whole difference from\0A/// `RawCStr.as_string()`: that one stops at the first NUL because a\0A/// `char*` alone cannot say how long it is, and any C API returning\0A/// bytes has to hand back a count separately. Given the count, this\0A/// is binary-safe. Given a wrong one, it reads whatever is\0A/// next in memory, exactly as the equivalent C would.\0A///\0A/// COPIES into a fresh cell. C buffers are routinely static, reused\0A/// on the next call, or freed by the callee; the copy is what makes\0A/// the result an ordinary owned Plum value.\0Alet bytes_from_cstr_raw (c: RawCStr) (len: Int): Bytes = unsafe { bytes_from_cstr_raw(c, len) }\0A/// Copies `len` bytes from a C pointer.\0A///\0A/// Requires an `unsafe` block and all arguments at the call site;\0A/// it cannot be used as a function value or partially applied.\0A/// For positive `len`, the caller must ensure `c` points to at least\0A/// `len` readable bytes that remain valid throughout the copy.\0A/// No pointer, lifetime, or allocation-bound validation is performed.\0A/// Nonpositive lengths return empty bytes without reading `c`.\0A/// The result owns a fresh copy, including any embedded NUL bytes;\0A/// the source is neither retained nor freed.\0Apub let Bytes.from_cstr (c: RawCStr) (len: Int): Bytes = unsafe {\0A    if len <= 0 { Bytes.empty() } else { bytes_from_cstr_raw(c, len) }\0A}\0A\0A// Borrows b and returns independent owned Array[Int] storage.\0Alet plum__bytes_to_array_raw (b: Bytes): Array[Int] = []\0A/// The bytes as numbers 0-255, using one exact-sized array allocation.\0A/// The result is independent of the input; empty results use static storage.\0Apub let Bytes.to_array (b: Bytes): Array[Int] = plum__bytes_to_array_raw(b)\0A\0A/// Lowercase hex, two characters per byte, no separator.\0A///\0A/// This is what `.to_string()` would have to be if `Bytes` had one,\0A/// and the reason it does not: hex is A rendering, not THE rendering,\0A/// and picking it silently would make `.to_string()` mean something\0A/// different on this type than on every other. Named explicitly, the\0A/// caller decides.\0Alet plum__hex_digit (v: Int): String =\0A    if v == 0 { \220\22 } else if v == 1 { \221\22 } else if v == 2 { \222\22 } else if v == 3 { \223\22 }\0A    else if v == 4 { \224\22 } else if v == 5 { \225\22 } else if v == 6 { \226\22 } else if v == 7 { \227\22 }\0A    else if v == 8 { \228\22 } else if v == 9 { \229\22 } else if v == 10 { \22a\22 } else if v == 11 { \22b\22 }\0A    else if v == 12 { \22c\22 } else if v == 13 { \22d\22 } else if v == 14 { \22e\22 } else { \22f\22 }\0A\0A// Implemented by the generated runtime; borrows b and returns owned storage.\0Alet plum__bytes_to_hex_raw (b: Bytes): String = \22\22\0A/// Lowercase hex, two characters per byte. `Encoding.hex_decode`\0A/// reads it back. A nonempty result uses one exact-sized allocation;\0A/// an empty result uses shared static storage.\0Apub let Bytes.to_hex (b: Bytes): String = plum__bytes_to_hex_raw(b)\0A\0A// The runtime plans and fills a known-size result while borrowing all inputs.\0Alet plum__string_join_raw (parts: Array[String]) (sep: String): String = \22\22\0A\0A/// Joins parts in order with `sep` between adjacent entries. Empty parts\0A/// still contribute separator boundaries.\0A///\0A/// Copies parts and separators directly into one exact-sized allocation.\0A/// Empty output uses shared static storage.\0Apub let Array.join (parts: Array[String]) (sep: String): String = plum__string_join_raw(parts, sep)\0A\0A/// Int's minimum, which CANNOT be written as a literal: its\0A/// magnitude is out of range as a positive number, so the lexer\0A/// rejects `9223372036854775808` before any sign is applied.\0Alet plum__int_min (u: Unit): Int = 0 - 9223372036854775807 - 1\0A\0A// chars_of groups following continuation bytes with the preceding byte,\0A// even for unsafe raw Strings. Only accept a sign/digit as a one-byte unit.\0Alet plum__string_parse_int_acc (s: String) (bytes: Bytes) (n: Int) (i: Int) (acc: Int) (any: Bool) (negative: Bool): Result[Int, String] =\0A    if i >= n { if any { Ok(acc) } else { Err(\22expected at least one digit\22) } }\0A    else {\0A        let byte = bytes_at_raw(bytes, i);\0A        if byte < 48 || byte > 57 || (i + 1 < n && plum__is_cont(bytes, i + 1)) {\0A            // Accepted prefix units are single ASCII bytes, so i is also\0A            // the character index here. Reuse String.slice's grouping for\0A            // the first rejected unit instead of adding another decoder.\0A            Err(\22expected a digit, found \22.concat(String.slice(s, i, i + 1)))\0A        } else {\0A            let digit = byte - 48;\0A            // Check range before checked multiplication/addition. Negative\0A            // accumulation represents Int::MIN without negating its magnitude.\0A            if negative {\0A                if acc < 0 - 922337203685477580 { Err(\22integer out of range\22) }\0A                else if acc * 10 < plum__int_min(()) + digit { Err(\22integer out of range\22) }\0A                else { plum__string_parse_int_acc(s, bytes, n, i + 1, acc * 10 - digit, true, negative) }\0A            } else if acc > 922337203685477580 { Err(\22integer out of range\22) }\0A            else if acc * 10 > 9223372036854775807 - digit { Err(\22integer out of range\22) }\0A            else { plum__string_parse_int_acc(s, bytes, n, i + 1, acc * 10 + digit, true, negative) }\0A        }\0A    }\0A\0A/// Parses a decimal integer, with an optional leading `-`.\0A///\0A/// `Err` on anything else, including an empty string, surrounding\0A/// spaces, and a number too large for an `Int`. No `0x` or `0b`\0A/// prefixes — this is the inverse of `to_string`, not a literal\0A/// parser. Scans ASCII digits directly without a character array;\0A/// the first invalid character keeps the existing diagnostic.\0Apub let String.parse_int (s: String): Result[Int, String] = {\0A    let bytes = bytes_of_str_raw(s);\0A    let n = bytes_len_raw(bytes);\0A    if n == 0 { Err(\22empty string\22) } else {\0A        let negative = bytes_at_raw(bytes, 0) == 45 && (n == 1 || !plum__is_cont(bytes, 1));\0A        plum__string_parse_int_acc(s, bytes, n, if negative { 1 } else { 0 }, 0, false, negative)\0A    }\0A}\0A\0A/// `String.parse_float` DELEGATES to the JSON number parser below,\0A/// exactly as the real prelude does.\0A///\0A/// It used to have a hand-written parser here, on the reasoning that\0A/// dragging a JSON parser in to read a float would be absurd. That\0A/// reasoning cost twice. The hand-written version accumulated the\0A/// fraction digit by digit against a repeatedly-divided 0.1, so\0A/// `0.000001` parsed as 1.0000000000000002e-06, invisible until\0A/// floats started printing every digit that matters. And its own\0A/// comment admitted the second cost: \22no exponent, which is a real\0A/// narrowing, stated rather than discovered\22. Stated, but it made\0A/// the two compilers DISAGREE. `String.parse_float(\221e3\22)` gave\0A/// 1000 under the real compiler and an error here.\0A///\0A/// The JSON parser was already in this same prelude, already\0A/// handling exponents, already correct. Reusing it is not absurd;\0A/// writing a second one was.\0A/// Overflow returns `Err`; underflow follows binary64 rounding to a\0A/// subnormal value or signed zero.\0Apub let String.parse_float (s: String): Result[Float, String] = {\0A    let cs = bytes_of_str_raw(s);\0A    match parse_number(cs, 0) {\0A        Ok(r) => if r.next_pos == bytes_len_raw(cs) { Ok(r.value) } else { Err(\22trailing characters after number\22) },\0A        Err(e) => Err(e),\0A    }\0A}\0A\0A// --- Sorting ---\0A\0A// Merge into a fresh, uniquely owned accumulator. Tail calls move it\0A// into the next push, so growth is amortized O(1) per element. Taking\0A// the left element on equality preserves the original order of ties.\0Alet plum__array_sort_merge_acc[T] (left: Array[T]) (right: Array[T]) (le: (T, T) -> Bool) (i: Int) (j: Int) (acc: Array[T]): Array[T] =\0A    if i >= left.len() {\0A        if j >= right.len() { acc }\0A        else { plum__array_sort_merge_acc(left, right, le, i, j + 1, acc.push(right[j])) }\0A    } else if j >= right.len() {\0A        plum__array_sort_merge_acc(left, right, le, i + 1, j, acc.push(left[i]))\0A    } else if le(left[i], right[j]) {\0A        plum__array_sort_merge_acc(left, right, le, i + 1, j, acc.push(left[i]))\0A    } else {\0A        plum__array_sort_merge_acc(left, right, le, i, j + 1, acc.push(right[j]))\0A    }\0A\0A// Split index ranges rather than copying slices of the input. Only\0A// the sorted runs and merge output allocate, with O(n) peak storage\0A// and O(log n) stack depth for the recursive splits.\0Alet plum__array_sort_range[T] (arr: Array[T]) (le: (T, T) -> Bool) (lo: Int) (hi: Int): Array[T] =\0A    if hi <= lo { [] }\0A    else if hi - lo == 1 { [arr[lo]] }\0A    else {\0A        let mid = lo + (hi - lo) / 2;\0A        let left = plum__array_sort_range(arr, le, lo, mid);\0A        let right = plum__array_sort_range(arr, le, mid, hi);\0A        plum__array_sort_merge_acc(left, right, le, 0, 0, [])\0A    }\0A\0A/// Sorted by a \5C\22less than or equal\5C\22 predicate.\0A///\0A/// STABLE: elements `le` considers equivalent keep their original\0A/// order, which is what makes sorting by one key and then another\0A/// produce the ordering people expect.\0A///\0A/// Merge sort with O(n log n) comparisons and O(n) auxiliary storage.\0Apub let Array.sort_by[T] (arr: Array[T]) (le: (T, T) -> Bool): Array[T] = plum__array_sort_range(arr, le, 0, arr.len())\0A\0A/// Sorted ascending.\0Apub let Array.sort_int (arr: Array[Int]): Array[Int] = Array.sort_by(arr, |a: Int, b: Int| a <= b)\0A/// Sorted ascending. NaN does not compare, so an array containing one\0A/// has no meaningful order.\0Apub let Array.sort_float (arr: Array[Float]): Array[Float] = Array.sort_by(arr, |a: Float, b: Float| a <= b)\0A\0A// `Array.sort_string` is deliberately ABSENT: the real prelude compares\0A// via `a.runes()`, and this compiler has no `.runes()` primitive. It\0A// belongs with `Float.sqrt` and friends -- the group that needs a\0A// runtime primitive rather than prelude source -- not here.\0A\0A// --- Zip ---\0A\0A/// A named struct, not a tuple, exactly as the real prelude has it.\0Apub struct Zipped[A, B] { pub first: A, pub second: B }\0A\0Alet plum__array_zip_acc[T, U] (a: Array[T]) (b: Array[U]) (i: Int) (acc: Array[Zipped[T, U]]): Array[Zipped[T, U]] =\0A    if i >= a.len() || i >= b.len() { acc } else { plum__array_zip_acc(a, b, i + 1, acc.push(Zipped { first: a[i], second: b[i] })) }\0A\0A/// Pairs elements positionally, stopping at the shorter array.\0Apub let Array.zip[T, U] (a: Array[T]) (b: Array[U]): Array[Zipped[T, U]] = plum__array_zip_acc(a, b, 0, [])\0A\0A// --- String trimming ---\0A\0Alet plum__string_trim_start_raw (s: String): String = \22\22\0Alet plum__string_trim_end_raw (s: String): String = \22\22\0A\0A/// Whitespace removed from the start, using the same Unicode whitespace\0A/// predicate as String.trim. Unchanged input shares its owned storage;\0A/// changed input copies only the retained UTF-8 bytes.\0Apub let String.trim_start (s: String): String = plum__string_trim_start_raw(s)\0A\0A/// Whitespace removed from the end, using the same Unicode whitespace\0A/// predicate as String.trim. Unchanged input shares its owned storage;\0A/// changed input copies only the retained UTF-8 bytes.\0Apub let String.trim_end (s: String): String = plum__string_trim_end_raw(s)\0A\0A/// Split on newlines.\0A///\0A/// A trailing newline produces a final empty piece, since the text\0A/// after it is empty — which is what makes joining the result back\0A/// with newlines give the original.\0Apub let String.lines (s: String): Array[String] = s.split(\22\5Cn\22)\0A\0A// --- Numbers that need the runtime ---\0A\0A/// The real prelude writes these as `unsafe { fabs(x) }`,\0A/// `unsafe { sqrt(x) }` and friends.\0A/// This backend has no `extern \22C\22`/`unsafe` support, so they reach the\0A/// same libm functions as runtime primitives instead.\0Alet abs_raw (x: Float): Float = 0.0\0Alet sqrt_raw (x: Float): Float = 0.0\0Alet pow_raw (b: Float) (e: Float): Float = 0.0\0Alet floor_raw (x: Float): Float = 0.0\0Alet ceil_raw (x: Float): Float = 0.0\0Alet round_raw (x: Float): Float = 0.0\0Alet sin_raw (x: Float): Float = 0.0\0Alet cos_raw (x: Float): Float = 0.0\0Alet tan_raw (x: Float): Float = 0.0\0Alet asin_raw (x: Float): Float = 0.0\0Alet acos_raw (x: Float): Float = 0.0\0Alet atan_raw (x: Float): Float = 0.0\0Alet atan2_raw (y: Float) (x: Float): Float = 0.0\0Alet log_raw (x: Float): Float = 0.0\0Alet log2_raw (x: Float): Float = 0.0\0Alet log10_raw (x: Float): Float = 0.0\0Alet exp_raw (x: Float): Float = 0.0\0Alet float_fixed_raw (x: Float) (decimals: Int): String = \22\22\0Alet random_raw (ignored: Bool): Float = 0.0\0A\0A/// The square root. Negative input gives NaN rather than failing.\0Apub let Float.sqrt (x: Float): Float = sqrt_raw(x)\0A/// `base` raised to `exp`. A fractional exponent of a negative base\0A/// gives NaN.\0Apub let Float.pow (base: Float) (exp: Float): Float = pow_raw(base, exp)\0A/// The largest whole number no greater than `x` — toward negative\0A/// infinity, so `floor(-2.5)` is `-3.0`.\0Apub let Float.floor (x: Float): Float = floor_raw(x)\0A/// The smallest whole number no less than `x`.\0Apub let Float.ceil (x: Float): Float = ceil_raw(x)\0A/// The nearest whole number, halves AWAY FROM ZERO: `round(2.5)` is\0A/// `3.0` and `round(-2.5)` is `-3.0`.\0A///\0A/// `Float.to_fixed` rounds halves to EVEN, which is not an\0A/// inconsistency — it is what C, Python, Rust and Java all do, because\0A/// rounding is arithmetic and formatting is rendering.\0Apub let Float.round (x: Float): Float = round_raw(x)\0A\0A/// A float in `[0.0, 1.0)` from a process-wide generator seeded from\0A/// the clock.\0A///\0A/// Different every run, and NOT reproducible. `Rng.from_seed` is the\0A/// one for a test or a replay.\0Apub let Float.random (): Float = random_raw(true)\0A/// A float in `[lo, hi)`, from the same unseeded generator as\0A/// `Float.random`.\0Apub let Float.random_range (lo: Float) (hi: Float): Float = lo + (hi - lo) * Float.random(())\0A\0A/// --- Trigonometry, logs and constants (issue #20) ---\0A///\0A/// Angles are RADIANS everywhere, which is what libm takes and what the\0A/// inverse functions return. `Float.radians` and `Float.degrees` convert\0A/// at the edges, so a program that thinks in degrees converts once\0A/// rather than scattering `* 3.14159 / 180.0`.\0A/// Sine of an angle in RADIANS.\0Apub let Float.sin (x: Float): Float = sin_raw(x)\0A/// Cosine of an angle in radians.\0Apub let Float.cos (x: Float): Float = cos_raw(x)\0A/// Tangent of an angle in radians. Grows without bound near odd\0A/// multiples of pi/2 rather than failing.\0Apub let Float.tan (x: Float): Float = tan_raw(x)\0A/// The angle in radians whose sine is `x`, in `[-pi/2, pi/2]`. NaN\0A/// outside `[-1, 1]`.\0Apub let Float.asin (x: Float): Float = asin_raw(x)\0A/// The angle in radians whose cosine is `x`, in `[0, pi]`. NaN\0A/// outside `[-1, 1]`.\0Apub let Float.acos (x: Float): Float = acos_raw(x)\0A/// The angle in radians whose tangent is `x`. `Float.atan2` is the\0A/// one that knows which quadrant.\0Apub let Float.atan (x: Float): Float = atan_raw(x)\0A\0A/// `atan2(y, x)`, in that order, matching libm, Go, Python\0A/// and Java all use, and the reason it exists: it knows which QUADRANT\0A/// the point is in, which `atan(y / x)` cannot, and it does not divide\0A/// by zero when `x` is 0.\0Apub let Float.atan2 (y: Float) (x: Float): Float = atan2_raw(y, x)\0A\0A/// Natural log. `log2` and `log10` are separate rather than\0A/// `log(x) / log(2.0)`, because libm computes them directly and the\0A/// division loses accuracy at exactly the powers people check.\0A/// The natural logarithm. NaN for a negative argument, and negative\0A/// infinity at zero.\0Apub let Float.log (x: Float): Float = log_raw(x)\0A/// Base-2 logarithm, computed directly rather than as a division —\0A/// which is what keeps `log2(8.0)` exactly `3.0`.\0Apub let Float.log2 (x: Float): Float = log2_raw(x)\0A/// Base-10 logarithm, computed directly. See `Float.log2`.\0Apub let Float.log10 (x: Float): Float = log10_raw(x)\0A/// `e` raised to `x`.\0Apub let Float.exp (x: Float): Float = exp_raw(x)\0A\0A/// Constants as FUNCTIONS, because `Float.` is a type namespace and\0A/// `T.f(x)` is how a name gets into it. Written out to the last digit a\0A/// double can hold rather than computed, so they are exact literals and\0A/// not a rounding of something else.\0A/// Pi, to the last digit a double holds.\0Apub let Float.pi (): Float = 3.141592653589793\0A/// Two pi — a full turn, which is the more useful constant when\0A/// working with angles.\0Apub let Float.tau (): Float = 6.283185307179586\0A/// Euler's number.\0Apub let Float.e (): Float = 2.718281828459045\0A\0A/// Degrees to radians. Every trigonometric function here takes\0A/// radians, so this is the conversion at the edge.\0Apub let Float.radians (degrees: Float): Float = degrees * 3.141592653589793 / 180.0\0A/// Radians to degrees.\0Apub let Float.degrees (radians: Float): Float = radians * 180.0 / 3.141592653589793\0A\0A/// --- Seeded, reproducible random numbers (issue #20) ---\0A///\0A/// `Float.random` reads a process-global generator seeded from the\0A/// clock, which is right for \22give me something different each run\22 and\0A/// useless for a test or a replay. An `Rng` is a VALUE: same seed, same\0A/// sequence, on every platform and every run.\0A///\0A/// Every call returns the NEXT GENERATOR alongside the number, rather\0A/// than mutating in place, so a generator is as ordinary a value as an\0A/// `Int`. Threading it by hand is the cost; being able to replay a game\0A/// from a seed, or write a test that cannot flake, is what it buys. A\0A/// `Ref[Rng]` is the opt-in for in-place update.\0A///\0A/// --- Which generator, and why ---\0A///\0A/// SplitMix64: a small, modern 64-bit generator with a full 2^64\0A/// period. It is fast, has excellent bit diffusion, and is the right\0A/// generator when reproducibility and simple state matter more than\0A/// cryptographic secrecy. The wrapping multiply and logical shifts it\0A/// needs became expressible when `Int.wrapping_mul` and bitwise\0A/// operators landed.\0A///\0A/// **Not for cryptography, keys, tokens or passwords.** It is a\0A/// statistical generator and its entire state is recoverable from two\0A/// outputs.\0Apub struct Rng { state: Int }\0A\0Alet RNG_GAMMA: Int = -7046029254386353131\0Alet RNG_MIX_1: Int = -4658895280553007687\0Alet RNG_MIX_2: Int = -7723592293110705685\0Alet RNG_RANGE: Int = 9223372036854775807\0A\0A/// Any `Int` is a legal seed, including zero and negatives. SplitMix64\0A/// has no forbidden state, unlike generators whose all-zero state gets\0A/// stuck, so the seed is kept exactly rather than folded into a range.\0Apub let Rng.from_seed (seed: Int): Rng = Rng { state: seed }\0A\0Alet plum__mod_floor (a: Int) (m: Int): Int = {\0A    let r = a - (a / m) * m;\0A    if r < 0 { r + m } else { r }\0A}\0A\0A/// The raw step: advance by SplitMix64's golden-ratio increment, then\0A/// mix all 64 bits. Keep the sign bit here: wide integer ranges need\0A/// the full signed domain. Each caller reduces the output as needed.\0Alet rng_step (r: Rng): (Rng, Int) = {\0A    let next = Rng { state: Int.wrapping_add(r.state, RNG_GAMMA) };\0A    let z1 = Int.wrapping_mul(next.state ^ Int.shr_logical(next.state, 30), RNG_MIX_1);\0A    let z2 = Int.wrapping_mul(z1 ^ Int.shr_logical(z1, 27), RNG_MIX_2);\0A    (next, z2 ^ Int.shr_logical(z2, 31))\0A}\0A\0A/// A `Float` in `[0.0, 1.0)`. Use 53 exactly representable bits so\0A/// converting to `Float` cannot round the largest sample up to `1.0`.\0A/// The generator advances exactly once, as for previous versions;\0A/// float samples may differ because the discarded low bits no longer round.\0Apub let Rng.float (r: Rng): (Rng, Float) = {\0A    let (next, z) = rng_step(r);\0A    (next, Int.shr_logical(z & RNG_RANGE, 10).to_float() / 9007199254740992.0)\0A}\0A\0A/// A float in `[lo, hi)`, and the next generator.\0Apub let Rng.float_range (r: Rng) (lo: Float) (hi: Float): (Rng, Float) = {\0A    let (next, f) = Rng.float(r);\0A    (next, lo + (hi - lo) * f)\0A}\0A\0A/// `[lo, hi)`, the upper bound EXCLUDED, so `int_range(r, 0, xs.len())`\0A/// is an index into `xs` and needs no `- 1` anywhere.\0A/// All ordered `Int` bounds are supported, even when `hi - lo` would\0A/// overflow. `hi` must itself be an `Int`, so the maximum `Int` cannot\0A/// be included as a result of this half-open API.\0A///\0A/// Rejection sampling, not `z % span`. The modulo is biased whenever the\0A/// span does not divide the generator's range evenly: the low values\0A/// come up more often, by about one part in `range / span`. That is\0A/// invisible in a game and fatal in a shuffle, and the loop costs an\0A/// extra step only on the fraction of draws that land in the leftover\0A/// tail. Widths through the maximum `Int` preserve their seeded sequences.\0A/// Wider ranges reject full signed samples outside `[lo, hi)` instead;\0A/// they accept at least half of the domain, averaging at most two draws.\0A///\0A/// An empty or backwards range returns `lo` and does not draw, because\0A/// there is no number to return and a panic here would make an ordinary\0A/// off-by-one crash a program at random.\0Apub let Rng.int_range (r: Rng) (lo: Int) (hi: Int): (Rng, Int) = {\0A    if hi <= lo { (r, lo) } else {\0A        let span = Int.wrapping_sub(hi, lo);\0A        if span < 0 { rng_wide(r, lo, hi) } else { rng_below(r, span, lo) }\0A    }\0A}\0A\0A// Tail recursion keeps retries in constant stack space. No span or\0A// offset arithmetic is needed for ranges at least 2^63 wide.\0Alet rng_wide (r: Rng) (lo: Int) (hi: Int): (Rng, Int) = {\0A    let (next, z) = rng_step(r);\0A    if z < lo || z >= hi { rng_wide(next, lo, hi) } else { (next, z) }\0A}\0A\0Alet rng_below (r: Rng) (span: Int) (lo: Int): (Rng, Int) = {\0A    let range = RNG_RANGE;\0A    let limit = range - plum__mod_floor(range, span);\0A    let (next, raw) = rng_step(r);\0A    let z = raw & RNG_RANGE;\0A    if z >= limit { rng_below(next, span, lo) } else { (next, lo + plum__mod_floor(z, span)) }\0A}\0A\0A/// A boolean, evenly, and the next generator.\0Apub let Rng.bool (r: Rng): (Rng, Bool) = {\0A    let (next, v) = Rng.int_range(r, 0, 2);\0A    (next, v == 1)\0A}\0A\0A/// Fisher-Yates, walking from the end so every permutation is equally\0A/// likely. The naive version, swapping each element with any other, is\0A/// not uniform, and looks fine until somebody counts.\0Apub let Rng.shuffle[T] (r: Rng) (xs: Array[T]): (Rng, Array[T]) =\0A    rng_shuffle_acc(r, xs, xs.len() - 1)\0A\0Alet rng_shuffle_acc[T] (r: Rng) (xs: Array[T]) (i: Int): (Rng, Array[T]) =\0A    if i <= 0 { (r, xs) } else {\0A        let (next, j) = Rng.int_range(r, 0, i + 1);\0A        rng_shuffle_acc(next, plum__swap(xs, i, j), i - 1)\0A    }\0A\0Alet plum__swap[T] (xs: Array[T]) (i: Int) (j: Int): Array[T] =\0A    if i == j { xs } else {\0A        let a = xs[i];\0A        let b = xs[j];\0A        xs.set(i, b).set(j, a)\0A    }\0A\0A/// One element, or `None` from an empty array.\0Apub let Rng.choice[T] (r: Rng) (xs: Array[T]): (Rng, Option[T]) =\0A    if Array.is_empty(xs) { (r, None) } else {\0A        let (next, i) = Rng.int_range(r, 0, xs.len());\0A        (next, Some(xs[i]))\0A    }\0A\0A// --- String ordering ---\0A\0A/// Byte-lexicographic, which for UTF-8 IS codepoint order, so this\0A/// agrees with the real prelude's rune-by-rune comparison without\0A/// needing a `.runes()` decoder.\0Alet string_concat_all_raw (parts: Array[String]): String = \22\22\0A\0A/// Concatenates parts in order, without a separator. The compiler's own\0A/// emitter uses this for collected output fragments.\0A///\0A/// Uses checked sizes and one exact-sized allocation for nonempty output;\0A/// empty output uses shared static storage.\0Apub let Array.concat_all (parts: Array[String]): String = string_concat_all_raw(parts)\0A\0A/// Decimal text to the NEAREST double, via libc `strtod`.\0A///\0A/// `parse_number` below validates the grammar and finds where the\0A/// number ends, and that part was always right. What it got wrong was\0A/// the VALUE: building it as `mantissa * 10^exp` in floating point\0A/// accumulates rounding error, so `9.21258e-07` parsed to a double\0A/// one ulp away and `parse_float(x.to_string()) != x`. `to_string`\0A/// goes to real lengths to guarantee that round trip, retrying\0A/// at 15, 16 and 17 digits until `strtod` agrees, so the inverse\0A/// has to be the same `strtod`, not an approximation of it.\0A///\0A/// Found by a property test on 2026-08-25. The Rust interpreter\0A/// computed the identical wrong double, so `interp-check` agreed\0A/// with it and saw nothing.\0Alet parse_float_raw (s: String): Float = 0.0\0A\0Alet string_cmp_raw (a: String) (b: String): Int = 0\0A\0A/// Sorted by BYTE order, not by any locale's alphabet — so uppercase\0A/// sorts before lowercase, and accented letters sort after `z`.\0Apub let Array.sort_string (arr: Array[String]): Array[String] = Array.sort_by(arr, |a: String, b: String| a <= b)\0A\0A// --- Assertions ---\0A//\0A// Mirrored from the real prelude, message for message: a test that\0A// fails should read the same whichever compiler ran it.\0A\0A/// Stops the program unless `cond` holds.\0A///\0A/// For a condition the code depends on, not for input validation:\0A/// there is no way to catch this.\0Apub let assert (cond: Bool): Unit =\0A    if cond { () } else { panic_raw(\22assertion failed\22) }\0A\0A/// Stops the program unless the two are equal, printing BOTH — which\0A/// is the difference from `assert(a == b)` and the reason to prefer\0A/// it in a test.\0Apub let assert_eq[T] (a: T) (b: T): Unit =\0A    if a == b { () } else {\0A        panic_raw(\22assertion failed: left != right\5Cn  left:  \22.concat(a.to_string()).concat(\22\5Cn  right: \22).concat(b.to_string()))\0A    }\0A\0A/// Stops the program if the two are equal, printing them.\0Apub let assert_ne[T] (a: T) (b: T): Unit =\0A    if a != b { () } else {\0A        panic_raw(\22assertion failed: left == right\5Cn  left:  \22.concat(a.to_string()).concat(\22\5Cn  right: \22).concat(b.to_string()))\0A    }\0A\0A// --- Collections: Map and Set ---\0A\0A/// One key and value stored in a map collision bucket.\0Apub struct MapEntry[K, V] { key: K, value: V }\0A\0A// Single entries live directly in leaves. Only equal complete hashes need\0A// a collision array. Branch arrays are bounded by the bitmap's 32 slots.\0Aenum MapNode[K, V] {\0A    MapEmpty,\0A    MapLeaf(Int, K, V),\0A    MapCollision(Int, Array[MapEntry[K, V]]),\0A    MapBranch(Int, Array[MapNode[K, V]]),\0A}\0A\0A/// A hash map from `K` to `V`.\0A///\0A/// PERSISTENT: `Map.insert` returns a new map and leaves the original\0A/// alone, so a map can be shared without copying defensively. Keys\0A/// need `Eq` and `Hash`. Equal keys hash identically.\0A/// NaN is not a supported key, including inside aggregates, because\0A/// IEEE equality makes it unequal to itself. References use identity.\0Apub struct Map[K, V] { root: MapNode[K, V], size: Int }\0A\0Alet value_hash[T: Hash] (x: T): Int = x.hash()\0Alet map_bit (hash: Int) (shift: Int): Int = 1 << (Int.shr_logical(hash, shift) & 31)\0Alet map_rank (bits: Int) (bit: Int): Int = Int.count_ones(bits & (bit - 1))\0Alet map_bucket_find_index[K: Eq, V] (bucket: Array[MapEntry[K, V]]) (k: K) (i: Int): Int =\0A    if i >= bucket.len() { -1 }\0A    else if bucket[i].key == k { i }\0A    else { map_bucket_find_index(bucket, k, i + 1) }\0A\0A// Joining distinct complete hashes must diverge before all hash bits are\0A// consumed. Keeping this separate also handles a collision node as a child.\0Alet map_join[K, V] (a: MapNode[K, V]) (ah: Int) (b: MapNode[K, V]) (bh: Int) (shift: Int): MapNode[K, V] = {\0A    let abit = map_bit(ah, shift);\0A    let bbit = map_bit(bh, shift);\0A    if abit == bbit { MapBranch(abit, [map_join(a, ah, b, bh, shift + 5)]) }\0A    else if abit < bbit { MapBranch(abit | bbit, [a, b]) }\0A    else { MapBranch(abit | bbit, [b, a]) }\0A}\0A\0Alet map_child_insert[K, V] (children: Array[MapNode[K, V]]) (at: Int) (child: MapNode[K, V]): Array[MapNode[K, V]] = {\0A    let mut out = [];\0A    for i in 0..children.len() {\0A        if i == at { out = out.push(child); };\0A        out = out.push(children[i]);\0A    };\0A    if at == children.len() { out = out.push(child); };\0A    out\0A}\0A\0Alet map_node_get[K: Eq, V] (node: MapNode[K, V]) (hash: Int) (key: K) (shift: Int): Option[V] = match node {\0A    MapEmpty => None,\0A    MapLeaf(h, k, v) => if h == hash && k == key { Some(v) } else { None },\0A    MapCollision(h, entries) => if h != hash { None } else {\0A        let i = map_bucket_find_index(entries, key, 0);\0A        if i < 0 { None } else { Some(entries[i].value) }\0A    },\0A    MapBranch(bits, children) => {\0A        let bit = map_bit(hash, shift);\0A        if (bits & bit) == 0 { None }\0A        else { map_node_get(children[map_rank(bits, bit)], hash, key, shift + 5) }\0A    },\0A}\0A\0A// Presence checks must not allocate an Option or retain a stored value.\0Alet map_node_contains[K: Eq, V] (node: MapNode[K, V]) (hash: Int) (key: K) (shift: Int): Bool = match node {\0A    MapEmpty => false,\0A    MapLeaf(h, k, _) => h == hash && k == key,\0A    MapCollision(h, entries) => h == hash && map_bucket_find_index(entries, key, 0) >= 0,\0A    MapBranch(bits, children) => {\0A        let bit = map_bit(hash, shift);\0A        (bits & bit) != 0 && map_node_contains(children[map_rank(bits, bit)], hash, key, shift + 5)\0A    },\0A}\0A\0Alet map_node_put[K: Eq, V] (node: MapNode[K, V]) (hash: Int) (key: K) (value: V) (shift: Int): MapNode[K, V] = match node {\0A    MapEmpty => MapLeaf(hash, key, value),\0A    MapLeaf(h, k, v) => if h != hash { map_join(node, h, MapLeaf(hash, key, value), hash, shift) }\0A        else if k == key { MapLeaf(hash, key, value) }\0A        else { MapCollision(hash, [MapEntry { key: k, value: v }, MapEntry { key: key, value: value }]) },\0A    MapCollision(h, entries) => if h != hash { map_join(node, h, MapLeaf(hash, key, value), hash, shift) }\0A        else {\0A            let i = map_bucket_find_index(entries, key, 0);\0A            let entry = MapEntry { key: key, value: value };\0A            MapCollision(hash, if i < 0 { entries.push(entry) } else { entries.set(i, entry) })\0A        },\0A    MapBranch(bits, children) => {\0A        let bit = map_bit(hash, shift);\0A        let i = map_rank(bits, bit);\0A        if (bits & bit) == 0 { MapBranch(bits | bit, map_child_insert(children, i, MapLeaf(hash, key, value))) }\0A        else { MapBranch(bits, children.set(i, map_node_put(children[i], hash, key, value, shift + 5))) }\0A    },\0A}\0A\0A// Branches encode their depth implicitly: only a leaf or collision node can\0A// be lifted through a singleton branch without changing the routing shift.\0Alet map_node_remove[K: Eq, V] (node: MapNode[K, V]) (hash: Int) (key: K) (shift: Int): MapNode[K, V] = match node {\0A    MapEmpty => node,\0A    MapLeaf(h, k, _) => if h == hash && k == key { MapEmpty } else { node },\0A    MapCollision(h, entries) => if h != hash { node } else {\0A        let i = map_bucket_find_index(entries, key, 0);\0A        if i < 0 { node } else {\0A            let rest = entries.remove(i);\0A            if rest.len() == 1 { MapLeaf(h, rest[0].key, rest[0].value) }\0A            else { MapCollision(h, rest) }\0A        }\0A    },\0A    MapBranch(bits, children) => {\0A        let bit = map_bit(hash, shift);\0A        if (bits & bit) == 0 { node } else {\0A            let i = map_rank(bits, bit);\0A            let child = map_node_remove(children[i], hash, key, shift + 5);\0A            let rest = match child { MapEmpty => children.remove(i), _ => children.set(i, child) };\0A            let new_bits = match child { MapEmpty => bits & ~bit, _ => bits };\0A            if rest.len() == 0 { MapEmpty }\0A            else if rest.len() == 1 { match rest[0] {\0A                MapLeaf(_, _, _) => rest[0], MapCollision(_, _) => rest[0], _ => MapBranch(new_bits, rest),\0A            } } else { MapBranch(new_bits, rest) }\0A        }\0A    },\0A}\0A\0A/// An empty map.\0Apub let Map.new[K, V] (): Map[K, V] = Map { root: MapEmpty, size: 0 }\0A\0A/// A NEW map with `k` set to `v`, replacing any previous value. The\0A/// original is unchanged. Only the affected trie path is rebuilt.\0Apub let Map.insert[K: Eq + Hash, V] (m: Map[K, V]) (k: K) (v: V): Map[K, V] = {\0A    let hash = value_hash(k);\0A    let added = if map_node_contains(m.root, hash, k, 0) { 0 } else { 1 };\0A    Map { root: map_node_put(m.root, hash, k, v, 0), size: m.size + added }\0A}\0A\0A/// The value for `k`, or `None`.\0Apub let Map.get[K: Eq + Hash, V] (m: Map[K, V]) (k: K): Option[V] = map_node_get(m.root, value_hash(k), k, 0)\0A\0A/// Whether `k` has a value.\0Apub let Map.contains[K: Eq + Hash, V] (m: Map[K, V]) (k: K): Bool =\0A    map_node_contains(m.root, value_hash(k), k, 0)\0A\0A/// A new map without `k`. Removing an absent key is not an error.\0Apub let Map.remove[K: Eq + Hash, V] (m: Map[K, V]) (k: K): Map[K, V] = {\0A    let hash = value_hash(k);\0A    if map_node_contains(m.root, hash, k, 0) {\0A        Map { root: map_node_remove(m.root, hash, k, 0), size: m.size - 1 }\0A    } else { m }\0A}\0A\0A/// How many entries.\0Apub let Map.len[K, V] (m: Map[K, V]): Int = m.size\0A\0Alet map_node_keys[K, V] (node: MapNode[K, V]) (acc: Array[K]): Array[K] = match node {\0A    MapEmpty => acc,\0A    MapLeaf(_, k, _) => acc.push(k),\0A    MapCollision(_, entries) => {\0A        let mut out = acc;\0A        for entry in entries { out = out.push(entry.key); };\0A        out\0A    },\0A    MapBranch(_, children) => {\0A        let mut out = acc;\0A        for child in children { out = map_node_keys(child, out); };\0A        out\0A    },\0A}\0Alet map_node_values[K, V] (node: MapNode[K, V]) (acc: Array[V]): Array[V] = match node {\0A    MapEmpty => acc,\0A    MapLeaf(_, _, v) => acc.push(v),\0A    MapCollision(_, entries) => {\0A        let mut out = acc;\0A        for entry in entries { out = out.push(entry.value); };\0A        out\0A    },\0A    MapBranch(_, children) => {\0A        let mut out = acc;\0A        for child in children { out = map_node_values(child, out); };\0A        out\0A    },\0A}\0A\0A/// Every key, in no particular order.\0Apub let Map.keys[K, V] (m: Map[K, V]): Array[K] = map_node_keys(m.root, [])\0A\0A/// Every value, in the same order as `Map.keys`.\0Apub let Map.values[K, V] (m: Map[K, V]): Array[V] = map_node_values(m.root, [])\0A\0Alet map_from_arrays_acc[K: Eq + Hash, V] (keys: Array[K]) (values: Array[V]) (i: Int) (acc: Map[K, V]): Map[K, V] =\0A    if i >= keys.len() || i >= values.len() { acc } else { map_from_arrays_acc(keys, values, i + 1, Map.insert(acc, keys[i], values[i])) }\0A/// A map from parallel arrays, stopping at the shorter. A repeated\0A/// key keeps the LAST value.\0Apub let Map.from_arrays[K: Eq + Hash, V] (keys: Array[K]) (values: Array[V]): Map[K, V] = map_from_arrays_acc(keys, values, 0, Map.new(()))\0A\0A/// A set of `T`, persistent like `Map` — `Set.insert` returns a new\0A/// set. Members need `Eq` and `Hash`. Equal keys hash identically.\0A/// NaN is not a supported key, including inside aggregates, because\0A/// IEEE equality makes it unequal to itself. References use identity.\0Apub struct Set[T] { inner: Map[T, Unit] }\0A\0A/// An empty set.\0Apub let Set.new[T] (): Set[T] = Set { inner: Map.new(()) }\0A/// A new set with `x` added. Adding a member twice changes nothing.\0Apub let Set.insert[T: Eq + Hash] (s: Set[T]) (x: T): Set[T] = Set { inner: Map.insert(s.inner, x, ()) }\0A/// Whether `x` is a member.\0Apub let Set.contains[T: Eq + Hash] (s: Set[T]) (x: T): Bool = Map.contains(s.inner, x)\0A/// A new set without `x`.\0Apub let Set.remove[T: Eq + Hash] (s: Set[T]) (x: T): Set[T] = Set { inner: Map.remove(s.inner, x) }\0A/// How many members.\0Apub let Set.len[T] (s: Set[T]): Int = Map.len(s.inner)\0A/// Every member, in no particular order.\0Apub let Set.to_array[T] (s: Set[T]): Array[T] = Map.keys(s.inner)\0A\0A/// Everything in either set.\0Apub let Set.union[T: Eq + Hash] (a: Set[T]) (b: Set[T]): Set[T] = {\0A    let mut result = b;\0A    for x in Set.to_array(a) { result = Set.insert(result, x); };\0A    result\0A}\0A\0A/// Only what is in both.\0Apub let Set.intersection[T: Eq + Hash] (a: Set[T]) (b: Set[T]): Set[T] = {\0A    let mut result = Set.new(());\0A    for x in Set.to_array(a) { if Set.contains(b, x) { result = Set.insert(result, x); } };\0A    result\0A}\0A\0A/// What is in `a` and not in `b`.\0Apub let Set.difference[T: Eq + Hash] (a: Set[T]) (b: Set[T]): Set[T] = {\0A    let mut result = Set.new(());\0A    for x in Set.to_array(a) { if !Set.contains(b, x) { result = Set.insert(result, x); } };\0A    result\0A}\0A\0Alet set_from_array_acc[T: Eq + Hash] (arr: Array[T]) (i: Int) (acc: Set[T]): Set[T] =\0A    if i >= arr.len() { acc } else { set_from_array_acc(arr, i + 1, Set.insert(acc, arr[i])) }\0A/// A set of the array's elements, discarding duplicates.\0Apub let Set.from_array[T: Eq + Hash] (arr: Array[T]): Set[T] = set_from_array_acc(arr, 0, Set.new(()))\0A\0A// --- JSON ---\0A\0A/// An object member, with a decoded key and JSON value.\0Apub struct JsonEntry { pub key: String, pub value: JsonValue }\0A/// A parsed JSON document.\0A///\0A/// Numbers are binary64 `Float`s and may lose precision when parsed.\0A/// `use Json;` brings in decoders that turn one of these into your own\0A/// types; `Json.int` rejects values outside the safe integer range.\0Apub enum JsonValue {\0A    JsonNull,\0A    JsonBool(Bool),\0A    JsonNumber(Float),\0A    JsonString(String),\0A    JsonArray(Array[JsonValue]),\0A    JsonObject(Array[JsonEntry]),\0A}\0A/// What a JSON parse step consumed: a value, and where to carry on\0A/// from. Public because the parser's own pieces return it; a caller\0A/// wants `json_parse`.\0Apub struct ParseResult[T] { pub value: T, pub next_pos: Int }\0A\0A// Scanning uses byte offsets. JSON punctuation is ASCII, so token and\0A// string-run boundaries never split a UTF-8 code point.\0Alet skip_ws (bytes: Bytes) (pos: Int): Int =\0A    if pos >= bytes_len_raw(bytes) { pos }\0A    else {\0A        let c = bytes_at_raw(bytes, pos);\0A        if c == 32 || c == 9 || c == 10 || c == 13 { skip_ws(bytes, pos + 1) } else { pos }\0A    }\0A\0Alet json_digit (c: Int): Bool = c >= 48 && c <= 57\0A\0Alet parse_digits (bytes: Bytes) (pos: Int): Int =\0A    if pos < bytes_len_raw(bytes) && json_digit(bytes_at_raw(bytes, pos)) { parse_digits(bytes, pos + 1) }\0A    else { pos }\0A\0A// Shared lexical scanner for String.parse_float and JSON. No numeric\0A// accumulation or exponent scaling: the runtime converts the token once.\0Alet parse_number (bytes: Bytes) (pos: Int): Result[ParseResult[Float], String] = {\0A    let n = bytes_len_raw(bytes);\0A    let start = if pos < n && bytes_at_raw(bytes, pos) == 45 { pos + 1 } else { pos };\0A    let int_end = parse_digits(bytes, start);\0A    if int_end == start { Err(\22expected digit\22) }\0A    else {\0A        let has_frac = int_end < n && bytes_at_raw(bytes, int_end) == 46;\0A        let frac_end = if has_frac { parse_digits(bytes, int_end + 1) } else { int_end };\0A        if has_frac && frac_end == int_end + 1 { Err(\22expected digit\22) }\0A        else {\0A            let has_exp = frac_end < n && (bytes_at_raw(bytes, frac_end) == 101 || bytes_at_raw(bytes, frac_end) == 69);\0A            let after_e = frac_end + 1;\0A            let exp_start = if has_exp && after_e < n && (bytes_at_raw(bytes, after_e) == 45 || bytes_at_raw(bytes, after_e) == 43) { after_e + 1 } else { after_e };\0A            let end = if has_exp { parse_digits(bytes, exp_start) } else { frac_end };\0A            if has_exp && end == exp_start { Err(\22expected digit\22) }\0A            else {\0A                let converted = parse_float_raw(str_of_bytes_raw(bytes_slice_raw(bytes, pos, end)));\0A                // Some CRTs return positive zero on negative underflow.\0A                // Preserve the token's sign independently of that behavior.\0A                let value = if converted == 0.0 && start > pos { -0.0 } else { converted };\0A                if Float.is_finite(value) { Ok(ParseResult { value: value, next_pos: end }) }\0A                else { Err(\22float out of range\22) }\0A            }\0A        }\0A    }\0A}\0A\0Alet parse_literal (bytes: Bytes) (pos: Int) (word: String) (value: JsonValue): Result[ParseResult[JsonValue], String] =\0A    if str_of_bytes_raw(bytes_slice_raw(bytes, pos, pos + word.len())) == word { Ok(ParseResult { value: value, next_pos: pos + word.len() }) }\0A    else { Err(\22invalid literal\22) }\0A\0Alet json_hex (c: Int): Int =\0A    if c >= 48 && c <= 57 { c - 48 }\0A    else if c >= 65 && c <= 70 { c - 55 }\0A    else if c >= 97 && c <= 102 { c - 87 }\0A    else { -1 }\0A\0Alet json_hex4 (bytes: Bytes) (pos: Int) (left: Int) (acc: Int): Result[Int, String] =\0A    if left == 0 { Ok(acc) }\0A    else if pos >= bytes_len_raw(bytes) { Err(\22invalid unicode escape\22) }\0A    else {\0A        let d = json_hex(bytes_at_raw(bytes, pos));\0A        if d < 0 { Err(\22invalid unicode escape\22) }\0A        else { json_hex4(bytes, pos + 1, left - 1, acc * 16 + d) }\0A    }\0A\0Alet json_codepoint (c: Int): String = str_of_bytes_raw(bytes_from_array_raw(\0A    if c < 128 { [c] }\0A    else if c < 2048 { [192 + c / 64, 128 + c % 64] }\0A    else if c < 65536 { [224 + c / 4096, 128 + (c / 64) % 64, 128 + c % 64] }\0A    else { [240 + c / 262144, 128 + (c / 4096) % 64, 128 + (c / 64) % 64, 128 + c % 64] }\0A))\0A\0Alet json_unicode (bytes: Bytes) (pos: Int): Result[ParseResult[String], String] =\0A    match json_hex4(bytes, pos, 4, 0) {\0A        Err(e) => Err(e),\0A        Ok(c) => if c >= 55296 && c <= 56319 {\0A            if pos + 6 > bytes_len_raw(bytes) || bytes_at_raw(bytes, pos + 4) != 92 || bytes_at_raw(bytes, pos + 5) != 117 { Err(\22invalid unicode surrogate pair\22) }\0A            else { match json_hex4(bytes, pos + 6, 4, 0) {\0A                Err(e) => Err(e),\0A                Ok(low) => if low < 56320 || low > 57343 { Err(\22invalid unicode surrogate pair\22) }\0A                else { Ok(ParseResult { value: json_codepoint(65536 + (c - 55296) * 1024 + low - 56320), next_pos: pos + 10 }) },\0A            } }\0A        } else if c >= 56320 && c <= 57343 { Err(\22invalid unicode surrogate pair\22) }\0A        else { Ok(ParseResult { value: json_codepoint(c), next_pos: pos + 4 }) },\0A    }\0A\0A// An ordinary run is copied once into a chunk. Escapes append small\0A// chunks to a uniquely owned growable array, then concat_all copies the\0A// decoded string once. Width is handled by tail calls, not stack frames.\0Alet parse_string_body (bytes: Bytes) (pos: Int) (run: Int) (parts: Array[String]): Result[ParseResult[String], String] =\0A    if pos >= bytes_len_raw(bytes) { Err(\22unterminated string\22) }\0A    else {\0A        let c = bytes_at_raw(bytes, pos);\0A        if c == 34 || c == 92 {\0A            if pos > run { parts = parts.push(str_of_bytes_raw(bytes_slice_raw(bytes, run, pos))); };\0A            if c == 34 { Ok(ParseResult { value: Array.concat_all(parts), next_pos: pos + 1 }) }\0A            else if pos + 1 >= bytes_len_raw(bytes) { Err(\22unterminated escape\22) }\0A            else {\0A                let e = bytes_at_raw(bytes, pos + 1);\0A                let decoded = if e == 117 { json_unicode(bytes, pos + 2) }\0A                else {\0A                    let value = if e == 34 { Ok(\22\5C\22\22) }\0A                    else if e == 92 { Ok(\22\5C\5C\22) }\0A                    else if e == 47 { Ok(\22/\22) }\0A                    else if e == 98 { Ok(json_codepoint(8)) }\0A                    else if e == 102 { Ok(json_codepoint(12)) }\0A                    else if e == 110 { Ok(\22\5Cn\22) }\0A                    else if e == 114 { Ok(\22\5Cr\22) }\0A                    else if e == 116 { Ok(\22\5Ct\22) }\0A                    else { Err(\22unsupported escape sequence\22) };\0A                    match value {\0A                        Err(err) => Err(err),\0A                        Ok(v) => Ok(ParseResult { value: v, next_pos: pos + 2 }),\0A                    }\0A                };\0A                match decoded {\0A                    Err(err) => Err(err),\0A                    Ok(r) => {\0A                        parts = parts.push(r.value);\0A                        parse_string_body(bytes, r.next_pos, r.next_pos, parts)\0A                    },\0A                }\0A            }\0A        }\0A        else if c < 32 { Err(\22unescaped control character\22) }\0A        else { parse_string_body(bytes, pos + 1, run, parts) }\0A    }\0A\0Alet parse_string (bytes: Bytes) (pos: Int): Result[ParseResult[String], String] =\0A    if pos >= bytes_len_raw(bytes) || bytes_at_raw(bytes, pos) != 34 { Err(\22expected opening quote\22) }\0A    else { parse_string_body(bytes, pos + 1, pos + 1, []) }\0A\0Alet parse_value (bytes: Bytes) (pos: Int) (depth: Int): Result[ParseResult[JsonValue], String] =\0A    if pos >= bytes_len_raw(bytes) { Err(\22unexpected end of input\22) }\0A    else {\0A        let c = bytes_at_raw(bytes, pos);\0A        if c == 34 {\0A            match parse_string(bytes, pos) {\0A                Ok(r) => Ok(ParseResult { value: JsonString(r.value), next_pos: r.next_pos }),\0A                Err(e) => Err(e),\0A            }\0A        }\0A        else if c == 123 { if depth >= 128 { Err(\22JSON nesting limit exceeded (128)\22) } else { parse_object(bytes, pos, depth + 1) } }\0A        else if c == 91 { if depth >= 128 { Err(\22JSON nesting limit exceeded (128)\22) } else { parse_array(bytes, pos, depth + 1) } }\0A        else if c == 116 { parse_literal(bytes, pos, \22true\22, JsonBool(true)) }\0A        else if c == 102 { parse_literal(bytes, pos, \22false\22, JsonBool(false)) }\0A        else if c == 110 { parse_literal(bytes, pos, \22null\22, JsonNull) }\0A        else if json_digit(c) || c == 45 {\0A            let start = if c == 45 { pos + 1 } else { pos };\0A            if start + 1 < bytes_len_raw(bytes) && bytes_at_raw(bytes, start) == 48 && json_digit(bytes_at_raw(bytes, start + 1)) { Err(\22leading zero in JSON number\22) }\0A            else { match parse_number(bytes, pos) {\0A                Ok(r) => Ok(ParseResult { value: JsonNumber(r.value), next_pos: r.next_pos }),\0A                Err(e) => Err(e),\0A            } }\0A        }\0A        else { Err(\22unexpected character\22) }\0A    }\0A\0Alet parse_array (bytes: Bytes) (pos: Int) (depth: Int): Result[ParseResult[JsonValue], String] = {\0A    let p1 = skip_ws(bytes, pos + 1);\0A    if p1 < bytes_len_raw(bytes) && bytes_at_raw(bytes, p1) == 93 { Ok(ParseResult { value: JsonArray([]), next_pos: p1 + 1 }) }\0A    else { parse_array_entries(bytes, p1, depth, []) }\0A}\0A\0Alet parse_array_entries (bytes: Bytes) (pos: Int) (depth: Int) (acc: Array[JsonValue]): Result[ParseResult[JsonValue], String] =\0A    match parse_value(bytes, pos, depth) {\0A        Err(e) => Err(e),\0A        Ok(val_r) => {\0A            acc = acc.push(val_r.value);\0A            let p1 = skip_ws(bytes, val_r.next_pos);\0A            if p1 < bytes_len_raw(bytes) && bytes_at_raw(bytes, p1) == 44 { parse_array_entries(bytes, skip_ws(bytes, p1 + 1), depth, acc) }\0A            else if p1 < bytes_len_raw(bytes) && bytes_at_raw(bytes, p1) == 93 { Ok(ParseResult { value: JsonArray(acc), next_pos: p1 + 1 }) }\0A            else { Err(\22expected ',' or ']'\22) }\0A        }\0A    }\0A\0Alet parse_object (bytes: Bytes) (pos: Int) (depth: Int): Result[ParseResult[JsonValue], String] = {\0A    let p1 = skip_ws(bytes, pos + 1);\0A    if p1 < bytes_len_raw(bytes) && bytes_at_raw(bytes, p1) == 125 { Ok(ParseResult { value: JsonObject([]), next_pos: p1 + 1 }) }\0A    else { parse_object_entries(bytes, p1, depth, []) }\0A}\0A\0Alet parse_object_entries (bytes: Bytes) (pos: Int) (depth: Int) (acc: Array[JsonEntry]): Result[ParseResult[JsonValue], String] =\0A    match parse_string(bytes, pos) {\0A        Err(e) => Err(e),\0A        Ok(key_r) => {\0A            let p1 = skip_ws(bytes, key_r.next_pos);\0A            if Array.any(acc, |entry: JsonEntry| entry.key == key_r.value) { Err(\22duplicate object member name\22) }\0A            else if p1 >= bytes_len_raw(bytes) || bytes_at_raw(bytes, p1) != 58 { Err(\22expected ':'\22) }\0A            else {\0A                let p2 = skip_ws(bytes, p1 + 1);\0A                match parse_value(bytes, p2, depth) {\0A                    Err(e) => Err(e),\0A                    Ok(val_r) => {\0A                        acc = acc.push(JsonEntry { key: key_r.value, value: val_r.value });\0A                        let p3 = skip_ws(bytes, val_r.next_pos);\0A                        if p3 < bytes_len_raw(bytes) && bytes_at_raw(bytes, p3) == 44 { parse_object_entries(bytes, skip_ws(bytes, p3 + 1), depth, acc) }\0A                        else if p3 < bytes_len_raw(bytes) && bytes_at_raw(bytes, p3) == 125 { Ok(ParseResult { value: JsonObject(acc), next_pos: p3 + 1 }) }\0A                        else { Err(\22expected ',' or '}'\22) }\0A                    }\0A                }\0A            }\0A        }\0A    }\0A\0A/// Parses JSON text.\0A///\0A/// `Err` with a message naming what was expected. Accepts one complete\0A/// value and rejects trailing text after it. Object member names must\0A/// be unique within each object, compared after decoding escapes;\0A/// duplicate names return `Err(\22duplicate object member name\22)`.\0A/// Strings support JSON escapes, including UTF-16 surrogate pairs, and\0A/// reject raw control characters and unpaired surrogates. Numbers must\0A/// follow JSON syntax (no leading zeros).\0A/// Numbers overflowing binary64 return `Err`; underflow rounds to a\0A/// subnormal value or signed zero.\0A/// At most 128 arrays/objects may be nested, counting the root container;\0A/// a deeper container returns `Err(\22JSON nesting limit exceeded (128)\22)`.\0A/// Input bytes and decoded strings use linear storage; this is not a\0A/// total input-size limit. Wide objects still compare each key against\0A/// preceding keys to reject duplicates.\0Apub let json_parse (s: String): Result[JsonValue, String] = {\0A    let bytes = bytes_of_str_raw(s);\0A    let start = skip_ws(bytes, 0);\0A    match parse_value(bytes, start, 0) {\0A        Err(e) => Err(e),\0A        Ok(r) => {\0A            let after = skip_ws(bytes, r.next_pos);\0A            if after == bytes_len_raw(bytes) { Ok(r.value) } else { Err(\22trailing characters after JSON value\22) }\0A        }\0A    }\0A}\0A\0A// ASCII escape boundaries cannot split a UTF-8 code point. Scan byte\0A// runs so ordinary text needs neither chars_of nor per-character strings.\0Alet json_run_end (s: Bytes) (pos: Int): Int =\0A    if pos >= bytes_len_raw(s) { pos }\0A    else {\0A        let b = bytes_at_raw(s, pos);\0A        if b == 34 || b == 92 || b < 32 { pos }\0A        else { json_run_end(s, pos + 1) }\0A    }\0A\0Alet json_escape_byte (b: Int): String =\0A    if b == 34 { \22\5C\5C\5C\22\22 }\0A    else if b == 92 { \22\5C\5C\5C\5C\22 }\0A    else if b == 8 { \22\5C\5Cb\22 }\0A    else if b == 12 { \22\5C\5Cf\22 }\0A    else if b == 10 { \22\5C\5Cn\22 }\0A    else if b == 13 { \22\5C\5Cr\22 }\0A    else if b == 9 { \22\5C\5Ct\22 }\0A    else if b < 32 { \22\5C\5Cu00\22.concat(plum__hex_digit(b / 16)).concat(plum__hex_digit(b % 16)) }\0A    else { \22\22 }\0A\0A// One continuation per active container, rather than one per sibling.\0A// Keep the container alive while visiting its children so dropping a\0A// traversal frame cannot recursively destroy the unvisited subtree.\0Aenum JsonWriteStack {\0A    JsonWriteDone,\0A    JsonWriteValue(JsonValue, JsonWriteStack),\0A    JsonWriteArray(Array[JsonValue], Int, JsonWriteStack),\0A    JsonWriteObject(Array[JsonEntry], Int, JsonWriteStack),\0A    JsonWriteString(Bytes, Int, JsonWriteStack),\0A    JsonWriteText(String, JsonWriteStack),\0A}\0A\0A// Every transition is a same-signature tail call (musttail in LLVM).\0A// Append only through self-rebinding here: passing parts through nested\0A// helpers keeps aliases alive and defeats geometric array growth.\0A// concat_all then copies the fragments into one final allocation.\0Alet json_emit (stack: JsonWriteStack) (parts: Array[String]): Result[String, String] = match stack {\0A    JsonWriteDone => Ok(Array.concat_all(parts)),\0A    JsonWriteText(text, rest) => {\0A        parts = parts.push(text);\0A        json_emit(rest, parts)\0A    },\0A    JsonWriteString(s, pos, rest) => {\0A        let end = json_run_end(s, pos);\0A        if end > pos { parts = parts.push(str_of_bytes_raw(bytes_slice_raw(s, pos, end))); };\0A        if end == bytes_len_raw(s) {\0A            parts = parts.push(\22\5C\22\22);\0A            json_emit(rest, parts)\0A        } else {\0A            parts = parts.push(json_escape_byte(bytes_at_raw(s, end)));\0A            json_emit(JsonWriteString(s, end + 1, rest), parts)\0A        }\0A    },\0A    JsonWriteValue(v, rest) => match v {\0A        JsonNull => {\0A            parts = parts.push(\22null\22);\0A            json_emit(rest, parts)\0A        },\0A        JsonBool(b) => {\0A            parts = parts.push(if b { \22true\22 } else { \22false\22 });\0A            json_emit(rest, parts)\0A        },\0A        JsonNumber(n) => {\0A            if Float.is_finite(n) {\0A                parts = parts.push(n.to_string());\0A                json_emit(rest, parts)\0A            } else { Err(\22non-finite JSON number\22) }\0A        },\0A        JsonString(s) => {\0A            parts = parts.push(\22\5C\22\22);\0A            json_emit(JsonWriteString(bytes_of_str_raw(s), 0, rest), parts)\0A        },\0A        JsonArray(arr) => {\0A            parts = parts.push(\22[\22);\0A            json_emit(JsonWriteArray(arr, 0, rest), parts)\0A        },\0A        JsonObject(entries) => {\0A            parts = parts.push(\22{\22);\0A            json_emit(JsonWriteObject(entries, 0, rest), parts)\0A        },\0A    },\0A    JsonWriteArray(arr, pos, rest) =>\0A        if pos >= arr.len() {\0A            parts = parts.push(\22]\22);\0A            json_emit(rest, parts)\0A        } else {\0A            if pos > 0 { parts = parts.push(\22,\22); };\0A            json_emit(JsonWriteValue(arr[pos], JsonWriteArray(arr, pos + 1, rest)), parts)\0A        },\0A    JsonWriteObject(entries, pos, rest) =>\0A        if pos >= entries.len() {\0A            parts = parts.push(\22}\22);\0A            json_emit(rest, parts)\0A        } else {\0A            let entry = entries[pos];\0A            if pos > 0 { parts = parts.push(\22,\22); };\0A            parts = parts.push(\22\5C\22\22);\0A            let next = JsonWriteValue(entry.value, JsonWriteObject(entries, pos + 1, rest));\0A            json_emit(JsonWriteString(bytes_of_str_raw(entry.key), 0, JsonWriteText(\22:\22, next)), parts)\0A        },\0A}\0A\0A/// Renders a `JsonValue` as compact JSON — no spaces, no newlines.\0A///\0A/// Object keys come out in the order they are held, which for a parsed\0A/// document is the order they were read. All U+0000–U+001F control\0A/// characters are escaped, including in keys. Output construction takes\0A/// linear time and space in the output size, with an explicit traversal\0A/// stack proportional to nesting depth instead of native stack recursion.\0A/// Returns `Err(\22non-finite JSON number\22)` for NaN or either infinity,\0A/// including inside arrays and objects. No partial output is returned.\0Apub let json_stringify (v: JsonValue): Result[String, String] = json_emit(JsonWriteValue(v, JsonWriteDone), [])\0A/// `pub` because the PARSER generates calls to these when it\0A/// desugars `requires`/`ensures`, and that generated code lands in\0A/// the user's own module. Nobody writes them by hand.\0Apub let __contract_require (cond: Bool) (msg: String): Unit =\0A    if cond { () } else { panic_raw(msg) }\0A\0Apub let __contract_ensure (cond: Bool) (msg: String): Unit =\0A    if cond { () } else { panic_raw(msg) }\0A\00" }
+@.str9883 = private global { i64, i64, [95290 x i8] } { i64 -1, i64 95289, [95290 x i8] c"/// A value that may not be there.\0A///\0A/// Plum has no null, so absence is spelled here and the checker makes\0A/// you handle it.\0Apub enum Option[T] { Some(T), None }\0A/// A value, or an explanation of why there isn't one.\0A///\0A/// Failure is an ordinary value: no exceptions, so a function that can\0A/// fail says so in its type.\0Apub enum Result[T, E] { Ok(T), Err(E) }\0A\0A/// Whether there is a value.\0Apub let Option.is_some[T] (o: Option[T]): Bool = match o { Some(_) => true, None => false }\0A/// Whether there is no value.\0Apub let Option.is_none[T] (o: Option[T]): Bool = match o { Some(_) => false, None => true }\0A/// The first option when it contains a value, or `fallback` otherwise.\0A///\0A/// `fallback` is evaluated whether or not it is needed. Use `or_else`\0A/// when finding the fallback costs something.\0Apub let Option.or[T] (o: Option[T]) (fallback: Option[T]): Option[T] = match o { Some(_) => o, None => fallback }\0A/// The first option when it contains a value, or the result of calling\0A/// `f` otherwise. The lazy `or`: `f` runs only when it has to.\0Apub let Option.or_else[T] (o: Option[T]) (f: () -> Option[T]): Option[T] = match o { Some(_) => o, None => f() }\0A/// The value, or `fallback` when there is none.\0A///\0A/// `fallback` is evaluated whether or not it is needed. Use\0A/// `unwrap_or_else` when computing it costs something.\0Apub let Option.unwrap_or[T] (o: Option[T]) (fallback: T): T = match o { Some(v) => v, None => fallback }\0A/// The value, or the result of calling `f` when there is none. The\0A/// lazy `unwrap_or`: `f` runs only when it has to.\0Apub let Option.unwrap_or_else[T] (o: Option[T]) (f: () -> T): T = match o { Some(v) => v, None => f() }\0A/// Transforms the value if there is one, leaving `None` alone.\0Apub let Option.map[T, U] (o: Option[T]) (f: (T) -> U): Option[U] = match o { Some(v) => Some(f(v)), None => None }\0A/// Chains an operation that may itself find nothing.\0A///\0A/// `map` with a function returning `Option` would give\0A/// `Option[Option[U]]`; this is the one that keeps it flat.\0Apub let Option.and_then[T, U] (o: Option[T]) (f: (T) -> Option[U]): Option[U] = match o { Some(v) => f(v), None => None }\0A/// Turns nothing into an error, so an `Option` can join a chain of\0A/// `Result`s.\0Apub let Option.ok_or[T, E] (o: Option[T]) (err: E): Result[T, E] = match o { Some(v) => Ok(v), None => Err(err) }\0A\0A/// Whether this succeeded.\0Apub let Result.is_ok[T, E] (r: Result[T, E]): Bool = match r { Ok(_) => true, Err(_) => false }\0A/// Whether this failed.\0Apub let Result.is_err[T, E] (r: Result[T, E]): Bool = match r { Ok(_) => false, Err(_) => true }\0A/// The value, or `fallback` on failure — DISCARDING the error. Reach\0A/// for `unwrap_or_else` when the error should shape the answer.\0Apub let Result.unwrap_or[T, E] (r: Result[T, E]) (fallback: T): T = match r { Ok(v) => v, Err(_) => fallback }\0A/// The value, or the result of calling `f` with the error. The\0A/// recovery that gets to see what went wrong.\0Apub let Result.unwrap_or_else[T, E] (r: Result[T, E]) (f: (E) -> T): T = match r { Ok(v) => v, Err(e) => f(e) }\0A/// Transforms the value on success, leaving an error untouched.\0Apub let Result.map[T, E, U] (r: Result[T, E]) (f: (T) -> U): Result[U, E] = match r { Ok(v) => Ok(f(v)), Err(e) => Err(e) }\0A/// Transforms the ERROR, leaving a success untouched. For adding\0A/// context to a failure on its way up.\0Apub let Result.map_err[T, E, F] (r: Result[T, E]) (f: (E) -> F): Result[T, F] = match r { Ok(v) => Ok(v), Err(e) => Err(f(e)) }\0A/// Chains an operation that may itself fail, stopping at the first\0A/// error. The flat version of `map` over a fallible step.\0Apub let Result.and_then[T, E, U] (r: Result[T, E]) (f: (T) -> Result[U, E]): Result[U, E] = match r { Ok(v) => f(v), Err(e) => Err(e) }\0A\0A/// Whether the array has no elements.\0Apub let Array.is_empty[T] (xs: Array[T]): Bool = xs.len() == 0\0A\0Alet plum__array_concat_acc[T] (a: Array[T]) (b: Array[T]) (i: Int): Array[T] =\0A    if i >= b.len() { a } else { plum__array_concat_acc(a.push(b[i]), b, i + 1) }\0A/// A new array with `b`'s elements after `a`'s. Neither input is\0A/// changed.\0Apub let Array.concat[T] (a: Array[T]) (b: Array[T]): Array[T] = plum__array_concat_acc(a, b, 0)\0A\0Alet plum__array_contains_acc[T] (xs: Array[T]) (needle: T) (i: Int): Bool =\0A    if i >= xs.len() { false } else if xs[i] == needle { true } else { plum__array_contains_acc(xs, needle, i + 1) }\0A/// Whether any element equals `needle`, compared structurally.\0Apub let Array.contains[T] (xs: Array[T]) (needle: T): Bool = plum__array_contains_acc(xs, needle, 0)\0A\0Alet plum__array_any_acc[T] (xs: Array[T]) (f: (T) -> Bool) (i: Int): Bool =\0A    if i >= xs.len() { false } else if f(xs[i]) { true } else { plum__array_any_acc(xs, f, i + 1) }\0A/// Whether `f` holds for at least one element. Stops at the first\0A/// that passes; false for an empty array.\0Apub let Array.any[T] (xs: Array[T]) (f: (T) -> Bool): Bool = plum__array_any_acc(xs, f, 0)\0A\0A/// Clamped at both ends, like the real prelude's own: a slice past\0A/// the end is the tail, not a crash, which matters because this\0A/// backend emits no bounds check of its own.\0Alet plum__array_slice_acc[T] (xs: Array[T]) (i: Int) (end: Int) (acc: Array[T]): Array[T] =\0A    if i >= end { acc } else if i >= xs.len() { acc } else { plum__array_slice_acc(xs, i + 1, end, acc.push(xs[i])) }\0A/// The elements from `start` up to but NOT including `end`.\0A///\0A/// Out-of-range bounds are clamped rather than an error, and a `start`\0A/// past `end` gives an empty array — so slicing near the end of an\0A/// array needs no arithmetic to stay safe.\0Apub let Array.slice[T] (xs: Array[T]) (start: Int) (end: Int): Array[T] =\0A    plum__array_slice_acc(xs, if start < 0 { 0 } else { start }, end, [])\0A\0Alet plum__array_reverse_acc[T] (xs: Array[T]) (i: Int) (acc: Array[T]): Array[T] =\0A    if i < 0 { acc } else { plum__array_reverse_acc(xs, i - 1, acc.push(xs[i])) }\0A/// A new array in the opposite order.\0Apub let Array.reverse[T] (xs: Array[T]): Array[T] = plum__array_reverse_acc(xs, xs.len() - 1, [])\0A\0Alet plum__array_all_acc[T] (xs: Array[T]) (f: (T) -> Bool) (i: Int): Bool =\0A    if i >= xs.len() { true } else if f(xs[i]) { plum__array_all_acc(xs, f, i + 1) } else { false }\0A/// Whether `f` holds for every element. Stops at the first that\0A/// fails; TRUE for an empty array, which is the convention everywhere\0A/// and still surprises people.\0Apub let Array.all[T] (xs: Array[T]) (f: (T) -> Bool): Bool = plum__array_all_acc(xs, f, 0)\0A\0Alet plum__array_find_acc[T] (xs: Array[T]) (f: (T) -> Bool) (i: Int): Option[T] =\0A    if i >= xs.len() { None } else if f(xs[i]) { Some(xs[i]) } else { plum__array_find_acc(xs, f, i + 1) }\0A/// The first element `f` accepts, or `None`.\0Apub let Array.find[T] (xs: Array[T]) (f: (T) -> Bool): Option[T] = plum__array_find_acc(xs, f, 0)\0A\0Alet plum__array_find_index_acc[T] (xs: Array[T]) (f: (T) -> Bool) (i: Int): Option[Int] =\0A    if i >= xs.len() { None } else if f(xs[i]) { Some(i) } else { plum__array_find_index_acc(xs, f, i + 1) }\0A/// The index of the first element `f` accepts, or `None`.\0Apub let Array.find_index[T] (xs: Array[T]) (f: (T) -> Bool): Option[Int] = plum__array_find_index_acc(xs, f, 0)\0A\0A/// The index of the first element equal to `needle`, or `None`.\0Apub let Array.index_of[T] (xs: Array[T]) (needle: T): Option[Int] = Array.find_index(xs, |x| x == needle)\0A/// The first element, or `None` when the array is empty.\0Apub let Array.first[T] (xs: Array[T]): Option[T] = if Array.is_empty(xs) { None } else { Some(xs[0]) }\0A/// The last element, or `None` when the array is empty.\0Apub let Array.last[T] (xs: Array[T]): Option[T] = if Array.is_empty(xs) { None } else { Some(xs[xs.len() - 1]) }\0A/// The first `n` elements, or all of them if there are fewer. Never\0A/// an error.\0Apub let Array.take[T] (xs: Array[T]) (n: Int): Array[T] = Array.slice(xs, 0, n)\0A/// Everything after the first `n` elements, or nothing if there are\0A/// fewer.\0Apub let Array.drop[T] (xs: Array[T]) (n: Int): Array[T] = Array.slice(xs, n, xs.len())\0A\0A/// The sum, which OVERFLOWS like any other addition and stops the\0A/// program rather than wrapping.\0Apub let Array.sum_int (xs: Array[Int]): Int = Array.fold(xs, 0, |acc, x| acc + x)\0A/// The sum, left to right. Floating-point addition is not\0A/// associative, so a different order can give a different last digit.\0Apub let Array.sum_float (xs: Array[Float]): Float = Array.fold(xs, 0.0, |acc, x| acc + x)\0A\0A// --- Numbers ---\0A\0A/// The absolute value.\0A///\0A/// `Int.abs` of the most negative `Int` cannot be represented and\0A/// overflows, which stops the program rather than returning a negative\0A/// \22absolute\22 value.\0Apub let Int.abs (a: Int): Int = if a < 0 { 0 - a } else { a }\0A/// The smaller of two.\0Apub let Int.min (a: Int) (b: Int): Int = if a < b { a } else { b }\0A/// The larger of two.\0Apub let Int.max (a: Int) (b: Int): Int = if a > b { a } else { b }\0A/// `x` held between `lo` and `hi` inclusive. A `lo` above `hi` gives\0A/// `hi`, since the upper bound is applied last.\0Apub let Int.clamp (x: Int) (lo: Int) (hi: Int): Int = Int.min(Int.max(x, lo), hi)\0A\0A/// An UNSIGNED right shift: zeros are shifted in, never the sign\0A/// bit. `>>` is arithmetic, because `Int` is signed and `-8 >> 1`\0A/// should be -4; hashing wants the other one, and writing it by\0A/// hand is exactly the sort of thing that is wrong at n = 0 and\0A/// n = 64 in every codebase that tries.\0A///\0A/// The mask is `~(-1 << (64 - n))` and NOT `(1 << (64 - n)) - 1`,\0A/// which is the spelling everyone reaches for first and which traps\0A/// here: at n = 1 that is `(1 << 63) - 1`, and `1 << 63` is\0A/// `Int`'s most negative value, so subtracting one from it is an\0A/// integer overflow. The complement builds the same mask out of a\0A/// shift and a NOT, neither of which can overflow.\0A///\0A/// The two ends are handled before the mask because the mask cannot\0A/// express them: at n = 0 it would need all 64 bits, and `64 - 0`\0A/// is a shift of 64, which this language defines as zero.\0Apub let Int.shr_logical (x: Int) (n: Int): Int =\0A    if n <= 0 { x }\0A    else if n >= 64 { 0 }\0A    else { (x >> n) & ~((0 - 1) << (64 - n)) }\0A\0A/// The number of one bits. Counted a nibble at a time through a\0A/// lookup rather than bit by bit, so it is 16 steps and not 64.\0Apub let Int.count_ones (x: Int): Int = plum__popcount(x, 0, 0)\0A\0Alet plum__popcount (x: Int) (i: Int) (acc: Int): Int =\0A    if i >= 16 { acc }\0A    else { plum__popcount(x, i + 1, acc + PLUM_NIBBLE_ONES[Int.shr_logical(x, i * 4) & 15]) }\0A\0Alet PLUM_NIBBLE_ONES: Array[Int] = [0, 1, 1, 2, 1, 2, 2, 3, 1, 2, 2, 3, 2, 3, 3, 4]\0A\0A/// The absolute value, clearing the sign bit (including on negative zero).\0A/// NaN remains NaN.\0Apub let Float.abs (a: Float): Float = abs_raw(a)\0A/// Whether `x` is neither infinity nor NaN. Includes both signed zeros\0A/// and subnormal values.\0Apub let Float.is_finite (x: Float): Bool = x - x == 0.0\0A/// The smaller of two. NaN does not compare, so a NaN argument gives\0A/// an answer that is not meaningful.\0Apub let Float.min (a: Float) (b: Float): Float = if a < b { a } else { b }\0A/// The larger of two. See `Float.min` on NaN.\0Apub let Float.max (a: Float) (b: Float): Float = if a > b { a } else { b }\0A/// `x` held between `lo` and `hi` inclusive.\0Apub let Float.clamp (x: Float) (lo: Float) (hi: Float): Float = Float.min(Float.max(x, lo), hi)\0A\0A/// --- Strings ---\0A///\0A/// String operations use codepoint boundaries rather than byte\0A/// indices. `String.slice` scans those boundaries directly; operations\0A/// that need individual characters can materialize them with `chars_of`.\0A// Borrow input and return an owned result through the runtime constructor.\0Alet plum__string_reverse_raw (s: String): String = \22\22\0A\0A/// The string with its CHARACTERS (codepoints) reversed, not its bytes.\0A/// Combining marks reverse independently; this does not reverse graphemes.\0A/// Uses one exact-sized output allocation without character arrays or strings.\0A/// Empty output uses static storage; a single character shares input storage.\0Apub let String.reverse (s: String): String = plum__string_reverse_raw(s)\0A/// Whether the string has no bytes.\0Apub let String.is_empty (s: String): Bool = s.len() == 0\0A/// Characters from `start` up to but not including `end`, counted in\0A/// CODEPOINTS rather than bytes. Out-of-range bounds are clamped.\0A/// Scans only as far as the requested boundaries and copies the selected\0A/// bytes once, without allocating an array or individual characters.\0Apub let String.slice (s: String) (start: Int) (end: Int): String = {\0A    let lo = if start < 0 { 0 } else { start };\0A    if end <= lo { \22\22 } else {\0A        let bytes = bytes_of_str_raw(s);\0A        let n = bytes_len_raw(bytes);\0A        let first = if lo == 0 { 0 } else { plum__string_slice_boundary(bytes, n, 1, lo - 1) };\0A        if first >= n { \22\22 } else {\0A            let last = plum__string_slice_boundary(bytes, n, first + 1, end - lo - 1);\0A            str_of_bytes_raw(bytes_slice_raw(bytes, first, last))\0A        }\0A    }\0A}\0A\0A// The first byte of a character was already consumed. Skip its\0A// continuation bytes, then count further character starts until the\0A// requested boundary. This also preserves chars_of's grouping for\0A// malformed raw byte sequences, including a leading continuation run.\0Alet plum__string_slice_boundary (bytes: Bytes) (n: Int) (i: Int) (left: Int): Int =\0A    if i >= n { n } else {\0A        let byte = bytes_at_raw(bytes, i);\0A        if byte >= 128 && byte < 192 { plum__string_slice_boundary(bytes, n, i + 1, left) }\0A        else if left <= 0 { i }\0A        else { plum__string_slice_boundary(bytes, n, i + 1, left - 1) }\0A    }\0A// Borrows the input and returns an owned result; lowered to the runtime.\0Alet plum__string_repeat_raw (s: String) (n: Int): String = \22\22\0A\0A/// The string joined to itself `n` times. Zero or negative counts and\0A/// empty input give an empty string. Repeating nonempty input once shares\0A/// its storage; larger results allocate one buffer without spare capacity.\0Apub let String.repeat (s: String) (n: Int): String = plum__string_repeat_raw(s, n)\0A\0A/// The number of CHARACTERS in `s`, which is not `s.len()`.\0A///\0A/// `.len()` is bytes; everything else in this section is codepoints.\0A/// The two agree on ASCII and part company on anything else, so a\0A/// program that lines text up in columns wants this one; padding\0A/// computed from a byte count puts an accented name in the wrong place.\0A/// The number of CHARACTERS (codepoints). `String.len` is the number\0A/// of BYTES, and the two differ for anything outside ASCII.\0A/// Scans the UTF-8 bytes in linear time and constant space, without\0A/// allocating an array or a string for each character.\0Apub let String.char_len (s: String): Int = {\0A    let bytes = bytes_of_str_raw(s);\0A    let n = bytes_len_raw(bytes);\0A    // chars_of groups the first byte with any following continuation\0A    // bytes, even for malformed text supplied through unsafe code.\0A    if n == 0 { 0 } else { plum__string_count_starts(bytes, n, 1, 1) }\0A}\0A\0A/// Pad `s` to `width` CHARACTERS with `fill`, on the left or the right.\0A///\0A/// A `fill` that is not exactly one character returns `s` untouched, as\0A/// does a string already at least `width` wide. Both are deliberate: a\0A/// formatting helper that returns a `Result` is a formatting helper\0A/// nobody uses, and truncating to fit loses data that padding was never\0A/// asked to remove.\0A/// Padded on the LEFT to `width` characters — right-aligned text.\0A///\0A/// `fill` must be a single character. A string already at or past the\0A/// width is returned unchanged: this pads, it never truncates.\0A/// Unique storage is reused when it already fits; other padded results\0A/// use one compact buffer without intermediate repeated-fill strings.\0Apub let String.pad_left (s: String) (width: Int) (fill: String): String = plum__pad(s, width, fill, 0)\0A/// Padded on the RIGHT to `width` characters — left-aligned text.\0A/// Never truncates; see `String.pad_left`.\0Apub let String.pad_right (s: String) (width: Int) (fill: String): String = plum__pad(s, width, fill, 1)\0A\0A// --- Formatting numbers (issue #23) ---\0A//\0A// String interpolation already exists -- `\22${a} + ${b} = ${a + b}\22` --\0A// so building output is not the gap. What was missing is CONTROL over\0A// how a number renders inside one: `${1.0 / 3.0}` gives\0A// 0.3333333333333333 and there was no way to ask for two places, and\0A// `${flags}` printing 20 is the wrong view of a bit field.\0A//\0A// These are the functions a `${x:.2}` syntax would lower to. Shipping\0A// them first means that syntax, if it ever arrives, can be designed\0A// against real usage rather than guessed -- and it stays purely\0A// additive, since it would be sugar over exactly these.\0A\0A/// Centred padding, completing the set beside `pad_left`/`pad_right`.\0A/// An odd remainder goes on the RIGHT, so a column of centred headings\0A/// lines up on its left edge rather than drifting.\0Apub let String.pad_center (s: String) (width: Int) (fill: String): String = plum__pad(s, width, fill, 2)\0A\0A/// `decimals` places after the point, rounded HALF TO EVEN. Precision is\0A/// clamped to 0..17: negative values act as 0, and values above 17 act as 17.\0A/// The limit leaves one guard digit for deterministic tie handling while\0A/// staying within the precision of a `Float`.\0A///\0A/// --- Why the rounding is done here and not by the C library ---\0A///\0A/// `snprintf(\22%.*f\22)` is correctly rounded on every platform and does\0A/// not give the same answer on all of them. glibc and Microsoft's CRT\0A/// agree on every value whose expansion is not an exact tie (2.675 is\0A/// really 2.674999..., and both render it 2.67) and disagree on ties:\0A/// glibc rounds 0.5, 1.5, 2.5, 3.5 to 0, 2, 2, 4 and the Microsoft CRT\0A/// to 1, 2, 3, 4.\0A///\0A/// A language whose programs print different\0A/// numbers depending on the machine has a worse problem than one whose\0A/// rounding is a line longer, so the decision is made here: the library\0A/// is asked for a high-precision expansion, and the rounding is applied\0A/// to the digits.\0A///\0A/// --- Why half to EVEN ---\0A///\0A/// It is IEEE 754's default (`roundTiesToEven`), which is what glibc\0A/// inherits from the ambient rounding mode rather than choosing, and it\0A/// is unbiased: rounding every tie away from zero accumulates. Summing\0A/// the thousand ties 0.5 .. 999.5 gives 500,500 rounded away and\0A/// 500,000 rounded to even, against an exact 500,000.\0A///\0A/// **`Float.round` rounds half AWAY from zero and that is not an\0A/// inconsistency.** C specifies `round()` that way regardless of the FP\0A/// mode, because it is arithmetic: \22the nearest integer, ties away\22,\0A/// while this is rendering. Every language with both has this pair.\0A///\0A/// --- Why 18 digits is enough to tell a tie from a near-miss ---\0A///\0A/// A tie has to be exact. The gap between neighbouring doubles near any\0A/// value whose fractional digits matter is enormously larger than\0A/// 1e-18: next to 2.5 it is about 4.4e-16, so the value after 2.5\0A/// renders as 2.500000000000000444 and is visibly not a tie. Above\0A/// about 1e3 the fraction is all zeros anyway.\0Apub let Float.to_fixed (x: Float) (decimals: Int): String = {\0A    let d = Int.clamp(decimals, 0, 17);\0A    let raw = float_fixed_raw(x, 18);\0A    // `inf` and `nan` have no digits to round.\0A    let dot = plum__decimal_dot(bytes_of_str_raw(raw), 0, raw.len());\0A    if dot < 0 { raw } else { plum__round_decimals(raw, d, dot) }\0A}\0A\0A// The fixed decimal expansion is ASCII. Search once without a general\0A// substring search's Option result or a second contains/index_of traversal.\0Alet plum__decimal_dot (s: Bytes) (i: Int) (end: Int): Int =\0A    if i >= end { 0 - 1 }\0A    else if bytes_at_raw(s, i) == 46 { i }\0A    else { plum__decimal_dot(s, i + 1, end) }\0A\0Alet plum__round_decimals (s: String) (d: Int) (raw_dot: Int): String = {\0A    let neg = String.starts_with(s, \22-\22);\0A    let body = if neg { String.slice(s, 1, s.len()) } else { s };\0A    let dot = raw_dot - if neg { 1 } else { 0 };\0A    let ip = String.slice(body, 0, dot);\0A    let fp = String.slice(body, dot + 1, body.len());\0A    let keep = String.slice(fp, 0, d);\0A    let rest = String.slice(fp, d, fp.len());\0A    let digits = ip.concat(keep);\0A    let bumped = if plum__rounds_up(digits, rest) { plum__inc_decimal(digits) } else { digits };\0A    let n = bumped.len();\0A    let out_ip = String.slice(bumped, 0, n - d);\0A    let out_fp = String.slice(bumped, n - d, n);\0A    let text = if d == 0 { out_ip } else { out_ip.concat(\22.\22).concat(out_fp) };\0A    // The sign survives a value that rounds to zero: `-0.00` says the\0A    // value was below zero, which is information. C does this too.\0A    if neg { \22-\22.concat(text) } else { text }\0A}\0A\0A/// `rest` is everything being discarded. Above half rounds up, below\0A/// half rounds down, and an EXACT half goes to whichever direction\0A/// leaves the last kept digit even.\0Alet plum__rounds_up (kept: String) (rest: String): Bool =\0A    if String.is_empty(rest) { false }\0A    else {\0A        let first = plum__digit_at(rest, 0);\0A        if first > 5 { true }\0A        else if first < 5 { false }\0A        else if plum__any_nonzero(rest, 1) { true }\0A        else {\0A            // An exact tie. Round to even.\0A            let last = if String.is_empty(kept) { 0 } else { plum__digit_at(kept, kept.len() - 1) };\0A            last - (last / 2) * 2 == 1\0A        }\0A    }\0A\0Alet plum__digit_at (s: String) (i: Int): Int =\0A    // Decimal expansion and assembled digits are ASCII. Preserve the zero\0A    // fallback without allocating a one-character String or an Option cell.\0A    // bytes_at_raw is unchecked: validate the index before reading storage.\0A    if i < 0 || i >= s.len() { 0 }\0A    else {\0A        let v = bytes_at_raw(bytes_of_str_raw(s), i);\0A        if v >= 48 && v <= 57 { v - 48 } else { 0 }\0A    }\0A\0Alet plum__any_nonzero (s: String) (i: Int): Bool =\0A    if i >= s.len() { false }\0A    else if plum__digit_at(s, i) != 0 { true }\0A    else { plum__any_nonzero(s, i + 1) }\0A\0A/// Adds one to a decimal digit string, growing it when every digit\0A/// carries: \22999\22 becomes \221000\22, which is what makes 9.99 round to\0A/// 10.0 without a special case.\0Alet plum__inc_decimal (s: String): String = plum__inc_acc(s, s.len() - 1, \22\22)\0A\0Alet plum__inc_acc (s: String) (i: Int) (acc: String): String =\0A    if i < 0 { \221\22.concat(acc) }\0A    else {\0A        let v = plum__digit_at(s, i) + 1;\0A        if v < 10 { String.slice(s, 0, i).concat(plum__radix_digit(v)).concat(acc) }\0A        else { plum__inc_acc(s, i - 1, \220\22.concat(acc)) }\0A    }\0A\0A/// --- Radix ---\0A///\0A/// SIGNED, and reversible: `Int.to_radix(-255, 16)` is \22-ff\22, which\0A/// `String.parse_int` would read back. That is the opposite of what C\0A/// and Rust print for `%x` on a negative, and it is the choice that\0A/// keeps `to_radix` a number conversion rather than a bit dump. For the\0A/// bit pattern, `Int.to_bits` says so in its name.\0A///\0A/// Radix is clamped to 2..36: one digit per character, `0-9a-z`.\0A/// Digit values select static strings. Multi-digit conversion grows a unique\0A/// accumulator through Perceus reuse, then reverses it into an exact-sized result.\0Apub let Int.to_radix (n: Int) (radix: Int): String = {\0A    let r = Int.clamp(radix, 2, 36);\0A    if n == 0 { \220\22 } else {\0A        // Peel the last digit before negating: Int::MIN has no positive\0A        // counterpart, but its quotient and remainder both do (r >= 2).\0A        let q = n / r;\0A        let tail = n - q * r;\0A        let digit = plum__radix_digit(if n < 0 { 0 - tail } else { tail });\0A        if q == 0 { if n < 0 { \22-\22.concat(digit) } else { digit } }\0A        else {\0A            let backwards = plum__radix_acc(if n < 0 { 0 - q } else { q }, r, digit);\0A            String.reverse(if n < 0 { backwards.concat(\22-\22) } else { backwards })\0A        }\0A    }\0A}\0A\0A// Remaining magnitude is nonnegative. Append least-significant digits into\0A// one owned accumulator; prepending would copy the growing suffix each time.\0Alet plum__radix_acc (n: Int) (r: Int) (acc: String): String =\0A    if n == 0 { acc } else { plum__radix_acc(n / r, r, acc.concat(plum__radix_digit(n - (n / r) * r))) }\0A\0A// A finite formatting alphabet needs no per-call arrays, byte buffers or\0A// Result cells. Each arm returns an immutable String literal. A global\0A// chars_of table would eagerly allocate all 36 digit cells and its array.\0A// Callers prove 0 <= v < 36; the fallback remains defensive.\0Alet plum__radix_digit (v: Int): String = match v {\0A    0 => \220\22,\0A    1 => \221\22,\0A    2 => \222\22,\0A    3 => \223\22,\0A    4 => \224\22,\0A    5 => \225\22,\0A    6 => \226\22,\0A    7 => \227\22,\0A    8 => \228\22,\0A    9 => \229\22,\0A    10 => \22a\22,\0A    11 => \22b\22,\0A    12 => \22c\22,\0A    13 => \22d\22,\0A    14 => \22e\22,\0A    15 => \22f\22,\0A    16 => \22g\22,\0A    17 => \22h\22,\0A    18 => \22i\22,\0A    19 => \22j\22,\0A    20 => \22k\22,\0A    21 => \22l\22,\0A    22 => \22m\22,\0A    23 => \22n\22,\0A    24 => \22o\22,\0A    25 => \22p\22,\0A    26 => \22q\22,\0A    27 => \22r\22,\0A    28 => \22s\22,\0A    29 => \22t\22,\0A    30 => \22u\22,\0A    31 => \22v\22,\0A    32 => \22w\22,\0A    33 => \22x\22,\0A    34 => \22y\22,\0A    35 => \22z\22,\0A    _ => \22?\22,\0A}\0A\0A/// Lowercase hex, SIGNED: `-255` is `-ff`, not a two's-complement bit\0A/// pattern. `Int.to_hex_bits` is the one that shows the bits.\0Apub let Int.to_hex (n: Int): String = Int.to_radix(n, 16)\0A/// Binary, SIGNED: `-1` is `-1`. `Int.to_bits` shows all 64 bits.\0Apub let Int.to_binary (n: Int): String = Int.to_radix(n, 2)\0A/// Octal, signed. See `Int.to_radix` for other bases.\0Apub let Int.to_octal (n: Int): String = Int.to_radix(n, 8)\0A\0A/// The BIT PATTERN: all 64 bits, two's complement, most significant\0A/// first. This is the one to reach for with a bit field, where a signed\0A/// reading is not what is wanted. `Int.to_bits(-1)` is sixty-four\0A/// ones, while `Int.to_binary(-1)` is \22-1\22. Both are right about\0A/// different questions.\0Apub let Int.to_bits (n: Int): String = plum__bits_acc(n, 63, \22\22)\0A\0Alet plum__bits_acc (n: Int) (i: Int) (acc: String): String =\0A    if i < 0 { acc }\0A    else { plum__bits_acc(n, i - 1, acc.concat(if Int.shr_logical(n, i) & 1 == 1 { \221\22 } else { \220\22 })) }\0A\0A/// The same, in hex: sixteen digits, two's complement, zero padded.\0Apub let Int.to_hex_bits (n: Int): String = plum__hex_bits_acc(n, 60, \22\22)\0A\0Alet plum__hex_bits_acc (n: Int) (i: Int) (acc: String): String =\0A    if i < 0 { acc }\0A    else { plum__hex_bits_acc(n, i - 4, acc.concat(plum__radix_digit(Int.shr_logical(n, i) & 15))) }\0A\0A// The kernel consumes s and borrows fill, following Perceus argument ownership.\0Alet plum__string_pad_raw (s: String) (fill: String) (left: Int) (right: Int): String = \22\22\0A\0Alet plum__pad (s: String) (width: Int) (fill: String) (mode: Int): String = {\0A    let n = String.char_len(s);\0A    if String.char_len(fill) != 1 || n >= width { s }\0A    else {\0A        let total = width - n;\0A        let left = if mode == 0 { total } else if mode == 1 { 0 } else { total / 2 };\0A        plum__string_pad_raw(s, fill, left, total - left)\0A    }\0A}\0A\0A/// `print` is `println` without the newline. Its `env_var` and\0A/// file/process neighbours moved to the `Os` module in 0.0.9;\0A/// output stayed here, because a program that prints is not\0A/// thereby doing operating-system work.\0Alet print_raw (s: String): Bool = false\0A\0A/// Writes to standard output with NO trailing newline. `println` is\0A/// the one that adds one.\0Apub let print (s: String): Unit = { print_raw(s); () }\0A\0Alet wrapping_add_raw (a: Int) (b: Int): Int = 0\0Alet wrapping_sub_raw (a: Int) (b: Int): Int = 0\0Alet wrapping_mul_raw (a: Int) (b: Int): Int = 0\0A\0A/// Addition that WRAPS on overflow, two's complement, instead of\0A/// stopping the program.\0A///\0A/// `+` is the one to reach for. It aborts on overflow, deliberately,\0A/// because an integer that silently became negative is a wrong\0A/// answer that keeps running. This is for the cases where wrapping is\0A/// the SPECIFICATION rather than an accident: hashes, checksums,\0A/// fixed-width binary protocols, and generators like PCG or\0A/// splitmix64 that are defined mod 2^64.\0A///\0A/// It is a named function and not an operator so that it is visible\0A/// at the call site. Wrapping should be asked for, not defaulted to.\0Apub let Int.wrapping_add (a: Int) (b: Int): Int = wrapping_add_raw(a, b)\0A\0A/// Subtraction that WRAPS on overflow. See `Int.wrapping_add`.\0Apub let Int.wrapping_sub (a: Int) (b: Int): Int = wrapping_sub_raw(a, b)\0A\0A/// Multiplication that WRAPS on overflow. See `Int.wrapping_add`.\0A///\0A/// This is the one most algorithms actually need: FNV-1a, xxHash and\0A/// splitmix64 are all a wrapping multiply by a large constant\0A/// followed by a mix.\0Apub let Int.wrapping_mul (a: Int) (b: Int): Int = wrapping_mul_raw(a, b)\0A\0A// i traverses the borrowed prefix [0, n); no optional byte cell is needed.\0Alet plum__string_hash_acc (b: Bytes) (i: Int) (n: Int) (h: Int): Int =\0A    if i >= n { h & 9223372036854775807 }\0A    else { plum__string_hash_acc(b, i + 1, n, Int.wrapping_mul(h ^ bytes_at_raw(b, i), 1099511628211)) }\0A\0A/// A hash of the string's bytes, for bucketing.\0A///\0A/// Not stable across releases and not cryptographic — do not persist\0A/// it, and do not use it for anything security-related.\0A///\0A/// Borrows input and allocates no temporary storage while hashing.\0A///\0A/// FNV-1a, kept in Plum now that `Int.wrapping_mul` can express its\0A/// modulo-2^64 multiply. The final sign-bit mask is required: `Map`\0A/// uses the result with `%`, which needs a non-negative index.\0Apub let String.hash (s: String): Int = {\0A    let b = s.as_bytes();\0A    plum__string_hash_acc(b, 0, b.len(), -3750763034362895579)\0A}\0A\0A/// Whether a one-character string is an ASCII space, tab, newline or\0A/// carriage return. Unicode spaces are not included.\0Apub let String.is_ascii_ws (c: String): Bool = c == \22 \22 || c == \22\5Ct\22 || c == \22\5Cn\22 || c == \22\5Cr\22\0A\0A// KMP failure links: the longest proper prefix that is also a suffix\0A// of the bytes matched so far. Following a link never advances the\0A// input, and never repeats comparisons for a discarded prefix.\0Alet plum__string_search_fallback (needle: Bytes) (links: Array[Int]) (matched: Int) (byte: Int): Int =\0A    if matched > 0 && bytes_at_raw(needle, matched) != byte {\0A        plum__string_search_fallback(needle, links, links[matched - 1], byte)\0A    } else { matched }\0A\0A// Self-rebinding keeps the table uniquely owned while it grows, so\0A// push reuses storage and total table construction remains linear.\0Alet plum__string_search_links (needle: Bytes): Array[Int] = {\0A    let mut links = [0];\0A    let mut matched = 0;\0A    for i in 1..bytes_len_raw(needle) {\0A        let byte = bytes_at_raw(needle, i);\0A        let prefix = plum__string_search_fallback(needle, links, matched, byte);\0A        matched = if bytes_at_raw(needle, prefix) == byte { prefix + 1 } else { 0 };\0A        links = links.push(matched);\0A    };\0A    links\0A}\0A\0Alet plum__string_search_bytes (s: Bytes) (needle: Bytes) (links: Array[Int]) (i: Int) (matched: Int): Option[Int] =\0A    if i >= bytes_len_raw(s) { None }\0A    else {\0A        let byte = bytes_at_raw(s, i);\0A        let prefix = plum__string_search_fallback(needle, links, matched, byte);\0A        let next = if bytes_at_raw(needle, prefix) == byte { prefix + 1 } else { 0 };\0A        if next == bytes_len_raw(needle) { Some(i + 1 - next) }\0A        else { plum__string_search_bytes(s, needle, links, i + 1, next) }\0A    }\0A\0A// Count non-continuation bytes in a borrowed UTF-8 prefix. Shared by\0A// character counts and the conversion of search offsets to codepoints.\0Alet plum__string_count_starts (s: Bytes) (end: Int) (i: Int) (count: Int): Int =\0A    if i >= end { count }\0A    else {\0A        let byte = bytes_at_raw(s, i);\0A        plum__string_count_starts(s, end, i + 1, count + if byte < 128 || byte >= 192 { 1 } else { 0 })\0A    }\0A\0A/// The CHARACTER index where `needle` first appears, or `None`.\0A/// An empty needle matches at zero. Uses linear time in the UTF-8\0A/// byte lengths and auxiliary storage proportional to the needle's\0A/// byte length; the input text is borrowed without copying.\0Apub let String.index_of (s: String) (needle: String): Option[Int] =\0A    if needle.len() == 0 { Some(0) }\0A    else if needle.len() > s.len() { None }\0A    else {\0A        let text = bytes_of_str_raw(s);\0A        let pattern = bytes_of_str_raw(needle);\0A        let links = plum__string_search_links(pattern);\0A        match plum__string_search_bytes(text, pattern, links, 0, 0) {\0A            Some(offset) => Some(plum__string_count_starts(text, offset, 0, 0)),\0A            None => None,\0A        }\0A    }\0A\0A/// --- Namespaced forms of the string METHODS ---\0A///\0A/// `.len()`, `.split()`, `.replace()` and friends are compiler\0A/// PRIMITIVES lowered straight to IR, so they existed only as\0A/// methods, while `String.slice`/`index_of`/`lines`/`repeat`/\0A/// `trim_start`/`trim_end` are ordinary prelude functions and so\0A/// existed only namespaced. That split tracks how each one happens\0A/// to be implemented, which is invisible from outside and produced\0A/// a genuinely confusing surface: `\22x\22.trim()` worked and\0A/// `String.trim(\22x\22)` did not, while `String.trim_start(\22x\22)`\0A/// worked and `\22x\22.trim_start()` did not. Same family, opposite\0A/// rules, no way to tell which without trying.\0A///\0A/// The rule now: `String.f(s, ..)` always works. Some also have\0A/// method sugar. These wrappers cost nothing when unused --\0A/// dead-function elimination drops them.\0A/// The number of BYTES. `String.char_len` is the character count, and\0A/// the two differ for anything outside ASCII.\0Apub let String.len (s: String): Int = s.len()\0A/// Splits on every occurrence of `sep`.\0A///\0A/// A separator at either end produces an empty piece, so splitting\0A/// `\5C\22,a,\5C\22` on `\5C\22,\5C\22` gives three pieces. Splitting on an empty\0A/// separator gives the characters.\0Apub let String.split (s: String) (sep: String): Array[String] = s.split(sep)\0A/// Whether `needle` appears anywhere.\0Apub let String.contains (s: String) (needle: String): Bool = s.contains(needle)\0A/// Whether the string begins with `prefix`.\0Apub let String.starts_with (s: String) (prefix: String): Bool = s.starts_with(prefix)\0A/// Whether the string ends with `suffix`.\0Apub let String.ends_with (s: String) (suffix: String): Bool = s.ends_with(suffix)\0A/// Every occurrence of `from` replaced with `to`. An empty `from`\0A/// leaves the string alone rather than looping.\0A/// Unchanged nonempty results share the input cell. Changed nonempty results\0A/// use one exact-sized allocation; empty results use static storage.\0Apub let String.replace (s: String) (from: String) (to: String): String = s.replace(from, to)\0A/// Uppercased using the platform's one-codepoint Unicode mapping. This\0A/// does not perform multi-codepoint expansions (for example, ß to SS).\0A/// POSIX uses the initialized UTF-8 locale; Windows maps the BMP only\0A/// and leaves supplementary codepoints unchanged. Mappings can vary by OS.\0A/// Unchanged nonempty results share input storage; changed results use\0A/// one exact-sized allocation. Empty results use static storage.\0Apub let String.to_upper (s: String): String = s.to_upper()\0A/// Lowercased with the same platform mapping and storage rules as `String.to_upper`.\0Apub let String.to_lower (s: String): String = s.to_lower()\0A/// Whitespace removed from both ends, including Unicode spaces.\0A/// Unchanged input shares its owned storage; changed input copies only\0A/// the retained UTF-8 bytes.\0Apub let String.trim (s: String): String = s.trim()\0A\0Alet bytes_of_str_raw (s: String): Bytes = bytes_of_str_raw(s)\0Alet str_of_bytes_raw (b: Bytes): String = \22\22\0Alet bytes_len_raw (b: Bytes): Int = 0\0Alet bytes_at_raw (b: Bytes) (i: Int): Int = 0\0Alet bytes_slice_raw (b: Bytes) (start: Int) (end: Int): Bytes = bytes_slice_raw(b, start, end)\0Alet bytes_concat_raw (a: Bytes) (b: Bytes): Bytes = bytes_concat_raw(a, b)\0Alet bytes_from_array_raw (xs: Array[Int]): Bytes = bytes_from_array_raw(xs)\0A\0A/// No bytes.\0Apub let Bytes.empty (): Bytes = bytes_of_str_raw(\22\22)\0A\0A/// How many bytes.\0Apub let Bytes.len (b: Bytes): Int = bytes_len_raw(b)\0A/// Whether there are no bytes.\0Apub let Bytes.is_empty (b: Bytes): Bool = bytes_len_raw(b) == 0\0A\0A/// Free in both directions at runtime; the DIRECTION is what differs.\0A/// Every String is bytes, so this one is total.\0A/// The string's bytes, as UTF-8. No copy of the text is decoded, so\0A/// this is the cheap direction.\0Apub let String.as_bytes (s: String): Bytes = bytes_of_str_raw(s)\0A/// The string's UTF-8 bytes. The same as `String.as_bytes`, named for\0A/// a caller thinking in bytes.\0Apub let Bytes.from_string (s: String): Bytes = bytes_of_str_raw(s)\0A\0A/// Not every Bytes is a String, so this one is not. This is the ONE\0A/// place the UTF-8 promise is established rather than assumed. The\0A/// reason the two types are distinct at all.\0A/// Written in Plum, not as a runtime primitive, because it needs\0A/// nothing the two byte primitives above do not already provide --\0A/// and this prelude's rule is that only what CANNOT be written here\0A/// goes into hand-written IR.\0A///\0A/// Full UTF-8, not just a lead-byte check: the ranges below reject\0A/// overlong encodings (C0/C1, and E0/F0 with a too-small second\0A/// byte), the UTF-16 surrogate block (ED A0..BF, which is why ED is\0A/// singled out), and anything past U+10FFFF (F5..FF, and F4 with a\0A/// second byte over 8F). A validator that only checked continuation\0A/// bytes would accept all four, and each one is a real way for a\0A/// decoder downstream to disagree about what this buffer says.\0Alet plum__is_cont (b: Bytes) (i: Int): Bool = {\0A    let v = bytes_at_raw(b, i);\0A    v >= 128 && v <= 191\0A}\0A\0Alet plum__utf8_ok (b: Bytes) (i: Int) (n: Int): Bool =\0A    if i >= n { true }\0A    else {\0A        let c = bytes_at_raw(b, i);\0A        // ASCII.\0A        if c < 128 { plum__utf8_ok(b, i + 1, n) }\0A        // A continuation byte with no lead (80..BF), or an overlong\0A        // two-byte form (C0/C1).\0A        else if c < 194 { false }\0A        // Two bytes: C2..DF.\0A        else if c < 224 {\0A            if i + 1 >= n { false }\0A            else if !plum__is_cont(b, i + 1) { false }\0A            else { plum__utf8_ok(b, i + 2, n) }\0A        }\0A        // Three bytes: E0..EF. E0 must not be overlong (second byte\0A        // A0..BF) and ED must not encode a surrogate (second byte\0A        // 80..9F).\0A        else if c < 240 {\0A            if i + 2 >= n { false }\0A            else {\0A                let c1 = bytes_at_raw(b, i + 1);\0A                let lo = if c == 224 { 160 } else { 128 };\0A                let hi = if c == 237 { 159 } else { 191 };\0A                if c1 < lo || c1 > hi { false }\0A                else if !plum__is_cont(b, i + 2) { false }\0A                else { plum__utf8_ok(b, i + 3, n) }\0A            }\0A        }\0A        // Four bytes: F0..F4. F0 must not be overlong (second byte\0A        // 90..BF) and F4 must not exceed U+10FFFF (second byte\0A        // 80..8F).\0A        else if c < 245 {\0A            if i + 3 >= n { false }\0A            else {\0A                let c1 = bytes_at_raw(b, i + 1);\0A                let lo = if c == 240 { 144 } else { 128 };\0A                let hi = if c == 244 { 143 } else { 191 };\0A                if c1 < lo || c1 > hi { false }\0A                else if !plum__is_cont(b, i + 2) { false }\0A                else if !plum__is_cont(b, i + 3) { false }\0A                else { plum__utf8_ok(b, i + 4, n) }\0A            }\0A        }\0A        // F5..FF: past the end of the encodable range.\0A        else { false }\0A    }\0A\0A/// Whether these bytes are valid UTF-8, without building a string.\0Apub let Bytes.is_utf8 (b: Bytes): Bool = plum__utf8_ok(b, 0, bytes_len_raw(b))\0A/// Decodes UTF-8 into a string.\0A///\0A/// `Err` when the bytes are not valid UTF-8 — which is why this is a\0A/// `Result` and `String.as_bytes` is not. Bytes arrive from files and\0A/// sockets, and not all of them are text.\0Apub let Bytes.as_string (b: Bytes): Result[String, String] =\0A    if Bytes.is_utf8(b) { Ok(str_of_bytes_raw(b)) }\0A    else { Err(\22Bytes.as_string: not valid UTF-8\22) }\0A\0A/// BYTE indices, throughout. `Bytes.slice` can and will split a\0A/// multi-byte character in half, which is the operation `String`\0A/// deliberately does not offer, and the reason a program reaching for\0A/// bytes reached for them.\0A///\0A/// Clamped rather than aborting, matching `Array.slice`.\0A/// Bytes from `start` up to but not including `end`, with bounds\0A/// clamped. A slice can split a multi-byte character, so the result is\0A/// not guaranteed to be valid UTF-8.\0Apub let Bytes.slice (b: Bytes) (start: Int) (end: Int): Bytes = {\0A    let n = bytes_len_raw(b);\0A    let lo = if start < 0 { 0 } else if start > n { n } else { start };\0A    let hi = if end < lo { lo } else if end > n { n } else { end };\0A    bytes_slice_raw(b, lo, hi)\0A}\0A\0A/// The two runs of bytes, joined.\0Apub let Bytes.concat (a: Bytes) (b: Bytes): Bytes = bytes_concat_raw(a, b)\0A\0A/// `None` rather than an abort for an out-of-range index: a byte\0A/// buffer is usually being walked by a parser that does not know how\0A/// long it is yet, and `Option` is how the rest of this prelude says\0A/// \22nothing there\22 (`Array.first`, `Map.get`).\0A/// The byte at `i` as a number 0-255, or `None` when out of range.\0Apub let Bytes.at (b: Bytes) (i: Int): Option[Int] =\0A    if i < 0 { None } else if i >= bytes_len_raw(b) { None } else { Some(bytes_at_raw(b, i)) }\0A\0A/// Each element is one byte, 0-255. Values outside that range are\0A/// masked to their low 8 bits rather than rejected. `from_array` is\0A/// a construction helper, and a `Result` here would put error handling\0A/// in front of every literal buffer.\0A/// Bytes from numbers. Values outside 0-255 are truncated to their\0A/// low eight bits.\0Apub let Bytes.from_array (xs: Array[Int]): Bytes = bytes_from_array_raw(xs)\0A\0A/// The way back in from C, and the counterpart to `.as_cstr()`.\0A///\0A/// Takes an explicit LENGTH, which is the whole difference from\0A/// `RawCStr.as_string()`: that one stops at the first NUL because a\0A/// `char*` alone cannot say how long it is, and any C API returning\0A/// bytes has to hand back a count separately. Given the count, this\0A/// is binary-safe. Given a wrong one, it reads whatever is\0A/// next in memory, exactly as the equivalent C would.\0A///\0A/// COPIES into a fresh cell. C buffers are routinely static, reused\0A/// on the next call, or freed by the callee; the copy is what makes\0A/// the result an ordinary owned Plum value.\0Alet bytes_from_cstr_raw (c: RawCStr) (len: Int): Bytes = unsafe { bytes_from_cstr_raw(c, len) }\0A/// Copies `len` bytes from a C pointer.\0A///\0A/// Requires an `unsafe` block and all arguments at the call site;\0A/// it cannot be used as a function value or partially applied.\0A/// For positive `len`, the caller must ensure `c` points to at least\0A/// `len` readable bytes that remain valid throughout the copy.\0A/// No pointer, lifetime, or allocation-bound validation is performed.\0A/// Nonpositive lengths return empty bytes without reading `c`.\0A/// The result owns a fresh copy, including any embedded NUL bytes;\0A/// the source is neither retained nor freed.\0Apub let Bytes.from_cstr (c: RawCStr) (len: Int): Bytes = unsafe {\0A    if len <= 0 { Bytes.empty() } else { bytes_from_cstr_raw(c, len) }\0A}\0A\0A// Borrows b and returns independent owned Array[Int] storage.\0Alet plum__bytes_to_array_raw (b: Bytes): Array[Int] = []\0A/// The bytes as numbers 0-255, using one exact-sized array allocation.\0A/// The result is independent of the input; empty results use static storage.\0Apub let Bytes.to_array (b: Bytes): Array[Int] = plum__bytes_to_array_raw(b)\0A\0A/// Lowercase hex, two characters per byte, no separator.\0A///\0A/// This is what `.to_string()` would have to be if `Bytes` had one,\0A/// and the reason it does not: hex is A rendering, not THE rendering,\0A/// and picking it silently would make `.to_string()` mean something\0A/// different on this type than on every other. Named explicitly, the\0A/// caller decides.\0Alet plum__hex_digit (v: Int): String =\0A    if v == 0 { \220\22 } else if v == 1 { \221\22 } else if v == 2 { \222\22 } else if v == 3 { \223\22 }\0A    else if v == 4 { \224\22 } else if v == 5 { \225\22 } else if v == 6 { \226\22 } else if v == 7 { \227\22 }\0A    else if v == 8 { \228\22 } else if v == 9 { \229\22 } else if v == 10 { \22a\22 } else if v == 11 { \22b\22 }\0A    else if v == 12 { \22c\22 } else if v == 13 { \22d\22 } else if v == 14 { \22e\22 } else { \22f\22 }\0A\0A// Implemented by the generated runtime; borrows b and returns owned storage.\0Alet plum__bytes_to_hex_raw (b: Bytes): String = \22\22\0A/// Lowercase hex, two characters per byte. `Encoding.hex_decode`\0A/// reads it back. A nonempty result uses one exact-sized allocation;\0A/// an empty result uses shared static storage.\0Apub let Bytes.to_hex (b: Bytes): String = plum__bytes_to_hex_raw(b)\0A\0A// The runtime plans and fills a known-size result while borrowing all inputs.\0Alet plum__string_join_raw (parts: Array[String]) (sep: String): String = \22\22\0A\0A/// Joins parts in order with `sep` between adjacent entries. Empty parts\0A/// still contribute separator boundaries.\0A///\0A/// Copies parts and separators directly into one exact-sized allocation.\0A/// Empty output uses shared static storage.\0Apub let Array.join (parts: Array[String]) (sep: String): String = plum__string_join_raw(parts, sep)\0A\0A/// Int's minimum, which CANNOT be written as a literal: its\0A/// magnitude is out of range as a positive number, so the lexer\0A/// rejects `9223372036854775808` before any sign is applied.\0Alet plum__int_min (u: Unit): Int = 0 - 9223372036854775807 - 1\0A\0A// chars_of groups following continuation bytes with the preceding byte,\0A// even for unsafe raw Strings. Only accept a sign/digit as a one-byte unit.\0Alet plum__string_parse_int_acc (s: String) (bytes: Bytes) (n: Int) (i: Int) (acc: Int) (any: Bool) (negative: Bool): Result[Int, String] =\0A    if i >= n { if any { Ok(acc) } else { Err(\22expected at least one digit\22) } }\0A    else {\0A        let byte = bytes_at_raw(bytes, i);\0A        if byte < 48 || byte > 57 || (i + 1 < n && plum__is_cont(bytes, i + 1)) {\0A            // Accepted prefix units are single ASCII bytes, so i is also\0A            // the character index here. Reuse String.slice's grouping for\0A            // the first rejected unit instead of adding another decoder.\0A            Err(\22expected a digit, found \22.concat(String.slice(s, i, i + 1)))\0A        } else {\0A            let digit = byte - 48;\0A            // Check range before checked multiplication/addition. Negative\0A            // accumulation represents Int::MIN without negating its magnitude.\0A            if negative {\0A                if acc < 0 - 922337203685477580 { Err(\22integer out of range\22) }\0A                else if acc * 10 < plum__int_min(()) + digit { Err(\22integer out of range\22) }\0A                else { plum__string_parse_int_acc(s, bytes, n, i + 1, acc * 10 - digit, true, negative) }\0A            } else if acc > 922337203685477580 { Err(\22integer out of range\22) }\0A            else if acc * 10 > 9223372036854775807 - digit { Err(\22integer out of range\22) }\0A            else { plum__string_parse_int_acc(s, bytes, n, i + 1, acc * 10 + digit, true, negative) }\0A        }\0A    }\0A\0A/// Parses a decimal integer, with an optional leading `-`.\0A///\0A/// `Err` on anything else, including an empty string, surrounding\0A/// spaces, and a number too large for an `Int`. No `0x` or `0b`\0A/// prefixes — this is the inverse of `to_string`, not a literal\0A/// parser. Scans ASCII digits directly without a character array;\0A/// the first invalid character keeps the existing diagnostic.\0Apub let String.parse_int (s: String): Result[Int, String] = {\0A    let bytes = bytes_of_str_raw(s);\0A    let n = bytes_len_raw(bytes);\0A    if n == 0 { Err(\22empty string\22) } else {\0A        let negative = bytes_at_raw(bytes, 0) == 45 && (n == 1 || !plum__is_cont(bytes, 1));\0A        plum__string_parse_int_acc(s, bytes, n, if negative { 1 } else { 0 }, 0, false, negative)\0A    }\0A}\0A\0A/// `String.parse_float` DELEGATES to the JSON number parser below,\0A/// exactly as the real prelude does.\0A///\0A/// It used to have a hand-written parser here, on the reasoning that\0A/// dragging a JSON parser in to read a float would be absurd. That\0A/// reasoning cost twice. The hand-written version accumulated the\0A/// fraction digit by digit against a repeatedly-divided 0.1, so\0A/// `0.000001` parsed as 1.0000000000000002e-06, invisible until\0A/// floats started printing every digit that matters. And its own\0A/// comment admitted the second cost: \22no exponent, which is a real\0A/// narrowing, stated rather than discovered\22. Stated, but it made\0A/// the two compilers DISAGREE. `String.parse_float(\221e3\22)` gave\0A/// 1000 under the real compiler and an error here.\0A///\0A/// The JSON parser was already in this same prelude, already\0A/// handling exponents, already correct. Reusing it is not absurd;\0A/// writing a second one was.\0A/// Overflow returns `Err`; underflow follows binary64 rounding to a\0A/// subnormal value or signed zero.\0Apub let String.parse_float (s: String): Result[Float, String] = {\0A    let cs = bytes_of_str_raw(s);\0A    match parse_number(cs, 0) {\0A        Ok(r) => if r.next_pos == bytes_len_raw(cs) { Ok(r.value) } else { Err(\22trailing characters after number\22) },\0A        Err(e) => Err(e),\0A    }\0A}\0A\0A// --- Sorting ---\0A\0A// Merge into a fresh, uniquely owned accumulator. Tail calls move it\0A// into the next push, so growth is amortized O(1) per element. Taking\0A// the left element on equality preserves the original order of ties.\0Alet plum__array_sort_merge_acc[T] (left: Array[T]) (right: Array[T]) (le: (T, T) -> Bool) (i: Int) (j: Int) (acc: Array[T]): Array[T] =\0A    if i >= left.len() {\0A        if j >= right.len() { acc }\0A        else { plum__array_sort_merge_acc(left, right, le, i, j + 1, acc.push(right[j])) }\0A    } else if j >= right.len() {\0A        plum__array_sort_merge_acc(left, right, le, i + 1, j, acc.push(left[i]))\0A    } else if le(left[i], right[j]) {\0A        plum__array_sort_merge_acc(left, right, le, i + 1, j, acc.push(left[i]))\0A    } else {\0A        plum__array_sort_merge_acc(left, right, le, i, j + 1, acc.push(right[j]))\0A    }\0A\0A// Split index ranges rather than copying slices of the input. Only\0A// the sorted runs and merge output allocate, with O(n) peak storage\0A// and O(log n) stack depth for the recursive splits.\0Alet plum__array_sort_range[T] (arr: Array[T]) (le: (T, T) -> Bool) (lo: Int) (hi: Int): Array[T] =\0A    if hi <= lo { [] }\0A    else if hi - lo == 1 { [arr[lo]] }\0A    else {\0A        let mid = lo + (hi - lo) / 2;\0A        let left = plum__array_sort_range(arr, le, lo, mid);\0A        let right = plum__array_sort_range(arr, le, mid, hi);\0A        plum__array_sort_merge_acc(left, right, le, 0, 0, [])\0A    }\0A\0A/// Sorted by a \5C\22less than or equal\5C\22 predicate.\0A///\0A/// STABLE: elements `le` considers equivalent keep their original\0A/// order, which is what makes sorting by one key and then another\0A/// produce the ordering people expect.\0A///\0A/// Merge sort with O(n log n) comparisons and O(n) auxiliary storage.\0Apub let Array.sort_by[T] (arr: Array[T]) (le: (T, T) -> Bool): Array[T] = plum__array_sort_range(arr, le, 0, arr.len())\0A\0A/// Sorted ascending.\0Apub let Array.sort_int (arr: Array[Int]): Array[Int] = Array.sort_by(arr, |a: Int, b: Int| a <= b)\0A/// Sorted ascending. NaN does not compare, so an array containing one\0A/// has no meaningful order.\0Apub let Array.sort_float (arr: Array[Float]): Array[Float] = Array.sort_by(arr, |a: Float, b: Float| a <= b)\0A\0A// `Array.sort_string` is deliberately ABSENT: the real prelude compares\0A// via `a.runes()`, and this compiler has no `.runes()` primitive. It\0A// belongs with `Float.sqrt` and friends -- the group that needs a\0A// runtime primitive rather than prelude source -- not here.\0A\0A// --- Zip ---\0A\0A/// A named struct, not a tuple, exactly as the real prelude has it.\0Apub struct Zipped[A, B] { pub first: A, pub second: B }\0A\0Alet plum__array_zip_acc[T, U] (a: Array[T]) (b: Array[U]) (i: Int) (acc: Array[Zipped[T, U]]): Array[Zipped[T, U]] =\0A    if i >= a.len() || i >= b.len() { acc } else { plum__array_zip_acc(a, b, i + 1, acc.push(Zipped { first: a[i], second: b[i] })) }\0A\0A/// Pairs elements positionally, stopping at the shorter array.\0Apub let Array.zip[T, U] (a: Array[T]) (b: Array[U]): Array[Zipped[T, U]] = plum__array_zip_acc(a, b, 0, [])\0A\0A// --- String trimming ---\0A\0Alet plum__string_trim_start_raw (s: String): String = \22\22\0Alet plum__string_trim_end_raw (s: String): String = \22\22\0A\0A/// Whitespace removed from the start, using the same Unicode whitespace\0A/// predicate as String.trim. Unchanged input shares its owned storage;\0A/// changed input copies only the retained UTF-8 bytes.\0Apub let String.trim_start (s: String): String = plum__string_trim_start_raw(s)\0A\0A/// Whitespace removed from the end, using the same Unicode whitespace\0A/// predicate as String.trim. Unchanged input shares its owned storage;\0A/// changed input copies only the retained UTF-8 bytes.\0Apub let String.trim_end (s: String): String = plum__string_trim_end_raw(s)\0A\0A/// Split on newlines.\0A///\0A/// A trailing newline produces a final empty piece, since the text\0A/// after it is empty — which is what makes joining the result back\0A/// with newlines give the original.\0Apub let String.lines (s: String): Array[String] = s.split(\22\5Cn\22)\0A\0A// --- Numbers that need the runtime ---\0A\0A/// The real prelude writes these as `unsafe { fabs(x) }`,\0A/// `unsafe { sqrt(x) }` and friends.\0A/// This backend has no `extern \22C\22`/`unsafe` support, so they reach the\0A/// same libm functions as runtime primitives instead.\0Alet abs_raw (x: Float): Float = 0.0\0Alet sqrt_raw (x: Float): Float = 0.0\0Alet pow_raw (b: Float) (e: Float): Float = 0.0\0Alet floor_raw (x: Float): Float = 0.0\0Alet ceil_raw (x: Float): Float = 0.0\0Alet round_raw (x: Float): Float = 0.0\0Alet sin_raw (x: Float): Float = 0.0\0Alet cos_raw (x: Float): Float = 0.0\0Alet tan_raw (x: Float): Float = 0.0\0Alet asin_raw (x: Float): Float = 0.0\0Alet acos_raw (x: Float): Float = 0.0\0Alet atan_raw (x: Float): Float = 0.0\0Alet atan2_raw (y: Float) (x: Float): Float = 0.0\0Alet log_raw (x: Float): Float = 0.0\0Alet log2_raw (x: Float): Float = 0.0\0Alet log10_raw (x: Float): Float = 0.0\0Alet exp_raw (x: Float): Float = 0.0\0Alet float_fixed_raw (x: Float) (decimals: Int): String = \22\22\0Alet random_raw (ignored: Bool): Float = 0.0\0A\0A/// The square root. Negative input gives NaN rather than failing.\0Apub let Float.sqrt (x: Float): Float = sqrt_raw(x)\0A/// `base` raised to `exp`. A fractional exponent of a negative base\0A/// gives NaN.\0Apub let Float.pow (base: Float) (exp: Float): Float = pow_raw(base, exp)\0A/// The largest whole number no greater than `x` — toward negative\0A/// infinity, so `floor(-2.5)` is `-3.0`.\0Apub let Float.floor (x: Float): Float = floor_raw(x)\0A/// The smallest whole number no less than `x`.\0Apub let Float.ceil (x: Float): Float = ceil_raw(x)\0A/// The nearest whole number, halves AWAY FROM ZERO: `round(2.5)` is\0A/// `3.0` and `round(-2.5)` is `-3.0`.\0A///\0A/// `Float.to_fixed` rounds halves to EVEN, which is not an\0A/// inconsistency — it is what C, Python, Rust and Java all do, because\0A/// rounding is arithmetic and formatting is rendering.\0Apub let Float.round (x: Float): Float = round_raw(x)\0A\0A/// A float in `[0.0, 1.0)` from a process-wide generator seeded from\0A/// the clock.\0A///\0A/// Different every run, and NOT reproducible. `Rng.from_seed` is the\0A/// one for a test or a replay.\0Apub let Float.random (): Float = random_raw(true)\0A/// A float in `[lo, hi)`, from the same unseeded generator as\0A/// `Float.random`.\0Apub let Float.random_range (lo: Float) (hi: Float): Float = lo + (hi - lo) * Float.random(())\0A\0A/// --- Trigonometry, logs and constants (issue #20) ---\0A///\0A/// Angles are RADIANS everywhere, which is what libm takes and what the\0A/// inverse functions return. `Float.radians` and `Float.degrees` convert\0A/// at the edges, so a program that thinks in degrees converts once\0A/// rather than scattering `* 3.14159 / 180.0`.\0A/// Sine of an angle in RADIANS.\0Apub let Float.sin (x: Float): Float = sin_raw(x)\0A/// Cosine of an angle in radians.\0Apub let Float.cos (x: Float): Float = cos_raw(x)\0A/// Tangent of an angle in radians. Grows without bound near odd\0A/// multiples of pi/2 rather than failing.\0Apub let Float.tan (x: Float): Float = tan_raw(x)\0A/// The angle in radians whose sine is `x`, in `[-pi/2, pi/2]`. NaN\0A/// outside `[-1, 1]`.\0Apub let Float.asin (x: Float): Float = asin_raw(x)\0A/// The angle in radians whose cosine is `x`, in `[0, pi]`. NaN\0A/// outside `[-1, 1]`.\0Apub let Float.acos (x: Float): Float = acos_raw(x)\0A/// The angle in radians whose tangent is `x`. `Float.atan2` is the\0A/// one that knows which quadrant.\0Apub let Float.atan (x: Float): Float = atan_raw(x)\0A\0A/// `atan2(y, x)`, in that order, matching libm, Go, Python\0A/// and Java all use, and the reason it exists: it knows which QUADRANT\0A/// the point is in, which `atan(y / x)` cannot, and it does not divide\0A/// by zero when `x` is 0.\0Apub let Float.atan2 (y: Float) (x: Float): Float = atan2_raw(y, x)\0A\0A/// Natural log. `log2` and `log10` are separate rather than\0A/// `log(x) / log(2.0)`, because libm computes them directly and the\0A/// division loses accuracy at exactly the powers people check.\0A/// The natural logarithm. NaN for a negative argument, and negative\0A/// infinity at zero.\0Apub let Float.log (x: Float): Float = log_raw(x)\0A/// Base-2 logarithm, computed directly rather than as a division —\0A/// which is what keeps `log2(8.0)` exactly `3.0`.\0Apub let Float.log2 (x: Float): Float = log2_raw(x)\0A/// Base-10 logarithm, computed directly. See `Float.log2`.\0Apub let Float.log10 (x: Float): Float = log10_raw(x)\0A/// `e` raised to `x`.\0Apub let Float.exp (x: Float): Float = exp_raw(x)\0A\0A/// Constants as FUNCTIONS, because `Float.` is a type namespace and\0A/// `T.f(x)` is how a name gets into it. Written out to the last digit a\0A/// double can hold rather than computed, so they are exact literals and\0A/// not a rounding of something else.\0A/// Pi, to the last digit a double holds.\0Apub let Float.pi (): Float = 3.141592653589793\0A/// Two pi — a full turn, which is the more useful constant when\0A/// working with angles.\0Apub let Float.tau (): Float = 6.283185307179586\0A/// Euler's number.\0Apub let Float.e (): Float = 2.718281828459045\0A\0A/// Degrees to radians. Every trigonometric function here takes\0A/// radians, so this is the conversion at the edge.\0Apub let Float.radians (degrees: Float): Float = degrees * 3.141592653589793 / 180.0\0A/// Radians to degrees.\0Apub let Float.degrees (radians: Float): Float = radians * 180.0 / 3.141592653589793\0A\0A/// --- Seeded, reproducible random numbers (issue #20) ---\0A///\0A/// `Float.random` reads a process-global generator seeded from the\0A/// clock, which is right for \22give me something different each run\22 and\0A/// useless for a test or a replay. An `Rng` is a VALUE: same seed, same\0A/// sequence, on every platform and every run.\0A///\0A/// Every call returns the NEXT GENERATOR alongside the number, rather\0A/// than mutating in place, so a generator is as ordinary a value as an\0A/// `Int`. Threading it by hand is the cost; being able to replay a game\0A/// from a seed, or write a test that cannot flake, is what it buys. A\0A/// `Ref[Rng]` is the opt-in for in-place update.\0A///\0A/// --- Which generator, and why ---\0A///\0A/// SplitMix64: a small, modern 64-bit generator with a full 2^64\0A/// period. It is fast, has excellent bit diffusion, and is the right\0A/// generator when reproducibility and simple state matter more than\0A/// cryptographic secrecy. The wrapping multiply and logical shifts it\0A/// needs became expressible when `Int.wrapping_mul` and bitwise\0A/// operators landed.\0A///\0A/// **Not for cryptography, keys, tokens or passwords.** It is a\0A/// statistical generator and its entire state is recoverable from two\0A/// outputs.\0Apub struct Rng { state: Int }\0A\0Alet RNG_GAMMA: Int = -7046029254386353131\0Alet RNG_MIX_1: Int = -4658895280553007687\0Alet RNG_MIX_2: Int = -7723592293110705685\0Alet RNG_RANGE: Int = 9223372036854775807\0A\0A/// Any `Int` is a legal seed, including zero and negatives. SplitMix64\0A/// has no forbidden state, unlike generators whose all-zero state gets\0A/// stuck, so the seed is kept exactly rather than folded into a range.\0Apub let Rng.from_seed (seed: Int): Rng = Rng { state: seed }\0A\0Alet plum__mod_floor (a: Int) (m: Int): Int = {\0A    let r = a - (a / m) * m;\0A    if r < 0 { r + m } else { r }\0A}\0A\0A/// The raw step: advance by SplitMix64's golden-ratio increment, then\0A/// mix all 64 bits. Keep the sign bit here: wide integer ranges need\0A/// the full signed domain. Each caller reduces the output as needed.\0Alet rng_step (r: Rng): (Rng, Int) = {\0A    let next = Rng { state: Int.wrapping_add(r.state, RNG_GAMMA) };\0A    let z1 = Int.wrapping_mul(next.state ^ Int.shr_logical(next.state, 30), RNG_MIX_1);\0A    let z2 = Int.wrapping_mul(z1 ^ Int.shr_logical(z1, 27), RNG_MIX_2);\0A    (next, z2 ^ Int.shr_logical(z2, 31))\0A}\0A\0A/// A `Float` in `[0.0, 1.0)`. Use 53 exactly representable bits so\0A/// converting to `Float` cannot round the largest sample up to `1.0`.\0A/// The generator advances exactly once, as for previous versions;\0A/// float samples may differ because the discarded low bits no longer round.\0Apub let Rng.float (r: Rng): (Rng, Float) = {\0A    let (next, z) = rng_step(r);\0A    (next, Int.shr_logical(z & RNG_RANGE, 10).to_float() / 9007199254740992.0)\0A}\0A\0A/// A float in `[lo, hi)`, and the next generator.\0Apub let Rng.float_range (r: Rng) (lo: Float) (hi: Float): (Rng, Float) = {\0A    let (next, f) = Rng.float(r);\0A    (next, lo + (hi - lo) * f)\0A}\0A\0A/// `[lo, hi)`, the upper bound EXCLUDED, so `int_range(r, 0, xs.len())`\0A/// is an index into `xs` and needs no `- 1` anywhere.\0A/// All ordered `Int` bounds are supported, even when `hi - lo` would\0A/// overflow. `hi` must itself be an `Int`, so the maximum `Int` cannot\0A/// be included as a result of this half-open API.\0A///\0A/// Rejection sampling, not `z % span`. The modulo is biased whenever the\0A/// span does not divide the generator's range evenly: the low values\0A/// come up more often, by about one part in `range / span`. That is\0A/// invisible in a game and fatal in a shuffle, and the loop costs an\0A/// extra step only on the fraction of draws that land in the leftover\0A/// tail. Widths through the maximum `Int` preserve their seeded sequences.\0A/// Wider ranges reject full signed samples outside `[lo, hi)` instead;\0A/// they accept at least half of the domain, averaging at most two draws.\0A///\0A/// An empty or backwards range returns `lo` and does not draw, because\0A/// there is no number to return and a panic here would make an ordinary\0A/// off-by-one crash a program at random.\0Apub let Rng.int_range (r: Rng) (lo: Int) (hi: Int): (Rng, Int) = {\0A    if hi <= lo { (r, lo) } else {\0A        let span = Int.wrapping_sub(hi, lo);\0A        if span < 0 { rng_wide(r, lo, hi) } else { rng_below(r, span, lo) }\0A    }\0A}\0A\0A// Tail recursion keeps retries in constant stack space. No span or\0A// offset arithmetic is needed for ranges at least 2^63 wide.\0Alet rng_wide (r: Rng) (lo: Int) (hi: Int): (Rng, Int) = {\0A    let (next, z) = rng_step(r);\0A    if z < lo || z >= hi { rng_wide(next, lo, hi) } else { (next, z) }\0A}\0A\0Alet rng_below (r: Rng) (span: Int) (lo: Int): (Rng, Int) = {\0A    let range = RNG_RANGE;\0A    let limit = range - plum__mod_floor(range, span);\0A    let (next, raw) = rng_step(r);\0A    let z = raw & RNG_RANGE;\0A    if z >= limit { rng_below(next, span, lo) } else { (next, lo + plum__mod_floor(z, span)) }\0A}\0A\0A/// A boolean, evenly, and the next generator.\0Apub let Rng.bool (r: Rng): (Rng, Bool) = {\0A    let (next, v) = Rng.int_range(r, 0, 2);\0A    (next, v == 1)\0A}\0A\0A/// Fisher-Yates, walking from the end so every permutation is equally\0A/// likely. The naive version, swapping each element with any other, is\0A/// not uniform, and looks fine until somebody counts.\0Apub let Rng.shuffle[T] (r: Rng) (xs: Array[T]): (Rng, Array[T]) =\0A    rng_shuffle_acc(r, xs, xs.len() - 1)\0A\0Alet rng_shuffle_acc[T] (r: Rng) (xs: Array[T]) (i: Int): (Rng, Array[T]) =\0A    if i <= 0 { (r, xs) } else {\0A        let (next, j) = Rng.int_range(r, 0, i + 1);\0A        rng_shuffle_acc(next, plum__swap(xs, i, j), i - 1)\0A    }\0A\0Alet plum__swap[T] (xs: Array[T]) (i: Int) (j: Int): Array[T] =\0A    if i == j { xs } else {\0A        let a = xs[i];\0A        let b = xs[j];\0A        xs.set(i, b).set(j, a)\0A    }\0A\0A/// One element, or `None` from an empty array.\0Apub let Rng.choice[T] (r: Rng) (xs: Array[T]): (Rng, Option[T]) =\0A    if Array.is_empty(xs) { (r, None) } else {\0A        let (next, i) = Rng.int_range(r, 0, xs.len());\0A        (next, Some(xs[i]))\0A    }\0A\0A// --- String ordering ---\0A\0A/// Byte-lexicographic, which for UTF-8 IS codepoint order, so this\0A/// agrees with the real prelude's rune-by-rune comparison without\0A/// needing a `.runes()` decoder.\0Alet string_concat_all_raw (parts: Array[String]): String = \22\22\0A\0A/// Concatenates parts in order, without a separator. The compiler's own\0A/// emitter uses this for collected output fragments.\0A///\0A/// Uses checked sizes and one exact-sized allocation for nonempty output;\0A/// empty output uses shared static storage.\0Apub let Array.concat_all (parts: Array[String]): String = string_concat_all_raw(parts)\0A\0A/// Decimal text to the NEAREST double, via libc `strtod`.\0A///\0A/// `parse_number` below validates the grammar and finds where the\0A/// number ends, and that part was always right. What it got wrong was\0A/// the VALUE: building it as `mantissa * 10^exp` in floating point\0A/// accumulates rounding error, so `9.21258e-07` parsed to a double\0A/// one ulp away and `parse_float(x.to_string()) != x`. `to_string`\0A/// goes to real lengths to guarantee that round trip, retrying\0A/// at 15, 16 and 17 digits until `strtod` agrees, so the inverse\0A/// has to be the same `strtod`, not an approximation of it.\0A///\0A/// Found by a property test on 2026-08-25. The Rust interpreter\0A/// computed the identical wrong double, so `interp-check` agreed\0A/// with it and saw nothing.\0Alet parse_float_raw (s: String): Float = 0.0\0A\0Alet string_cmp_raw (a: String) (b: String): Int = 0\0A\0A/// Sorted by BYTE order, not by any locale's alphabet — so uppercase\0A/// sorts before lowercase, and accented letters sort after `z`.\0Apub let Array.sort_string (arr: Array[String]): Array[String] = Array.sort_by(arr, |a: String, b: String| a <= b)\0A\0A// --- Assertions ---\0A//\0A// Mirrored from the real prelude, message for message: a test that\0A// fails should read the same whichever compiler ran it.\0A\0A/// Stops the program unless `cond` holds.\0A///\0A/// For a condition the code depends on, not for input validation:\0A/// there is no way to catch this.\0Apub let assert (cond: Bool): Unit =\0A    if cond { () } else { panic_raw(\22assertion failed\22) }\0A\0A/// Stops the program unless the two are equal, printing BOTH — which\0A/// is the difference from `assert(a == b)` and the reason to prefer\0A/// it in a test.\0Apub let assert_eq[T] (a: T) (b: T): Unit =\0A    if a == b { () } else {\0A        panic_raw(\22assertion failed: left != right\5Cn  left:  \22.concat(a.to_string()).concat(\22\5Cn  right: \22).concat(b.to_string()))\0A    }\0A\0A/// Stops the program if the two are equal, printing them.\0Apub let assert_ne[T] (a: T) (b: T): Unit =\0A    if a != b { () } else {\0A        panic_raw(\22assertion failed: left == right\5Cn  left:  \22.concat(a.to_string()).concat(\22\5Cn  right: \22).concat(b.to_string()))\0A    }\0A\0A// --- Collections: Map and Set ---\0A\0A/// One key and value stored in a map collision bucket.\0Apub struct MapEntry[K, V] { key: K, value: V }\0A\0A// Single entries live directly in leaves. Only equal complete hashes need\0A// a collision array. Branch arrays are bounded by the bitmap's 32 slots.\0Aenum MapNode[K, V] {\0A    MapEmpty,\0A    MapLeaf(Int, K, V),\0A    MapCollision(Int, Array[MapEntry[K, V]]),\0A    MapBranch(Int, Array[MapNode[K, V]]),\0A}\0A\0A/// A hash map from `K` to `V`.\0A///\0A/// PERSISTENT: `Map.insert` returns a new map and leaves the original\0A/// alone, so a map can be shared without copying defensively. Keys\0A/// need `Eq` and `Hash`. Equal keys hash identically.\0A/// NaN is not a supported key, including inside aggregates, because\0A/// IEEE equality makes it unequal to itself. References use identity.\0Apub struct Map[K, V] { root: MapNode[K, V], size: Int }\0A\0Alet value_hash[T: Hash] (x: T): Int = x.hash()\0Alet map_bit (hash: Int) (shift: Int): Int = 1 << (Int.shr_logical(hash, shift) & 31)\0Alet map_rank (bits: Int) (bit: Int): Int = Int.count_ones(bits & (bit - 1))\0Alet map_bucket_find_index[K: Eq, V] (bucket: Array[MapEntry[K, V]]) (k: K) (i: Int): Int =\0A    if i >= bucket.len() { -1 }\0A    else if bucket[i].key == k { i }\0A    else { map_bucket_find_index(bucket, k, i + 1) }\0A\0A// Joining distinct complete hashes must diverge before all hash bits are\0A// consumed. Keeping this separate also handles a collision node as a child.\0Alet map_join[K, V] (a: MapNode[K, V]) (ah: Int) (b: MapNode[K, V]) (bh: Int) (shift: Int): MapNode[K, V] = {\0A    let abit = map_bit(ah, shift);\0A    let bbit = map_bit(bh, shift);\0A    if abit == bbit { MapBranch(abit, [map_join(a, ah, b, bh, shift + 5)]) }\0A    else if abit < bbit { MapBranch(abit | bbit, [a, b]) }\0A    else { MapBranch(abit | bbit, [b, a]) }\0A}\0A\0Alet map_child_insert[K, V] (children: Array[MapNode[K, V]]) (at: Int) (child: MapNode[K, V]): Array[MapNode[K, V]] = {\0A    let mut out = [];\0A    for i in 0..children.len() {\0A        if i == at { out = out.push(child); };\0A        out = out.push(children[i]);\0A    };\0A    if at == children.len() { out = out.push(child); };\0A    out\0A}\0A\0Alet map_node_get[K: Eq, V] (node: MapNode[K, V]) (hash: Int) (key: K) (shift: Int): Option[V] = match node {\0A    MapEmpty => None,\0A    MapLeaf(h, k, v) => if h == hash && k == key { Some(v) } else { None },\0A    MapCollision(h, entries) => if h != hash { None } else {\0A        let i = map_bucket_find_index(entries, key, 0);\0A        if i < 0 { None } else { Some(entries[i].value) }\0A    },\0A    MapBranch(bits, children) => {\0A        let bit = map_bit(hash, shift);\0A        if (bits & bit) == 0 { None }\0A        else { map_node_get(children[map_rank(bits, bit)], hash, key, shift + 5) }\0A    },\0A}\0A\0A// Presence checks must not allocate an Option or retain a stored value.\0Alet map_node_contains[K: Eq, V] (node: MapNode[K, V]) (hash: Int) (key: K) (shift: Int): Bool = match node {\0A    MapEmpty => false,\0A    MapLeaf(h, k, _) => h == hash && k == key,\0A    MapCollision(h, entries) => h == hash && map_bucket_find_index(entries, key, 0) >= 0,\0A    MapBranch(bits, children) => {\0A        let bit = map_bit(hash, shift);\0A        (bits & bit) != 0 && map_node_contains(children[map_rank(bits, bit)], hash, key, shift + 5)\0A    },\0A}\0A\0Alet map_node_put[K: Eq, V] (node: MapNode[K, V]) (hash: Int) (key: K) (value: V) (shift: Int): MapNode[K, V] = match node {\0A    MapEmpty => MapLeaf(hash, key, value),\0A    MapLeaf(h, k, v) => if h != hash { map_join(node, h, MapLeaf(hash, key, value), hash, shift) }\0A        else if k == key { MapLeaf(hash, key, value) }\0A        else { MapCollision(hash, [MapEntry { key: k, value: v }, MapEntry { key: key, value: value }]) },\0A    MapCollision(h, entries) => if h != hash { map_join(node, h, MapLeaf(hash, key, value), hash, shift) }\0A        else {\0A            let i = map_bucket_find_index(entries, key, 0);\0A            let entry = MapEntry { key: key, value: value };\0A            MapCollision(hash, if i < 0 { entries.push(entry) } else { entries.set(i, entry) })\0A        },\0A    MapBranch(bits, children) => {\0A        let bit = map_bit(hash, shift);\0A        let i = map_rank(bits, bit);\0A        if (bits & bit) == 0 { MapBranch(bits | bit, map_child_insert(children, i, MapLeaf(hash, key, value))) }\0A        else { MapBranch(bits, children.set(i, map_node_put(children[i], hash, key, value, shift + 5))) }\0A    },\0A}\0A\0A// Branches encode their depth implicitly: only a leaf or collision node can\0A// be lifted through a singleton branch without changing the routing shift.\0Alet map_node_remove[K: Eq, V] (node: MapNode[K, V]) (hash: Int) (key: K) (shift: Int): MapNode[K, V] = match node {\0A    MapEmpty => node,\0A    MapLeaf(h, k, _) => if h == hash && k == key { MapEmpty } else { node },\0A    MapCollision(h, entries) => if h != hash { node } else {\0A        let i = map_bucket_find_index(entries, key, 0);\0A        if i < 0 { node } else {\0A            let rest = entries.remove(i);\0A            if rest.len() == 1 { MapLeaf(h, rest[0].key, rest[0].value) }\0A            else { MapCollision(h, rest) }\0A        }\0A    },\0A    MapBranch(bits, children) => {\0A        let bit = map_bit(hash, shift);\0A        if (bits & bit) == 0 { node } else {\0A            let i = map_rank(bits, bit);\0A            let child = map_node_remove(children[i], hash, key, shift + 5);\0A            let rest = match child { MapEmpty => children.remove(i), _ => children.set(i, child) };\0A            let new_bits = match child { MapEmpty => bits & ~bit, _ => bits };\0A            if rest.len() == 0 { MapEmpty }\0A            else if rest.len() == 1 { match rest[0] {\0A                MapLeaf(_, _, _) => rest[0], MapCollision(_, _) => rest[0], _ => MapBranch(new_bits, rest),\0A            } } else { MapBranch(new_bits, rest) }\0A        }\0A    },\0A}\0A\0A/// An empty map.\0Apub let Map.new[K, V] (): Map[K, V] = Map { root: MapEmpty, size: 0 }\0A\0A/// A NEW map with `k` set to `v`, replacing any previous value. The\0A/// original is unchanged. Only the affected trie path is rebuilt.\0Apub let Map.insert[K: Eq + Hash, V] (m: Map[K, V]) (k: K) (v: V): Map[K, V] = {\0A    let hash = value_hash(k);\0A    let added = if map_node_contains(m.root, hash, k, 0) { 0 } else { 1 };\0A    Map { root: map_node_put(m.root, hash, k, v, 0), size: m.size + added }\0A}\0A\0A/// The value for `k`, or `None`.\0Apub let Map.get[K: Eq + Hash, V] (m: Map[K, V]) (k: K): Option[V] = map_node_get(m.root, value_hash(k), k, 0)\0A\0A/// Whether `k` has a value.\0Apub let Map.contains[K: Eq + Hash, V] (m: Map[K, V]) (k: K): Bool =\0A    map_node_contains(m.root, value_hash(k), k, 0)\0A\0A/// A new map without `k`. Removing an absent key is not an error.\0Apub let Map.remove[K: Eq + Hash, V] (m: Map[K, V]) (k: K): Map[K, V] = {\0A    let hash = value_hash(k);\0A    if map_node_contains(m.root, hash, k, 0) {\0A        Map { root: map_node_remove(m.root, hash, k, 0), size: m.size - 1 }\0A    } else { m }\0A}\0A\0A/// How many entries.\0Apub let Map.len[K, V] (m: Map[K, V]): Int = m.size\0A\0Alet map_node_keys[K, V] (node: MapNode[K, V]) (acc: Array[K]): Array[K] = match node {\0A    MapEmpty => acc,\0A    MapLeaf(_, k, _) => acc.push(k),\0A    MapCollision(_, entries) => {\0A        let mut out = acc;\0A        for entry in entries { out = out.push(entry.key); };\0A        out\0A    },\0A    MapBranch(_, children) => {\0A        let mut out = acc;\0A        for child in children { out = map_node_keys(child, out); };\0A        out\0A    },\0A}\0Alet map_node_values[K, V] (node: MapNode[K, V]) (acc: Array[V]): Array[V] = match node {\0A    MapEmpty => acc,\0A    MapLeaf(_, _, v) => acc.push(v),\0A    MapCollision(_, entries) => {\0A        let mut out = acc;\0A        for entry in entries { out = out.push(entry.value); };\0A        out\0A    },\0A    MapBranch(_, children) => {\0A        let mut out = acc;\0A        for child in children { out = map_node_values(child, out); };\0A        out\0A    },\0A}\0A\0A/// Every key, in no particular order.\0Apub let Map.keys[K, V] (m: Map[K, V]): Array[K] = map_node_keys(m.root, [])\0A\0A/// Every value, in the same order as `Map.keys`.\0Apub let Map.values[K, V] (m: Map[K, V]): Array[V] = map_node_values(m.root, [])\0A\0Alet map_from_arrays_acc[K: Eq + Hash, V] (keys: Array[K]) (values: Array[V]) (i: Int) (acc: Map[K, V]): Map[K, V] =\0A    if i >= keys.len() || i >= values.len() { acc } else { map_from_arrays_acc(keys, values, i + 1, Map.insert(acc, keys[i], values[i])) }\0A/// A map from parallel arrays, stopping at the shorter. A repeated\0A/// key keeps the LAST value.\0Apub let Map.from_arrays[K: Eq + Hash, V] (keys: Array[K]) (values: Array[V]): Map[K, V] = map_from_arrays_acc(keys, values, 0, Map.new(()))\0A\0A/// A set of `T`, persistent like `Map` — `Set.insert` returns a new\0A/// set. Members need `Eq` and `Hash`. Equal keys hash identically.\0A/// NaN is not a supported key, including inside aggregates, because\0A/// IEEE equality makes it unequal to itself. References use identity.\0Apub struct Set[T] { inner: Map[T, Unit] }\0A\0A/// An empty set.\0Apub let Set.new[T] (): Set[T] = Set { inner: Map.new(()) }\0A/// A new set with `x` added. Adding a member twice changes nothing.\0Apub let Set.insert[T: Eq + Hash] (s: Set[T]) (x: T): Set[T] = Set { inner: Map.insert(s.inner, x, ()) }\0A/// Whether `x` is a member.\0Apub let Set.contains[T: Eq + Hash] (s: Set[T]) (x: T): Bool = Map.contains(s.inner, x)\0A/// A new set without `x`.\0Apub let Set.remove[T: Eq + Hash] (s: Set[T]) (x: T): Set[T] = Set { inner: Map.remove(s.inner, x) }\0A/// How many members.\0Apub let Set.len[T] (s: Set[T]): Int = Map.len(s.inner)\0A/// Every member, in no particular order.\0Apub let Set.to_array[T] (s: Set[T]): Array[T] = Map.keys(s.inner)\0A\0A/// Everything in either set.\0Apub let Set.union[T: Eq + Hash] (a: Set[T]) (b: Set[T]): Set[T] = {\0A    let mut result = b;\0A    for x in Set.to_array(a) { result = Set.insert(result, x); };\0A    result\0A}\0A\0A/// Only what is in both.\0Apub let Set.intersection[T: Eq + Hash] (a: Set[T]) (b: Set[T]): Set[T] = {\0A    let mut result = Set.new(());\0A    for x in Set.to_array(a) { if Set.contains(b, x) { result = Set.insert(result, x); } };\0A    result\0A}\0A\0A/// What is in `a` and not in `b`.\0Apub let Set.difference[T: Eq + Hash] (a: Set[T]) (b: Set[T]): Set[T] = {\0A    let mut result = Set.new(());\0A    for x in Set.to_array(a) { if !Set.contains(b, x) { result = Set.insert(result, x); } };\0A    result\0A}\0A\0Alet set_from_array_acc[T: Eq + Hash] (arr: Array[T]) (i: Int) (acc: Set[T]): Set[T] =\0A    if i >= arr.len() { acc } else { set_from_array_acc(arr, i + 1, Set.insert(acc, arr[i])) }\0A/// A set of the array's elements, discarding duplicates.\0Apub let Set.from_array[T: Eq + Hash] (arr: Array[T]): Set[T] = set_from_array_acc(arr, 0, Set.new(()))\0A\0A// --- JSON ---\0A\0A/// An object member, with a decoded key and JSON value.\0Apub struct JsonEntry { pub key: String, pub value: JsonValue }\0A/// A parsed JSON document.\0A///\0A/// Numbers are binary64 `Float`s and may lose precision when parsed.\0A/// `use Json;` brings in decoders that turn one of these into your own\0A/// types; `Json.int` rejects values outside the safe integer range.\0Apub enum JsonValue {\0A    JsonNull,\0A    JsonBool(Bool),\0A    JsonNumber(Float),\0A    JsonString(String),\0A    JsonArray(Array[JsonValue]),\0A    JsonObject(Array[JsonEntry]),\0A}\0A/// What a JSON parse step consumed: a value, and where to carry on\0A/// from. Public because the parser's own pieces return it; a caller\0A/// wants `json_parse`.\0Apub struct ParseResult[T] { pub value: T, pub next_pos: Int }\0A\0A// Scanning uses byte offsets. JSON punctuation is ASCII, so token and\0A// string-run boundaries never split a UTF-8 code point.\0Alet skip_ws (bytes: Bytes) (pos: Int): Int =\0A    if pos >= bytes_len_raw(bytes) { pos }\0A    else {\0A        let c = bytes_at_raw(bytes, pos);\0A        if c == 32 || c == 9 || c == 10 || c == 13 { skip_ws(bytes, pos + 1) } else { pos }\0A    }\0A\0Alet json_digit (c: Int): Bool = c >= 48 && c <= 57\0A\0Alet parse_digits (bytes: Bytes) (pos: Int): Int =\0A    if pos < bytes_len_raw(bytes) && json_digit(bytes_at_raw(bytes, pos)) { parse_digits(bytes, pos + 1) }\0A    else { pos }\0A\0A// Shared lexical scanner for String.parse_float and JSON. No numeric\0A// accumulation or exponent scaling: the runtime converts the token once.\0Alet parse_number (bytes: Bytes) (pos: Int): Result[ParseResult[Float], String] = {\0A    let n = bytes_len_raw(bytes);\0A    let start = if pos < n && bytes_at_raw(bytes, pos) == 45 { pos + 1 } else { pos };\0A    let int_end = parse_digits(bytes, start);\0A    if int_end == start { Err(\22expected digit\22) }\0A    else {\0A        let has_frac = int_end < n && bytes_at_raw(bytes, int_end) == 46;\0A        let frac_end = if has_frac { parse_digits(bytes, int_end + 1) } else { int_end };\0A        if has_frac && frac_end == int_end + 1 { Err(\22expected digit\22) }\0A        else {\0A            let has_exp = frac_end < n && (bytes_at_raw(bytes, frac_end) == 101 || bytes_at_raw(bytes, frac_end) == 69);\0A            let after_e = frac_end + 1;\0A            let exp_start = if has_exp && after_e < n && (bytes_at_raw(bytes, after_e) == 45 || bytes_at_raw(bytes, after_e) == 43) { after_e + 1 } else { after_e };\0A            let end = if has_exp { parse_digits(bytes, exp_start) } else { frac_end };\0A            if has_exp && end == exp_start { Err(\22expected digit\22) }\0A            else {\0A                let converted = parse_float_raw(str_of_bytes_raw(bytes_slice_raw(bytes, pos, end)));\0A                // Some CRTs return positive zero on negative underflow.\0A                // Preserve the token's sign independently of that behavior.\0A                let value = if converted == 0.0 && start > pos { -0.0 } else { converted };\0A                if Float.is_finite(value) { Ok(ParseResult { value: value, next_pos: end }) }\0A                else { Err(\22float out of range\22) }\0A            }\0A        }\0A    }\0A}\0A\0Alet parse_literal (bytes: Bytes) (pos: Int) (word: String) (value: JsonValue): Result[ParseResult[JsonValue], String] =\0A    if str_of_bytes_raw(bytes_slice_raw(bytes, pos, pos + word.len())) == word { Ok(ParseResult { value: value, next_pos: pos + word.len() }) }\0A    else { Err(\22invalid literal\22) }\0A\0Alet json_hex (c: Int): Int =\0A    if c >= 48 && c <= 57 { c - 48 }\0A    else if c >= 65 && c <= 70 { c - 55 }\0A    else if c >= 97 && c <= 102 { c - 87 }\0A    else { -1 }\0A\0Alet json_hex4 (bytes: Bytes) (pos: Int) (left: Int) (acc: Int): Result[Int, String] =\0A    if left == 0 { Ok(acc) }\0A    else if pos >= bytes_len_raw(bytes) { Err(\22invalid unicode escape\22) }\0A    else {\0A        let d = json_hex(bytes_at_raw(bytes, pos));\0A        if d < 0 { Err(\22invalid unicode escape\22) }\0A        else { json_hex4(bytes, pos + 1, left - 1, acc * 16 + d) }\0A    }\0A\0Alet json_codepoint (c: Int): String = str_of_bytes_raw(bytes_from_array_raw(\0A    if c < 128 { [c] }\0A    else if c < 2048 { [192 + c / 64, 128 + c % 64] }\0A    else if c < 65536 { [224 + c / 4096, 128 + (c / 64) % 64, 128 + c % 64] }\0A    else { [240 + c / 262144, 128 + (c / 4096) % 64, 128 + (c / 64) % 64, 128 + c % 64] }\0A))\0A\0Alet json_unicode (bytes: Bytes) (pos: Int): Result[ParseResult[String], String] =\0A    match json_hex4(bytes, pos, 4, 0) {\0A        Err(e) => Err(e),\0A        Ok(c) => if c >= 55296 && c <= 56319 {\0A            if pos + 6 > bytes_len_raw(bytes) || bytes_at_raw(bytes, pos + 4) != 92 || bytes_at_raw(bytes, pos + 5) != 117 { Err(\22invalid unicode surrogate pair\22) }\0A            else { match json_hex4(bytes, pos + 6, 4, 0) {\0A                Err(e) => Err(e),\0A                Ok(low) => if low < 56320 || low > 57343 { Err(\22invalid unicode surrogate pair\22) }\0A                else { Ok(ParseResult { value: json_codepoint(65536 + (c - 55296) * 1024 + low - 56320), next_pos: pos + 10 }) },\0A            } }\0A        } else if c >= 56320 && c <= 57343 { Err(\22invalid unicode surrogate pair\22) }\0A        else { Ok(ParseResult { value: json_codepoint(c), next_pos: pos + 4 }) },\0A    }\0A\0A// An ordinary run is copied once into a chunk. Escapes append small\0A// chunks to a uniquely owned growable array, then concat_all copies the\0A// decoded string once. Width is handled by tail calls, not stack frames.\0Alet parse_string_body (bytes: Bytes) (pos: Int) (run: Int) (parts: Array[String]): Result[ParseResult[String], String] =\0A    if pos >= bytes_len_raw(bytes) { Err(\22unterminated string\22) }\0A    else {\0A        let c = bytes_at_raw(bytes, pos);\0A        if c == 34 || c == 92 {\0A            if pos > run { parts = parts.push(str_of_bytes_raw(bytes_slice_raw(bytes, run, pos))); };\0A            if c == 34 { Ok(ParseResult { value: Array.concat_all(parts), next_pos: pos + 1 }) }\0A            else if pos + 1 >= bytes_len_raw(bytes) { Err(\22unterminated escape\22) }\0A            else {\0A                let e = bytes_at_raw(bytes, pos + 1);\0A                let decoded = if e == 117 { json_unicode(bytes, pos + 2) }\0A                else {\0A                    let value = if e == 34 { Ok(\22\5C\22\22) }\0A                    else if e == 92 { Ok(\22\5C\5C\22) }\0A                    else if e == 47 { Ok(\22/\22) }\0A                    else if e == 98 { Ok(json_codepoint(8)) }\0A                    else if e == 102 { Ok(json_codepoint(12)) }\0A                    else if e == 110 { Ok(\22\5Cn\22) }\0A                    else if e == 114 { Ok(\22\5Cr\22) }\0A                    else if e == 116 { Ok(\22\5Ct\22) }\0A                    else { Err(\22unsupported escape sequence\22) };\0A                    match value {\0A                        Err(err) => Err(err),\0A                        Ok(v) => Ok(ParseResult { value: v, next_pos: pos + 2 }),\0A                    }\0A                };\0A                match decoded {\0A                    Err(err) => Err(err),\0A                    Ok(r) => {\0A                        parts = parts.push(r.value);\0A                        parse_string_body(bytes, r.next_pos, r.next_pos, parts)\0A                    },\0A                }\0A            }\0A        }\0A        else if c < 32 { Err(\22unescaped control character\22) }\0A        else { parse_string_body(bytes, pos + 1, run, parts) }\0A    }\0A\0Alet parse_string (bytes: Bytes) (pos: Int): Result[ParseResult[String], String] =\0A    if pos >= bytes_len_raw(bytes) || bytes_at_raw(bytes, pos) != 34 { Err(\22expected opening quote\22) }\0A    else { parse_string_body(bytes, pos + 1, pos + 1, []) }\0A\0Alet parse_value (bytes: Bytes) (pos: Int) (depth: Int): Result[ParseResult[JsonValue], String] =\0A    if pos >= bytes_len_raw(bytes) { Err(\22unexpected end of input\22) }\0A    else {\0A        let c = bytes_at_raw(bytes, pos);\0A        if c == 34 {\0A            match parse_string(bytes, pos) {\0A                Ok(r) => Ok(ParseResult { value: JsonString(r.value), next_pos: r.next_pos }),\0A                Err(e) => Err(e),\0A            }\0A        }\0A        else if c == 123 { if depth >= 128 { Err(\22JSON nesting limit exceeded (128)\22) } else { parse_object(bytes, pos, depth + 1) } }\0A        else if c == 91 { if depth >= 128 { Err(\22JSON nesting limit exceeded (128)\22) } else { parse_array(bytes, pos, depth + 1) } }\0A        else if c == 116 { parse_literal(bytes, pos, \22true\22, JsonBool(true)) }\0A        else if c == 102 { parse_literal(bytes, pos, \22false\22, JsonBool(false)) }\0A        else if c == 110 { parse_literal(bytes, pos, \22null\22, JsonNull) }\0A        else if json_digit(c) || c == 45 {\0A            let start = if c == 45 { pos + 1 } else { pos };\0A            if start + 1 < bytes_len_raw(bytes) && bytes_at_raw(bytes, start) == 48 && json_digit(bytes_at_raw(bytes, start + 1)) { Err(\22leading zero in JSON number\22) }\0A            else { match parse_number(bytes, pos) {\0A                Ok(r) => Ok(ParseResult { value: JsonNumber(r.value), next_pos: r.next_pos }),\0A                Err(e) => Err(e),\0A            } }\0A        }\0A        else { Err(\22unexpected character\22) }\0A    }\0A\0Alet parse_array (bytes: Bytes) (pos: Int) (depth: Int): Result[ParseResult[JsonValue], String] = {\0A    let p1 = skip_ws(bytes, pos + 1);\0A    if p1 < bytes_len_raw(bytes) && bytes_at_raw(bytes, p1) == 93 { Ok(ParseResult { value: JsonArray([]), next_pos: p1 + 1 }) }\0A    else { parse_array_entries(bytes, p1, depth, []) }\0A}\0A\0Alet parse_array_entries (bytes: Bytes) (pos: Int) (depth: Int) (acc: Array[JsonValue]): Result[ParseResult[JsonValue], String] =\0A    match parse_value(bytes, pos, depth) {\0A        Err(e) => Err(e),\0A        Ok(val_r) => {\0A            acc = acc.push(val_r.value);\0A            let p1 = skip_ws(bytes, val_r.next_pos);\0A            if p1 < bytes_len_raw(bytes) && bytes_at_raw(bytes, p1) == 44 { parse_array_entries(bytes, skip_ws(bytes, p1 + 1), depth, acc) }\0A            else if p1 < bytes_len_raw(bytes) && bytes_at_raw(bytes, p1) == 93 { Ok(ParseResult { value: JsonArray(acc), next_pos: p1 + 1 }) }\0A            else { Err(\22expected ',' or ']'\22) }\0A        }\0A    }\0A\0Alet parse_object (bytes: Bytes) (pos: Int) (depth: Int): Result[ParseResult[JsonValue], String] = {\0A    let p1 = skip_ws(bytes, pos + 1);\0A    if p1 < bytes_len_raw(bytes) && bytes_at_raw(bytes, p1) == 125 { Ok(ParseResult { value: JsonObject([]), next_pos: p1 + 1 }) }\0A    else { parse_object_entries(bytes, p1, depth, []) }\0A}\0A\0Alet parse_object_entries (bytes: Bytes) (pos: Int) (depth: Int) (acc: Array[JsonEntry]): Result[ParseResult[JsonValue], String] =\0A    match parse_string(bytes, pos) {\0A        Err(e) => Err(e),\0A        Ok(key_r) => {\0A            let p1 = skip_ws(bytes, key_r.next_pos);\0A            if Array.any(acc, |entry: JsonEntry| entry.key == key_r.value) { Err(\22duplicate object member name\22) }\0A            else if p1 >= bytes_len_raw(bytes) || bytes_at_raw(bytes, p1) != 58 { Err(\22expected ':'\22) }\0A            else {\0A                let p2 = skip_ws(bytes, p1 + 1);\0A                match parse_value(bytes, p2, depth) {\0A                    Err(e) => Err(e),\0A                    Ok(val_r) => {\0A                        acc = acc.push(JsonEntry { key: key_r.value, value: val_r.value });\0A                        let p3 = skip_ws(bytes, val_r.next_pos);\0A                        if p3 < bytes_len_raw(bytes) && bytes_at_raw(bytes, p3) == 44 { parse_object_entries(bytes, skip_ws(bytes, p3 + 1), depth, acc) }\0A                        else if p3 < bytes_len_raw(bytes) && bytes_at_raw(bytes, p3) == 125 { Ok(ParseResult { value: JsonObject(acc), next_pos: p3 + 1 }) }\0A                        else { Err(\22expected ',' or '}'\22) }\0A                    }\0A                }\0A            }\0A        }\0A    }\0A\0A/// Parses JSON text.\0A///\0A/// `Err` with a message naming what was expected. Accepts one complete\0A/// value and rejects trailing text after it. Object member names must\0A/// be unique within each object, compared after decoding escapes;\0A/// duplicate names return `Err(\22duplicate object member name\22)`.\0A/// Strings support JSON escapes, including UTF-16 surrogate pairs, and\0A/// reject raw control characters and unpaired surrogates. Numbers must\0A/// follow JSON syntax (no leading zeros).\0A/// Numbers overflowing binary64 return `Err`; underflow rounds to a\0A/// subnormal value or signed zero.\0A/// At most 128 arrays/objects may be nested, counting the root container;\0A/// a deeper container returns `Err(\22JSON nesting limit exceeded (128)\22)`.\0A/// Input bytes and decoded strings use linear storage; this is not a\0A/// total input-size limit. Wide objects still compare each key against\0A/// preceding keys to reject duplicates.\0Apub let json_parse (s: String): Result[JsonValue, String] = {\0A    let bytes = bytes_of_str_raw(s);\0A    let start = skip_ws(bytes, 0);\0A    match parse_value(bytes, start, 0) {\0A        Err(e) => Err(e),\0A        Ok(r) => {\0A            let after = skip_ws(bytes, r.next_pos);\0A            if after == bytes_len_raw(bytes) { Ok(r.value) } else { Err(\22trailing characters after JSON value\22) }\0A        }\0A    }\0A}\0A\0A// ASCII escape boundaries cannot split a UTF-8 code point. Scan byte\0A// runs so ordinary text needs neither chars_of nor per-character strings.\0Alet json_run_end (s: Bytes) (pos: Int): Int =\0A    if pos >= bytes_len_raw(s) { pos }\0A    else {\0A        let b = bytes_at_raw(s, pos);\0A        if b == 34 || b == 92 || b < 32 { pos }\0A        else { json_run_end(s, pos + 1) }\0A    }\0A\0Alet json_escape_byte (b: Int): String =\0A    if b == 34 { \22\5C\5C\5C\22\22 }\0A    else if b == 92 { \22\5C\5C\5C\5C\22 }\0A    else if b == 8 { \22\5C\5Cb\22 }\0A    else if b == 12 { \22\5C\5Cf\22 }\0A    else if b == 10 { \22\5C\5Cn\22 }\0A    else if b == 13 { \22\5C\5Cr\22 }\0A    else if b == 9 { \22\5C\5Ct\22 }\0A    else if b < 32 { \22\5C\5Cu00\22.concat(plum__hex_digit(b / 16)).concat(plum__hex_digit(b % 16)) }\0A    else { \22\22 }\0A\0A// One continuation per active container, rather than one per sibling.\0A// Keep the container alive while visiting its children so dropping a\0A// traversal frame cannot recursively destroy the unvisited subtree.\0Aenum JsonWriteStack {\0A    JsonWriteDone,\0A    JsonWriteValue(JsonValue, JsonWriteStack),\0A    JsonWriteArray(Array[JsonValue], Int, JsonWriteStack),\0A    JsonWriteObject(Array[JsonEntry], Int, JsonWriteStack),\0A    JsonWriteString(Bytes, Int, JsonWriteStack),\0A    JsonWriteText(String, JsonWriteStack),\0A}\0A\0A// Every transition is a same-signature tail call (musttail in LLVM).\0A// Append only through self-rebinding here: passing parts through nested\0A// helpers keeps aliases alive and defeats geometric array growth.\0A// concat_all then copies the fragments into one final allocation.\0Alet json_emit (stack: JsonWriteStack) (parts: Array[String]): Result[String, String] = match stack {\0A    JsonWriteDone => Ok(Array.concat_all(parts)),\0A    JsonWriteText(text, rest) => {\0A        parts = parts.push(text);\0A        json_emit(rest, parts)\0A    },\0A    JsonWriteString(s, pos, rest) => {\0A        let end = json_run_end(s, pos);\0A        if end > pos { parts = parts.push(str_of_bytes_raw(bytes_slice_raw(s, pos, end))); };\0A        if end == bytes_len_raw(s) {\0A            parts = parts.push(\22\5C\22\22);\0A            json_emit(rest, parts)\0A        } else {\0A            parts = parts.push(json_escape_byte(bytes_at_raw(s, end)));\0A            json_emit(JsonWriteString(s, end + 1, rest), parts)\0A        }\0A    },\0A    JsonWriteValue(v, rest) => match v {\0A        JsonNull => {\0A            parts = parts.push(\22null\22);\0A            json_emit(rest, parts)\0A        },\0A        JsonBool(b) => {\0A            parts = parts.push(if b { \22true\22 } else { \22false\22 });\0A            json_emit(rest, parts)\0A        },\0A        JsonNumber(n) => {\0A            if Float.is_finite(n) {\0A                parts = parts.push(n.to_string());\0A                json_emit(rest, parts)\0A            } else { Err(\22non-finite JSON number\22) }\0A        },\0A        JsonString(s) => {\0A            parts = parts.push(\22\5C\22\22);\0A            json_emit(JsonWriteString(bytes_of_str_raw(s), 0, rest), parts)\0A        },\0A        JsonArray(arr) => {\0A            parts = parts.push(\22[\22);\0A            json_emit(JsonWriteArray(arr, 0, rest), parts)\0A        },\0A        JsonObject(entries) => {\0A            parts = parts.push(\22{\22);\0A            json_emit(JsonWriteObject(entries, 0, rest), parts)\0A        },\0A    },\0A    JsonWriteArray(arr, pos, rest) =>\0A        if pos >= arr.len() {\0A            parts = parts.push(\22]\22);\0A            json_emit(rest, parts)\0A        } else {\0A            if pos > 0 { parts = parts.push(\22,\22); };\0A            json_emit(JsonWriteValue(arr[pos], JsonWriteArray(arr, pos + 1, rest)), parts)\0A        },\0A    JsonWriteObject(entries, pos, rest) =>\0A        if pos >= entries.len() {\0A            parts = parts.push(\22}\22);\0A            json_emit(rest, parts)\0A        } else {\0A            let entry = entries[pos];\0A            if pos > 0 { parts = parts.push(\22,\22); };\0A            parts = parts.push(\22\5C\22\22);\0A            let next = JsonWriteValue(entry.value, JsonWriteObject(entries, pos + 1, rest));\0A            json_emit(JsonWriteString(bytes_of_str_raw(entry.key), 0, JsonWriteText(\22:\22, next)), parts)\0A        },\0A}\0A\0A/// Renders a `JsonValue` as compact JSON — no spaces, no newlines.\0A///\0A/// Object keys come out in the order they are held, which for a parsed\0A/// document is the order they were read. All U+0000–U+001F control\0A/// characters are escaped, including in keys. Output construction takes\0A/// linear time and space in the output size, with an explicit traversal\0A/// stack proportional to nesting depth instead of native stack recursion.\0A/// Returns `Err(\22non-finite JSON number\22)` for NaN or either infinity,\0A/// including inside arrays and objects. No partial output is returned.\0Apub let json_stringify (v: JsonValue): Result[String, String] = json_emit(JsonWriteValue(v, JsonWriteDone), [])\0A/// `pub` because the PARSER generates calls to these when it\0A/// desugars `requires`/`ensures`, and that generated code lands in\0A/// the user's own module. Nobody writes them by hand.\0Apub let __contract_require (cond: Bool) (msg: String): Unit =\0A    if cond { () } else { panic_raw(msg) }\0A\0Apub let __contract_ensure (cond: Bool) (msg: String): Unit =\0A    if cond { () } else { panic_raw(msg) }\0A\00" }
 define ptr @plum.f.codegen.cg_prelude_src.0.(i1 %p0) !dbg !747 {
 entry:
   %s0 = alloca i1, !dbg !748
@@ -70547,7 +70547,7 @@ L12915:
   store i64 %t12918, ptr %t12914, !dbg !965
   br label %L12917, !dbg !965
 L12916:
-  ; plum.off 77733
+  ; plum.off 78322
   %t12920 = load ptr, ptr %s0, !dbg !966
   call void @plum_rc_inc(ptr %t12920), !dbg !966
   %t12921 = load i64, ptr %s1, !dbg !966
@@ -70691,7 +70691,7 @@ L12964:
   store ptr @.const12969, ptr %t12963, !dbg !968
   br label %L12966, !dbg !968
 L12965:
-  ; plum.off 84372
+  ; plum.off 84961
   %t12971 = load ptr, ptr %s0, !dbg !969
   call void @plum_rc_inc(ptr %t12971), !dbg !969
   %t12972 = load i64, ptr %s1, !dbg !969
@@ -71006,7 +71006,7 @@ L13133:
   %t13136 = load i1, ptr %t13131, !dbg !969
   br i1 %t13136, label %L13138, label %L13139, !dbg !969
 L13138:
-  ; plum.off 85181
+  ; plum.off 85770
   %t13142 = load i64, ptr %t12970, !dbg !969
   %t13143 = icmp eq i64 %t13142, 45, !dbg !969
   br i1 %t13143, label %L13145, label %L13146, !dbg !969
@@ -80041,7 +80041,7 @@ reset_no17011:
   call void @plum.h.rel.E$3cprelude$3e$2eJsonWriteStack.0.(ptr %reset_old17011), !dbg !1253
   br label %reset_done17011, !dbg !1253
 reset_done17011:
-  ; plum.off 91304
+  ; plum.off 91893
   %t17012 = load ptr, ptr %s1, !dbg !1254
   store ptr null, ptr %s1, !dbg !1254
   %t17013 = load ptr, ptr %t17004, !dbg !1254
@@ -80170,19 +80170,19 @@ reset_no17043:
   call void @plum.h.rel.E$3cprelude$3e$2eJsonWriteStack.0.(ptr %reset_old17043), !dbg !1254
   br label %reset_done17043, !dbg !1254
 reset_done17043:
-  ; plum.off 91415
+  ; plum.off 92004
   %t17045 = load ptr, ptr %t17031, !dbg !1254
   call void @plum_rc_inc(ptr %t17045), !dbg !1254
   %t17046 = load i64, ptr %t17036, !dbg !1254
   %t17047 = call i64 @plum.f.$3cprelude$3e.json_run_end.0.(ptr %t17045, i64 %t17046), !dbg !1254
   store i64 %t17047, ptr %t17044, !dbg !1254
-  ; plum.off 91455
+  ; plum.off 92044
   %t17048 = load i64, ptr %t17044, !dbg !1254
   %t17049 = load i64, ptr %t17036, !dbg !1254
   %t17050 = icmp sgt i64 %t17048, %t17049, !dbg !1254
   br i1 %t17050, label %L17052, label %L17053, !dbg !1254
 L17052:
-  ; plum.off 91470
+  ; plum.off 92059
   %t17055 = load ptr, ptr %s1, !dbg !1254
   store ptr null, ptr %s1, !dbg !1254
   %t17056 = load ptr, ptr %t17031, !dbg !1254
@@ -80222,7 +80222,7 @@ L17074:
   %t17031_dead17077_0 = load ptr, ptr %t17031, !dbg !1254
   call void @plum_rel_str(ptr %t17031_dead17077_0), !dbg !1254
   store ptr null, ptr %t17031, !dbg !1254
-  ; plum.off 91590
+  ; plum.off 92179
   %t17078 = load ptr, ptr %s1, !dbg !1254
   store ptr null, ptr %s1, !dbg !1254
   %t17081 = call ptr @plum_array_push_grow(ptr %t17078, i1 1, ptr @plum.h.rel.SArray.1.s), !dbg !1254
@@ -80306,7 +80306,7 @@ Ltail62:
   store ptr %t17090, ptr %t17073, !dbg !1254
   br label %L17076, !dbg !1254
 L17075:
-  ; plum.off 91680
+  ; plum.off 92269
   %t17091 = load ptr, ptr %s1, !dbg !1254
   store ptr null, ptr %s1, !dbg !1254
   %t17092 = load ptr, ptr %t17031, !dbg !1254
@@ -80492,7 +80492,7 @@ reset_no17145:
   call void @plum.h.rel.E$3cprelude$3e$2eJsonValue.0.(ptr %reset_old17145), !dbg !1254
   br label %reset_done17145, !dbg !1254
 reset_done17145:
-  ; plum.off 91896
+  ; plum.off 92485
   %t17146 = load ptr, ptr %s1, !dbg !1254
   store ptr null, ptr %s1, !dbg !1254
   %t17149 = call ptr @plum_array_push_grow(ptr %t17146, i1 1, ptr @plum.h.rel.SArray.1.s), !dbg !1254
@@ -80603,7 +80603,7 @@ reset_no17167:
   call void @plum.h.rel.E$3cprelude$3e$2eJsonValue.0.(ptr %reset_old17167), !dbg !1254
   br label %reset_done17167, !dbg !1254
 reset_done17167:
-  ; plum.off 92007
+  ; plum.off 92596
   %t17168 = load ptr, ptr %s1, !dbg !1254
   store ptr null, ptr %s1, !dbg !1254
   %t17169 = load i1, ptr %t17165, !dbg !1254
@@ -80728,7 +80728,7 @@ reset_done17198:
   %t17200 = call i1 @plum.f.$3cprelude$3e.Float$2eis_finite.0.(double %t17199), !dbg !1254
   br i1 %t17200, label %L17202, label %L17203, !dbg !1254
 L17202:
-  ; plum.off 92186
+  ; plum.off 92775
   %t17205 = load ptr, ptr %s1, !dbg !1254
   store ptr null, ptr %s1, !dbg !1254
   %t17206 = load double, ptr %t17196, !dbg !1254
@@ -80852,7 +80852,7 @@ reset_no17231:
   call void @plum.h.rel.E$3cprelude$3e$2eJsonValue.0.(ptr %reset_old17231), !dbg !1254
   br label %reset_done17231, !dbg !1254
 reset_done17231:
-  ; plum.off 92363
+  ; plum.off 92952
   %t17232 = load ptr, ptr %s1, !dbg !1254
   store ptr null, ptr %s1, !dbg !1254
   %t17235 = call ptr @plum_array_push_grow(ptr %t17232, i1 1, ptr @plum.h.rel.SArray.1.s), !dbg !1254
@@ -80990,7 +80990,7 @@ reset_no17264:
   call void @plum.h.rel.E$3cprelude$3e$2eJsonValue.0.(ptr %reset_old17264), !dbg !1254
   br label %reset_done17264, !dbg !1254
 reset_done17264:
-  ; plum.off 92516
+  ; plum.off 93105
   %t17265 = load ptr, ptr %s1, !dbg !1254
   store ptr null, ptr %s1, !dbg !1254
   %t17268 = call ptr @plum_array_push_grow(ptr %t17265, i1 1, ptr @plum.h.rel.SArray.1.s), !dbg !1254
@@ -81126,7 +81126,7 @@ reset_no17296:
   call void @plum.h.rel.E$3cprelude$3e$2eJsonValue.0.(ptr %reset_old17296), !dbg !1254
   br label %reset_done17296, !dbg !1254
 reset_done17296:
-  ; plum.off 92656
+  ; plum.off 93245
   %t17297 = load ptr, ptr %s1, !dbg !1254
   store ptr null, ptr %s1, !dbg !1254
   %t17300 = call ptr @plum_array_push_grow(ptr %t17297, i1 1, ptr @plum.h.rel.SArray.1.s), !dbg !1254
@@ -81293,7 +81293,7 @@ L17345:
   %t17327_dead17348_0 = load ptr, ptr %t17327, !dbg !1254
   call void @plum.h.rel.SArray.1.E$3cprelude$3e$2eJsonValue.0.(ptr %t17327_dead17348_0), !dbg !1254
   store ptr null, ptr %t17327, !dbg !1254
-  ; plum.off 92843
+  ; plum.off 93432
   %t17349 = load ptr, ptr %s1, !dbg !1254
   store ptr null, ptr %s1, !dbg !1254
   %t17352 = call ptr @plum_array_push_grow(ptr %t17349, i1 1, ptr @plum.h.rel.SArray.1.s), !dbg !1254
@@ -81377,12 +81377,12 @@ Ltail70:
   store ptr %t17361, ptr %t17344, !dbg !1254
   br label %L17347, !dbg !1254
 L17346:
-  ; plum.off 92932
+  ; plum.off 93521
   %t17362 = load i64, ptr %t17332, !dbg !1254
   %t17363 = icmp sgt i64 %t17362, 0, !dbg !1254
   br i1 %t17363, label %L17365, label %L17366, !dbg !1254
 L17365:
-  ; plum.off 92945
+  ; plum.off 93534
   %t17368 = load ptr, ptr %s1, !dbg !1254
   store ptr null, ptr %s1, !dbg !1254
   %t17371 = call ptr @plum_array_push_grow(ptr %t17368, i1 1, ptr @plum.h.rel.SArray.1.s), !dbg !1254
@@ -81582,7 +81582,7 @@ L17439:
   %t17421_dead17442_0 = load ptr, ptr %t17421, !dbg !1254
   call void @plum.h.rel.SArray.1.S$3cprelude$3e$2eJsonEntry.0.(ptr %t17421_dead17442_0), !dbg !1254
   store ptr null, ptr %t17421, !dbg !1254
-  ; plum.off 93164
+  ; plum.off 93753
   %t17443 = load ptr, ptr %s1, !dbg !1254
   store ptr null, ptr %s1, !dbg !1254
   %t17446 = call ptr @plum_array_push_grow(ptr %t17443, i1 1, ptr @plum.h.rel.SArray.1.s), !dbg !1254
@@ -81666,7 +81666,7 @@ Ltail72:
   store ptr %t17455, ptr %t17438, !dbg !1254
   br label %L17441, !dbg !1254
 L17440:
-  ; plum.off 93253
+  ; plum.off 93842
   %t17457 = load ptr, ptr %t17421, !dbg !1254
   %t17458 = load i64, ptr %t17426, !dbg !1254
   %t17459 = call i64 @plum_array_check_index(ptr %t17457, i64 %t17458), !dbg !1254
@@ -81679,12 +81679,12 @@ L17440:
   call void @plum.h.rel.S$3cprelude$3e$2eJsonEntry.0.(ptr %t17456_pre), !dbg !1254
   store ptr null, ptr %t17456, !dbg !1254
   store ptr %t17463, ptr %t17456, !dbg !1254
-  ; plum.off 93291
+  ; plum.off 93880
   %t17464 = load i64, ptr %t17426, !dbg !1254
   %t17465 = icmp sgt i64 %t17464, 0, !dbg !1254
   br i1 %t17465, label %L17467, label %L17468, !dbg !1254
 L17467:
-  ; plum.off 93304
+  ; plum.off 93893
   %t17470 = load ptr, ptr %s1, !dbg !1254
   store ptr null, ptr %s1, !dbg !1254
   %t17473 = call ptr @plum_array_push_grow(ptr %t17470, i1 1, ptr @plum.h.rel.SArray.1.s), !dbg !1254
@@ -81705,7 +81705,7 @@ L17468:
   br label %L17469, !dbg !1254
 L17469:
   %t17480 = load i1, ptr %t17466, !dbg !1254
-  ; plum.off 93344
+  ; plum.off 93933
   %t17481 = load ptr, ptr %s1, !dbg !1254
   store ptr null, ptr %s1, !dbg !1254
   %t17484 = call ptr @plum_array_push_grow(ptr %t17481, i1 1, ptr @plum.h.rel.SArray.1.s), !dbg !1254
@@ -81719,7 +81719,7 @@ L17469:
   call void @plum.h.rel.SArray.1.s(ptr %s1_a17490), !dbg !1254
   store ptr null, ptr %s1, !dbg !1254
   store ptr %t17484, ptr %s1, !dbg !1254
-  ; plum.off 93382
+  ; plum.off 93971
   %t17492 = load ptr, ptr %t17456, !dbg !1254
   %t17493 = getelementptr i8, ptr %t17492, i64 16, !dbg !1254
   %t17494 = load ptr, ptr %t17493, !dbg !1254
@@ -86474,7 +86474,7 @@ L19717:
   store ptr @.const19720, ptr %t19716, !dbg !1358
   br label %L19719, !dbg !1358
 L19718:
-  ; plum.off 31278
+  ; plum.off 31867
   %t19722 = load ptr, ptr %s0, !dbg !1359
   store ptr null, ptr %s0, !dbg !1359
   %t19723 = call ptr @plum_bytes_retag(ptr %t19722), !dbg !1359
@@ -86483,7 +86483,7 @@ L19718:
   call void @plum_rel_str(ptr %t19721_pre), !dbg !1359
   store ptr null, ptr %t19721, !dbg !1359
   store ptr %t19723, ptr %t19721, !dbg !1359
-  ; plum.off 31318
+  ; plum.off 31907
   %t19725 = load ptr, ptr %s1, !dbg !1359
   store ptr null, ptr %s1, !dbg !1359
   %t19726 = call ptr @plum_bytes_retag(ptr %t19725), !dbg !1359
@@ -86492,7 +86492,7 @@ L19718:
   call void @plum_rel_str(ptr %t19724_pre), !dbg !1359
   store ptr null, ptr %t19724, !dbg !1359
   store ptr %t19726, ptr %t19724, !dbg !1359
-  ; plum.off 31366
+  ; plum.off 31955
   %t19728 = load ptr, ptr %t19724, !dbg !1359
   call void @plum_rc_inc(ptr %t19728), !dbg !1359
   %t19729 = call ptr @plum.f.$3cprelude$3e.plum__string_search_links.0.(ptr %t19728), !dbg !1359
@@ -113768,7 +113768,7 @@ entry:
   %t38223 = alloca i64, !dbg !1689
   %t38245 = alloca ptr, !dbg !1689
   %t38237 = alloca i1, !dbg !1689
-  ; plum.off 86750
+  ; plum.off 87339
   %t38224 = load ptr, ptr %s0, !dbg !1690
   call void @plum_rc_inc(ptr %t38224), !dbg !1690
   %t38225 = load i64, ptr %s1, !dbg !1690
@@ -113861,7 +113861,7 @@ entry:
   %t38269 = alloca i64, !dbg !1692
   %t38291 = alloca ptr, !dbg !1692
   %t38283 = alloca i1, !dbg !1692
-  ; plum.off 85761
+  ; plum.off 86350
   %t38270 = load ptr, ptr %s0, !dbg !1693
   call void @plum_rc_inc(ptr %t38270), !dbg !1693
   %t38271 = load i64, ptr %s1, !dbg !1693
@@ -114109,13 +114109,13 @@ entry:
   %t38574 = alloca double, !dbg !1699
   %t38567 = alloca i1, !dbg !1699
   %t38583 = alloca ptr, !dbg !1699
-  ; plum.off 78324
+  ; plum.off 78913
   %t38374 = load ptr, ptr %s0, !dbg !1700
   call void @plum_rc_inc(ptr %t38374), !dbg !1700
   %t38375 = call i64 @plum_str_len(ptr %t38374), !dbg !1700
   call void @plum_rel_str(ptr %t38374), !dbg !1700
   store i64 %t38375, ptr %t38373, !dbg !1700
-  ; plum.off 78358
+  ; plum.off 78947
   %t38377 = load i64, ptr %s1, !dbg !1700
   %t38378 = load i64, ptr %t38373, !dbg !1700
   %t38379 = icmp slt i64 %t38377, %t38378, !dbg !1700
@@ -114153,7 +114153,7 @@ L38390:
 L38391:
   %t38400 = load i64, ptr %t38388, !dbg !1700
   store i64 %t38400, ptr %t38376, !dbg !1700
-  ; plum.off 78445
+  ; plum.off 79034
   %t38402 = load ptr, ptr %s0, !dbg !1700
   call void @plum_rc_inc(ptr %t38402), !dbg !1700
   %t38403 = load i64, ptr %t38376, !dbg !1700
@@ -114167,7 +114167,7 @@ L38409:
   store ptr @.const38414, ptr %t38408, !dbg !1700
   br label %L38411, !dbg !1700
 L38410:
-  ; plum.off 78556
+  ; plum.off 79145
   %t38416 = load i64, ptr %t38401, !dbg !1700
   %t38417 = load i64, ptr %t38373, !dbg !1700
   %t38418 = icmp slt i64 %t38416, %t38417, !dbg !1700
@@ -114185,7 +114185,7 @@ L38420:
 L38421:
   %t38426 = load i1, ptr %t38419, !dbg !1700
   store i1 %t38426, ptr %t38415, !dbg !1700
-  ; plum.off 78630
+  ; plum.off 79219
   %t38428 = load i1, ptr %t38415, !dbg !1700
   br i1 %t38428, label %L38430, label %L38431, !dbg !1700
 L38430:
@@ -114236,7 +114236,7 @@ L38459:
   store ptr @.const38464, ptr %t38458, !dbg !1700
   br label %L38461, !dbg !1700
 L38460:
-  ; plum.off 78812
+  ; plum.off 79401
   %t38466 = load i64, ptr %t38427, !dbg !1700
   %t38467 = load i64, ptr %t38373, !dbg !1700
   %t38468 = icmp slt i64 %t38466, %t38467, !dbg !1700
@@ -114267,7 +114267,7 @@ L38478:
 L38471:
   %t38484 = load i1, ptr %t38469, !dbg !1700
   store i1 %t38484, ptr %t38465, !dbg !1700
-  ; plum.off 78933
+  ; plum.off 79522
   %t38486 = load i64, ptr %t38427, !dbg !1700
   %t38487 = call { i64, i1 } @llvm.sadd.with.overflow.i64(i64 %t38486, i64 1), !dbg !1700
   %t38488 = extractvalue { i64, i1 } %t38487, 0, !dbg !1700
@@ -114279,7 +114279,7 @@ L38492:
   unreachable, !dbg !1700
 L38491:
   store i64 %t38488, ptr %t38485, !dbg !1700
-  ; plum.off 78973
+  ; plum.off 79562
   %t38494 = load i1, ptr %t38465, !dbg !1700
   store i1 0, ptr %t38495, !dbg !1700
   br i1 %t38494, label %L38496, label %L38497, !dbg !1700
@@ -114338,7 +114338,7 @@ L38520:
 L38521:
   %t38530 = load i64, ptr %t38518, !dbg !1700
   store i64 %t38530, ptr %t38493, !dbg !1700
-  ; plum.off 79139
+  ; plum.off 79728
   %t38532 = load i1, ptr %t38465, !dbg !1700
   br i1 %t38532, label %L38534, label %L38535, !dbg !1700
 L38534:
@@ -114371,7 +114371,7 @@ L38551:
   store ptr @.const38556, ptr %t38550, !dbg !1700
   br label %L38553, !dbg !1700
 L38552:
-  ; plum.off 79318
+  ; plum.off 79907
   %t38558 = load ptr, ptr %s0, !dbg !1700
   store ptr null, ptr %s0, !dbg !1700
   %t38559 = load i64, ptr %s1, !dbg !1700
@@ -114383,7 +114383,7 @@ L38552:
   %t38563 = call double @plum_parse_float_raw(ptr %t38562), !dbg !1700
   call void @plum_rel_str(ptr %t38562), !dbg !1700
   store double %t38563, ptr %t38557, !dbg !1700
-  ; plum.off 79569
+  ; plum.off 80158
   %t38565 = load double, ptr %t38557, !dbg !1700
   %t38566 = fcmp oeq double %t38565, 0.0, !dbg !1700
   store i1 0, ptr %t38567, !dbg !1700
@@ -115152,13 +115152,13 @@ entry:
   %t38967 = alloca i64, !dbg !1725
   %t38971 = alloca i64, !dbg !1725
   %t38979 = alloca i64, !dbg !1725
-  ; plum.off 39558
+  ; plum.off 40147
   %t38947 = load ptr, ptr %s0, !dbg !1726
   call void @plum_rc_inc(ptr %t38947), !dbg !1726
   %t38948 = call i64 @plum_str_len(ptr %t38947), !dbg !1726
   call void @plum_rel_str(ptr %t38947), !dbg !1726
   store i64 %t38948, ptr %t38946, !dbg !1726
-  ; plum.off 39588
+  ; plum.off 40177
   %t38950 = load i64, ptr %s1, !dbg !1726
   %t38951 = icmp slt i64 %t38950, 0, !dbg !1726
   br i1 %t38951, label %L38953, label %L38954, !dbg !1726
@@ -115185,7 +115185,7 @@ L38962:
 L38955:
   %t38966 = load i64, ptr %t38952, !dbg !1726
   store i64 %t38966, ptr %t38949, !dbg !1726
-  ; plum.off 39660
+  ; plum.off 40249
   %t38968 = load i64, ptr %s2, !dbg !1726
   %t38969 = load i64, ptr %t38949, !dbg !1726
   %t38970 = icmp slt i64 %t38968, %t38969, !dbg !1726
@@ -123329,7 +123329,7 @@ L42625:
   store i64 %t42628, ptr %t42624, !dbg !1935
   br label %L42627, !dbg !1935
 L42626:
-  ; plum.off 89837
+  ; plum.off 90426
   %t42630 = load ptr, ptr %s0, !dbg !1936
   call void @plum_rc_inc(ptr %t42630), !dbg !1936
   %t42631 = load i64, ptr %s1, !dbg !1936
@@ -130623,14 +130623,14 @@ entry:
   %t46437 = alloca i64, !dbg !2093
   %t46441 = alloca i64, !dbg !2093
   %t46452 = alloca i64, !dbg !2093
-  ; plum.off 29570
+  ; plum.off 30159
   %t46424_pre = load ptr, ptr %t46424, !dbg !2094
   call void @plum.h.rel.SArray.1.i(ptr %t46424_pre), !dbg !2094
   store ptr null, ptr %t46424, !dbg !2094
   store ptr @.const46425, ptr %t46424, !dbg !2094
-  ; plum.off 29595
+  ; plum.off 30184
   store i64 0, ptr %t46426, !dbg !2094
-  ; plum.off 29620
+  ; plum.off 30209
   %t46427 = load ptr, ptr %s0, !dbg !2094
   call void @plum_rc_inc(ptr %t46427), !dbg !2094
   %t46428 = call i64 @plum_str_len(ptr %t46427), !dbg !2094
@@ -130644,14 +130644,14 @@ L46431:
   %t46436 = icmp slt i64 %t46434, %t46435, !dbg !2094
   br i1 %t46436, label %L46432, label %L46433, !dbg !2094
 L46432:
-  ; plum.off 29664
+  ; plum.off 30253
   %t46438 = load ptr, ptr %s0, !dbg !2094
   call void @plum_rc_inc(ptr %t46438), !dbg !2094
   %t46439 = load i64, ptr %t46429, !dbg !2094
   %t46440 = call i64 @plum_bytes_at(ptr %t46438, i64 %t46439), !dbg !2094
   call void @plum_rel_str(ptr %t46438), !dbg !2094
   store i64 %t46440, ptr %t46437, !dbg !2094
-  ; plum.off 29708
+  ; plum.off 30297
   %t46442 = load ptr, ptr %s0, !dbg !2094
   call void @plum_rc_inc(ptr %t46442), !dbg !2094
   %t46443 = load ptr, ptr %t46424, !dbg !2094
@@ -130660,7 +130660,7 @@ L46432:
   %t46445 = load i64, ptr %t46437, !dbg !2094
   %t46446 = call i64 @plum.f.$3cprelude$3e.plum__string_search_fallback.0.(ptr %t46442, ptr %t46443, i64 %t46444, i64 %t46445), !dbg !2094
   store i64 %t46446, ptr %t46441, !dbg !2094
-  ; plum.off 29789
+  ; plum.off 30378
   %t46447 = load ptr, ptr %s0, !dbg !2094
   call void @plum_rc_inc(ptr %t46447), !dbg !2094
   %t46448 = load i64, ptr %t46441, !dbg !2094
@@ -130688,7 +130688,7 @@ L46454:
 L46455:
   %t46463 = load i64, ptr %t46452, !dbg !2094
   store i64 %t46463, ptr %t46426, !dbg !2094
-  ; plum.off 29874
+  ; plum.off 30463
   %t46465 = load ptr, ptr %t46424, !dbg !2094
   store ptr null, ptr %t46424, !dbg !2094
   %t46466 = load i64, ptr %t46426, !dbg !2094
@@ -130749,14 +130749,14 @@ L46482:
   store ptr @.const46485, ptr %t46481, !dbg !2096
   br label %L46484, !dbg !2096
 L46483:
-  ; plum.off 30096
+  ; plum.off 30685
   %t46487 = load ptr, ptr %s0, !dbg !2097
   call void @plum_rc_inc(ptr %t46487), !dbg !2097
   %t46488 = load i64, ptr %s3, !dbg !2097
   %t46489 = call i64 @plum_bytes_at(ptr %t46487, i64 %t46488), !dbg !2097
   call void @plum_rel_str(ptr %t46487), !dbg !2097
   store i64 %t46489, ptr %t46486, !dbg !2097
-  ; plum.off 30135
+  ; plum.off 30724
   %t46491 = load ptr, ptr %s1, !dbg !2097
   call void @plum_rc_inc(ptr %t46491), !dbg !2097
   %t46492 = load ptr, ptr %s2, !dbg !2097
@@ -130765,7 +130765,7 @@ L46483:
   %t46494 = load i64, ptr %t46486, !dbg !2097
   %t46495 = call i64 @plum.f.$3cprelude$3e.plum__string_search_fallback.0.(ptr %t46491, ptr %t46492, i64 %t46493, i64 %t46494), !dbg !2097
   store i64 %t46495, ptr %t46490, !dbg !2097
-  ; plum.off 30216
+  ; plum.off 30805
   %t46497 = load ptr, ptr %s1, !dbg !2097
   call void @plum_rc_inc(ptr %t46497), !dbg !2097
   %t46498 = load i64, ptr %t46490, !dbg !2097
@@ -130901,7 +130901,7 @@ L46556:
   store i64 %t46559, ptr %t46555, !dbg !2099
   br label %L46558, !dbg !2099
 L46557:
-  ; plum.off 30707
+  ; plum.off 31296
   %t46561 = load ptr, ptr %s0, !dbg !2100
   call void @plum_rc_inc(ptr %t46561), !dbg !2100
   %t46562 = load i64, ptr %s2, !dbg !2100
@@ -198092,7 +198092,7 @@ L63704:
   store ptr @.const63709, ptr %t63703, !dbg !2610
   br label %L63706, !dbg !2610
 L63705:
-  ; plum.off 82289
+  ; plum.off 82878
   %t63711 = load ptr, ptr %s0, !dbg !2611
   call void @plum_rc_inc(ptr %t63711), !dbg !2611
   %t63712 = load i64, ptr %s1, !dbg !2611
@@ -198112,13 +198112,13 @@ L63718:
   %t63721 = load i1, ptr %t63716, !dbg !2611
   br i1 %t63721, label %L63723, label %L63724, !dbg !2611
 L63723:
-  ; plum.off 82367
+  ; plum.off 82956
   %t63726 = load i64, ptr %s1, !dbg !2611
   %t63727 = load i64, ptr %s2, !dbg !2611
   %t63728 = icmp sgt i64 %t63726, %t63727, !dbg !2611
   br i1 %t63728, label %L63730, label %L63731, !dbg !2611
 L63730:
-  ; plum.off 82382
+  ; plum.off 82971
   %t63733 = load ptr, ptr %s3, !dbg !2611
   store ptr null, ptr %s3, !dbg !2611
   %t63734 = load ptr, ptr %s0, !dbg !2611
@@ -198197,7 +198197,7 @@ L63778:
   store ptr @.const63783, ptr %t63777, !dbg !2611
   br label %L63780, !dbg !2611
 L63779:
-  ; plum.off 82672
+  ; plum.off 83261
   %t63785 = load ptr, ptr %s0, !dbg !2611
   call void @plum_rc_inc(ptr %t63785), !dbg !2611
   %t63786 = load i64, ptr %s1, !dbg !2611
@@ -198213,7 +198213,7 @@ L63791:
   %t63793 = call i64 @plum_bytes_at(ptr %t63785, i64 %t63788), !dbg !2611
   call void @plum_rel_str(ptr %t63785), !dbg !2611
   store i64 %t63793, ptr %t63784, !dbg !2611
-  ; plum.off 82726
+  ; plum.off 83315
   %t63795 = load i64, ptr %t63784, !dbg !2611
   %t63796 = icmp eq i64 %t63795, 117, !dbg !2611
   br i1 %t63796, label %L63798, label %L63799, !dbg !2611
@@ -198234,7 +198234,7 @@ L63807:
   store ptr %t63809, ptr %t63797, !dbg !2611
   br label %L63800, !dbg !2611
 L63799:
-  ; plum.off 82828
+  ; plum.off 83417
   %t63811 = load i64, ptr %t63784, !dbg !2611
   %t63812 = icmp eq i64 %t63811, 34, !dbg !2611
   br i1 %t63812, label %L63814, label %L63815, !dbg !2611
@@ -198561,7 +198561,7 @@ reset_no63978:
   call void @plum.h.rel.E$3cprelude$3e$2eResult.2.S$3cprelude$3e$2eParseResult.1.ss(ptr %reset_old63978), !dbg !2611
   br label %reset_done63978, !dbg !2611
 reset_done63978:
-  ; plum.off 83634
+  ; plum.off 84223
   %t63979 = load ptr, ptr %s3, !dbg !2611
   store ptr null, ptr %s3, !dbg !2611
   %t63980 = load ptr, ptr %t63976, !dbg !2611
@@ -198906,7 +198906,7 @@ reset_no64056:
   call void @plum.h.rel.E$3cprelude$3e$2eResult.2.S$3cprelude$3e$2eParseResult.1.ss(ptr %reset_old64056), !dbg !2613
   br label %reset_done64056, !dbg !2613
 reset_done64056:
-  ; plum.off 87202
+  ; plum.off 87791
   %t64058 = load ptr, ptr %s0, !dbg !2614
   call void @plum_rc_inc(ptr %t64058), !dbg !2614
   %t64059 = load ptr, ptr %t64054, !dbg !2614
@@ -198956,7 +198956,7 @@ L64098:
   store ptr @.const64103, ptr %t64097, !dbg !2614
   br label %L64100, !dbg !2614
 L64099:
-  ; plum.off 87497
+  ; plum.off 88086
   %t64105 = load ptr, ptr %s0, !dbg !2614
   call void @plum_rc_inc(ptr %t64105), !dbg !2614
   %t64106 = load i64, ptr %t64057, !dbg !2614
@@ -199055,7 +199055,7 @@ reset_no64146:
   call void @plum.h.rel.E$3cprelude$3e$2eResult.2.S$3cprelude$3e$2eParseResult.1.E$3cprelude$3e$2eJsonValue.0.s(ptr %reset_old64146), !dbg !2614
   br label %reset_done64146, !dbg !2614
 reset_done64146:
-  ; plum.off 87681
+  ; plum.off 88270
   %t64147 = load ptr, ptr %s3, !dbg !2614
   store ptr null, ptr %s3, !dbg !2614
   %t64148 = load ptr, ptr %t64054, !dbg !2614
@@ -199092,7 +199092,7 @@ L64159:
   call void @plum.h.rel.SArray.1.S$3cprelude$3e$2eJsonEntry.0.(ptr %s3_a64168), !dbg !2614
   store ptr null, ptr %s3, !dbg !2614
   store ptr %t64162, ptr %s3, !dbg !2614
-  ; plum.off 87773
+  ; plum.off 88362
   %t64170 = load ptr, ptr %s0, !dbg !2614
   call void @plum_rc_inc(ptr %t64170), !dbg !2614
   %t64171 = load ptr, ptr %t64144, !dbg !2614
@@ -199432,7 +199432,7 @@ reset_no64292:
   call void @plum.h.rel.E$3cprelude$3e$2eResult.2.S$3cprelude$3e$2eParseResult.1.E$3cprelude$3e$2eJsonValue.0.s(ptr %reset_old64292), !dbg !2616
   br label %reset_done64292, !dbg !2616
 reset_done64292:
-  ; plum.off 86215
+  ; plum.off 86804
   %t64293 = load ptr, ptr %s3, !dbg !2617
   store ptr null, ptr %s3, !dbg !2617
   %t64294 = load ptr, ptr %t64290, !dbg !2617
@@ -199450,7 +199450,7 @@ reset_done64292:
   call void @plum.h.rel.SArray.1.E$3cprelude$3e$2eJsonValue.0.(ptr %s3_a64303), !dbg !2617
   store ptr null, ptr %s3, !dbg !2617
   store ptr %t64297, ptr %s3, !dbg !2617
-  ; plum.off 86256
+  ; plum.off 86845
   %t64305 = load ptr, ptr %s0, !dbg !2617
   call void @plum_rc_inc(ptr %t64305), !dbg !2617
   %t64306 = load ptr, ptr %t64290, !dbg !2617
@@ -200792,12 +200792,12 @@ entry:
   %t64969 = alloca i64, !dbg !2660
   %t64972 = alloca i64, !dbg !2660
   %t64979 = alloca i64, !dbg !2660
-  ; plum.off 72212
+  ; plum.off 72801
   %t64970 = load ptr, ptr %s1, !dbg !2661
   call void @plum_rc_inc(ptr %t64970), !dbg !2661
   %t64971 = call i64 @plum.f.$3cprelude$3e.value_hash.1.s(ptr %t64970), !dbg !2661
   store i64 %t64971, ptr %t64969, !dbg !2661
-  ; plum.off 72242
+  ; plum.off 72831
   %t64973 = load ptr, ptr %s0, !dbg !2661
   %t64974 = getelementptr i8, ptr %t64973, i64 8, !dbg !2661
   %t64975 = load ptr, ptr %t64974, !dbg !2661
@@ -202467,7 +202467,7 @@ L65753:
   store ptr %t65756, ptr %t65752, !dbg !2715
   br label %L65755, !dbg !2715
 L65754:
-  ; plum.off 49360
+  ; plum.off 49949
   %t65766 = load i64, ptr %s2, !dbg !2716
   %t65767 = load i64, ptr %s3, !dbg !2716
   %t65768 = load i64, ptr %s2, !dbg !2716
@@ -202506,7 +202506,7 @@ L65790:
   unreachable, !dbg !2716
 L65789:
   store i64 %t65786, ptr %t65765, !dbg !2716
-  ; plum.off 49398
+  ; plum.off 49987
   %t65792 = load ptr, ptr %s0, !dbg !2716
   call void @plum_rc_inc(ptr %t65792), !dbg !2716
   %t65793 = load ptr, ptr %s1, !dbg !2716
@@ -202518,7 +202518,7 @@ L65789:
   call void @plum.h.rel.SArray.1.s(ptr %t65791_pre), !dbg !2716
   store ptr null, ptr %t65791, !dbg !2716
   store ptr %t65796, ptr %t65791, !dbg !2716
-  ; plum.off 49459
+  ; plum.off 50048
   %t65798 = load ptr, ptr %s0, !dbg !2716
   store ptr null, ptr %s0, !dbg !2716
   %t65799 = load ptr, ptr %s1, !dbg !2716
@@ -206527,12 +206527,12 @@ entry:
   %t67803 = alloca i64, !dbg !2842
   %t67806 = alloca i64, !dbg !2842
   %t67813 = alloca i64, !dbg !2842
-  ; plum.off 72212
+  ; plum.off 72801
   %t67804 = load ptr, ptr %s1, !dbg !2843
   call void @plum_rc_inc(ptr %t67804), !dbg !2843
   %t67805 = call i64 @plum.f.$3cprelude$3e.value_hash.1.s(ptr %t67804), !dbg !2843
   store i64 %t67805, ptr %t67803, !dbg !2843
-  ; plum.off 72242
+  ; plum.off 72831
   %t67807 = load ptr, ptr %s0, !dbg !2843
   %t67808 = getelementptr i8, ptr %t67807, i64 8, !dbg !2843
   %t67809 = load ptr, ptr %t67808, !dbg !2843
@@ -253719,7 +253719,7 @@ entry:
   store ptr null, ptr %match_owner89516, !dbg !3716
   %match_token89516 = alloca ptr, !dbg !3716
   store ptr null, ptr %match_token89516, !dbg !3716
-  ; plum.off 47920
+  ; plum.off 48509
   %t89512 = load ptr, ptr %s0, !dbg !3717
   store ptr null, ptr %s0, !dbg !3717
   %t89513 = call ptr @plum_bytes_retag(ptr %t89512), !dbg !3717
@@ -257325,7 +257325,7 @@ L91157:
   store i1 1, ptr %t91156, !dbg !3798
   br label %L91159, !dbg !3798
 L91158:
-  ; plum.off 36732
+  ; plum.off 37321
   %t91161 = load ptr, ptr %s0, !dbg !3799
   call void @plum_rc_inc(ptr %t91161), !dbg !3799
   %t91162 = load i64, ptr %s1, !dbg !3799
@@ -257456,7 +257456,7 @@ L91247:
   store i1 0, ptr %t91246, !dbg !3799
   br label %L91249, !dbg !3799
 L91248:
-  ; plum.off 37423
+  ; plum.off 38012
   %t91251 = load ptr, ptr %s0, !dbg !3799
   call void @plum_rc_inc(ptr %t91251), !dbg !3799
   %t91252 = load i64, ptr %s1, !dbg !3799
@@ -257472,7 +257472,7 @@ L91257:
   %t91259 = call i64 @plum_bytes_at(ptr %t91251, i64 %t91254), !dbg !3799
   call void @plum_rel_str(ptr %t91251), !dbg !3799
   store i64 %t91259, ptr %t91250, !dbg !3799
-  ; plum.off 37472
+  ; plum.off 38061
   %t91261 = load i64, ptr %t91160, !dbg !3799
   %t91262 = icmp eq i64 %t91261, 224, !dbg !3799
   br i1 %t91262, label %L91264, label %L91265, !dbg !3799
@@ -257485,7 +257485,7 @@ L91265:
 L91266:
   %t91267 = load i64, ptr %t91263, !dbg !3799
   store i64 %t91267, ptr %t91260, !dbg !3799
-  ; plum.off 37531
+  ; plum.off 38120
   %t91269 = load i64, ptr %t91160, !dbg !3799
   %t91270 = icmp eq i64 %t91269, 237, !dbg !3799
   br i1 %t91270, label %L91272, label %L91273, !dbg !3799
@@ -257590,7 +257590,7 @@ L91333:
   store i1 0, ptr %t91332, !dbg !3799
   br label %L91335, !dbg !3799
 L91334:
-  ; plum.off 38006
+  ; plum.off 38595
   %t91337 = load ptr, ptr %s0, !dbg !3799
   call void @plum_rc_inc(ptr %t91337), !dbg !3799
   %t91338 = load i64, ptr %s1, !dbg !3799
@@ -257606,7 +257606,7 @@ L91343:
   %t91345 = call i64 @plum_bytes_at(ptr %t91337, i64 %t91340), !dbg !3799
   call void @plum_rel_str(ptr %t91337), !dbg !3799
   store i64 %t91345, ptr %t91336, !dbg !3799
-  ; plum.off 38055
+  ; plum.off 38644
   %t91347 = load i64, ptr %t91160, !dbg !3799
   %t91348 = icmp eq i64 %t91347, 240, !dbg !3799
   br i1 %t91348, label %L91350, label %L91351, !dbg !3799
@@ -257619,7 +257619,7 @@ L91351:
 L91352:
   %t91353 = load i64, ptr %t91349, !dbg !3799
   store i64 %t91353, ptr %t91346, !dbg !3799
-  ; plum.off 38114
+  ; plum.off 38703
   %t91355 = load i64, ptr %t91160, !dbg !3799
   %t91356 = icmp eq i64 %t91355, 244, !dbg !3799
   br i1 %t91356, label %L91358, label %L91359, !dbg !3799
@@ -259304,7 +259304,7 @@ L92177:
   store ptr @.const92181, ptr %t92176, !dbg !3830
   br label %L92179, !dbg !3830
 L92178:
-  ; plum.off 68551
+  ; plum.off 69140
   %t92183 = load ptr, ptr %t92169, !dbg !3831
   call void @plum_rc_inc(ptr %t92183), !dbg !3831
   %t92184 = load ptr, ptr %s2, !dbg !3831
@@ -259390,7 +259390,7 @@ reset_no92225:
   call void @plum.h.rel.E$3cprelude$3e$2eMapNode.2.si(ptr %reset_old92225), !dbg !3831
   br label %reset_done92225, !dbg !3831
 reset_done92225:
-  ; plum.off 68707
+  ; plum.off 69296
   %t92227 = load i64, ptr %s1, !dbg !3831
   %t92228 = load i64, ptr %s3, !dbg !3831
   %t92229 = call i64 @plum.f.$3cprelude$3e.map_bit.0.(i64 %t92227, i64 %t92228), !dbg !3831
@@ -259649,7 +259649,7 @@ L92339:
   %match_owner92266_reset92339 = load ptr, ptr %match_owner92266, !dbg !3835
   call void @plum.h.rel.E$3cprelude$3e$2eMapNode.2.si(ptr %match_owner92266_reset92339), !dbg !3835
   store ptr null, ptr %match_owner92266, !dbg !3835
-  ; plum.off 69255
+  ; plum.off 69844
   %t92341 = load i64, ptr %s1, !dbg !3836
   %t92342 = load i64, ptr %s3, !dbg !3836
   %t92343 = call i64 @plum.f.$3cprelude$3e.map_bit.0.(i64 %t92341, i64 %t92342), !dbg !3836
@@ -260086,14 +260086,14 @@ reset_no92533:
 reset_done92533:
   br label %frontier_done92533, !dbg !3838
 frontier_done92533:
-  ; plum.off 69959
+  ; plum.off 70548
   %t92535 = load ptr, ptr %t92504, !dbg !3839
   call void @plum_rc_inc(ptr %t92535), !dbg !3839
   %t92536 = load ptr, ptr %s2, !dbg !3839
   call void @plum_rc_inc(ptr %t92536), !dbg !3839
   %t92537 = call i64 @plum.f.$3cprelude$3e.map_bucket_find_index.2.si(ptr %t92535, ptr %t92536, i64 0), !dbg !3839
   store i64 %t92537, ptr %t92534, !dbg !3839
-  ; plum.off 70019
+  ; plum.off 70608
   %t92539 = load ptr, ptr %s2, !dbg !3839
   store ptr null, ptr %s2, !dbg !3839
   %t92540 = load i64, ptr %s3, !dbg !3839
@@ -260224,12 +260224,12 @@ reset_no92600:
 reset_done92600:
   br label %frontier_done92600, !dbg !3839
 frontier_done92600:
-  ; plum.off 70218
+  ; plum.off 70807
   %t92602 = load i64, ptr %s1, !dbg !3839
   %t92603 = load i64, ptr %s4, !dbg !3839
   %t92604 = call i64 @plum.f.$3cprelude$3e.map_bit.0.(i64 %t92602, i64 %t92603), !dbg !3839
   store i64 %t92604, ptr %t92601, !dbg !3839
-  ; plum.off 70258
+  ; plum.off 70847
   %t92606 = load i64, ptr %t92592, !dbg !3839
   %t92607 = load i64, ptr %t92601, !dbg !3839
   %t92608 = call i64 @plum.f.$3cprelude$3e.map_rank.0.(i64 %t92606, i64 %t92607), !dbg !3839
@@ -262762,7 +262762,7 @@ entry:
   %t93843 = alloca i64, !dbg !3910
   %t93846 = alloca i64, !dbg !3910
   %t93853 = alloca i64, !dbg !3910
-  ; plum.off 25823
+  ; plum.off 26412
   %t93816 = load ptr, ptr %s0, !dbg !3911
   call void @plum_rc_inc(ptr %t93816), !dbg !3911
   %t93817 = call i64 @plum.f.$3cprelude$3e.String$2echar_len.0.(ptr %t93816), !dbg !3911
@@ -262789,7 +262789,7 @@ L93830:
   store ptr %t93833, ptr %t93829, !dbg !3911
   br label %L93832, !dbg !3911
 L93831:
-  ; plum.off 25924
+  ; plum.off 26513
   %t93835 = load i64, ptr %s1, !dbg !3911
   %t93836 = load i64, ptr %t93815, !dbg !3911
   %t93837 = call { i64, i1 } @llvm.ssub.with.overflow.i64(i64 %t93835, i64 %t93836), !dbg !3911
@@ -262802,7 +262802,7 @@ L93842:
   unreachable, !dbg !3911
 L93841:
   store i64 %t93838, ptr %t93834, !dbg !3911
-  ; plum.off 25955
+  ; plum.off 26544
   %t93844 = load i64, ptr %s3, !dbg !3911
   %t93845 = icmp eq i64 %t93844, 0, !dbg !3911
   br i1 %t93845, label %L93847, label %L93848, !dbg !3911
@@ -262897,7 +262897,7 @@ entry:
   store ptr null, ptr %t93958, !dbg !3913
   %t93961 = alloca i64, !dbg !3913
   %t93979 = alloca ptr, !dbg !3913
-  ; plum.off 22439
+  ; plum.off 23028
   %t93884 = load i64, ptr %s1, !dbg !3914
   %t93885 = call i64 @plum.f.$3cprelude$3e.Int$2eclamp.0.(i64 %t93884, i64 2, i64 36), !dbg !3914
   store i64 %t93885, ptr %t93883, !dbg !3914
@@ -262908,7 +262908,7 @@ L93889:
   store ptr @.str93892, ptr %t93888, !dbg !3914
   br label %L93891, !dbg !3914
 L93890:
-  ; plum.off 22655
+  ; plum.off 23244
   %t93895 = load i64, ptr %s0, !dbg !3914
   %t93896 = load i64, ptr %t93883, !dbg !3914
   %t93897 = icmp ne i64 %t93896, 0, !dbg !3914
@@ -262928,7 +262928,7 @@ L93905:
 L93904:
   %t93906 = sdiv i64 %t93895, %t93896, !dbg !3914
   store i64 %t93906, ptr %t93894, !dbg !3914
-  ; plum.off 22678
+  ; plum.off 23267
   %t93908 = load i64, ptr %s0, !dbg !3914
   %t93909 = load i64, ptr %t93894, !dbg !3914
   %t93910 = load i64, ptr %t93883, !dbg !3914
@@ -262951,7 +262951,7 @@ L93922:
   unreachable, !dbg !3914
 L93921:
   store i64 %t93918, ptr %t93907, !dbg !3914
-  ; plum.off 22708
+  ; plum.off 23297
   %t93924 = load i64, ptr %s0, !dbg !3914
   %t93925 = icmp slt i64 %t93924, 0, !dbg !3914
   br i1 %t93925, label %L93927, label %L93928, !dbg !3914
@@ -263003,7 +263003,7 @@ L93951:
   store ptr %t93957, ptr %t93942, !dbg !3914
   br label %L93945, !dbg !3914
 L93944:
-  ; plum.off 22871
+  ; plum.off 23460
   %t93959 = load i64, ptr %s0, !dbg !3914
   %t93960 = icmp slt i64 %t93959, 0, !dbg !3914
   br i1 %t93960, label %L93962, label %L93963, !dbg !3914
@@ -265837,12 +265837,12 @@ entry:
   %t95169 = alloca i64, !dbg !3977
   %t95172 = alloca i64, !dbg !3977
   %t95179 = alloca i64, !dbg !3977
-  ; plum.off 72212
+  ; plum.off 72801
   %t95170 = load ptr, ptr %s1, !dbg !3978
   call void @plum_rc_inc(ptr %t95170), !dbg !3978
   %t95171 = call i64 @plum.f.$3cprelude$3e.value_hash.1.s(ptr %t95170), !dbg !3978
   store i64 %t95171, ptr %t95169, !dbg !3978
-  ; plum.off 72242
+  ; plum.off 72831
   %t95173 = load ptr, ptr %s0, !dbg !3978
   %t95174 = getelementptr i8, ptr %t95173, i64 8, !dbg !3978
   %t95175 = load ptr, ptr %t95174, !dbg !3978
@@ -266415,7 +266415,7 @@ entry:
   store ptr %p1, ptr %s1, !dbg !3992
   %t95404 = alloca i64, !dbg !3992
   %t95413 = alloca ptr, !dbg !3992
-  ; plum.off 72830
+  ; plum.off 73419
   %t95405 = load ptr, ptr %s1, !dbg !3993
   call void @plum_rc_inc(ptr %t95405), !dbg !3993
   %t95406 = call i64 @plum.f.$3cprelude$3e.value_hash.1.s(ptr %t95405), !dbg !3993
@@ -267072,7 +267072,7 @@ L95690:
   %match_owner95617_reset95690 = load ptr, ptr %match_owner95617, !dbg !4018
   call void @plum.h.rel.E$3cprelude$3e$2eMapNode.2.sb(ptr %match_owner95617_reset95690), !dbg !4018
   store ptr null, ptr %match_owner95617, !dbg !4018
-  ; plum.off 69255
+  ; plum.off 69844
   %t95692 = load i64, ptr %s1, !dbg !4019
   %t95693 = load i64, ptr %s3, !dbg !4019
   %t95694 = call i64 @plum.f.$3cprelude$3e.map_bit.0.(i64 %t95692, i64 %t95693), !dbg !4019
@@ -267509,14 +267509,14 @@ reset_no95884:
 reset_done95884:
   br label %frontier_done95884, !dbg !4021
 frontier_done95884:
-  ; plum.off 69959
+  ; plum.off 70548
   %t95886 = load ptr, ptr %t95855, !dbg !4022
   call void @plum_rc_inc(ptr %t95886), !dbg !4022
   %t95887 = load ptr, ptr %s2, !dbg !4022
   call void @plum_rc_inc(ptr %t95887), !dbg !4022
   %t95888 = call i64 @plum.f.$3cprelude$3e.map_bucket_find_index.2.sb(ptr %t95886, ptr %t95887, i64 0), !dbg !4022
   store i64 %t95888, ptr %t95885, !dbg !4022
-  ; plum.off 70019
+  ; plum.off 70608
   %t95890 = load ptr, ptr %s2, !dbg !4022
   store ptr null, ptr %s2, !dbg !4022
   %t95891 = load i1, ptr %s3, !dbg !4022
@@ -267647,12 +267647,12 @@ reset_no95951:
 reset_done95951:
   br label %frontier_done95951, !dbg !4022
 frontier_done95951:
-  ; plum.off 70218
+  ; plum.off 70807
   %t95953 = load i64, ptr %s1, !dbg !4022
   %t95954 = load i64, ptr %s4, !dbg !4022
   %t95955 = call i64 @plum.f.$3cprelude$3e.map_bit.0.(i64 %t95953, i64 %t95954), !dbg !4022
   store i64 %t95955, ptr %t95952, !dbg !4022
-  ; plum.off 70258
+  ; plum.off 70847
   %t95957 = load i64, ptr %t95943, !dbg !4022
   %t95958 = load i64, ptr %t95952, !dbg !4022
   %t95959 = call i64 @plum.f.$3cprelude$3e.map_rank.0.(i64 %t95957, i64 %t95958), !dbg !4022
@@ -289918,12 +289918,12 @@ entry:
   %t104573 = alloca i64, !dbg !4368
   %t104576 = alloca i64, !dbg !4368
   %t104583 = alloca i64, !dbg !4368
-  ; plum.off 72212
+  ; plum.off 72801
   %t104574 = load ptr, ptr %s1, !dbg !4369
   call void @plum_rc_inc(ptr %t104574), !dbg !4369
   %t104575 = call i64 @plum.f.$3cprelude$3e.value_hash.1.Etypecheck$2eITy.0.(ptr %t104574), !dbg !4369
   store i64 %t104575, ptr %t104573, !dbg !4369
-  ; plum.off 72242
+  ; plum.off 72831
   %t104577 = load ptr, ptr %s0, !dbg !4369
   %t104578 = getelementptr i8, ptr %t104577, i64 8, !dbg !4369
   %t104579 = load ptr, ptr %t104578, !dbg !4369
@@ -327218,7 +327218,7 @@ L123091:
   store ptr @.const123096, ptr %t123090, !dbg !5150
   br label %L123093, !dbg !5150
 L123092:
-  ; plum.off 80500
+  ; plum.off 81089
   %t123098 = load ptr, ptr %s0, !dbg !5151
   call void @plum_rc_inc(ptr %t123098), !dbg !5151
   %t123099 = load i64, ptr %s1, !dbg !5151
@@ -327847,12 +327847,12 @@ entry:
   %t123371 = alloca i64, !dbg !5170
   %t123378 = alloca ptr, !dbg !5170
   %t123409 = alloca ptr, !dbg !5170
-  ; plum.off 67694
+  ; plum.off 68283
   %t123368 = load i64, ptr %s1, !dbg !5171
   %t123369 = load i64, ptr %s4, !dbg !5171
   %t123370 = call i64 @plum.f.$3cprelude$3e.map_bit.0.(i64 %t123368, i64 %t123369), !dbg !5171
   store i64 %t123370, ptr %t123367, !dbg !5171
-  ; plum.off 67729
+  ; plum.off 68318
   %t123372 = load i64, ptr %s3, !dbg !5171
   %t123373 = load i64, ptr %s4, !dbg !5171
   %t123374 = call i64 @plum.f.$3cprelude$3e.map_bit.0.(i64 %t123372, i64 %t123373), !dbg !5171
@@ -328007,12 +328007,12 @@ entry:
   %t123454 = alloca i64, !dbg !5173
   %t123464 = alloca i1, !dbg !5173
   %t123499 = alloca i1, !dbg !5173
-  ; plum.off 68066
+  ; plum.off 68655
   %t123449_pre = load ptr, ptr %t123449, !dbg !5174
   call void @plum.h.rel.SArray.1.E$3cprelude$3e$2eMapNode.2.si(ptr %t123449_pre), !dbg !5174
   store ptr null, ptr %t123449, !dbg !5174
   store ptr @.const123450, ptr %t123449, !dbg !5174
-  ; plum.off 68088
+  ; plum.off 68677
   %t123451 = load ptr, ptr %s0, !dbg !5174
   %t123452 = call i64 @plum_array_len(ptr %t123451), !dbg !5174
   store i64 0, ptr %t123453, !dbg !5174
@@ -328024,13 +328024,13 @@ L123455:
   %t123460 = icmp slt i64 %t123458, %t123459, !dbg !5174
   br i1 %t123460, label %L123456, label %L123457, !dbg !5174
 L123456:
-  ; plum.off 68125
+  ; plum.off 68714
   %t123461 = load i64, ptr %t123453, !dbg !5174
   %t123462 = load i64, ptr %s1, !dbg !5174
   %t123463 = icmp eq i64 %t123461, %t123462, !dbg !5174
   br i1 %t123463, label %L123465, label %L123466, !dbg !5174
 L123465:
-  ; plum.off 68138
+  ; plum.off 68727
   %t123468 = load ptr, ptr %t123449, !dbg !5174
   store ptr null, ptr %t123449, !dbg !5174
   %t123469 = load ptr, ptr %s2, !dbg !5174
@@ -328053,7 +328053,7 @@ L123466:
   br label %L123467, !dbg !5174
 L123467:
   %t123477 = load i1, ptr %t123464, !dbg !5174
-  ; plum.off 68172
+  ; plum.off 68761
   %t123478 = load ptr, ptr %t123449, !dbg !5174
   store ptr null, ptr %t123449, !dbg !5174
   %t123479 = load ptr, ptr %s0, !dbg !5174
@@ -328080,7 +328080,7 @@ L123467:
   store i64 %t123494, ptr %t123453, !dbg !5174
   br label %L123455, !dbg !5174
 L123457:
-  ; plum.off 68212
+  ; plum.off 68801
   %t123495 = load i64, ptr %s1, !dbg !5174
   %t123496 = load ptr, ptr %s0, !dbg !5174
   store ptr null, ptr %s0, !dbg !5174
@@ -328089,7 +328089,7 @@ L123457:
   %t123498 = icmp eq i64 %t123495, %t123497, !dbg !5174
   br i1 %t123498, label %L123500, label %L123501, !dbg !5174
 L123500:
-  ; plum.off 68238
+  ; plum.off 68827
   %t123503 = load ptr, ptr %t123449, !dbg !5174
   store ptr null, ptr %t123449, !dbg !5174
   %t123504 = load ptr, ptr %s2, !dbg !5174
@@ -332695,7 +332695,7 @@ L125691:
   store ptr @.const125695, ptr %t125690, !dbg !5271
   br label %L125693, !dbg !5271
 L125692:
-  ; plum.off 68551
+  ; plum.off 69140
   %t125697 = load ptr, ptr %t125683, !dbg !5272
   call void @plum_rc_inc(ptr %t125697), !dbg !5272
   %t125698 = load ptr, ptr %s2, !dbg !5272
@@ -332782,7 +332782,7 @@ reset_no125739:
   call void @plum.h.rel.E$3cprelude$3e$2eMapNode.2.ss(ptr %reset_old125739), !dbg !5272
   br label %reset_done125739, !dbg !5272
 reset_done125739:
-  ; plum.off 68707
+  ; plum.off 69296
   %t125741 = load i64, ptr %s1, !dbg !5272
   %t125742 = load i64, ptr %s3, !dbg !5272
   %t125743 = call i64 @plum.f.$3cprelude$3e.map_bit.0.(i64 %t125741, i64 %t125742), !dbg !5272
@@ -333609,7 +333609,7 @@ L126109:
   %match_owner126036_reset126109 = load ptr, ptr %match_owner126036, !dbg !5288
   call void @plum.h.rel.E$3cprelude$3e$2eMapNode.2.ss(ptr %match_owner126036_reset126109), !dbg !5288
   store ptr null, ptr %match_owner126036, !dbg !5288
-  ; plum.off 69255
+  ; plum.off 69844
   %t126111 = load i64, ptr %s1, !dbg !5289
   %t126112 = load i64, ptr %s3, !dbg !5289
   %t126113 = call i64 @plum.f.$3cprelude$3e.map_bit.0.(i64 %t126111, i64 %t126112), !dbg !5289
@@ -334057,14 +334057,14 @@ reset_no126303:
 reset_done126303:
   br label %frontier_done126303, !dbg !5291
 frontier_done126303:
-  ; plum.off 69959
+  ; plum.off 70548
   %t126305 = load ptr, ptr %t126274, !dbg !5292
   call void @plum_rc_inc(ptr %t126305), !dbg !5292
   %t126306 = load ptr, ptr %s2, !dbg !5292
   call void @plum_rc_inc(ptr %t126306), !dbg !5292
   %t126307 = call i64 @plum.f.$3cprelude$3e.map_bucket_find_index.2.ss(ptr %t126305, ptr %t126306, i64 0), !dbg !5292
   store i64 %t126307, ptr %t126304, !dbg !5292
-  ; plum.off 70019
+  ; plum.off 70608
   %t126309 = load ptr, ptr %s2, !dbg !5292
   store ptr null, ptr %s2, !dbg !5292
   %t126310 = load ptr, ptr %s3, !dbg !5292
@@ -334199,12 +334199,12 @@ reset_no126372:
 reset_done126372:
   br label %frontier_done126372, !dbg !5292
 frontier_done126372:
-  ; plum.off 70218
+  ; plum.off 70807
   %t126374 = load i64, ptr %s1, !dbg !5292
   %t126375 = load i64, ptr %s4, !dbg !5292
   %t126376 = call i64 @plum.f.$3cprelude$3e.map_bit.0.(i64 %t126374, i64 %t126375), !dbg !5292
   store i64 %t126376, ptr %t126373, !dbg !5292
-  ; plum.off 70258
+  ; plum.off 70847
   %t126378 = load i64, ptr %t126364, !dbg !5292
   %t126379 = load i64, ptr %t126373, !dbg !5292
   %t126380 = call i64 @plum.f.$3cprelude$3e.map_rank.0.(i64 %t126378, i64 %t126379), !dbg !5292
@@ -335115,7 +335115,7 @@ L126800:
   store ptr %t126805, ptr %t126799, !dbg !5311
   br label %L126802, !dbg !5311
 L126801:
-  ; plum.off 70953
+  ; plum.off 71542
   %t126807 = load ptr, ptr %t126792, !dbg !5312
   call void @plum_rc_inc(ptr %t126807), !dbg !5312
   %t126808 = load ptr, ptr %s2, !dbg !5312
@@ -335161,7 +335161,7 @@ reset_no126819:
 reset_done126819:
   br label %frontier_done126819, !dbg !5312
 frontier_done126819:
-  ; plum.off 71046
+  ; plum.off 71635
   %t126821 = load ptr, ptr %t126792, !dbg !5312
   store ptr null, ptr %t126792, !dbg !5312
   %t126822 = load i64, ptr %t126806, !dbg !5312
@@ -335275,7 +335275,7 @@ L126884:
   call void @plum.h.rel.SArray.1.E$3cprelude$3e$2eMapNode.2.ss(ptr %t126882_pre), !dbg !5312
   store ptr null, ptr %t126882, !dbg !5312
   store ptr %t126880, ptr %t126882, !dbg !5312
-  ; plum.off 71253
+  ; plum.off 71842
   %t126886 = load i64, ptr %s1, !dbg !5312
   %t126887 = load i64, ptr %s3, !dbg !5312
   %t126888 = call i64 @plum.f.$3cprelude$3e.map_bit.0.(i64 %t126886, i64 %t126887), !dbg !5312
@@ -335321,12 +335321,12 @@ reset_no126900:
 reset_done126900:
   br label %frontier_done126900, !dbg !5312
 frontier_done126900:
-  ; plum.off 71342
+  ; plum.off 71931
   %t126902 = load i64, ptr %t126877, !dbg !5312
   %t126903 = load i64, ptr %t126885, !dbg !5312
   %t126904 = call i64 @plum.f.$3cprelude$3e.map_rank.0.(i64 %t126902, i64 %t126903), !dbg !5312
   store i64 %t126904, ptr %t126901, !dbg !5312
-  ; plum.off 71383
+  ; plum.off 71972
   %t126906 = load ptr, ptr %t126882, !dbg !5312
   %t126907 = load i64, ptr %t126901, !dbg !5312
   %t126908 = call i64 @plum_array_check_index(ptr %t126906, i64 %t126907), !dbg !5312
@@ -335353,7 +335353,7 @@ L126920:
   call void @plum.h.rel.E$3cprelude$3e$2eMapNode.2.ss(ptr %t126905_pre), !dbg !5312
   store ptr null, ptr %t126905, !dbg !5312
   store ptr %t126922, ptr %t126905, !dbg !5312
-  ; plum.off 71459
+  ; plum.off 72048
   %t126924 = load ptr, ptr %t126905, !dbg !5312
   br label %L126928, !dbg !5312
 L126928:
@@ -335401,7 +335401,7 @@ L126926:
   call void @plum.h.rel.SArray.1.E$3cprelude$3e$2eMapNode.2.ss(ptr %t126923_pre), !dbg !5312
   store ptr null, ptr %t126923, !dbg !5312
   store ptr %t126947, ptr %t126923, !dbg !5312
-  ; plum.off 71559
+  ; plum.off 72148
   %t126949 = load ptr, ptr %t126905, !dbg !5312
   store ptr null, ptr %t126905, !dbg !5312
   store ptr %t126949, ptr %match_owner126950, !dbg !5312
@@ -335767,14 +335767,14 @@ L127103:
   %match_owner127058_reset127103 = load ptr, ptr %match_owner127058, !dbg !5314
   call void @plum.h.rel.E$3cprelude$3e$2eMapNode.2.sSLspDiagnostics.0.(ptr %match_owner127058_reset127103), !dbg !5314
   store ptr null, ptr %match_owner127058, !dbg !5314
-  ; plum.off 73260
+  ; plum.off 73849
   %t127105 = load ptr, ptr %s1, !dbg !5315
   store ptr null, ptr %s1, !dbg !5315
   %t127104_pre = load ptr, ptr %t127104, !dbg !5315
   call void @plum.h.rel.SArray.1.s(ptr %t127104_pre), !dbg !5315
   store ptr null, ptr %t127104, !dbg !5315
   store ptr %t127105, ptr %t127104, !dbg !5315
-  ; plum.off 73287
+  ; plum.off 73876
   %t127106 = load ptr, ptr %t127101, !dbg !5315
   call void @plum_rc_inc(ptr %t127106), !dbg !5315
   %t127118 = call i64 @plum_array_len(ptr %t127106), !dbg !5315
@@ -335793,7 +335793,7 @@ L127111:
   %t127117 = load ptr, ptr %t127116, !dbg !5315
   call void @plum_rc_inc(ptr %t127117), !dbg !5315
   store ptr %t127117, ptr %t127108, !dbg !5315
-  ; plum.off 73310
+  ; plum.off 73899
   %t127119 = load ptr, ptr %t127104, !dbg !5315
   store ptr null, ptr %t127104, !dbg !5315
   %t127120 = load ptr, ptr %t127108, !dbg !5315
@@ -335845,14 +335845,14 @@ L127146:
   %match_owner127058_reset127146 = load ptr, ptr %match_owner127058, !dbg !5315
   call void @plum.h.rel.E$3cprelude$3e$2eMapNode.2.sSLspDiagnostics.0.(ptr %match_owner127058_reset127146), !dbg !5315
   store ptr null, ptr %match_owner127058, !dbg !5315
-  ; plum.off 73399
+  ; plum.off 73988
   %t127148 = load ptr, ptr %s1, !dbg !5315
   store ptr null, ptr %s1, !dbg !5315
   %t127147_pre = load ptr, ptr %t127147, !dbg !5315
   call void @plum.h.rel.SArray.1.s(ptr %t127147_pre), !dbg !5315
   store ptr null, ptr %t127147, !dbg !5315
   store ptr %t127148, ptr %t127147, !dbg !5315
-  ; plum.off 73426
+  ; plum.off 74015
   %t127149 = load ptr, ptr %t127144, !dbg !5315
   call void @plum_rc_inc(ptr %t127149), !dbg !5315
   %t127161 = call i64 @plum_array_len(ptr %t127149), !dbg !5315
@@ -335871,7 +335871,7 @@ L127154:
   %t127160 = load ptr, ptr %t127159, !dbg !5315
   call void @plum_rc_inc(ptr %t127160), !dbg !5315
   store ptr %t127160, ptr %t127151, !dbg !5315
-  ; plum.off 73450
+  ; plum.off 74039
   %t127162 = load ptr, ptr %t127151, !dbg !5315
   call void @plum_rc_inc(ptr %t127162), !dbg !5315
   %t127163 = load ptr, ptr %t127147, !dbg !5315
@@ -336127,7 +336127,7 @@ L127243:
   store ptr @.const127247, ptr %t127242, !dbg !5317
   br label %L127245, !dbg !5317
 L127244:
-  ; plum.off 68551
+  ; plum.off 69140
   %t127249 = load ptr, ptr %t127235, !dbg !5318
   call void @plum_rc_inc(ptr %t127249), !dbg !5318
   %t127250 = load ptr, ptr %s2, !dbg !5318
@@ -336214,7 +336214,7 @@ reset_no127291:
   call void @plum.h.rel.E$3cprelude$3e$2eMapNode.2.sSLspDiagnostics.0.(ptr %reset_old127291), !dbg !5318
   br label %reset_done127291, !dbg !5318
 reset_done127291:
-  ; plum.off 68707
+  ; plum.off 69296
   %t127293 = load i64, ptr %s1, !dbg !5318
   %t127294 = load i64, ptr %s3, !dbg !5318
   %t127295 = call i64 @plum.f.$3cprelude$3e.map_bit.0.(i64 %t127293, i64 %t127294), !dbg !5318
@@ -336497,14 +336497,14 @@ L127407:
   %match_owner127362_reset127407 = load ptr, ptr %match_owner127362, !dbg !5322
   call void @plum.h.rel.E$3cprelude$3e$2eMapNode.2.ss(ptr %match_owner127362_reset127407), !dbg !5322
   store ptr null, ptr %match_owner127362, !dbg !5322
-  ; plum.off 73260
+  ; plum.off 73849
   %t127409 = load ptr, ptr %s1, !dbg !5323
   store ptr null, ptr %s1, !dbg !5323
   %t127408_pre = load ptr, ptr %t127408, !dbg !5323
   call void @plum.h.rel.SArray.1.s(ptr %t127408_pre), !dbg !5323
   store ptr null, ptr %t127408, !dbg !5323
   store ptr %t127409, ptr %t127408, !dbg !5323
-  ; plum.off 73287
+  ; plum.off 73876
   %t127410 = load ptr, ptr %t127405, !dbg !5323
   call void @plum_rc_inc(ptr %t127410), !dbg !5323
   %t127422 = call i64 @plum_array_len(ptr %t127410), !dbg !5323
@@ -336523,7 +336523,7 @@ L127415:
   %t127421 = load ptr, ptr %t127420, !dbg !5323
   call void @plum_rc_inc(ptr %t127421), !dbg !5323
   store ptr %t127421, ptr %t127412, !dbg !5323
-  ; plum.off 73310
+  ; plum.off 73899
   %t127423 = load ptr, ptr %t127408, !dbg !5323
   store ptr null, ptr %t127408, !dbg !5323
   %t127424 = load ptr, ptr %t127412, !dbg !5323
@@ -336575,14 +336575,14 @@ L127450:
   %match_owner127362_reset127450 = load ptr, ptr %match_owner127362, !dbg !5323
   call void @plum.h.rel.E$3cprelude$3e$2eMapNode.2.ss(ptr %match_owner127362_reset127450), !dbg !5323
   store ptr null, ptr %match_owner127362, !dbg !5323
-  ; plum.off 73399
+  ; plum.off 73988
   %t127452 = load ptr, ptr %s1, !dbg !5323
   store ptr null, ptr %s1, !dbg !5323
   %t127451_pre = load ptr, ptr %t127451, !dbg !5323
   call void @plum.h.rel.SArray.1.s(ptr %t127451_pre), !dbg !5323
   store ptr null, ptr %t127451, !dbg !5323
   store ptr %t127452, ptr %t127451, !dbg !5323
-  ; plum.off 73426
+  ; plum.off 74015
   %t127453 = load ptr, ptr %t127448, !dbg !5323
   call void @plum_rc_inc(ptr %t127453), !dbg !5323
   %t127465 = call i64 @plum_array_len(ptr %t127453), !dbg !5323
@@ -336601,7 +336601,7 @@ L127458:
   %t127464 = load ptr, ptr %t127463, !dbg !5323
   call void @plum_rc_inc(ptr %t127464), !dbg !5323
   store ptr %t127464, ptr %t127455, !dbg !5323
-  ; plum.off 73450
+  ; plum.off 74039
   %t127466 = load ptr, ptr %t127455, !dbg !5323
   call void @plum_rc_inc(ptr %t127466), !dbg !5323
   %t127467 = load ptr, ptr %t127451, !dbg !5323
@@ -336665,7 +336665,7 @@ entry:
   store ptr %p1, ptr %s1, !dbg !5325
   %t127475 = alloca i64, !dbg !5325
   %t127484 = alloca ptr, !dbg !5325
-  ; plum.off 72830
+  ; plum.off 73419
   %t127476 = load ptr, ptr %s1, !dbg !5326
   call void @plum_rc_inc(ptr %t127476), !dbg !5326
   %t127477 = call i64 @plum.f.$3cprelude$3e.value_hash.1.s(ptr %t127476), !dbg !5326
@@ -336920,12 +336920,12 @@ entry:
   %t127587 = alloca i64, !dbg !5336
   %t127594 = alloca ptr, !dbg !5336
   %t127625 = alloca ptr, !dbg !5336
-  ; plum.off 67694
+  ; plum.off 68283
   %t127584 = load i64, ptr %s1, !dbg !5337
   %t127585 = load i64, ptr %s4, !dbg !5337
   %t127586 = call i64 @plum.f.$3cprelude$3e.map_bit.0.(i64 %t127584, i64 %t127585), !dbg !5337
   store i64 %t127586, ptr %t127583, !dbg !5337
-  ; plum.off 67729
+  ; plum.off 68318
   %t127588 = load i64, ptr %s3, !dbg !5337
   %t127589 = load i64, ptr %s4, !dbg !5337
   %t127590 = call i64 @plum.f.$3cprelude$3e.map_bit.0.(i64 %t127588, i64 %t127589), !dbg !5337
@@ -337080,12 +337080,12 @@ entry:
   %t127670 = alloca i64, !dbg !5339
   %t127680 = alloca i1, !dbg !5339
   %t127715 = alloca i1, !dbg !5339
-  ; plum.off 68066
+  ; plum.off 68655
   %t127665_pre = load ptr, ptr %t127665, !dbg !5340
   call void @plum.h.rel.SArray.1.E$3cprelude$3e$2eMapNode.2.sb(ptr %t127665_pre), !dbg !5340
   store ptr null, ptr %t127665, !dbg !5340
   store ptr @.const127666, ptr %t127665, !dbg !5340
-  ; plum.off 68088
+  ; plum.off 68677
   %t127667 = load ptr, ptr %s0, !dbg !5340
   %t127668 = call i64 @plum_array_len(ptr %t127667), !dbg !5340
   store i64 0, ptr %t127669, !dbg !5340
@@ -337097,13 +337097,13 @@ L127671:
   %t127676 = icmp slt i64 %t127674, %t127675, !dbg !5340
   br i1 %t127676, label %L127672, label %L127673, !dbg !5340
 L127672:
-  ; plum.off 68125
+  ; plum.off 68714
   %t127677 = load i64, ptr %t127669, !dbg !5340
   %t127678 = load i64, ptr %s1, !dbg !5340
   %t127679 = icmp eq i64 %t127677, %t127678, !dbg !5340
   br i1 %t127679, label %L127681, label %L127682, !dbg !5340
 L127681:
-  ; plum.off 68138
+  ; plum.off 68727
   %t127684 = load ptr, ptr %t127665, !dbg !5340
   store ptr null, ptr %t127665, !dbg !5340
   %t127685 = load ptr, ptr %s2, !dbg !5340
@@ -337126,7 +337126,7 @@ L127682:
   br label %L127683, !dbg !5340
 L127683:
   %t127693 = load i1, ptr %t127680, !dbg !5340
-  ; plum.off 68172
+  ; plum.off 68761
   %t127694 = load ptr, ptr %t127665, !dbg !5340
   store ptr null, ptr %t127665, !dbg !5340
   %t127695 = load ptr, ptr %s0, !dbg !5340
@@ -337153,7 +337153,7 @@ L127683:
   store i64 %t127710, ptr %t127669, !dbg !5340
   br label %L127671, !dbg !5340
 L127673:
-  ; plum.off 68212
+  ; plum.off 68801
   %t127711 = load i64, ptr %s1, !dbg !5340
   %t127712 = load ptr, ptr %s0, !dbg !5340
   store ptr null, ptr %s0, !dbg !5340
@@ -337162,7 +337162,7 @@ L127673:
   %t127714 = icmp eq i64 %t127711, %t127713, !dbg !5340
   br i1 %t127714, label %L127716, label %L127717, !dbg !5340
 L127716:
-  ; plum.off 68238
+  ; plum.off 68827
   %t127719 = load ptr, ptr %t127665, !dbg !5340
   store ptr null, ptr %t127665, !dbg !5340
   %t127720 = load ptr, ptr %s2, !dbg !5340
@@ -359188,7 +359188,7 @@ L137275:
   %match_owner137202_reset137275 = load ptr, ptr %match_owner137202, !dbg !5695
   call void @plum.h.rel.E$3cprelude$3e$2eMapNode.2.Etypecheck$2eITy.0.b(ptr %match_owner137202_reset137275), !dbg !5695
   store ptr null, ptr %match_owner137202, !dbg !5695
-  ; plum.off 69255
+  ; plum.off 69844
   %t137277 = load i64, ptr %s1, !dbg !5696
   %t137278 = load i64, ptr %s3, !dbg !5696
   %t137279 = call i64 @plum.f.$3cprelude$3e.map_bit.0.(i64 %t137277, i64 %t137278), !dbg !5696
@@ -359639,14 +359639,14 @@ reset_no137473:
 reset_done137473:
   br label %frontier_done137473, !dbg !5700
 frontier_done137473:
-  ; plum.off 69959
+  ; plum.off 70548
   %t137475 = load ptr, ptr %t137444, !dbg !5701
   call void @plum_rc_inc(ptr %t137475), !dbg !5701
   %t137476 = load ptr, ptr %s2, !dbg !5701
   call void @plum_rc_inc(ptr %t137476), !dbg !5701
   %t137477 = call i64 @plum.f.$3cprelude$3e.map_bucket_find_index.2.Etypecheck$2eITy.0.b(ptr %t137475, ptr %t137476, i64 0), !dbg !5701
   store i64 %t137477, ptr %t137474, !dbg !5701
-  ; plum.off 70019
+  ; plum.off 70608
   %t137479 = load ptr, ptr %s2, !dbg !5701
   store ptr null, ptr %s2, !dbg !5701
   %t137480 = load i1, ptr %s3, !dbg !5701
@@ -359777,12 +359777,12 @@ reset_no137540:
 reset_done137540:
   br label %frontier_done137540, !dbg !5701
 frontier_done137540:
-  ; plum.off 70218
+  ; plum.off 70807
   %t137542 = load i64, ptr %s1, !dbg !5701
   %t137543 = load i64, ptr %s4, !dbg !5701
   %t137544 = call i64 @plum.f.$3cprelude$3e.map_bit.0.(i64 %t137542, i64 %t137543), !dbg !5701
   store i64 %t137544, ptr %t137541, !dbg !5701
-  ; plum.off 70258
+  ; plum.off 70847
   %t137546 = load i64, ptr %t137532, !dbg !5701
   %t137547 = load i64, ptr %t137541, !dbg !5701
   %t137548 = call i64 @plum.f.$3cprelude$3e.map_rank.0.(i64 %t137546, i64 %t137547), !dbg !5701
@@ -386240,12 +386240,12 @@ entry:
   %t148380 = alloca i64, !dbg !6155
   %t148387 = alloca ptr, !dbg !6155
   %t148418 = alloca ptr, !dbg !6155
-  ; plum.off 67694
+  ; plum.off 68283
   %t148377 = load i64, ptr %s1, !dbg !6156
   %t148378 = load i64, ptr %s4, !dbg !6156
   %t148379 = call i64 @plum.f.$3cprelude$3e.map_bit.0.(i64 %t148377, i64 %t148378), !dbg !6156
   store i64 %t148379, ptr %t148376, !dbg !6156
-  ; plum.off 67729
+  ; plum.off 68318
   %t148381 = load i64, ptr %s3, !dbg !6156
   %t148382 = load i64, ptr %s4, !dbg !6156
   %t148383 = call i64 @plum.f.$3cprelude$3e.map_bit.0.(i64 %t148381, i64 %t148382), !dbg !6156
@@ -386400,12 +386400,12 @@ entry:
   %t148463 = alloca i64, !dbg !6158
   %t148473 = alloca i1, !dbg !6158
   %t148508 = alloca i1, !dbg !6158
-  ; plum.off 68066
+  ; plum.off 68655
   %t148458_pre = load ptr, ptr %t148458, !dbg !6159
   call void @plum.h.rel.SArray.1.E$3cprelude$3e$2eMapNode.2.ss(ptr %t148458_pre), !dbg !6159
   store ptr null, ptr %t148458, !dbg !6159
   store ptr @.const148459, ptr %t148458, !dbg !6159
-  ; plum.off 68088
+  ; plum.off 68677
   %t148460 = load ptr, ptr %s0, !dbg !6159
   %t148461 = call i64 @plum_array_len(ptr %t148460), !dbg !6159
   store i64 0, ptr %t148462, !dbg !6159
@@ -386417,13 +386417,13 @@ L148464:
   %t148469 = icmp slt i64 %t148467, %t148468, !dbg !6159
   br i1 %t148469, label %L148465, label %L148466, !dbg !6159
 L148465:
-  ; plum.off 68125
+  ; plum.off 68714
   %t148470 = load i64, ptr %t148462, !dbg !6159
   %t148471 = load i64, ptr %s1, !dbg !6159
   %t148472 = icmp eq i64 %t148470, %t148471, !dbg !6159
   br i1 %t148472, label %L148474, label %L148475, !dbg !6159
 L148474:
-  ; plum.off 68138
+  ; plum.off 68727
   %t148477 = load ptr, ptr %t148458, !dbg !6159
   store ptr null, ptr %t148458, !dbg !6159
   %t148478 = load ptr, ptr %s2, !dbg !6159
@@ -386446,7 +386446,7 @@ L148475:
   br label %L148476, !dbg !6159
 L148476:
   %t148486 = load i1, ptr %t148473, !dbg !6159
-  ; plum.off 68172
+  ; plum.off 68761
   %t148487 = load ptr, ptr %t148458, !dbg !6159
   store ptr null, ptr %t148458, !dbg !6159
   %t148488 = load ptr, ptr %s0, !dbg !6159
@@ -386473,7 +386473,7 @@ L148476:
   store i64 %t148503, ptr %t148462, !dbg !6159
   br label %L148464, !dbg !6159
 L148466:
-  ; plum.off 68212
+  ; plum.off 68801
   %t148504 = load i64, ptr %s1, !dbg !6159
   %t148505 = load ptr, ptr %s0, !dbg !6159
   store ptr null, ptr %s0, !dbg !6159
@@ -386482,7 +386482,7 @@ L148466:
   %t148507 = icmp eq i64 %t148504, %t148506, !dbg !6159
   br i1 %t148507, label %L148509, label %L148510, !dbg !6159
 L148509:
-  ; plum.off 68238
+  ; plum.off 68827
   %t148512 = load ptr, ptr %t148458, !dbg !6159
   store ptr null, ptr %t148458, !dbg !6159
   %t148513 = load ptr, ptr %s2, !dbg !6159
@@ -386684,12 +386684,12 @@ entry:
   %t148595 = alloca i64, !dbg !6168
   %t148598 = alloca i64, !dbg !6168
   %t148605 = alloca i64, !dbg !6168
-  ; plum.off 72212
+  ; plum.off 72801
   %t148596 = load ptr, ptr %s1, !dbg !6169
   call void @plum_rc_inc(ptr %t148596), !dbg !6169
   %t148597 = call i64 @plum.f.$3cprelude$3e.value_hash.1.s(ptr %t148596), !dbg !6169
   store i64 %t148597, ptr %t148595, !dbg !6169
-  ; plum.off 72242
+  ; plum.off 72831
   %t148599 = load ptr, ptr %s0, !dbg !6169
   %t148600 = getelementptr i8, ptr %t148599, i64 8, !dbg !6169
   %t148601 = load ptr, ptr %t148600, !dbg !6169
@@ -387338,7 +387338,7 @@ L148934:
   %match_owner148861_reset148934 = load ptr, ptr %match_owner148861, !dbg !6180
   call void @plum.h.rel.E$3cprelude$3e$2eMapNode.2.sSLspDiagnostics.0.(ptr %match_owner148861_reset148934), !dbg !6180
   store ptr null, ptr %match_owner148861, !dbg !6180
-  ; plum.off 69255
+  ; plum.off 69844
   %t148936 = load i64, ptr %s1, !dbg !6181
   %t148937 = load i64, ptr %s3, !dbg !6181
   %t148938 = call i64 @plum.f.$3cprelude$3e.map_bit.0.(i64 %t148936, i64 %t148937), !dbg !6181
@@ -387596,7 +387596,7 @@ L149036:
   store ptr %t149041, ptr %t149035, !dbg !6183
   br label %L149038, !dbg !6183
 L149037:
-  ; plum.off 70953
+  ; plum.off 71542
   %t149043 = load ptr, ptr %t149028, !dbg !6184
   call void @plum_rc_inc(ptr %t149043), !dbg !6184
   %t149044 = load ptr, ptr %s2, !dbg !6184
@@ -387642,7 +387642,7 @@ reset_no149055:
 reset_done149055:
   br label %frontier_done149055, !dbg !6184
 frontier_done149055:
-  ; plum.off 71046
+  ; plum.off 71635
   %t149057 = load ptr, ptr %t149028, !dbg !6184
   store ptr null, ptr %t149028, !dbg !6184
   %t149058 = load i64, ptr %t149042, !dbg !6184
@@ -387756,7 +387756,7 @@ L149120:
   call void @plum.h.rel.SArray.1.E$3cprelude$3e$2eMapNode.2.sSLspDiagnostics.0.(ptr %t149118_pre), !dbg !6184
   store ptr null, ptr %t149118, !dbg !6184
   store ptr %t149116, ptr %t149118, !dbg !6184
-  ; plum.off 71253
+  ; plum.off 71842
   %t149122 = load i64, ptr %s1, !dbg !6184
   %t149123 = load i64, ptr %s3, !dbg !6184
   %t149124 = call i64 @plum.f.$3cprelude$3e.map_bit.0.(i64 %t149122, i64 %t149123), !dbg !6184
@@ -387802,12 +387802,12 @@ reset_no149136:
 reset_done149136:
   br label %frontier_done149136, !dbg !6184
 frontier_done149136:
-  ; plum.off 71342
+  ; plum.off 71931
   %t149138 = load i64, ptr %t149113, !dbg !6184
   %t149139 = load i64, ptr %t149121, !dbg !6184
   %t149140 = call i64 @plum.f.$3cprelude$3e.map_rank.0.(i64 %t149138, i64 %t149139), !dbg !6184
   store i64 %t149140, ptr %t149137, !dbg !6184
-  ; plum.off 71383
+  ; plum.off 71972
   %t149142 = load ptr, ptr %t149118, !dbg !6184
   %t149143 = load i64, ptr %t149137, !dbg !6184
   %t149144 = call i64 @plum_array_check_index(ptr %t149142, i64 %t149143), !dbg !6184
@@ -387834,7 +387834,7 @@ L149156:
   call void @plum.h.rel.E$3cprelude$3e$2eMapNode.2.sSLspDiagnostics.0.(ptr %t149141_pre), !dbg !6184
   store ptr null, ptr %t149141, !dbg !6184
   store ptr %t149158, ptr %t149141, !dbg !6184
-  ; plum.off 71459
+  ; plum.off 72048
   %t149160 = load ptr, ptr %t149141, !dbg !6184
   br label %L149164, !dbg !6184
 L149164:
@@ -387882,7 +387882,7 @@ L149162:
   call void @plum.h.rel.SArray.1.E$3cprelude$3e$2eMapNode.2.sSLspDiagnostics.0.(ptr %t149159_pre), !dbg !6184
   store ptr null, ptr %t149159, !dbg !6184
   store ptr %t149183, ptr %t149159, !dbg !6184
-  ; plum.off 71559
+  ; plum.off 72148
   %t149185 = load ptr, ptr %t149141, !dbg !6184
   store ptr null, ptr %t149141, !dbg !6184
   store ptr %t149185, ptr %match_owner149186, !dbg !6184
@@ -399598,12 +399598,12 @@ entry:
   %t153945 = alloca i64, !dbg !6390
   %t153948 = alloca i64, !dbg !6390
   %t153955 = alloca i64, !dbg !6390
-  ; plum.off 72212
+  ; plum.off 72801
   %t153946 = load ptr, ptr %s1, !dbg !6391
   call void @plum_rc_inc(ptr %t153946), !dbg !6391
   %t153947 = call i64 @plum.f.$3cprelude$3e.value_hash.1.Etypecheck$2eITy.0.(ptr %t153946), !dbg !6391
   store i64 %t153947, ptr %t153945, !dbg !6391
-  ; plum.off 72242
+  ; plum.off 72831
   %t153949 = load ptr, ptr %s0, !dbg !6391
   %t153950 = getelementptr i8, ptr %t153949, i64 8, !dbg !6391
   %t153951 = load ptr, ptr %t153950, !dbg !6391
@@ -399824,12 +399824,12 @@ entry:
   %t154056 = alloca i64, !dbg !6397
   %t154063 = alloca ptr, !dbg !6397
   %t154094 = alloca ptr, !dbg !6397
-  ; plum.off 67694
+  ; plum.off 68283
   %t154053 = load i64, ptr %s1, !dbg !6398
   %t154054 = load i64, ptr %s4, !dbg !6398
   %t154055 = call i64 @plum.f.$3cprelude$3e.map_bit.0.(i64 %t154053, i64 %t154054), !dbg !6398
   store i64 %t154055, ptr %t154052, !dbg !6398
-  ; plum.off 67729
+  ; plum.off 68318
   %t154057 = load i64, ptr %s3, !dbg !6398
   %t154058 = load i64, ptr %s4, !dbg !6398
   %t154059 = call i64 @plum.f.$3cprelude$3e.map_bit.0.(i64 %t154057, i64 %t154058), !dbg !6398
@@ -399984,12 +399984,12 @@ entry:
   %t154139 = alloca i64, !dbg !6400
   %t154149 = alloca i1, !dbg !6400
   %t154184 = alloca i1, !dbg !6400
-  ; plum.off 68066
+  ; plum.off 68655
   %t154134_pre = load ptr, ptr %t154134, !dbg !6401
   call void @plum.h.rel.SArray.1.E$3cprelude$3e$2eMapNode.2.Etypecheck$2eITy.0.b(ptr %t154134_pre), !dbg !6401
   store ptr null, ptr %t154134, !dbg !6401
   store ptr @.const154135, ptr %t154134, !dbg !6401
-  ; plum.off 68088
+  ; plum.off 68677
   %t154136 = load ptr, ptr %s0, !dbg !6401
   %t154137 = call i64 @plum_array_len(ptr %t154136), !dbg !6401
   store i64 0, ptr %t154138, !dbg !6401
@@ -400001,13 +400001,13 @@ L154140:
   %t154145 = icmp slt i64 %t154143, %t154144, !dbg !6401
   br i1 %t154145, label %L154141, label %L154142, !dbg !6401
 L154141:
-  ; plum.off 68125
+  ; plum.off 68714
   %t154146 = load i64, ptr %t154138, !dbg !6401
   %t154147 = load i64, ptr %s1, !dbg !6401
   %t154148 = icmp eq i64 %t154146, %t154147, !dbg !6401
   br i1 %t154148, label %L154150, label %L154151, !dbg !6401
 L154150:
-  ; plum.off 68138
+  ; plum.off 68727
   %t154153 = load ptr, ptr %t154134, !dbg !6401
   store ptr null, ptr %t154134, !dbg !6401
   %t154154 = load ptr, ptr %s2, !dbg !6401
@@ -400030,7 +400030,7 @@ L154151:
   br label %L154152, !dbg !6401
 L154152:
   %t154162 = load i1, ptr %t154149, !dbg !6401
-  ; plum.off 68172
+  ; plum.off 68761
   %t154163 = load ptr, ptr %t154134, !dbg !6401
   store ptr null, ptr %t154134, !dbg !6401
   %t154164 = load ptr, ptr %s0, !dbg !6401
@@ -400057,7 +400057,7 @@ L154152:
   store i64 %t154179, ptr %t154138, !dbg !6401
   br label %L154140, !dbg !6401
 L154142:
-  ; plum.off 68212
+  ; plum.off 68801
   %t154180 = load i64, ptr %s1, !dbg !6401
   %t154181 = load ptr, ptr %s0, !dbg !6401
   store ptr null, ptr %s0, !dbg !6401
@@ -400066,7 +400066,7 @@ L154142:
   %t154183 = icmp eq i64 %t154180, %t154182, !dbg !6401
   br i1 %t154183, label %L154185, label %L154186, !dbg !6401
 L154185:
-  ; plum.off 68238
+  ; plum.off 68827
   %t154188 = load ptr, ptr %t154134, !dbg !6401
   store ptr null, ptr %t154134, !dbg !6401
   %t154189 = load ptr, ptr %s2, !dbg !6401
@@ -412766,11 +412766,11 @@ entry:
   %t160086 = alloca i64, !dbg !6608
   %t160089 = alloca i64, !dbg !6608
   %t160096 = alloca i64, !dbg !6608
-  ; plum.off 72212
+  ; plum.off 72801
   %t160087 = load i64, ptr %s1, !dbg !6609
   %t160088 = call i64 @plum.f.$3cprelude$3e.value_hash.1.i(i64 %t160087), !dbg !6609
   store i64 %t160088, ptr %t160086, !dbg !6609
-  ; plum.off 72242
+  ; plum.off 72831
   %t160090 = load ptr, ptr %s0, !dbg !6609
   %t160091 = getelementptr i8, ptr %t160090, i64 8, !dbg !6609
   %t160092 = load ptr, ptr %t160091, !dbg !6609
@@ -412929,11 +412929,11 @@ entry:
   %t160165 = alloca i64, !dbg !6614
   %t160168 = alloca i64, !dbg !6614
   %t160175 = alloca i64, !dbg !6614
-  ; plum.off 72212
+  ; plum.off 72801
   %t160166 = load i64, ptr %s1, !dbg !6615
   %t160167 = call i64 @plum.f.$3cprelude$3e.value_hash.1.i(i64 %t160166), !dbg !6615
   store i64 %t160167, ptr %t160165, !dbg !6615
-  ; plum.off 72242
+  ; plum.off 72831
   %t160169 = load ptr, ptr %s0, !dbg !6615
   %t160170 = getelementptr i8, ptr %t160169, i64 8, !dbg !6615
   %t160171 = load ptr, ptr %t160170, !dbg !6615
@@ -418492,7 +418492,7 @@ L161905:
   store ptr %t161908, ptr %t161904, !dbg !6680
   br label %L161907, !dbg !6680
 L161906:
-  ; plum.off 49360
+  ; plum.off 49949
   %t161918 = load i64, ptr %s2, !dbg !6681
   %t161919 = load i64, ptr %s3, !dbg !6681
   %t161920 = load i64, ptr %s2, !dbg !6681
@@ -418531,7 +418531,7 @@ L161942:
   unreachable, !dbg !6681
 L161941:
   store i64 %t161938, ptr %t161917, !dbg !6681
-  ; plum.off 49398
+  ; plum.off 49987
   %t161944 = load ptr, ptr %s0, !dbg !6681
   call void @plum_rc_inc(ptr %t161944), !dbg !6681
   %t161945 = load ptr, ptr %s1, !dbg !6681
@@ -418543,7 +418543,7 @@ L161941:
   call void @plum.h.rel.SArray.1.Spkg$2ePackageEntry.0.(ptr %t161943_pre), !dbg !6681
   store ptr null, ptr %t161943, !dbg !6681
   store ptr %t161948, ptr %t161943, !dbg !6681
-  ; plum.off 49459
+  ; plum.off 50048
   %t161950 = load ptr, ptr %s0, !dbg !6681
   store ptr null, ptr %s0, !dbg !6681
   %t161951 = load ptr, ptr %s1, !dbg !6681
@@ -420320,14 +420320,14 @@ reset_no162841:
 reset_done162841:
   br label %frontier_done162841, !dbg !6717
 frontier_done162841:
-  ; plum.off 69959
+  ; plum.off 70548
   %t162843 = load ptr, ptr %t162812, !dbg !6718
   call void @plum_rc_inc(ptr %t162843), !dbg !6718
   %t162844 = load ptr, ptr %s2, !dbg !6718
   call void @plum_rc_inc(ptr %t162844), !dbg !6718
   %t162845 = call i64 @plum.f.$3cprelude$3e.map_bucket_find_index.2.sSLspDiagnostics.0.(ptr %t162843, ptr %t162844, i64 0), !dbg !6718
   store i64 %t162845, ptr %t162842, !dbg !6718
-  ; plum.off 70019
+  ; plum.off 70608
   %t162847 = load ptr, ptr %s2, !dbg !6718
   store ptr null, ptr %s2, !dbg !6718
   %t162848 = load ptr, ptr %s3, !dbg !6718
@@ -420462,12 +420462,12 @@ reset_no162910:
 reset_done162910:
   br label %frontier_done162910, !dbg !6718
 frontier_done162910:
-  ; plum.off 70218
+  ; plum.off 70807
   %t162912 = load i64, ptr %s1, !dbg !6718
   %t162913 = load i64, ptr %s4, !dbg !6718
   %t162914 = call i64 @plum.f.$3cprelude$3e.map_bit.0.(i64 %t162912, i64 %t162913), !dbg !6718
   store i64 %t162914, ptr %t162911, !dbg !6718
-  ; plum.off 70258
+  ; plum.off 70847
   %t162916 = load i64, ptr %t162902, !dbg !6718
   %t162917 = load i64, ptr %t162911, !dbg !6718
   %t162918 = call i64 @plum.f.$3cprelude$3e.map_rank.0.(i64 %t162916, i64 %t162917), !dbg !6718
@@ -424331,7 +424331,7 @@ L164447:
   store ptr @.const164451, ptr %t164446, !dbg !6790
   br label %L164449, !dbg !6790
 L164448:
-  ; plum.off 68551
+  ; plum.off 69140
   %t164453 = load ptr, ptr %t164439, !dbg !6791
   call void @plum_rc_inc(ptr %t164453), !dbg !6791
   %t164454 = load ptr, ptr %s2, !dbg !6791
@@ -424418,7 +424418,7 @@ reset_no164495:
   call void @plum.h.rel.E$3cprelude$3e$2eMapNode.2.Etypecheck$2eITy.0.Scodegen$2eCgTypeFacts.0.(ptr %reset_old164495), !dbg !6791
   br label %reset_done164495, !dbg !6791
 reset_done164495:
-  ; plum.off 68707
+  ; plum.off 69296
   %t164497 = load i64, ptr %s1, !dbg !6791
   %t164498 = load i64, ptr %s3, !dbg !6791
   %t164499 = call i64 @plum.f.$3cprelude$3e.map_bit.0.(i64 %t164497, i64 %t164498), !dbg !6791
@@ -424957,7 +424957,7 @@ L164730:
   %match_owner164657_reset164730 = load ptr, ptr %match_owner164657, !dbg !6797
   call void @plum.h.rel.E$3cprelude$3e$2eMapNode.2.Etypecheck$2eITy.0.Scodegen$2eCgTypeFacts.0.(ptr %match_owner164657_reset164730), !dbg !6797
   store ptr null, ptr %match_owner164657, !dbg !6797
-  ; plum.off 69255
+  ; plum.off 69844
   %t164732 = load i64, ptr %s1, !dbg !6798
   %t164733 = load i64, ptr %s3, !dbg !6798
   %t164734 = call i64 @plum.f.$3cprelude$3e.map_bit.0.(i64 %t164732, i64 %t164733), !dbg !6798
@@ -425405,14 +425405,14 @@ reset_no164924:
 reset_done164924:
   br label %frontier_done164924, !dbg !6800
 frontier_done164924:
-  ; plum.off 69959
+  ; plum.off 70548
   %t164926 = load ptr, ptr %t164895, !dbg !6801
   call void @plum_rc_inc(ptr %t164926), !dbg !6801
   %t164927 = load ptr, ptr %s2, !dbg !6801
   call void @plum_rc_inc(ptr %t164927), !dbg !6801
   %t164928 = call i64 @plum.f.$3cprelude$3e.map_bucket_find_index.2.Etypecheck$2eITy.0.Scodegen$2eCgTypeFacts.0.(ptr %t164926, ptr %t164927, i64 0), !dbg !6801
   store i64 %t164928, ptr %t164925, !dbg !6801
-  ; plum.off 70019
+  ; plum.off 70608
   %t164930 = load ptr, ptr %s2, !dbg !6801
   store ptr null, ptr %s2, !dbg !6801
   %t164931 = load ptr, ptr %s3, !dbg !6801
@@ -425547,12 +425547,12 @@ reset_no164993:
 reset_done164993:
   br label %frontier_done164993, !dbg !6801
 frontier_done164993:
-  ; plum.off 70218
+  ; plum.off 70807
   %t164995 = load i64, ptr %s1, !dbg !6801
   %t164996 = load i64, ptr %s4, !dbg !6801
   %t164997 = call i64 @plum.f.$3cprelude$3e.map_bit.0.(i64 %t164995, i64 %t164996), !dbg !6801
   store i64 %t164997, ptr %t164994, !dbg !6801
-  ; plum.off 70258
+  ; plum.off 70847
   %t164999 = load i64, ptr %t164985, !dbg !6801
   %t165000 = load i64, ptr %t164994, !dbg !6801
   %t165001 = call i64 @plum.f.$3cprelude$3e.map_rank.0.(i64 %t164999, i64 %t165000), !dbg !6801
@@ -428121,7 +428121,7 @@ L166125:
   store ptr @.const166129, ptr %t166124, !dbg !6846
   br label %L166127, !dbg !6846
 L166126:
-  ; plum.off 68551
+  ; plum.off 69140
   %t166131 = load ptr, ptr %t166117, !dbg !6847
   call void @plum_rc_inc(ptr %t166131), !dbg !6847
   %t166132 = load ptr, ptr %s2, !dbg !6847
@@ -428207,7 +428207,7 @@ reset_no166173:
   call void @plum.h.rel.E$3cprelude$3e$2eMapNode.2.sb(ptr %reset_old166173), !dbg !6847
   br label %reset_done166173, !dbg !6847
 reset_done166173:
-  ; plum.off 68707
+  ; plum.off 69296
   %t166175 = load i64, ptr %s1, !dbg !6847
   %t166176 = load i64, ptr %s3, !dbg !6847
   %t166177 = call i64 @plum.f.$3cprelude$3e.map_bit.0.(i64 %t166175, i64 %t166176), !dbg !6847
@@ -433802,7 +433802,7 @@ L168597:
   store ptr @.const168601, ptr %t168596, !dbg !6918
   br label %L168599, !dbg !6918
 L168598:
-  ; plum.off 68551
+  ; plum.off 69140
   %t168603 = load ptr, ptr %t168589, !dbg !6919
   call void @plum_rc_inc(ptr %t168603), !dbg !6919
   %t168604 = load i64, ptr %s2, !dbg !6919
@@ -433888,7 +433888,7 @@ reset_no168645:
   call void @plum.h.rel.E$3cprelude$3e$2eMapNode.2.iSArray.1.Sfmt$2eEdit.0.(ptr %reset_old168645), !dbg !6919
   br label %reset_done168645, !dbg !6919
 reset_done168645:
-  ; plum.off 68707
+  ; plum.off 69296
   %t168647 = load i64, ptr %s1, !dbg !6919
   %t168648 = load i64, ptr %s3, !dbg !6919
   %t168649 = call i64 @plum.f.$3cprelude$3e.map_bit.0.(i64 %t168647, i64 %t168648), !dbg !6919
@@ -434359,7 +434359,7 @@ L168879:
   %match_owner168806_reset168879 = load ptr, ptr %match_owner168806, !dbg !6927
   call void @plum.h.rel.E$3cprelude$3e$2eMapNode.2.ii(ptr %match_owner168806_reset168879), !dbg !6927
   store ptr null, ptr %match_owner168806, !dbg !6927
-  ; plum.off 69255
+  ; plum.off 69844
   %t168881 = load i64, ptr %s1, !dbg !6928
   %t168882 = load i64, ptr %s3, !dbg !6928
   %t168883 = call i64 @plum.f.$3cprelude$3e.map_bit.0.(i64 %t168881, i64 %t168882), !dbg !6928
@@ -434778,13 +434778,13 @@ reset_no169073:
 reset_done169073:
   br label %frontier_done169073, !dbg !6930
 frontier_done169073:
-  ; plum.off 69959
+  ; plum.off 70548
   %t169075 = load ptr, ptr %t169044, !dbg !6931
   call void @plum_rc_inc(ptr %t169075), !dbg !6931
   %t169076 = load i64, ptr %s2, !dbg !6931
   %t169077 = call i64 @plum.f.$3cprelude$3e.map_bucket_find_index.2.ii(ptr %t169075, i64 %t169076, i64 0), !dbg !6931
   store i64 %t169077, ptr %t169074, !dbg !6931
-  ; plum.off 70019
+  ; plum.off 70608
   %t169079 = load i64, ptr %s2, !dbg !6931
   %t169080 = load i64, ptr %s3, !dbg !6931
   %t169081 = load ptr, ptr %t169078, !dbg !6931
@@ -434911,12 +434911,12 @@ reset_no169138:
 reset_done169138:
   br label %frontier_done169138, !dbg !6931
 frontier_done169138:
-  ; plum.off 70218
+  ; plum.off 70807
   %t169140 = load i64, ptr %s1, !dbg !6931
   %t169141 = load i64, ptr %s4, !dbg !6931
   %t169142 = call i64 @plum.f.$3cprelude$3e.map_bit.0.(i64 %t169140, i64 %t169141), !dbg !6931
   store i64 %t169142, ptr %t169139, !dbg !6931
-  ; plum.off 70258
+  ; plum.off 70847
   %t169144 = load i64, ptr %t169130, !dbg !6931
   %t169145 = load i64, ptr %t169139, !dbg !6931
   %t169146 = call i64 @plum.f.$3cprelude$3e.map_rank.0.(i64 %t169144, i64 %t169145), !dbg !6931
@@ -435301,7 +435301,7 @@ L169353:
   %match_owner169280_reset169353 = load ptr, ptr %match_owner169280, !dbg !6936
   call void @plum.h.rel.E$3cprelude$3e$2eMapNode.2.iSArray.1.Sfmt$2eEdit.0.(ptr %match_owner169280_reset169353), !dbg !6936
   store ptr null, ptr %match_owner169280, !dbg !6936
-  ; plum.off 69255
+  ; plum.off 69844
   %t169355 = load i64, ptr %s1, !dbg !6937
   %t169356 = load i64, ptr %s3, !dbg !6937
   %t169357 = call i64 @plum.f.$3cprelude$3e.map_bit.0.(i64 %t169355, i64 %t169356), !dbg !6937
@@ -435731,13 +435731,13 @@ reset_no169547:
 reset_done169547:
   br label %frontier_done169547, !dbg !6939
 frontier_done169547:
-  ; plum.off 69959
+  ; plum.off 70548
   %t169549 = load ptr, ptr %t169518, !dbg !6940
   call void @plum_rc_inc(ptr %t169549), !dbg !6940
   %t169550 = load i64, ptr %s2, !dbg !6940
   %t169551 = call i64 @plum.f.$3cprelude$3e.map_bucket_find_index.2.iSArray.1.Sfmt$2eEdit.0.(ptr %t169549, i64 %t169550, i64 0), !dbg !6940
   store i64 %t169551, ptr %t169548, !dbg !6940
-  ; plum.off 70019
+  ; plum.off 70608
   %t169553 = load i64, ptr %s2, !dbg !6940
   %t169554 = load ptr, ptr %s3, !dbg !6940
   store ptr null, ptr %s3, !dbg !6940
@@ -435868,12 +435868,12 @@ reset_no169614:
 reset_done169614:
   br label %frontier_done169614, !dbg !6940
 frontier_done169614:
-  ; plum.off 70218
+  ; plum.off 70807
   %t169616 = load i64, ptr %s1, !dbg !6940
   %t169617 = load i64, ptr %s4, !dbg !6940
   %t169618 = call i64 @plum.f.$3cprelude$3e.map_bit.0.(i64 %t169616, i64 %t169617), !dbg !6940
   store i64 %t169618, ptr %t169615, !dbg !6940
-  ; plum.off 70258
+  ; plum.off 70847
   %t169620 = load i64, ptr %t169606, !dbg !6940
   %t169621 = load i64, ptr %t169615, !dbg !6940
   %t169622 = call i64 @plum.f.$3cprelude$3e.map_rank.0.(i64 %t169620, i64 %t169621), !dbg !6940
@@ -436343,7 +436343,7 @@ L169843:
   store ptr @.const169847, ptr %t169842, !dbg !6944
   br label %L169845, !dbg !6944
 L169844:
-  ; plum.off 68551
+  ; plum.off 69140
   %t169849 = load ptr, ptr %t169835, !dbg !6945
   call void @plum_rc_inc(ptr %t169849), !dbg !6945
   %t169850 = load i64, ptr %s2, !dbg !6945
@@ -436428,7 +436428,7 @@ reset_no169891:
   call void @plum.h.rel.E$3cprelude$3e$2eMapNode.2.ii(ptr %reset_old169891), !dbg !6945
   br label %reset_done169891, !dbg !6945
 reset_done169891:
-  ; plum.off 68707
+  ; plum.off 69296
   %t169893 = load i64, ptr %s1, !dbg !6945
   %t169894 = load i64, ptr %s3, !dbg !6945
   %t169895 = call i64 @plum.f.$3cprelude$3e.map_bit.0.(i64 %t169893, i64 %t169894), !dbg !6945
@@ -439616,12 +439616,12 @@ entry:
   %t171368 = alloca i64, !dbg !7015
   %t171375 = alloca ptr, !dbg !7015
   %t171406 = alloca ptr, !dbg !7015
-  ; plum.off 67694
+  ; plum.off 68283
   %t171365 = load i64, ptr %s1, !dbg !7016
   %t171366 = load i64, ptr %s4, !dbg !7016
   %t171367 = call i64 @plum.f.$3cprelude$3e.map_bit.0.(i64 %t171365, i64 %t171366), !dbg !7016
   store i64 %t171367, ptr %t171364, !dbg !7016
-  ; plum.off 67729
+  ; plum.off 68318
   %t171369 = load i64, ptr %s3, !dbg !7016
   %t171370 = load i64, ptr %s4, !dbg !7016
   %t171371 = call i64 @plum.f.$3cprelude$3e.map_bit.0.(i64 %t171369, i64 %t171370), !dbg !7016
@@ -439776,12 +439776,12 @@ entry:
   %t171451 = alloca i64, !dbg !7018
   %t171461 = alloca i1, !dbg !7018
   %t171496 = alloca i1, !dbg !7018
-  ; plum.off 68066
+  ; plum.off 68655
   %t171446_pre = load ptr, ptr %t171446, !dbg !7019
   call void @plum.h.rel.SArray.1.E$3cprelude$3e$2eMapNode.2.sSLspDiagnostics.0.(ptr %t171446_pre), !dbg !7019
   store ptr null, ptr %t171446, !dbg !7019
   store ptr @.const171447, ptr %t171446, !dbg !7019
-  ; plum.off 68088
+  ; plum.off 68677
   %t171448 = load ptr, ptr %s0, !dbg !7019
   %t171449 = call i64 @plum_array_len(ptr %t171448), !dbg !7019
   store i64 0, ptr %t171450, !dbg !7019
@@ -439793,13 +439793,13 @@ L171452:
   %t171457 = icmp slt i64 %t171455, %t171456, !dbg !7019
   br i1 %t171457, label %L171453, label %L171454, !dbg !7019
 L171453:
-  ; plum.off 68125
+  ; plum.off 68714
   %t171458 = load i64, ptr %t171450, !dbg !7019
   %t171459 = load i64, ptr %s1, !dbg !7019
   %t171460 = icmp eq i64 %t171458, %t171459, !dbg !7019
   br i1 %t171460, label %L171462, label %L171463, !dbg !7019
 L171462:
-  ; plum.off 68138
+  ; plum.off 68727
   %t171465 = load ptr, ptr %t171446, !dbg !7019
   store ptr null, ptr %t171446, !dbg !7019
   %t171466 = load ptr, ptr %s2, !dbg !7019
@@ -439822,7 +439822,7 @@ L171463:
   br label %L171464, !dbg !7019
 L171464:
   %t171474 = load i1, ptr %t171461, !dbg !7019
-  ; plum.off 68172
+  ; plum.off 68761
   %t171475 = load ptr, ptr %t171446, !dbg !7019
   store ptr null, ptr %t171446, !dbg !7019
   %t171476 = load ptr, ptr %s0, !dbg !7019
@@ -439849,7 +439849,7 @@ L171464:
   store i64 %t171491, ptr %t171450, !dbg !7019
   br label %L171452, !dbg !7019
 L171454:
-  ; plum.off 68212
+  ; plum.off 68801
   %t171492 = load i64, ptr %s1, !dbg !7019
   %t171493 = load ptr, ptr %s0, !dbg !7019
   store ptr null, ptr %s0, !dbg !7019
@@ -439858,7 +439858,7 @@ L171454:
   %t171495 = icmp eq i64 %t171492, %t171494, !dbg !7019
   br i1 %t171495, label %L171497, label %L171498, !dbg !7019
 L171497:
-  ; plum.off 68238
+  ; plum.off 68827
   %t171500 = load ptr, ptr %t171446, !dbg !7019
   store ptr null, ptr %t171446, !dbg !7019
   %t171501 = load ptr, ptr %s2, !dbg !7019
@@ -440836,12 +440836,12 @@ entry:
   %t171940 = alloca i64, !dbg !7039
   %t171947 = alloca ptr, !dbg !7039
   %t171978 = alloca ptr, !dbg !7039
-  ; plum.off 67694
+  ; plum.off 68283
   %t171937 = load i64, ptr %s1, !dbg !7040
   %t171938 = load i64, ptr %s4, !dbg !7040
   %t171939 = call i64 @plum.f.$3cprelude$3e.map_bit.0.(i64 %t171937, i64 %t171938), !dbg !7040
   store i64 %t171939, ptr %t171936, !dbg !7040
-  ; plum.off 67729
+  ; plum.off 68318
   %t171941 = load i64, ptr %s3, !dbg !7040
   %t171942 = load i64, ptr %s4, !dbg !7040
   %t171943 = call i64 @plum.f.$3cprelude$3e.map_bit.0.(i64 %t171941, i64 %t171942), !dbg !7040
@@ -440996,12 +440996,12 @@ entry:
   %t172023 = alloca i64, !dbg !7042
   %t172033 = alloca i1, !dbg !7042
   %t172068 = alloca i1, !dbg !7042
-  ; plum.off 68066
+  ; plum.off 68655
   %t172018_pre = load ptr, ptr %t172018, !dbg !7043
   call void @plum.h.rel.SArray.1.E$3cprelude$3e$2eMapNode.2.Etypecheck$2eITy.0.Scodegen$2eCgTypeFacts.0.(ptr %t172018_pre), !dbg !7043
   store ptr null, ptr %t172018, !dbg !7043
   store ptr @.const172019, ptr %t172018, !dbg !7043
-  ; plum.off 68088
+  ; plum.off 68677
   %t172020 = load ptr, ptr %s0, !dbg !7043
   %t172021 = call i64 @plum_array_len(ptr %t172020), !dbg !7043
   store i64 0, ptr %t172022, !dbg !7043
@@ -441013,13 +441013,13 @@ L172024:
   %t172029 = icmp slt i64 %t172027, %t172028, !dbg !7043
   br i1 %t172029, label %L172025, label %L172026, !dbg !7043
 L172025:
-  ; plum.off 68125
+  ; plum.off 68714
   %t172030 = load i64, ptr %t172022, !dbg !7043
   %t172031 = load i64, ptr %s1, !dbg !7043
   %t172032 = icmp eq i64 %t172030, %t172031, !dbg !7043
   br i1 %t172032, label %L172034, label %L172035, !dbg !7043
 L172034:
-  ; plum.off 68138
+  ; plum.off 68727
   %t172037 = load ptr, ptr %t172018, !dbg !7043
   store ptr null, ptr %t172018, !dbg !7043
   %t172038 = load ptr, ptr %s2, !dbg !7043
@@ -441042,7 +441042,7 @@ L172035:
   br label %L172036, !dbg !7043
 L172036:
   %t172046 = load i1, ptr %t172033, !dbg !7043
-  ; plum.off 68172
+  ; plum.off 68761
   %t172047 = load ptr, ptr %t172018, !dbg !7043
   store ptr null, ptr %t172018, !dbg !7043
   %t172048 = load ptr, ptr %s0, !dbg !7043
@@ -441069,7 +441069,7 @@ L172036:
   store i64 %t172063, ptr %t172022, !dbg !7043
   br label %L172024, !dbg !7043
 L172026:
-  ; plum.off 68212
+  ; plum.off 68801
   %t172064 = load i64, ptr %s1, !dbg !7043
   %t172065 = load ptr, ptr %s0, !dbg !7043
   store ptr null, ptr %s0, !dbg !7043
@@ -441078,7 +441078,7 @@ L172026:
   %t172067 = icmp eq i64 %t172064, %t172066, !dbg !7043
   br i1 %t172067, label %L172069, label %L172070, !dbg !7043
 L172069:
-  ; plum.off 68238
+  ; plum.off 68827
   %t172072 = load ptr, ptr %t172018, !dbg !7043
   store ptr null, ptr %t172018, !dbg !7043
   %t172073 = load ptr, ptr %s2, !dbg !7043
@@ -446092,12 +446092,12 @@ entry:
   %t174042 = alloca i64, !dbg !7108
   %t174049 = alloca ptr, !dbg !7108
   %t174080 = alloca ptr, !dbg !7108
-  ; plum.off 67694
+  ; plum.off 68283
   %t174039 = load i64, ptr %s1, !dbg !7109
   %t174040 = load i64, ptr %s4, !dbg !7109
   %t174041 = call i64 @plum.f.$3cprelude$3e.map_bit.0.(i64 %t174039, i64 %t174040), !dbg !7109
   store i64 %t174041, ptr %t174038, !dbg !7109
-  ; plum.off 67729
+  ; plum.off 68318
   %t174043 = load i64, ptr %s3, !dbg !7109
   %t174044 = load i64, ptr %s4, !dbg !7109
   %t174045 = call i64 @plum.f.$3cprelude$3e.map_bit.0.(i64 %t174043, i64 %t174044), !dbg !7109
@@ -446252,12 +446252,12 @@ entry:
   %t174125 = alloca i64, !dbg !7111
   %t174135 = alloca i1, !dbg !7111
   %t174170 = alloca i1, !dbg !7111
-  ; plum.off 68066
+  ; plum.off 68655
   %t174120_pre = load ptr, ptr %t174120, !dbg !7112
   call void @plum.h.rel.SArray.1.E$3cprelude$3e$2eMapNode.2.ii(ptr %t174120_pre), !dbg !7112
   store ptr null, ptr %t174120, !dbg !7112
   store ptr @.const174121, ptr %t174120, !dbg !7112
-  ; plum.off 68088
+  ; plum.off 68677
   %t174122 = load ptr, ptr %s0, !dbg !7112
   %t174123 = call i64 @plum_array_len(ptr %t174122), !dbg !7112
   store i64 0, ptr %t174124, !dbg !7112
@@ -446269,13 +446269,13 @@ L174126:
   %t174131 = icmp slt i64 %t174129, %t174130, !dbg !7112
   br i1 %t174131, label %L174127, label %L174128, !dbg !7112
 L174127:
-  ; plum.off 68125
+  ; plum.off 68714
   %t174132 = load i64, ptr %t174124, !dbg !7112
   %t174133 = load i64, ptr %s1, !dbg !7112
   %t174134 = icmp eq i64 %t174132, %t174133, !dbg !7112
   br i1 %t174134, label %L174136, label %L174137, !dbg !7112
 L174136:
-  ; plum.off 68138
+  ; plum.off 68727
   %t174139 = load ptr, ptr %t174120, !dbg !7112
   store ptr null, ptr %t174120, !dbg !7112
   %t174140 = load ptr, ptr %s2, !dbg !7112
@@ -446298,7 +446298,7 @@ L174137:
   br label %L174138, !dbg !7112
 L174138:
   %t174148 = load i1, ptr %t174135, !dbg !7112
-  ; plum.off 68172
+  ; plum.off 68761
   %t174149 = load ptr, ptr %t174120, !dbg !7112
   store ptr null, ptr %t174120, !dbg !7112
   %t174150 = load ptr, ptr %s0, !dbg !7112
@@ -446325,7 +446325,7 @@ L174138:
   store i64 %t174165, ptr %t174124, !dbg !7112
   br label %L174126, !dbg !7112
 L174128:
-  ; plum.off 68212
+  ; plum.off 68801
   %t174166 = load i64, ptr %s1, !dbg !7112
   %t174167 = load ptr, ptr %s0, !dbg !7112
   store ptr null, ptr %s0, !dbg !7112
@@ -446334,7 +446334,7 @@ L174128:
   %t174169 = icmp eq i64 %t174166, %t174168, !dbg !7112
   br i1 %t174169, label %L174171, label %L174172, !dbg !7112
 L174171:
-  ; plum.off 68238
+  ; plum.off 68827
   %t174174 = load ptr, ptr %t174120, !dbg !7112
   store ptr null, ptr %t174120, !dbg !7112
   %t174175 = load ptr, ptr %s2, !dbg !7112
@@ -446387,12 +446387,12 @@ entry:
   %t174189 = alloca i64, !dbg !7114
   %t174196 = alloca ptr, !dbg !7114
   %t174227 = alloca ptr, !dbg !7114
-  ; plum.off 67694
+  ; plum.off 68283
   %t174186 = load i64, ptr %s1, !dbg !7115
   %t174187 = load i64, ptr %s4, !dbg !7115
   %t174188 = call i64 @plum.f.$3cprelude$3e.map_bit.0.(i64 %t174186, i64 %t174187), !dbg !7115
   store i64 %t174188, ptr %t174185, !dbg !7115
-  ; plum.off 67729
+  ; plum.off 68318
   %t174190 = load i64, ptr %s3, !dbg !7115
   %t174191 = load i64, ptr %s4, !dbg !7115
   %t174192 = call i64 @plum.f.$3cprelude$3e.map_bit.0.(i64 %t174190, i64 %t174191), !dbg !7115
@@ -446547,12 +446547,12 @@ entry:
   %t174272 = alloca i64, !dbg !7117
   %t174282 = alloca i1, !dbg !7117
   %t174317 = alloca i1, !dbg !7117
-  ; plum.off 68066
+  ; plum.off 68655
   %t174267_pre = load ptr, ptr %t174267, !dbg !7118
   call void @plum.h.rel.SArray.1.E$3cprelude$3e$2eMapNode.2.iSArray.1.Sfmt$2eEdit.0.(ptr %t174267_pre), !dbg !7118
   store ptr null, ptr %t174267, !dbg !7118
   store ptr @.const174268, ptr %t174267, !dbg !7118
-  ; plum.off 68088
+  ; plum.off 68677
   %t174269 = load ptr, ptr %s0, !dbg !7118
   %t174270 = call i64 @plum_array_len(ptr %t174269), !dbg !7118
   store i64 0, ptr %t174271, !dbg !7118
@@ -446564,13 +446564,13 @@ L174273:
   %t174278 = icmp slt i64 %t174276, %t174277, !dbg !7118
   br i1 %t174278, label %L174274, label %L174275, !dbg !7118
 L174274:
-  ; plum.off 68125
+  ; plum.off 68714
   %t174279 = load i64, ptr %t174271, !dbg !7118
   %t174280 = load i64, ptr %s1, !dbg !7118
   %t174281 = icmp eq i64 %t174279, %t174280, !dbg !7118
   br i1 %t174281, label %L174283, label %L174284, !dbg !7118
 L174283:
-  ; plum.off 68138
+  ; plum.off 68727
   %t174286 = load ptr, ptr %t174267, !dbg !7118
   store ptr null, ptr %t174267, !dbg !7118
   %t174287 = load ptr, ptr %s2, !dbg !7118
@@ -446593,7 +446593,7 @@ L174284:
   br label %L174285, !dbg !7118
 L174285:
   %t174295 = load i1, ptr %t174282, !dbg !7118
-  ; plum.off 68172
+  ; plum.off 68761
   %t174296 = load ptr, ptr %t174267, !dbg !7118
   store ptr null, ptr %t174267, !dbg !7118
   %t174297 = load ptr, ptr %s0, !dbg !7118
@@ -446620,7 +446620,7 @@ L174285:
   store i64 %t174312, ptr %t174271, !dbg !7118
   br label %L174273, !dbg !7118
 L174275:
-  ; plum.off 68212
+  ; plum.off 68801
   %t174313 = load i64, ptr %s1, !dbg !7118
   %t174314 = load ptr, ptr %s0, !dbg !7118
   store ptr null, ptr %s0, !dbg !7118
@@ -446629,7 +446629,7 @@ L174275:
   %t174316 = icmp eq i64 %t174313, %t174315, !dbg !7118
   br i1 %t174316, label %L174318, label %L174319, !dbg !7118
 L174318:
-  ; plum.off 68238
+  ; plum.off 68827
   %t174321 = load ptr, ptr %t174267, !dbg !7118
   store ptr null, ptr %t174267, !dbg !7118
   %t174322 = load ptr, ptr %s2, !dbg !7118

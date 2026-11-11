@@ -2469,3 +2469,15 @@ pub let test_padding_placement (): Unit = {
         };
     }
 }
+
+// Binary halves are exact. Formatting chooses the even integer for both
+// signs, retaining the minus sign when a negative half rounds to zero.
+pub let test_fixed_half_even_range (): Unit = {
+    for i in 0..1024 {
+        let x = i.to_float() + 0.5;
+        let even = i + if i - (i / 2) * 2 == 0 { 0 } else { 1 };
+        let expected = even.to_string();
+        check_eq("positive half-even range", i.to_string(), Float.to_fixed(x, 0), expected);
+        check_eq("negative half-even range", i.to_string(), Float.to_fixed(0.0 - x, 0), "-".concat(expected));
+    }
+}
