@@ -2426,3 +2426,27 @@ pub let test_bytes_array_conversion (): Unit = {
     };
     assert_eq(Bytes.to_array(Bytes.empty()), [])
 }
+
+// Decode into a negative accumulator so Int::MIN can round-trip in every base.
+let radix_negative_read (s: String) (base: Int): Int = {
+    let negative = s.starts_with("-"); let mut value = 0;
+    let units = chars_of(s);
+    let first = if negative { 1 } else { 0 };
+    for i in first..units.len() {
+        let digit = String.index_of("0123456789abcdefghijklmnopqrstuvwxyz", units[i]).unwrap_or(0 - 1);
+        assert_eq(digit >= 0 && digit < base, true);
+        value = value * base - digit;
+    };
+    if negative { value } else { 0 - value }
+}
+pub let test_radix_full_range (): Unit = {
+    let min = 0 - 9223372036854775807 - 1;
+    let values = [min, min + 1, 0 - 9223372036854775807, 0 - 256, 0 - 1, 0, 1, 255, 256, 9223372036854775807];
+    for radix in 2..37 {
+        for n in values { assert_eq(radix_negative_read(Int.to_radix(n, radix), radix), n); };
+    };
+    for n in values {
+        assert_eq(Int.to_radix(n, min), Int.to_binary(n));
+        assert_eq(Int.to_radix(n, 9223372036854775807), Int.to_radix(n, 36));
+    };
+}

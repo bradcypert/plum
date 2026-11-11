@@ -60,6 +60,8 @@ keeps `to_radix` a number conversion rather than a bit dump. For the
 bit pattern, `Int.to_bits` says so in its name.
 
 Radix is clamped to 2..36: one digit per character, `0-9a-z`.
+Digit values select static strings. Multi-digit conversion grows a unique
+accumulator through Perceus reuse, then reverses it into an exact-sized result.
 
 ## `let Int.to_hex (n: Int): String`
 

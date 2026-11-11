@@ -1,0 +1,1 @@
+let main (): Unit = { for i in 0..1000 { for d in 0..36 { assert_eq(Int.to_radix(d, 36).len(), 1); }; }; }

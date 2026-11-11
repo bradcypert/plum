@@ -863,11 +863,15 @@ jobs:
   # Storage and snapshot checks took almost seven minutes in run 42652141792.
   # All completed successfully, but together with TLS validation they exhausted
   # the native job's 15-minute budget during the final process-capture check.
+  # The expanded storage matrix now builds 15 public fixtures in four modes.
+  # In run 42901721081 it passed in 13m09s, leaving only 29s for snapshots
+  # after setup. Match macOS's 30-minute memory-check budget; keep both suites
+  # and the aggregate requirement intact.
   windows-memory:
     name: Windows storage and ownership checks
     needs: windows-build
     runs-on: windows-latest
-    timeout-minutes: 15
+    timeout-minutes: 30
     defaults:
       run:
         shell: msys2 {0}
