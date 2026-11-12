@@ -2608,3 +2608,21 @@ pub let test_array_concat_persistence (): Unit = {
     for i in 0..128 { saved = saved.push(xs); xs = Array.concat(xs, [i]); };
     for n in 0..128 { assert_eq(saved[n].len(), n); for i in 0..n { assert_eq(saved[n][i], i); }; };
 }
+
+pub let test_bytes_concat_persistence (): Unit = {
+    let mut seed = 41213;
+    for trial in 0..64 {
+        seed = next_seed(seed); let left = Bytes.from_array(int_array(seed, trial % 33, []));
+        seed = next_seed(seed); let right = Bytes.from_array(int_array(seed, (trial * 7) % 33, []));
+        let original_left = left.to_array(); let original_right = right.to_array();
+        let out = Bytes.concat(left, right);
+        assert_eq(out.len(), left.len() + right.len());
+        for i in 0..out.len() {
+            assert_eq(out.at(i), if i < left.len() { left.at(i) } else { right.at(i - left.len()) });
+        };
+        assert_eq(left.to_array(), original_left); assert_eq(right.to_array(), original_right);
+        assert(Bytes.concat(left, Bytes.empty()) == left);
+        assert(Bytes.concat(Bytes.empty(), right) == right);
+        assert(Bytes.concat(out, left) == Bytes.concat(left, Bytes.concat(right, left)));
+    }
+}

@@ -1,0 +1,10 @@
+let grow (n: Int): Bytes = {
+    let mut out = Bytes.empty();
+    for i in 0..n { out = Bytes.concat(out, "x".as_bytes()); };
+    out
+}
+let main (): Unit = {
+    let out = grow(4096);
+    assert_eq(out.len(), 4096);
+    assert_eq(out.at(4095), Some(120));
+}
