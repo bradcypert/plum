@@ -106,9 +106,9 @@ jobs:
       - name: corpus
         run: ./bootstrap/corpus-check --shard ${{ matrix.shard }}/2
 
-  # These suites took almost eight minutes in the CLI/docs job, leaving
-  # later checks unrun at its 15-minute limit. Keep their full coverage
-  # in an isolated checkout with the same source-built compiler.
+  # In run 43153341707 the general sanitizer suite took 8m09s; storage
+  # suites then exhausted the combined job's 15-minute limit. Run them
+  # independently with the same freshly built compiler and full coverage.
   runtime_checks:
     name: Linux sanitizer and ownership checks
     needs: build
@@ -132,6 +132,26 @@ jobs:
         run: ./bootstrap/self-test ./sh.real
       - name: sanitizers cover generated code, native code, leaks and cache transitions
         run: python3 ./bootstrap/sanitizer-check.py ./sh.real
+
+  storage_checks:
+    name: Linux storage construction and memory checks
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v5
+      - name: clang toolchain
+        run: |
+          if ! command -v clang > /dev/null 2>&1; then
+            sudo apt-get update
+            sudo apt-get install -y clang
+          fi
+          clang --version
+      - uses: actions/download-artifact@v4
+        with:
+          name: plum-linux-compiler
+      - name: restore freshly built compiler
+        run: tar -xzf plum-linux-compiler.tar.gz
       - name: String construction preserves ownership, bounded traffic and allocation failures
         run: python3 ./bootstrap/string-growth-check.py ./sh.real --sanitize
       - name: primitive formatting bounds scratch and preserves compact results
@@ -338,7 +358,7 @@ jobs:
   bootstrap:
     name: build from seed and validate
     if: ${{ always() }}
-    needs: [build, bootstrap_proofs, corpus, checks, runtime_checks, native_checks, cache_behavior, cache_objects]
+    needs: [build, bootstrap_proofs, corpus, checks, runtime_checks, storage_checks, native_checks, cache_behavior, cache_objects]
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
@@ -349,6 +369,7 @@ jobs:
           test "${{ needs.corpus.result }}" = success
           test "${{ needs.checks.result }}" = success
           test "${{ needs.runtime_checks.result }}" = success
+          test "${{ needs.storage_checks.result }}" = success
           test "${{ needs.native_checks.result }}" = success
           test "${{ needs.cache_behavior.result }}" = success
           test "${{ needs.cache_objects.result }}" = success
