@@ -1,0 +1,1 @@
+pub let Array.slice (xs: Array[Int]) (lo: Int) (hi: Int): Array[Int] = [99]

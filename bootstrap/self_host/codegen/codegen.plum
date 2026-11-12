@@ -2950,7 +2950,9 @@ let cg_fn_call (p: CgProgram) (env: Array[CgSlot]) (n: Int) (module_name: String
 
 let cg_fn_call_real (p: CgProgram) (env: Array[CgSlot]) (n: Int) (module_name: String) (name: String) (args: Array[typecheck.TExpr]) (targs: Array[typecheck.ITy]) (ret: CgTy) (tail: Bool) (pending: String): Emit = {
     let reverse = module_name == "<prelude>" && name == "Array.reverse" && args.len() == 1 && targs.len() == 1;
-    let sym = if reverse { "@plum_array_reverse" } else { match cg_array_concat_sym(p, name, targs) {
+    let slice = module_name == "<prelude>" && name == "Array.slice" && args.len() == 3 && targs.len() == 1;
+    let owned_array = reverse || slice;
+    let sym = if reverse { "@plum_array_reverse" } else if slice { "@plum_array_slice" } else { match cg_array_concat_sym(p, name, targs) {
         Some(rt) => rt,
         None => match cg_runtime_fn(name) {
             Some(rt) => rt,
@@ -2960,10 +2962,10 @@ let cg_fn_call_real (p: CgProgram) (env: Array[CgSlot]) (n: Int) (module_name: S
                 else { { cg_fail("prelude function ${name} has no implementation in this backend's runtime yet"); "@plum_missing" } },
         } } };
     let a = cg_args(p, env, n, args);
-    // A permutation preserves element ownership; its shared-copy path still
-    // needs the concrete array destructor. Ordinary argument moves retain
-    // the existing scoped lifetime rules for closures and native handles.
-    let vals = if reverse {
+    // Owned array operations need the concrete input destructor. Normal
+    // argument preparation evaluates every operand before consumption and
+    // preserves scoped lifetime rules for closures and native handles.
+    let vals = if owned_array {
         a.vals.push("i1 ".concat(if cg_is_heap(cg_elem_ty(ret)) { "1" } else { "0" }))
             .push("ptr ".concat(cg_rel_sym(cg_concrete(p, typecheck.texpr_ty(p.subst, args[0])))))
     } else { a.vals };
@@ -2984,10 +2986,10 @@ let cg_fn_call_real (p: CgProgram) (env: Array[CgSlot]) (n: Int) (module_name: S
     } else { "call " };
     let call = "  ${reg} = call ${cg_llvm_ty(ret)} ${sym}(${cg_join_commas(vals)})\n"
         // Runtime calls normally borrow every prepared owned argument. Padding
-        // and array reversal consume their first argument; only the remaining
+        // and these array operations consume their first argument; only the remaining
         // language arguments are released here.
-        .concat(if reverse || Option.is_some(cg_runtime_fn(name)) || name == "Array.concat" {
-            cg_dec_args(p, args, a.vals, if reverse || name == "plum__string_pad_raw" { 1 } else { 0 }, "")
+        .concat(if owned_array || Option.is_some(cg_runtime_fn(name)) || name == "Array.concat" {
+            cg_dec_args(p, args, a.vals, if owned_array || name == "plum__string_pad_raw" { 1 } else { 0 }, "")
         } else { "" });
     let code = if cyclic {
         // Releases first, then return the call's own result -- see
