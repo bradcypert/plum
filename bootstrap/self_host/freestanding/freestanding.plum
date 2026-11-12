@@ -1,0 +1,54 @@
+// Initial bare-metal profile. This is a build policy, not a kernel runtime.
+use buildmode;
+
+pub let target (): String = "x86_64-unknown-none"
+pub let enabled (triple: String): Bool = triple == target(())
+
+pub struct Options { pub object: Bool, pub script: String, pub objects: Array[String], pub assembly: Array[String] }
+pub let defaults (): Options = Options { object: false, script: "", objects: [], assembly: [] }
+
+// Parse values as values, never rediscover flags inside a filename. The
+// hosted CLI keeps its existing policy; this parser is for the new profile.
+pub let parse (argv: Array[String]) (start: Int): Result[Options, String] =
+    if Array.filter(argv, |v| v == "--target").len() > 1 || Array.filter(argv, |v| v == "-o").len() > 1 {
+        Err("--target and -o may each be specified only once")
+    } else { parse_at(argv, start, defaults(())) }
+let parse_at (argv: Array[String]) (i: Int) (opts: Options): Result[Options, String] =
+    if i >= argv.len() { Ok(opts) }
+    else {
+        let flag = argv[i];
+        if flag == "--emit-object" { parse_at(argv, i + 1, Options { object: true, ..opts }) }
+        else if flag == "--release" { parse_at(argv, i + 1, opts) }
+        else if flag == "--linker-script" || flag == "--link-object" || flag == "--link-asm"
+            || flag == "--target" || flag == "-o" || flag == "--link-c" || flag == "--native-deps" {
+                if i + 1 >= argv.len() || argv[i + 1].starts_with("-") || argv[i + 1] == "" { Err("${flag} requires a value") }
+                else {
+                    let value = argv[i + 1];
+                    if flag == "--linker-script" && opts.script != "" { Err("--linker-script may be specified only once") }
+                    else if flag == "--native-deps" && value != "none" { Err("freestanding builds do not support hosted native dependencies") }
+                    else {
+                        let next = if flag == "--linker-script" { Options { script: value, ..opts } }
+                        else if flag == "--link-object" { Options { objects: opts.objects.push(value), ..opts } }
+                        else if flag == "--link-asm" { Options { assembly: opts.assembly.push(value), ..opts } }
+                        else { opts };
+                        parse_at(argv, i + 2, next)
+                    }
+                }
+            } else { Err("unsupported freestanding option: ${flag}") }
+    }
+
+pub let validate (opts: Options): String =
+    if opts.object && opts.script != "" { "--emit-object cannot be combined with --linker-script" }
+    else if !opts.object && opts.script == "" { "freestanding linking requires --linker-script (or use --emit-object)" }
+    else { "" }
+
+pub let compile_flags (mode: buildmode.Options): Array[String] =
+    Array.concat(buildmode.compile_flags(mode), ["--target=x86_64-unknown-none", "-march=x86-64", "-mcmodel=kernel", "-mno-red-zone",
+        "-mno-avx", "-mno-avx2", "-mno-avx512f", "-ffreestanding", "-fno-builtin", "-fno-stack-protector",
+        "-fno-pic", "-fno-pie", "-fno-unwind-tables", "-fno-asynchronous-unwind-tables", "-Wno-override-module"])
+
+// Linking is never cached: scripts, object contents and linker defaults
+// must be read again on every invocation. Native object keys include the
+// effective Clang command, including all of compile_flags.
+pub let cache_key (mode: buildmode.Options): String =
+    "plum-freestanding-v1:".concat(target(())).concat(":").concat(buildmode.cache_key(mode))

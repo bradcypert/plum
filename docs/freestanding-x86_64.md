@@ -1,10 +1,12 @@
 # x86-64 freestanding target and kernel ABI
 
 Status: implementation contract for [#505](https://github.com/bradcypert/plum/issues/505).
-This profile is not implemented or a supported platform tier yet. The
+The build pipeline is experimental; the freestanding runtime and boot adapter
+are not implemented, and this is not a supported platform tier. The
 [tracking issue](https://github.com/bradcypert/plum/issues/514) records the work
 needed to make it executable. Requirements below describe the intended behavior,
-not capabilities of today's compiler. Normal hosted builds retain their behavior.
+not a claim of boot support. See [build commands](../RUNNING.md#freestanding-objects-and-elf-linking)
+for the implemented pipeline. Normal hosted builds retain their behavior.
 
 ## Scope and terms
 

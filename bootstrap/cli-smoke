@@ -367,7 +367,8 @@ check $? "plum build wrote the failure to stdout, not stderr: $(head -n 1 "$work
 ! grep -q 'unsupported target' "$work/fail.out"
 check $? "plum build printed the failure on stdout as well as stderr"
 
-# Known-width architectures still need a supported OS. In particular,
+# Known-width architectures still need a supported OS or the explicit
+# x86_64-unknown-none freestanding profile. In particular,
 # do not compile Linux shims for FreeBSD or macOS shims for iOS just
 # because their triples share a vendor or architecture with a supported
 # target.
@@ -378,7 +379,7 @@ for target in x86_64-unknown-freebsd arm64-apple-ios; do
     status=$?
     [ "$status" -ne 0 ]
     check $? "plum build accepted unsupported OS target $target"
-    grep -q 'supports Linux, macOS and Windows' "$work/fail.err"
+    grep -Fq 'supports Linux, macOS, Windows and x86_64-unknown-none targets only.' "$work/fail.err"
     check $? "plum build did not explain unsupported OS target $target: $(head -n 1 "$work/fail.err")"
 done
 
