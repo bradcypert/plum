@@ -1,0 +1,1 @@
+byte slices: shared identities, static empties, compact subranges and immutable aliases

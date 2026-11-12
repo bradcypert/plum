@@ -214,8 +214,10 @@ pub let String.reverse (s: String): String = plum__string_reverse_raw(s)
 pub let String.is_empty (s: String): Bool = s.len() == 0
 /// Characters from `start` up to but not including `end`, counted in
 /// CODEPOINTS rather than bytes. Out-of-range bounds are clamped.
-/// Scans only as far as the requested boundaries and copies the selected
-/// bytes once, without allocating an array or individual characters.
+/// Scans only as far as the requested boundaries, without allocating an
+/// array or individual characters. Whole ranges share their owned storage;
+/// empty ranges use shared static storage. Other ranges copy only the
+/// selected bytes into compact storage.
 pub let String.slice (s: String) (start: Int) (end: Int): String = {
     let lo = if start < 0 { 0 } else { start };
     if end <= lo { "" } else {
@@ -814,6 +816,8 @@ pub let Bytes.as_string (b: Bytes): Result[String, String] =
 /// Bytes from `start` up to but not including `end`, with bounds
 /// clamped. A slice can split a multi-byte character, so the result is
 /// not guaranteed to be valid UTF-8.
+/// Whole ranges share their owned storage; empty ranges use shared static
+/// storage. Other ranges copy only the selected bytes into compact storage.
 pub let Bytes.slice (b: Bytes) (start: Int) (end: Int): Bytes = {
     let n = bytes_len_raw(b);
     let lo = if start < 0 { 0 } else if start > n { n } else { start };

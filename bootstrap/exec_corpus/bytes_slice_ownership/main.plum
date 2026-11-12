@@ -1,0 +1,49 @@
+use Memory;
+let live (): Int = match Memory.snapshot() { Some(s) => s.live_bytes, None => -1 }
+let buffer (n: Int): Bytes = "x".repeat(n).as_bytes()
+let whole (b: Bytes): Bytes = Bytes.slice(b, 0, 9223372036854775807)
+let text_whole (s: String): String = String.slice(s, 0, 9223372036854775807)
+let compact (): Bytes = Bytes.slice(buffer(1048576), 8, 9)
+let compact_text (): String = String.slice("é".repeat(524288), 8, 9)
+let memory_round (): Unit = {
+    let source = buffer(1024); let before = live();
+    let full = whole(source);
+    let empty = Bytes.slice(source, 3, 3);
+    if before >= 0 { assert_eq(live(), before); };
+    let part = Bytes.slice(source, 1, 4);
+    if before >= 0 { assert_eq(live() - before, 20); };
+    assert(full == source); assert(empty == Bytes.empty()); assert(part == buffer(3));
+}
+let main (): Unit = {
+    let before = live(); memory_round();
+    if before >= 0 { assert_eq(live(), before); };
+    let before = live(); let tiny = compact(); let text_tiny = compact_text();
+    let blank = Bytes.slice(buffer(1048576), 0, 0);
+    if before >= 0 { assert_eq(live() - before, 37); };
+    assert(tiny == "x".as_bytes()); assert_eq(text_tiny, "é"); assert(blank == Bytes.empty());
+    assert(whole(buffer(31)) == buffer(31));
+    let raw = Bytes.from_array([0, 255, 128, 195, 169, 0]);
+    let saved = whole(raw); let text = unsafe { raw.as_cstr().as_string() };
+    let mut copy = whole(raw); copy = copy.concat(copy);
+    assert_eq(copy.to_array(), [0, 255, 128, 195, 169, 0, 0, 255, 128, 195, 169, 0]);
+    assert_eq(raw.to_array(), [0, 255, 128, 195, 169, 0]); assert(saved == raw);
+    assert_eq(text, "");
+    let original = "aé中🙂\x00".repeat(128); let view = original.as_cstr();
+    let mut full = text_whole(original); let bytes = whole(original.as_bytes());
+    full = full.concat("changed");
+    assert_eq(full, original.concat("changed")); assert(bytes == original.as_bytes());
+    assert_eq(unsafe { view.as_string() }, "aé中🙂");
+    assert_eq(text_whole("é".repeat(31)), "é".repeat(31));
+    let slice: (Bytes, Int, Int) -> Bytes = Bytes.slice;
+    let partial = Bytes.slice(raw, 1);
+    assert_eq(slice(raw, 1, 4).to_array(), [255, 128, 195]);
+    assert(slice(raw, 0, 9223372036854775807) == raw);
+    assert(whole("é".as_bytes()) == "é".as_bytes());
+    assert_eq(partial(4).to_array(), [255, 128, 195]);
+    let mut source = buffer(31);
+    let out = Bytes.slice(source, { source = buffer(7); 0 }, 9223372036854775807);
+    assert(out == buffer(31)); assert(source == buffer(7));
+    let left = spawn { whole(raw) }; let right = spawn { Bytes.slice(raw, 1, 4) };
+    assert(left.join() == raw); assert_eq(right.join().to_array(), [255, 128, 195]);
+    println("byte slices: shared identities, static empties, compact subranges and immutable aliases")
+}

@@ -19,8 +19,10 @@ Whether the string has no bytes.
 
 Characters from `start` up to but not including `end`, counted in
 CODEPOINTS rather than bytes. Out-of-range bounds are clamped.
-Scans only as far as the requested boundaries and copies the selected
-bytes once, without allocating an array or individual characters.
+Scans only as far as the requested boundaries, without allocating an
+array or individual characters. Whole ranges share their owned storage;
+empty ranges use shared static storage. Other ranges copy only the
+selected bytes into compact storage.
 
 ## `let String.repeat (s: String) (n: Int): String`
 

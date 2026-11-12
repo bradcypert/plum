@@ -2626,3 +2626,24 @@ pub let test_bytes_concat_persistence (): Unit = {
         assert(Bytes.concat(out, left) == Bytes.concat(left, Bytes.concat(right, left)));
     }
 }
+
+pub let test_bytes_slice_ranges (): Unit = {
+    let mut seed = 6037;
+    let bounds = [0 - 9223372036854775807 - 1, -1, 0, 1, 7, 32, 9223372036854775807];
+    for trial in 0..32 {
+        seed = next_seed(seed); let bytes = Bytes.from_array(int_array(seed, trial, []));
+        let saved = bytes.to_array();
+        for start in bounds {
+            for end in bounds {
+                let lo = Int.max(0, Int.min(bytes.len(), start));
+                let hi = Int.max(lo, Int.min(bytes.len(), end));
+                let out = Bytes.slice(bytes, start, end);
+                assert_eq(out.len(), hi - lo);
+                for i in 0..out.len() { assert_eq(out.at(i), Some(saved[lo + i])); };
+            };
+        };
+        let mut changed = Bytes.slice(bytes, 0, 9223372036854775807);
+        changed = changed.concat(Bytes.from_array([0, 255]));
+        assert_eq(changed.len(), bytes.len() + 2); assert_eq(bytes.to_array(), saved);
+    }
+}
