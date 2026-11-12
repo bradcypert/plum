@@ -28,7 +28,7 @@ let cg_reaches_batch (p: CgProgram) (batch: Array[CgInst]) (read: Int) (queued: 
         let s = cg_sym(head.module, head.name, head.targs);
         if s == target { true }
         else if Array.contains(seen, s) { cg_reaches_batch(p, batch, read + 1, queued, target, seen, fuel + 1) }
-        else if Option.is_some(cg_runtime_fn(head.name)) || head.name == "Array.concat" {
+        else if Option.is_some(cg_runtime_fn(head.name)) || cg_is_array_concat(head.module, head.name, head.targs) {
             cg_reaches_batch(p, batch, read + 1, queued, target, seen.push(s), fuel + 1)
         }
         else { match cg_find_tfn(p, head.module, head.name, 0) {
@@ -55,7 +55,7 @@ let cg_reachable_batch (p: CgProgram) (batch: Array[CgInst]) (read: Int) (queued
     else if fuel > 10000 { { cg_fail("monomorphization did not terminate after 10000 instantiations — polymorphic recursion?"); done } }
     else {
         let head = batch[read];
-        if Option.is_some(cg_runtime_fn(head.name)) || head.name == "Array.concat" { cg_reachable_batch(p, batch, read + 1, queued, done, fuel + 1) }
+        if Option.is_some(cg_runtime_fn(head.name)) || cg_is_array_concat(head.module, head.name, head.targs) { cg_reachable_batch(p, batch, read + 1, queued, done, fuel + 1) }
         else if cg_inst_seen(done, head, 0) { cg_reachable_batch(p, batch, read + 1, queued, done, fuel + 1) }
         else {
             match cg_find_tfn(p, head.module, head.name, 0) {

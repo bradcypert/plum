@@ -2588,3 +2588,23 @@ pub let test_array_slice_ranges (): Unit = {
         assert_eq(xs, saved);
     }
 }
+
+// Independent indexed concatenation model plus retained growing snapshots.
+pub let test_array_concat_persistence (): Unit = {
+    let mut seed = 29761;
+    for trial in 0..64 {
+        seed = next_seed(seed); let left = int_array(seed, trial % 33, []);
+        seed = next_seed(seed); let right = int_array(seed, (trial * 7) % 33, []);
+        let out = Array.concat(left, right);
+        assert_eq(out.len(), left.len() + right.len());
+        for i in 0..out.len() { assert_eq(out[i], if i < left.len() { left[i] } else { right[i - left.len()] }); };
+        let texts = Array.map(left, |n| (n % 7).to_string().repeat(4));
+        let joined = Array.concat(texts, texts);
+        assert_eq(joined.len(), 2 * texts.len());
+        for i in 0..joined.len() { assert_eq(joined[i], texts[i % texts.len()]); };
+        assert_eq(Array.take(out, left.len()), left); assert_eq(Array.drop(out, left.len()), right);
+    };
+    let mut xs: Array[Int] = []; let mut saved: Array[Array[Int]] = [];
+    for i in 0..128 { saved = saved.push(xs); xs = Array.concat(xs, [i]); };
+    for n in 0..128 { assert_eq(saved[n].len(), n); for i in 0..n { assert_eq(saved[n][i], i); }; };
+}
