@@ -170,6 +170,7 @@ pub let capabilities (): JsonValue =
             JsonEntry { key: "textDocumentSync", value: JsonNumber(1.0) },
             JsonEntry { key: "hoverProvider", value: JsonBool(true) },
             JsonEntry { key: "definitionProvider", value: JsonBool(true) },
+            JsonEntry { key: "referencesProvider", value: JsonBool(true) },
             // `plum fmt`, over LSP. The formatter is a pure
             // `String -> String`, so the whole of this capability is
             // one whole-file `TextEdit` -- see `format_result`.

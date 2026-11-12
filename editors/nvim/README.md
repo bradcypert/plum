@@ -69,6 +69,24 @@ confirm.
 - `parser/` — where the compiled `plum.so` goes (step 2 above);
   git-ignored, not part of the repo.
 
+## References
+
+Find references (`vim.lsp.buf.references()`, normally `grr` in Neovim)
+supports functions, associated methods on named receivers, global values,
+local bindings, assignments, typed parameters, and struct and enum types.
+Type references include annotations (also inside generics, tuples, and
+function types), constructors, patterns, and associated-function qualifiers.
+It distinguishes
+shadowed bindings and module-qualified names, includes unsaved buffers,
+and honors the client's `includeDeclaration` setting. Analysis uses the
+current project and its dependencies; a `plum.pkg` identifies the project
+root when requesting references from a nested module.
+
+Reference results currently require a project that type-checks. Struct
+fields and closure parameters are not indexed yet.
+After updating the compiler, restart Neovim's Plum LSP client to pick up
+the new `referencesProvider` capability.
+
 ## Known limitation
 
 `plum lsp` reports diagnostics one at a time (the first error found),

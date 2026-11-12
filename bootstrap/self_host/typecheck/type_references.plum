@@ -1,0 +1,73 @@
+use parser;
+
+// Patterns resolve from the scrutinee, which may pick a sibling module's
+// Bullet even when a different Bullet is visible to ordinary annotations.
+// Pair the original pattern with its checked form, then walk their children
+// in source order to associate parser sites with the resolved identities.
+let note_pattern_type_references (path: String) (source: parser.PPattern) (typed: TPattern) (cursor: Int): Int =
+    if cursor < 0 { cursor }
+    else { match source {
+        PStruct(parts, fields, _) => match typed {
+            TPStruct(identity, checked) => {
+                let next = note_pattern_type_site(path, parts, parts, identity, cursor);
+                note_pattern_type_children(path, Array.map(fields, |f| f.pattern), Array.map(checked, |f| f.pattern), next)
+            },
+            _ => cursor,
+        },
+        PVariant(parts, children) => match typed {
+            TPVariant(identity, _, checked) => {
+                let prefix = Array.slice(parts, 0, parts.len() - 1);
+                let next = note_pattern_type_site(path, parts, prefix, identity, cursor);
+                note_pattern_type_children(path, children, checked, next)
+            },
+            TPStruct(identity, fields) => {
+                let next = note_pattern_type_site(path, parts, parts, identity, cursor);
+                note_pattern_type_children(path, children, Array.map(fields, |f| f.pattern), next)
+            },
+            _ => cursor,
+        },
+        PTuple(children) => match typed { TPTuple(checked) => note_pattern_type_children(path, children, checked, cursor), _ => cursor },
+        POr(children) => match typed { TPOr(checked) => note_pattern_type_children(path, children, checked, cursor), _ => cursor },
+        _ => cursor,
+    } }
+
+let note_pattern_type_children (path: String) (source: Array[parser.PPattern]) (typed: Array[TPattern]) (cursor: Int): Int = {
+    let mut next = cursor;
+    for i in 0..source.len() {
+        if i < typed.len() { next = note_pattern_type_references(path, source[i], typed[i], next); };
+    };
+    next
+}
+
+let note_pattern_type_site (path: String) (written: Array[String]) (nominal: Array[String]) (identity: String) (cursor: Int): Int = {
+    let mut found: Option[parser.TypeSite] = None;
+    for site in parser.recorded_type_sites() {
+        if site.kind == TypePatternSite && site.path == path && site.start >= cursor && site.segments == written {
+            let earlier = match found { None => true, Some(previous) => site.start < previous.start };
+            if earlier { found = Some(site); };
+        };
+    };
+    match found {
+        None => cursor,
+        Some(site) => {
+            if !Array.is_empty(nominal) {
+                match reference_path_name(path, nominal, site.start) {
+                    None => (),
+                    Some(name) => add_reference(path, name.offset, name.name, type_symbol(identity), false),
+                }
+            };
+            site.offset + written[written.len() - 1].len()
+        },
+    }
+}
+
+let reference_path_name (path: String) (parts: Array[String]) (start: Int): Option[ReferenceName] = {
+    let mut site = Some(ReferenceName { name: parts[0], offset: start });
+    for i in 1..parts.len() {
+        site = match site {
+            None => None,
+            Some(previous) => reference_member(reference_tokens(path), previous.offset, parts[i], 0),
+        };
+    };
+    site
+}
