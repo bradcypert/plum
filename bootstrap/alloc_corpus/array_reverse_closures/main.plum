@@ -1,0 +1,12 @@
+let func (n: Int): () -> Int = || n
+let input (): Array[() -> Int] = {
+    let mut xs: Array[() -> Int] = [];
+    for i in 0..256 { xs = xs.push(func(i)); };
+    xs
+}
+let main (): Unit = {
+    let xs = input(); let snapshot = xs;
+    let ys = Array.reverse(xs);
+    assert_eq(ys.len(), 256);
+    for i in 0..256 { assert_eq(ys[i](), 255 - i); assert_eq(snapshot[i](), i); };
+}

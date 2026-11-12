@@ -1,0 +1,86 @@
+struct Box { text: String }
+enum Item { Empty, Text(String) }
+extern "C" {
+    fn rev_close(n: Int) -> Unit;
+    fn rev_count() -> Int;
+    fn rev_at(i: Int) -> Int;
+    fn rev_pattern(i: Int) -> Float;
+    fn rev_bits(n: Float) -> Int;
+}
+handle Resource { on_drop: rev_close }
+let make (n: Int): Resource = unsafe { Resource.from_raw(n) }
+let text (n: Int): String = n.to_string().repeat(16)
+let reverse[T] (xs: Array[T]): Array[T] = Array.reverse(xs)
+let owned (xs: Array[Int]) (n: Int): Array[Int] =
+    if n <= 0 { xs } else { owned(xs.reverse(), n - 1) }
+let captured (n: Int): () -> Int = { let owner = make(n); || unsafe { owner.raw() } }
+let scoped (): Unit = {
+    let xs = [make(1), make(2), make(3)];
+    let marker = make(4);
+    let ys = reverse(xs);
+    assert_eq(unsafe { ys[0].raw() }, 3);
+    assert_eq(unsafe { rev_count() }, 0);
+}
+let closures (): Unit = {
+    let xs = [captured(5), captured(6)];
+    let marker = make(7);
+    let ys = reverse(xs);
+    assert_eq(ys[0](), 6); assert_eq(ys[1](), 5);
+    assert_eq(unsafe { rev_count() }, 4);
+}
+let main (): Unit = {
+    let empty: Array[String] = [];
+    assert_eq(reverse(empty), []);
+    // Filtering leaves a dynamic empty/small cell with its original reserve.
+    assert_eq(reverse(Array.filter([text(3), text(4)], |s| false)), []);
+    assert_eq(reverse(Array.filter([text(3), text(4)], |s| s == text(3))), [text(3)]);
+    assert_eq(reverse([text(1)]), [text(1)]);
+    assert_eq(reverse([0, 1]), [1, 0]);
+    assert_eq(reverse([0, 1, 2, 3, 4]), [4, 3, 2, 1, 0]);
+    assert_eq(owned([0, 1, 2, 3], 1001), [3, 2, 1, 0]);
+    let f: (Array[Int]) -> Array[Int] = Array.reverse;
+    assert_eq(f([1, 2, 3]), [3, 2, 1]);
+    assert_eq(reverse([true, false, false]), [false, false, true]);
+    assert_eq(reverse([(), (), ()]), [(), (), ()]);
+    let floats = reverse([1.25, -0.0, 2.5]);
+    assert_eq(floats[0], 2.5); assert_eq(floats[1].to_string(), "-0"); assert_eq(floats[2], 1.25);
+
+    let patterns = reverse([unsafe { rev_pattern(0) }, unsafe { rev_pattern(1) }, unsafe { rev_pattern(2) }, unsafe { rev_pattern(3) }]);
+    for i in 0..4 { assert_eq(unsafe { rev_bits(patterns[i]) }, unsafe { rev_bits(rev_pattern(3 - i)) }); };
+    let large = "abcd".repeat(25000).as_bytes().to_array();
+    let large = reverse(large);
+    assert_eq(large.len(), 100000); assert_eq(large[0], 100); assert_eq(large[99999], 97);
+
+    let a = text(1); let b = text(2);
+    let bytes = a.as_bytes(); let view = unsafe { a.as_cstr() };
+    let xs = [a, a, b]; let snapshot = xs;
+    let ys = reverse(xs);
+    assert_eq(ys, [b, a, a]); assert_eq(snapshot, [a, a, b]);
+    assert_eq(bytes.to_hex(), a.as_bytes().to_hex());
+    assert_eq(unsafe { view.as_string() }, a);
+    let buffers = reverse([a.as_bytes(), b.as_bytes()]);
+    assert_eq(buffers[0].to_hex(), b.as_bytes().to_hex());
+    let views = reverse([unsafe { a.as_cstr() }, unsafe { b.as_cstr() }]);
+    assert_eq(unsafe { views[0].as_string() }, b);
+    assert_eq(reverse([Box { text: a }, Box { text: b }])[0].text, b);
+    assert_eq(reverse([Text(a), Empty, Text(b)]), [Text(b), Empty, Text(a)]);
+    let nested = [[1, 2], [3, 4]]; let saved = nested;
+    assert_eq(reverse(nested), [[3, 4], [1, 2]]); assert_eq(saved, [[1, 2], [3, 4]]);
+    let pairs = reverse([(a, 1), (b, 2)]);
+    let (s, n) = pairs[0]; assert_eq(s, b); assert_eq(n, 2);
+    let first = ref(a); let second = ref(b);
+    let refs = reverse([first, second]); first.set(text(3));
+    assert_eq(refs[0].get(), b); assert_eq(refs[1].get(), text(3));
+    let xs = [Box { text: a }, Box { text: b }];
+    let left = spawn { reverse(xs) }; let right = spawn { reverse(xs) };
+    assert_eq(left.join()[0].text, b); assert_eq(right.join()[1].text, a);
+    assert_eq(xs[0].text, a);
+
+    scoped();
+    assert_eq(unsafe { rev_count() }, 4);
+    for i in 0..4 { assert_eq(unsafe { rev_at(i) }, [4, 1, 2, 3][i]); };
+    closures();
+    assert_eq(unsafe { rev_count() }, 7);
+    for i in 0..3 { assert_eq(unsafe { rev_at(i + 4) }, [7, 5, 6][i]); };
+    println("Array.reverse: permutations, aliases, function values and scoped owners")
+}

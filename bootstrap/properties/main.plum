@@ -2542,3 +2542,24 @@ pub let test_array_callback_captures (): Unit = {
         assert_eq(callback_filter(xs), filtered);
     }
 }
+
+// Check the indexed permutation independently of reverse-twice, including odd
+// lengths, repeated heap children and retained snapshots.
+pub let test_array_reverse_permutation (): Unit = {
+    let mut seed = 42403;
+    for trial in 0..128 {
+        seed = next_seed(seed);
+        let xs = int_array(seed, trial % 65, []);
+        let saved = xs;
+        let texts = Array.map(xs, |n| (n % 7).to_string().repeat(4));
+        let reversed = Array.reverse(xs);
+        let reversed_texts = Array.reverse(texts);
+        assert_eq(reversed.len(), saved.len());
+        for i in 0..saved.len() {
+            assert_eq(reversed[i], saved[saved.len() - 1 - i]);
+            assert_eq(reversed_texts[i], texts[texts.len() - 1 - i]);
+        };
+        assert_eq(Array.reverse(reversed), saved);
+        assert_eq(Array.reverse(reversed_texts), texts);
+    }
+}
