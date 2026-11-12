@@ -1970,7 +1970,24 @@ let lsp_handle (body: String) (state: LspState): LspState =
     }
 
 let lsp_dispatch (req: lsp.Request): Unit =
-    if req.method == "textDocument/completion" || req.method == "textDocument/hover" || req.method == "textDocument/definition" {
+    if req.method == "textDocument/references" {
+        match lsp.params_position(req.params) {
+            None => lsp_error(req.id, 0 - 32602, "Invalid reference position"),
+            Some(position) => match lsp.json_field(req.params, "context") {
+                Some(context) => match lsp.json_field(context, "includeDeclaration") {
+                    Some(JsonBool(include)) => {
+                        let path = lsp.uri_to_path(lsp.document_uri(req.params));
+                        lsp_reply(req.id, if path == "" { JsonArray([]) } else {
+                            lsp_with_snapshot(path, JsonArray([]), |snapshot| lsp_answer_references(snapshot, position, include))
+                        })
+                    },
+                    _ => lsp_error(req.id, 0 - 32602, "Expected context.includeDeclaration boolean"),
+                },
+                None => lsp_error(req.id, 0 - 32602, "Expected reference context"),
+            },
+        };
+        ()
+    } else if req.method == "textDocument/completion" || req.method == "textDocument/hover" || req.method == "textDocument/definition" {
         match lsp.params_position(req.params) {
             None => lsp_error(req.id, 0 - 32602, "Invalid position: expected line and character uintegers"),
             Some(position) => {
@@ -4369,6 +4386,10 @@ let main (): Unit = {
         else { cmd_doc(argv[1], out, html, home, with_deps) }
     } else if argv.len() < 2 {
         usage(());
+    } else if argv[0] == "references" && argv.len() >= 6 {
+        cmd_references(argv[1], argv[2],
+            Result.unwrap_or(String.parse_int(argv[3]), 1),
+            Result.unwrap_or(String.parse_int(argv[4]), 1), argv[5] == "true");
     } else if argv[0] == "query" && argv.len() >= 5 {
         cmd_query(argv[1], argv[2],
             Result.unwrap_or(String.parse_int(argv[3]), 1),

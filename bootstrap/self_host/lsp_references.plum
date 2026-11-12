@@ -1,0 +1,97 @@
+use lsp;
+use lexer;
+use parser;
+use typecheck;
+use codegen;
+
+// Parse/check only in a child: incomplete source must never abort the server.
+// One snapshot and one check cover all files, including open dependencies.
+let cmd_references (dir: String) (path: String) (line: Int) (col: Int) (include: Bool): Unit = {
+    typecheck.record_references();
+    parser.record_type_sites();
+    let items = codegen.cg_with_prelude(parser.ProgramNode { items: collect_project(dir) }).items;
+    for item in items {
+        match item.kind {
+            IKLet(def) => typecheck.reference_declaration(item, def.name),
+            IKExtern(block) => for fn_decl in block.fns { typecheck.reference_declaration(item, fn_decl.name); },
+            IKStruct(decl) => typecheck.reference_type_declaration(item, decl.name),
+            IKEnum(decl) => typecheck.reference_type_declaration(item, decl.name),
+            _ => (),
+        };
+    };
+    typecheck.check_program(parser.ProgramNode { items: items });
+    let src = Result.unwrap_or(source_read_path(path), "");
+    let off = lexer.offset_of(src, line, col);
+    let nodes = typecheck.recorded_references();
+    let symbol = reference_symbol_at(nodes, path, off, 0);
+    let mut locations = [];
+    if symbol != "" {
+        for node in nodes {
+            if node.symbol == symbol && (include || !node.declaration) {
+                match source_read_path(node.path) {
+                    Err(_) => (),
+                    Ok(text) => {
+                        let at = reference_lsp_position(text, node.offset);
+                        let location = lsp.location_at(node.path, at.line, at.col, node.name.len());
+                        if !Array.contains(locations, location) { locations = locations.push(location); () };
+                    },
+                };
+            };
+        };
+    };
+    println(lsp.encode_json(JsonArray(locations)))
+}
+
+let reference_symbol_at (nodes: Array[typecheck.Reference]) (path: String) (off: Int) (i: Int): String =
+    if i >= nodes.len() { "" }
+    else if nodes[i].path == path && off >= nodes[i].offset && off < nodes[i].offset + nodes[i].name.len() { nodes[i].symbol }
+    else { reference_symbol_at(nodes, path, off, i + 1) }
+
+let lsp_answer_references (snapshot: LspSnapshot) (position: lsp.Position) (include: Bool): JsonValue =
+    match snapshot_read(snapshot, snapshot.target) {
+        Err(_) => JsonArray([]),
+        Ok(src) => {
+            let at = lexer.line_col(src, reference_lsp_offset(src, position));
+            match lsp_run(["references", snapshot.root, snapshot.target, at.line.to_string(), at.col.to_string(), if include { "true" } else { "false" }]) {
+                Err(_) => JsonArray([]),
+                Ok(result) => if result.exit_code != 0 { JsonArray([]) }
+                else { match json_parse(result.stdout) {
+                    Ok(JsonArray(locations)) => JsonArray(Array.map(locations, |location| {
+                        let real = snapshot_restore(snapshot, lsp.uri_to_path(lsp.json_field_str(location, "uri")));
+                        JsonObject([
+                            JsonEntry { key: "uri", value: JsonString(lsp.path_to_uri(real)) },
+                            JsonEntry { key: "range", value: Option.unwrap_or(lsp.json_field(location, "range"), JsonNull) },
+                        ])
+                    })),
+                    _ => JsonArray([]),
+                } }
+            }
+        },
+    }
+
+// The compiler counts Unicode scalars; LSP defaults to UTF-16 units.
+// Convert only at the protocol boundary and clamp inside a surrogate pair.
+let reference_lsp_offset (src: String) (position: lsp.Position): Int = {
+    let cs = chars_of(src);
+    let start = lexer.offset_of(src, position.line, 1);
+    let mut off = start;
+    let mut units = 1;
+    let mut done = false;
+    for i in start..cs.len() {
+        let width = if cs[i].as_bytes().len() >= 4 { 2 } else { 1 };
+        if !done && cs[i] != "\r" && cs[i] != "\n" && units + width <= position.col {
+            off = i + 1;
+            units = units + width;
+        } else { done = true; };
+    };
+    off
+}
+
+let reference_lsp_position (src: String) (off: Int): lexer.LineCol = {
+    let at = lexer.line_col(src, off);
+    let cs = chars_of(src);
+    let start = lexer.offset_of(src, at.line, 1);
+    let mut col = 1;
+    for i in start..off { col = col + if cs[i].as_bytes().len() >= 4 { 2 } else { 1 }; };
+    lexer.LineCol { line: at.line, col: col }
+}

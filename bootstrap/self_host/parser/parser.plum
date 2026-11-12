@@ -550,6 +550,7 @@ let parse_let_def (tokens: Array[lexer.Token]) (pos: Int): LetDefResult = {
     let name_tok = expect_ident(tokens, p1);
     let dot_bump = bump_if(tokens, name_tok.next_pos, TokDot);
     let name_r = if dot_bump.matched {
+        note_type_site(p1, [name_tok.name], TypeConstructionSite);
         let second = expect_ident(tokens, dot_bump.next_pos);
         NameResult { value: name_tok.name.concat(".").concat(second.name), next_pos: second.next_pos }
     } else {
@@ -869,12 +870,14 @@ let parse_type (tokens: Array[lexer.Token]) (pos: Int): TypeResult =
     if check(tokens, pos, TokLParen) { parse_paren_or_function_type(tokens, pos) }
     else {
         let path_r = parse_dotted_path_acc(tokens, pos, []);
-        if check(tokens, path_r.next_pos, TokLBracket) {
+        let result = if check(tokens, path_r.next_pos, TokLBracket) {
             let args_r = parse_generic_args(tokens, path_r.next_pos);
             TypeResult { value: TyGeneric(path_r.value, args_r.value), next_pos: args_r.next_pos }
         } else {
             TypeResult { value: TyPath(path_r.value), next_pos: path_r.next_pos }
-        }
+        };
+        if TYPE_SITES_ON.get() { note_type_site_with_annotation(pos, path_r.value, TypeAnnotationSite, Some(result.value)) };
+        result
     }
 
 let parse_paren_or_function_type (tokens: Array[lexer.Token]) (pos: Int): TypeResult = {
@@ -971,6 +974,7 @@ let is_capitalized (name: String): Bool = Array.contains(UPPERCASE_CHARS, chars_
 
 let parse_path_shaped_pattern (tokens: Array[lexer.Token]) (pos: Int): PatResult = {
     let path_r = parse_dotted_path_acc(tokens, pos, []);
+    note_type_site(pos, path_r.value, TypePatternSite);
     match tokens[path_r.next_pos] {
         TokLParen => {
             let open = path_r.next_pos + 1;
@@ -1602,6 +1606,7 @@ let parse_path_shaped_expr (tokens: Array[lexer.Token]) (pos: Int) (ns: Bool): E
     let path_r = parse_expr_path_acc(tokens, pos, []);
     let last_name = path_r.value[path_r.value.len() - 1];
     if check(tokens, path_r.next_pos, TokLBrace) && is_capitalized(last_name) && !ns {
+        note_type_site(pos, path_r.value, TypeConstructionSite);
         parse_struct_literal(tokens, path_r.next_pos, path_r.value)
     } else {
         ExprResult { value: path_to_field_chain(path_r.value, offset_at(pos)), next_pos: path_r.next_pos }

@@ -101,10 +101,12 @@ let NODES: Ref[Array[NodeType]] = ref(no_nodes(()))
 pub let record_types (on: Bool): Unit = { RECORD.set(on); NODES.set(no_nodes(())) }
 pub let recorded_types (): Array[NodeType] = NODES.get()
 
-let note_at (name: String) (offset: Int) (ty: ITy) (def_offset: Int): Unit =
+let note_at (name: String) (offset: Int) (ty: ITy) (def_offset: Int): Unit = {
+    note_local_reference(err_path(()), name, offset, def_offset);
     if RECORD.get() && offset >= 0 {
         NODES.set(NODES.get().push(NodeType { path: err_path(()), offset: offset, name: name, ty: render_ty(ty), def_offset: def_offset }))
     } else { () }
+}
 
 let note_ident (name: String) (offset: Int) (ty: ITy) (def_offset: Int): Unit = note_at(name, offset, ty, def_offset)
 
@@ -434,7 +436,7 @@ let bind_param (env: TyEnv) (p: parser.ParamNode) (ty: ITy): TyEnv =
     match p {
         ParamIdent(name) => tyenv_extend(env, name, ty, 0 - 1),
         ParamPatternTy(pattern, _) => match pattern {
-            PIdent(name, off) => tyenv_extend(env, name, ty, off),
+            PIdent(name, off) => { note_binding(name, off, ty); tyenv_extend(env, name, ty, off) },
             PTuple(elems) => if Array.is_empty(elems) { env } else { { fail_tc("destructuring parameters aren't supported yet"); env } },
             _ => { fail_tc("destructuring parameters aren't supported yet"); env },
         },
@@ -447,7 +449,8 @@ pub let check_program (program: parser.ProgramNode): Unit = {
     let ctx = build_context(program);
     let p2 = build_sigs(ctx, program);
     check_handle_drops(p2, program.items, 0);
-    check_ordered_bounds(ctx, program.items, check_all_fns(p2, program.items, 0, []))
+    check_ordered_bounds(ctx, program.items, check_all_fns(p2, program.items, 0, []));
+    if REFERENCES_ON.get() { record_type_references(ctx, program.items, parser.recorded_type_sites()) }
 }
 
 // A handle's `on_drop` must name an `extern "C"` function taking one
@@ -940,6 +943,15 @@ let ir_unsupported (subst: Subst) (state: FreshState) (what: String): InferResul
     ir_leaf(ITUnit, subst, state, TUnsupported(what))
 
 pub let infer_expr (p2: Program2) (state: FreshState) (env: TyEnv) (acc: Subst) (e: parser.PExpr): InferResult =
+    if !REFERENCES_ON.get() { infer_expr_inner(p2, state, env, acc, e) }
+    else {
+        let path = err_path(());
+        let r = infer_expr_inner(p2, state, env, acc, e);
+        note_expression_reference(p2, path, env, e, r.texpr);
+        r
+    }
+
+let infer_expr_inner (p2: Program2) (state: FreshState) (env: TyEnv) (acc: Subst) (e: parser.PExpr): InferResult =
     match e {
         EInt(v) => ir_leaf(ITInt, acc, state, TInt(v)),
         EFloat(v) => ir_leaf(ITFloat, acc, state, TFloat(v)),
@@ -1070,7 +1082,7 @@ let infer_ident (p2: Program2) (state: FreshState) (env: TyEnv) (acc: Subst) (na
         // instead of at every mention.
         None => match find_global_def(p2, name) {
             Some(def) => {
-                let r = infer_expr(p2, state, tyenv_empty(()), acc, def.body);
+                let r = infer_reference_global(p2, state, acc, def.body);
                 // The DECLARED type decides, when there is one.
                 //
                 // Inferring the body was the only source of type here,
@@ -1707,7 +1719,7 @@ let infer_field (p2: Program2) (state: FreshState) (env: TyEnv) (acc: Subst) (ba
         Some(sig) => infer_partial_call(p2, state, env, acc, sig, []),
         None => match qualified_global(p2, env, base, name) {
             Some(g) => {
-                let r = infer_expr(p2, state, tyenv_empty(()), acc, g.def.body);
+                let r = infer_reference_global(p2, state, acc, g.def.body);
                 let t = global_ref_ty_in(p2, g.module, g.def, r);
                 ir_leaf(t.ty, t.subst, r.state, TGlobalRef(g.module, name))
             },
@@ -3136,9 +3148,14 @@ let infer_stmts (p2: Program2) (state: FreshState) (env: TyEnv) (acc: Subst) (st
                     },
                 };
                 let br = bind_pattern_ty(p2, r.state, checked.subst, env, pattern, checked.ty);
+                if REFERENCES_ON.get() { let end = note_pattern_type_references(err_path(()), pattern, br.pattern, block_start_at(starts, i)); () };
                 infer_stmts(p2, br.state, br.env, br.subst, stmts, i + 1, tstmts.push(TSLet(br.pattern, r.texpr)), starts)
             },
             SAssign(name, value) => {
+                match tyenv_lookup(env, name) {
+                    Some(b) => note_local_reference(err_path(()), name, starts[i], b.def_offset),
+                    None => (),
+                };
                 let r = infer_expr(p2, state, env, acc, value);
                 // `match`, NOT `Option.unwrap_or` — a real mistake
                 // caught immediately by an actual test failure, not
@@ -3541,6 +3558,7 @@ let infer_match_arms (p2: Program2) (state: FreshState) (env: TyEnv) (acc: Subst
         // caret now does, which is the half a reader acts on.
         set_stmt_pos(arms[i].start);
         let br = bind_pattern_ty(p2, state, acc, env, arms[i].pattern, scrutinee_ty);
+        if REFERENCES_ON.get() { let end = note_pattern_type_references(err_path(()), arms[i].pattern, br.pattern, arms[i].start); () };
         let gr = match arms[i].guard {
             Some(g) => {
                 let r = infer_expr(p2, br.state, br.env, br.subst, g);

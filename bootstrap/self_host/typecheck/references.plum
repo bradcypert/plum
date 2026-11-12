@@ -1,0 +1,237 @@
+// Reference identities come from resolved expressions, never textual name
+// matches. Locals use their binding offset; top-level values use module/name.
+use parser;
+use lexer;
+use treefs;
+
+pub struct Reference { pub path: String, pub offset: Int, pub name: String, pub symbol: String, pub declaration: Bool }
+let REFERENCES_ON: Ref[Bool] = ref(false)
+let no_references (): Array[Reference] = []
+let REFERENCES: Ref[Array[Reference]] = ref(no_references(()))
+let empty_reference_sources (): Map[String, lexer.LexedSource] = Map.new(())
+let REFERENCE_SOURCES: Ref[Map[String, lexer.LexedSource]] = ref(empty_reference_sources(()))
+
+pub let record_references (): Unit = {
+    REFERENCES_ON.set(true);
+    REFERENCES.set(no_references(()));
+    REFERENCE_SOURCES.set(empty_reference_sources(()))
+}
+
+pub let recorded_references (): Array[Reference] = REFERENCES.get()
+
+pub let value_symbol (module_name: String) (name: String): String = "value:${module_name}:${name}"
+
+pub let add_reference (path: String) (off: Int) (name: String) (symbol: String) (declaration: Bool): Unit =
+    if REFERENCES_ON.get() && reference_source_path(path) && off >= 0 {
+        REFERENCES.set(REFERENCES.get().push(Reference { path: path, offset: off, name: name, symbol: symbol, declaration: declaration }))
+    } else { () }
+
+// Embedded compiler sources have offsets but no navigable editor file.
+let reference_source_path (path: String): Bool =
+    path != "" && path != "<prelude>" && path != "<stdlib-modules>" && path != "<builtins>"
+
+let note_local_reference (path: String) (name: String) (off: Int) (binding: Int): Unit =
+    if REFERENCES_ON.get() && binding >= 0 { add_reference(path, off, name, "local:${path}:${binding}", off == binding) } else { () }
+
+// Global initializers are checked once in their own source context. Name
+// lookup re-infers them as well, under the caller's error context; those
+// repeated walks must not invent reference sites in the caller's file.
+let infer_reference_global (p2: Program2) (state: FreshState) (acc: Subst) (body: parser.PExpr): InferResult = {
+    let recording = REFERENCES_ON.get();
+    REFERENCES_ON.set(false);
+    let result = infer_expr(p2, state, tyenv_empty(()), acc, body);
+    REFERENCES_ON.set(recording);
+    result
+}
+
+pub let reference_declaration (item: parser.ItemNode) (name: String): Unit =
+    if item.path != "" {
+        let parts = String.split(name, ".");
+        let tokens = reference_tokens(item.path);
+        let off = reference_decl_offset(tokens, item.start, item.end, parts, 0);
+        // Native C names live in the root signature namespace, including
+        // extern blocks declared inside a Plum module.
+        let module_name = match item.kind { IKExtern(_) => "", _ => item.module };
+        add_reference(item.path, off, parts[parts.len() - 1], value_symbol(module_name, name), true)
+    }
+
+let reference_decl_offset (tokens: lexer.LexedSource) (start: Int) (end: Int) (parts: Array[String]) (i: Int): Int =
+    if i >= tokens.tokens.len() || tokens.starts[i] >= end { 0 - 1 }
+    else {
+        let off = if tokens.starts[i] >= start && (tokens.tokens[i] == TokLet || tokens.tokens[i] == TokFn || tokens.tokens[i] == TokStruct || tokens.tokens[i] == TokEnum) {
+            reference_decl_path(tokens, parts, i + 1, 0)
+        } else { 0 - 1 };
+        if off >= 0 { off } else { reference_decl_offset(tokens, start, end, parts, i + 1) }
+    }
+
+let reference_decl_path (tokens: lexer.LexedSource) (parts: Array[String]) (i: Int) (part: Int): Int =
+    if i >= tokens.tokens.len() || tokens.tokens[i] != TokIdent(parts[part]) { 0 - 1 }
+    else if part + 1 >= parts.len() { tokens.starts[i] }
+    else if i + 1 < tokens.tokens.len() && tokens.tokens[i + 1] == TokDot { reference_decl_path(tokens, parts, i + 2, part + 1) }
+    else { 0 - 1 }
+
+// Only a typed value/function reference gives a global identity. Looking
+// through an eta-expanded function value also handles partial applications.
+let expression_symbol (e: TExpr): String = match e.node {
+    TGlobalRef(module_name, name) => value_symbol(module_name, name),
+    TFnCall(module_name, name, _, _) => value_symbol(module_name, name),
+    TExternCall(name, _) => value_symbol("", name),
+    TClosure(_, body) => expression_symbol(body),
+    _ => "",
+}
+
+let note_expression_reference (p2: Program2) (path: String) (env: TyEnv) (source: parser.PExpr) (typed: TExpr): Unit = {
+    note_type_qualifier(p2, path, env, source, typed);
+    match source {
+        EIdent(name, off) => if Option.is_none(tyenv_lookup(env, name)) {
+            let symbol = expression_symbol(typed);
+            if symbol != "" { add_reference(path, off, name, symbol, false) }
+        },
+        EField(_, _) => note_value_reference(path, source, typed),
+        ECall(callee, _) => match callee {
+            EIdent(name, off) => match tyenv_lookup(env, name) {
+                Some(b) => note_local_reference(path, name, off, b.def_offset),
+                None => note_value_reference(path, callee, typed),
+            },
+            EField(_, _) => note_value_reference(path, callee, typed),
+            _ => (),
+        },
+        _ => (),
+    }
+}
+
+let note_value_reference (path: String) (source: parser.PExpr) (typed: TExpr): Unit = {
+    let symbol = expression_symbol(typed);
+    if symbol != "" {
+        match reference_name(path, source) {
+            Some(site) => add_reference(path, site.offset, site.name, symbol, false),
+            None => (),
+        }
+    }
+}
+
+struct ReferenceName { name: String, offset: Int }
+
+// EField carries no member offset. Recover it from the lossless token
+// stream anchored at its base identifier, skipping trivia such as comments.
+// Cache each file's tokens for this one compiler subprocess.
+let reference_tokens (path: String): lexer.LexedSource =
+    match Map.get(REFERENCE_SOURCES.get(), path) {
+        Some(tokens) => tokens,
+        None => {
+            let src = Result.unwrap_or(treefs.read_source(path), "");
+            let tokens = lexer.tokenize_spanned(src);
+            REFERENCE_SOURCES.set(Map.insert(REFERENCE_SOURCES.get(), path, tokens));
+            tokens
+        },
+    }
+
+let reference_name (path: String) (e: parser.PExpr): Option[ReferenceName] = match e {
+    EIdent(name, off) => Some(ReferenceName { name: name, offset: off }),
+    EField(base, name) => match reference_name(path, base) {
+        None => None,
+        Some(site) => {
+            let tokens = reference_tokens(path);
+            reference_member(tokens, site.offset, name, 0)
+        },
+    },
+    _ => None,
+}
+
+let reference_member (tokens: lexer.LexedSource) (base: Int) (name: String) (i: Int): Option[ReferenceName] =
+    if i + 2 >= tokens.tokens.len() { None }
+    else if tokens.starts[i] == base && tokens.tokens[i + 1] == TokDot && tokens.tokens[i + 2] == TokIdent(name) {
+        Some(ReferenceName { name: name, offset: tokens.starts[i + 2] })
+    } else { reference_member(tokens, base, name, i + 1) }
+
+let type_symbol (identity: String): String = "type:${identity}"
+
+pub let reference_type_declaration (item: parser.ItemNode) (name: String): Unit =
+    if item.path != "" {
+        let off = reference_decl_offset(reference_tokens(item.path), item.start, item.end, [name], 0);
+        add_reference(item.path, off, name, type_symbol(parser.qualify_type(item.module, name)), true)
+    }
+
+// The parser supplies definite type positions, not arbitrary capitalized
+// tokens. Resolve those positions in the containing item's generic scope
+// and file-local module aliases, using the checker's declaration context.
+let record_type_references (ctx: TyContext) (items: Array[parser.ItemNode]) (sites: Array[parser.TypeSite]): Unit = {
+    let saved = ERR.get();
+    for site in sites {
+        if site.kind != TypePatternSite && reference_source_path(site.path) { reference_type_in_item(ctx, items, site, 0); };
+    };
+    ERR.set(saved)
+}
+
+let reference_type_in_item (ctx: TyContext) (items: Array[parser.ItemNode]) (site: parser.TypeSite) (i: Int): Unit =
+    if i < items.len() {
+        let item = items[i];
+        if item.path == site.path && site.offset >= item.start && site.offset < item.end {
+            let generics = match item.kind {
+                IKLet(def) => Array.map(def.generics, |g| g.name),
+                IKStruct(decl) => Array.map(decl.generics, |g| g.name),
+                IKEnum(decl) => Array.map(decl.generics, |g| g.name),
+                _ => [],
+            };
+            let written = parser.join_dot(site.segments);
+            set_err_pos(site.path, site.offset, "");
+            let identity = match site.annotation {
+                Some(annotation) => match resolve_ann_seen(ctx, item.module, generics, annotation) {
+                    ITStruct(name, _) => name,
+                    ITEnum(name, _) => name,
+                    _ => "",
+                },
+                None => reference_nominal_identity(ctx, item.module, written),
+            };
+            if identity != "" {
+                add_reference(site.path, site.offset, site.segments[site.segments.len() - 1], type_symbol(identity), false)
+            }
+        } else { reference_type_in_item(ctx, items, site, i + 1) }
+    }
+
+let reference_nominal_identity (ctx: TyContext) (viewer: String) (written: String): String = {
+    let name = rewrite_type_path(written);
+    match best_struct(ctx, viewer, name) {
+        Some(info) => info.name,
+        None => match best_enum(ctx, viewer, name) { Some(info) => info.name, None => "" },
+    }
+}
+
+// A qualifier in an expression counts only when inference resolved an enum
+// constructor or an associated function. A value's field access must never
+// become a type reference merely because its spelling matches a type name.
+let note_type_qualifier (p2: Program2) (path: String) (env: TyEnv) (source: parser.PExpr) (typed: TExpr): Unit = {
+    let base = match source {
+        EField(base, _) => Some(base),
+        ECall(EField(base, _), _) => Some(base),
+        _ => None,
+    };
+    match base {
+        None => (),
+        Some(expr) => match enum_path_name(expr) {
+            None => (),
+            Some(written) => {
+                let head = String.split(written, ".")[0];
+                if Option.is_none(tyenv_lookup(env, head)) && Option.is_none(find_global_def(p2, head)) {
+                    let identity = qualifier_type_identity(p2.ctx, typed);
+                    if identity != "" {
+                        match reference_name(path, expr) {
+                            Some(site) => add_reference(path, site.offset, site.name, type_symbol(identity), false),
+                            None => (),
+                        }
+                    }
+                }
+            },
+        },
+    }
+}
+
+let qualifier_type_identity (ctx: TyContext) (typed: TExpr): String = match typed.node {
+    TVariantNew(identity, _, _) => identity,
+    TFnCall(module_name, name, _, _) => {
+        let dot = last_dot_index(name);
+        if dot < 0 { "" } else { reference_nominal_identity(ctx, module_name, String.slice(name, 0, dot)) }
+    },
+    TClosure(_, body) => qualifier_type_identity(ctx, body),
+    _ => "",
+}

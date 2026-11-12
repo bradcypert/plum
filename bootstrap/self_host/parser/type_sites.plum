@@ -1,0 +1,28 @@
+// Source metadata for nominal-type references. Keep it separate from Ty so
+// synthetic annotations and existing AST consumers need no position wrappers.
+// Only the references subprocess enables recording; ordinary builds retain
+// neither this table nor source text for it.
+pub enum TypeSiteKind { TypeAnnotationSite, TypeConstructionSite, TypePatternSite }
+pub struct TypeSite { pub path: String, pub start: Int, pub offset: Int, pub segments: Array[String], pub kind: TypeSiteKind, pub annotation: Option[Ty] }
+let TYPE_SITES_ON: Ref[Bool] = ref(false)
+let no_type_sites (): Array[TypeSite] = []
+let TYPE_SITES: Ref[Array[TypeSite]] = ref(no_type_sites(()))
+
+pub let record_type_sites (): Unit = {
+    TYPE_SITES_ON.set(true);
+    TYPE_SITES.set(no_type_sites(()))
+}
+
+pub let recorded_type_sites (): Array[TypeSite] = TYPE_SITES.get()
+
+let note_type_site (pos: Int) (segments: Array[String]) (kind: TypeSiteKind): Unit =
+    note_type_site_with_annotation(pos, segments, kind, None)
+
+let note_type_site_with_annotation (pos: Int) (segments: Array[String]) (kind: TypeSiteKind) (annotation: Option[Ty]): Unit =
+    if TYPE_SITES_ON.get() && !Array.is_empty(segments) {
+        let off = offset_at(pos + 2 * (segments.len() - 1));
+        let path = current_path(());
+        if path != "" && off >= 0 {
+            TYPE_SITES.set(TYPE_SITES.get().push(TypeSite { path: path, start: offset_at(pos), offset: off, segments: segments, kind: kind, annotation: annotation }))
+        }
+    }
