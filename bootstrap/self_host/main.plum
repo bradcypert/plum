@@ -66,6 +66,7 @@ use Path;
 use Encoding;
 use buildcache;
 use buildmode;
+use freestanding;
 
 // `query <project> <path> <line> <col>` -- what is the type of the
 // identifier at that position?
@@ -2435,6 +2436,9 @@ let usage (): Unit = {
     println("  --memory-stats      opt-in live/peak Plum-cell snapshots via use Memory.");
     println("  --sanitize address  ASan instrumentation and symbols (native Linux/macOS).");
     println("                      Supported by build, run, test and emit-llvm; -- ends options.");
+    println("  build <dir> --target x86_64-unknown-none --emit-object [-o kernel.o]");
+    println("  build <dir> --target x86_64-unknown-none --linker-script <file> [--link-object <file>] [--link-asm <file>]");
+    println("  link --target x86_64-unknown-none --linker-script <file> --link-object <file> [-o kernel.elf]");
     println("  --target <triple>   build for another platform, e.g. aarch64-linux-musl.");
     println("                      Needs a C compiler that can link for it: set PLUM_CC,");
     println("                      e.g. PLUM_CC=\"zig cc\". Plum ships no sysroot.");
@@ -2773,7 +2777,7 @@ let native_known_dir (name: String): Bool =
 // use, so there is one spelling of "windows" in this compiler rather
 // than a second one invented here.
 let native_applies (name: String) (os: String): Bool =
-    if name == os { true } else if name == "posix" { os != "windows" } else { false }
+    if name == os { true } else if name == "posix" { os == "linux" || os == "macos" } else { false }
 
 // `-o` if given, else the project directory's own basename -- the same
 // convention `plum build` uses.
@@ -3126,7 +3130,8 @@ let cached_object_loop (program: String) (srcs: Array[String]) (i: Int) (scratch
     }
 
 let platform_libs (target: String): Array[String] =
-    if target_os(target) == "windows" { ["-lm", "-lpthread", "-lws2_32", "-lcrypt32", "-lbcrypt"] }
+    if freestanding.enabled(target) { [] }
+    else if target_os(target) == "windows" { ["-lm", "-lpthread", "-lws2_32", "-lcrypt32", "-lbcrypt"] }
     else { ["-lm"] }
 
 // Every 64-bit architecture this compiler is willing to emit for.
@@ -3150,9 +3155,9 @@ let target_arch (triple: String): String = {
 
 // An error message for a target we must not build, or "" to proceed.
 let target_error (triple: String): String =
-    if triple == native_target() { "" }
+    if triple == native_target() || freestanding.enabled(triple) { "" }
     else if target_os(triple) == "" {
-        "unsupported target `${triple}`: Plum supports Linux, macOS and Windows targets only."
+        "unsupported target `${triple}`: Plum supports Linux, macOS, Windows and x86_64-unknown-none targets only."
     }
     else if Array.contains(known_64_bit_arches(), target_arch(triple)) { "" }
     else {
@@ -3468,6 +3473,13 @@ let fail_cmd (err: String): Unit = {
 
 let build_project (argv: Array[String]): Unit = {
     let target = match find_flag_value(argv, "--target", 0) { Some(t) => t, None => native_target() };
+    if freestanding.enabled(target) { build_freestanding(argv) }
+    else if Array.any(argv, |v| v == "--emit-object" || v == "--linker-script" || v == "--link-object" || v == "--link-asm") {
+        fail_cmd("object/script/assembly options currently require --target x86_64-unknown-none")
+    } else { build_hosted(argv, target) }
+}
+
+let build_hosted (argv: Array[String]) (target: String): Unit = {
     let out = output_path(argv, target);
     let inputs = prepare_inputs(argv[1]);
     let err = compile_prepared(argv[1], out, link_args_resolved(argv, argv[1], target, inputs.deps), target, build_options(argv, target), inputs, false);
@@ -4384,6 +4396,8 @@ let main (): Unit = {
         let with_deps = doc_has_flag(argv, "--with-deps", 0);
         if argv[1] == "--stdlib" { cmd_doc_stdlib(out, html, home) }
         else { cmd_doc(argv[1], out, html, home, with_deps) }
+    } else if argv[0] == "link" {
+        link_freestanding(argv);
     } else if argv.len() < 2 {
         usage(());
     } else if argv[0] == "references" && argv.len() >= 6 {
