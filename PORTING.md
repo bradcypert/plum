@@ -8,6 +8,10 @@ were wrong three times") was wrong three times.
 
 ## Support tiers
 
+The planned bare-metal profile has a separate
+[x86-64 freestanding target and kernel ABI contract](docs/freestanding-x86_64.md).
+It is not implemented yet and does not add a supported platform tier.
+
 The rule the release workflow already enforced, now stated as a
 promise: **a platform is published only once something in CI builds and
 runs real programs on it.** Nothing ships that is merely expected to
