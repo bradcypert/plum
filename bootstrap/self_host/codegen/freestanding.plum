@@ -1,0 +1,37 @@
+// Target attributes must cover every definition, including synthesized
+// runtime helpers. Clang frontend flags do not retrofit arbitrary input IR.
+pub let cg_freestanding (ir: String): String = {
+    let mut lines: Array[String] = [];
+    for line in ir.split("\n") {
+        if line.starts_with("define ") {
+            let at = match String.index_of(line, " !dbg ") { Some(n) => n, None => line.len() - 2 };
+            if !line.ends_with(" {") { cg_fail("unexpected LLVM function header in freestanding profile") };
+            lines = lines.push(line.slice(0, at).concat(" noredzone \"target-cpu\"=\"x86-64\" \"target-features\"=\"+sse2,-avx,-avx2,-avx512f\"").concat(line.slice(at, line.len())));
+        } else { lines = lines.push(line); }
+    };
+    let header = "target triple = \"x86_64-unknown-none\"\ntarget datalayout = \"e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-f80:128-n8:16:32:64-S128\"\n";
+    // Reserve a fresh metadata ID rather than colliding with DWARF IDs.
+    let mut next = 0;
+    for line in lines {
+        if line.starts_with("!") {
+            match String.index_of(line, " = ") {
+                Some(at) => match String.parse_int(line.slice(1, at)) {
+                    Ok(n) => if n >= next { next = n + 1; () },
+                    Err(_) => (),
+                },
+                None => (),
+            }
+        }
+    };
+    let node = "!${next}";
+    let mut found = false;
+    let mut out: Array[String] = [];
+    for line in lines {
+        if line.starts_with("!llvm.module.flags = !{") {
+            found = true;
+            out = out.push(line.slice(0, line.len() - 1).concat(", ${node}}"));
+        } else { out = out.push(line); }
+    };
+    if !found { out = out.push("!llvm.module.flags = !{${node}}"); };
+    header.concat(Array.join(out, "\n")).concat("\n${node} = !{i32 1, !\"Code Model\", i32 2}\n")
+}

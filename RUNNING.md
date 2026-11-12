@@ -177,6 +177,61 @@ error: type error: operator: type mismatch: expected Str, found Int
   |               ^^^^^^^^^^^
 ```
 
+## Freestanding objects and ELF linking
+
+The experimental `x86_64-unknown-none` profile emits kernel-model x86-64 ELF
+objects without extracting hosted OS shims or linking default libraries:
+
+```sh
+plum build mykernel --target x86_64-unknown-none --emit-object -o kernel.o
+```
+
+The object contains Plum-generated code plus project/dependency `native/*.c`
+inputs. Target-specific hosted directories, including `native/posix`, are
+excluded. Add explicit C sources with `--link-c file.c`, assembly with
+`--link-asm start.S` (or `.s`), and prebuilt objects with `--link-object file.o`.
+Repeated native-input options are supported. Paths are relative to the calling
+working directory. The final relocatable object is assembled by `ld.lld -r`.
+
+Link an ELF with an explicit linker script:
+
+```sh
+plum build mykernel --target x86_64-unknown-none \
+  --linker-script kernel.ld --link-asm start.S -o kernel.elf
+```
+
+Or link precompiled objects without compiling a Plum project:
+
+```sh
+plum link --target x86_64-unknown-none --linker-script kernel.ld \
+  --link-object kernel.o --link-object start.o -o kernel.elf
+```
+
+These commands require Clang's x86 backend and LLD's `ld.lld` on `PATH`.
+The script defines the ELF entry and memory layout. No startup files, libraries,
+bootloader, or missing-symbol stubs are supplied. `--release` selects optimized
+code; tracing, sanitizers, memory statistics, and library-link flags are rejected
+for the freestanding profile. Object output currently requires this exact target.
+Without `-o`, output is `kernel.o` or `kernel.elf` respectively. `--emit-object`
+and `--linker-script` are mutually exclusive. `link` accepts prebuilt objects only.
+
+**This pipeline does not yet produce a bootable Plum kernel.** Generated code
+still includes the hosted runtime and C `main`; the runtime split and kernel
+entry are tracked separately in #507 and #508. Ordinary Plum objects therefore
+still reference hosted symbols. Final ELF linking fails on unresolved symbols,
+while object emission allows them. On a build failure the emitted IR is retained
+at `<output>.ll` for inspection.
+
+Freestanding IR uses its own cache identity. C/IR objects reuse the existing
+validated object cache with the effective target/compiler flags; custom drivers
+and assembly compile uncached. Linker scripts and prebuilt objects are reread
+on every link, so changing them never reuses an old ELF. `PLUM_NO_BUILD_CACHE`
+and `PLUM_NO_OBJECT_CACHE` retain their usual meaning.
+
+See the [target and ABI contract](docs/freestanding-x86_64.md) for the intended
+boot environment, CPU assumptions, runtime hooks, and later verification steps.
+
+
 ## Examples
 
 Real, runnable projects under [`examples/`](examples/), one per theme —

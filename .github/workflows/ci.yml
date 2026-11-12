@@ -51,6 +51,27 @@ jobs:
           overwrite: true
           retention-days: 7
 
+  freestanding_checks:
+    name: Linux freestanding object and ELF checks
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v5
+      - name: ELF toolchain
+        run: |
+          if ! command -v clang >/dev/null || ! command -v ld.lld >/dev/null || ! command -v readelf >/dev/null || ! command -v nm >/dev/null || ! command -v objdump >/dev/null; then
+            sudo apt-get update
+            sudo apt-get install -y clang lld binutils
+          fi
+      - uses: actions/download-artifact@v4
+        with:
+          name: plum-linux-compiler
+      - name: restore freshly built compiler
+        run: tar -xzf plum-linux-compiler.tar.gz
+      - name: freestanding objects, explicit linking and cache isolation
+        run: python3 ./bootstrap/freestanding-check.py ./sh.real
+
   bootstrap_proofs:
     name: Linux compiler self-hosting and memory checks
     needs: build
@@ -336,7 +357,7 @@ jobs:
   bootstrap:
     name: build from seed and validate
     if: ${{ always() }}
-    needs: [build, bootstrap_proofs, corpus, checks, runtime_checks, native_checks, cache_behavior, cache_objects]
+    needs: [build, bootstrap_proofs, corpus, checks, runtime_checks, native_checks, cache_behavior, cache_objects, freestanding_checks]
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
@@ -350,6 +371,7 @@ jobs:
           test "${{ needs.native_checks.result }}" = success
           test "${{ needs.cache_behavior.result }}" = success
           test "${{ needs.cache_objects.result }}" = success
+          test "${{ needs.freestanding_checks.result }}" = success
 
   # Does the compiler work somewhere that is not the developer's Linux
   # box? Only `bootstrap/platform-smoke` runs here, deliberately -- see

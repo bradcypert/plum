@@ -1,0 +1,128 @@
+// Kept apart from the hosted driver: object emission never extracts OS
+// shims, and the freestanding link always sees explicit inputs only.
+let freestanding_options (argv: Array[String]) (start: Int): freestanding.Options = {
+    let opts = match freestanding.parse(argv, start) {
+        Ok(v) => v,
+        Err(e) => { fail_cmd(e); freestanding.defaults(()) },
+    };
+    let bad = freestanding.validate(opts);
+    if bad != "" { fail_cmd(bad) };
+    opts
+}
+
+let freestanding_output (argv: Array[String]) (opts: freestanding.Options): String =
+    Option.unwrap_or(find_flag_value(argv, "-o", 0), if opts.object { "kernel.o" } else { "kernel.elf" })
+
+let freestanding_command (program: String) (argv: Array[String]): String =
+    match run_process(program, argv) {
+        Err(e) => "freestanding build failed: ${e}",
+        Ok(r) => if r.exit_code == 0 { "" } else { "${program} failed (exit ${r.exit_code}):\n${r.stderr}" },
+    }
+
+let freestanding_link (opts: freestanding.Options) (objects: Array[String]) (out: String): String = {
+    let flags = if opts.object { ["-r"] } else { ["-static", "--no-undefined", "-T", opts.script] };
+    freestanding_command("ld.lld", Array.concat(["-m", "elf_x86_64"], Array.concat(flags, Array.concat(objects, ["-o", out]))))
+}
+
+// Build inputs are snapshotted by the same dependency-aware IR cache as
+// hosted builds. The profile has its own namespace and generation policy.
+let freestanding_ir (dir: String) (inputs: BuildInputs) (mode: buildmode.Options) (ll: String): String = {
+    let source_key = if buildcache.enabled(()) { ir_input_key(dir, inputs, mode) } else { "" };
+    let key = if source_key == "" { "" } else { buildcache.hash(freestanding.cache_key(mode).concat(buildcache.frame(source_key))) };
+    let hit = if key == "" { None } else { buildcache.load_ir(key) };
+    let ir = match hit {
+        Some(text) => { buildcache.diagnostic("IR hit"); text },
+        None => {
+            buildcache.diagnostic(if key == "" { "IR bypass" } else { "IR miss" });
+            buildcache.begin_reads(key != "");
+            codegen.cg_freestanding(emit_program(parser.ProgramNode { items: parse_source_files(inputs.files, 0, []) }, "main", mode))
+        },
+    };
+    let err = match Os.write_file(ll, ir) { Ok(_) => "", Err(e) => e };
+    if err == "" && Option.is_none(hit) && key != "" {
+        let reads = buildcache.read_manifest(());
+        if buildcache.sources_unchanged(()) && buildcache.unchanged(reads) && ir_input_key(dir, prepare_inputs(dir), mode) == source_key {
+            buildcache.store("ir", key, ll, reads)
+        } else { buildcache.diagnostic("inputs changed; IR not stored") }
+    };
+    buildcache.begin_reads(false);
+    err
+}
+
+// Unknown compiler/loader configurations and assembly use the original
+// source uncached, just as on the hosted path. Never treat assembly as C
+// snapshots: .S can include other files and the cache cannot certify it.
+let freestanding_uncached_objects (srcs: Array[String]) (scratch: String) (flags: Array[String]) (prefix: String): ObjBuild = {
+    let mut objects: Array[String] = [];
+    let mut err = "";
+    for src in srcs {
+        if err == "" {
+            let obj = Path.join(scratch, "${prefix}${objects.len()}.o");
+            err = freestanding_command(cc_program(), Array.concat(cc_prefix_args(), Array.concat(flags, ["-c", src, "-o", obj])));
+            objects = objects.push(obj);
+        }
+    };
+    ObjBuild { err: err, objs: objects }
+}
+
+let freestanding_objects (srcs: Array[String]) (scratch: String) (flags: Array[String]): ObjBuild = {
+    let fingerprint = if buildcache.enabled(()) && buildcache.env("PLUM_NO_OBJECT_CACHE") != "1" { buildcache.native_fingerprint(()) } else { "" };
+    if fingerprint == "" {
+        buildcache.diagnostic("objects bypass: freestanding driver or cache configuration");
+        freestanding_uncached_objects(srcs, scratch, flags, "obj")
+    } else {
+        let result = cached_object_loop(buildcache.object_program(cc_program()), srcs, 0, scratch, flags, [], fingerprint, []);
+        if result.err == "uncertified native cache invocation" { freestanding_uncached_objects(srcs, scratch, flags, "obj") }
+        else { result }
+    }
+}
+
+let build_freestanding (argv: Array[String]): Unit = {
+    let opts = freestanding_options(argv, 2);
+    let mode = build_options(argv, freestanding.target(()));
+    let out = freestanding_output(argv, opts);
+    let inputs = prepare_inputs(argv[1]);
+    let native = link_args_resolved(argv, argv[1], freestanding.target(()), inputs.deps);
+    if Array.any(native.args, |arg| !arg.ends_with(".c")) {
+        fail_cmd("freestanding builds require explicit native sources/objects, not manifest link libraries")
+    };
+    let scratch = match Os.temp_dir() { Ok(v) => v, Err(e) => { fail_cmd(e); "" } };
+    // Leave IR beside the requested output on failure, like hosted builds.
+    let ll = out.concat(".ll");
+    let ir_error = freestanding_ir(argv[1], inputs, mode, ll);
+    let flags = freestanding.compile_flags(mode);
+    let built = if ir_error != "" { ObjBuild { err: ir_error, objs: [] } }
+        else { freestanding_objects(Array.concat([ll], native.args), scratch, flags) };
+    let assembly = if built.err == "" { freestanding_uncached_objects(opts.assembly, scratch, flags, "asm") }
+        else { ObjBuild { err: built.err, objs: [] } };
+    let err = if assembly.err != "" { assembly.err }
+        else { freestanding_link(opts, Array.concat(Array.concat(built.objs, assembly.objs), opts.objects), out) };
+    let cleaned = Os.remove_tree(scratch);
+    if buildcache.enabled(()) { buildcache.prune(()) };
+    if err != "" { fail_cmd(err.concat("\nIR left at ${ll}")) }
+    else { let removed = Os.remove_file(ll); println("wrote ${out}"); }
+}
+
+let link_freestanding (argv: Array[String]): Unit = {
+    let target = Option.unwrap_or(find_flag_value(argv, "--target", 0), "");
+    if !freestanding.enabled(target) { fail_cmd("link requires --target x86_64-unknown-none") };
+    let opts = freestanding_options(argv, 1);
+    if opts.object || opts.assembly.len() > 0 || collect_flag(argv, "--link-c", 0, []).len() > 0 {
+        fail_cmd("link accepts --link-object inputs only; compile C/assembly separately or use build")
+    };
+    if opts.objects.len() == 0 { fail_cmd("link requires at least one --link-object") };
+    let out = freestanding_output(argv, opts);
+    let err = freestanding_link(opts, opts.objects, out);
+    if err != "" { fail_cmd(err) } else { println("wrote ${out}") }
+}
+
+pub let test_freestanding_platform_selection (): Unit = {
+    assert_eq(target_error(freestanding.target(())), "");
+    assert(target_error("i686-linux-gnu") != "");
+    assert(target_error("aarch64-unknown-none") != "");
+    assert_eq(platform_libs(freestanding.target(())), []);
+    assert(!native_applies("posix", target_os(freestanding.target(()))));
+    assert(native_applies("posix", "linux"));
+    assert(native_applies("posix", "macos"));
+    assert(!native_applies("posix", "windows"));
+}
