@@ -1,0 +1,60 @@
+use Memory;
+let buffer (n: Int): Bytes = "x".repeat(n).as_bytes()
+let grow (n: Int): Bytes = {
+    let mut out = Bytes.empty();
+    for i in 0..n { out = out.concat("x".as_bytes()); };
+    out
+}
+let tail (out: Bytes) (piece: Bytes) (n: Int): Bytes =
+    if n == 0 { out } else { tail(Bytes.concat(out, piece), piece, n - 1) }
+let live (): Int = match Memory.snapshot() { Some(s) => s.live_bytes, None => -1 }
+let shared_round (): Unit = {
+    let original = buffer(128); let suffix = buffer(7); let before = live();
+    let out = Bytes.concat(original, suffix);
+    if before >= 0 { assert_eq(live() - before, 152); };
+    assert_eq(out.len(), 135); assert(original == buffer(128)); assert(suffix == buffer(7));
+}
+let main (): Unit = {
+    let baseline = live(); shared_round();
+    if baseline >= 0 { assert_eq(live(), baseline); };
+    assert(Bytes.concat(Bytes.empty(), Bytes.empty()) == Bytes.empty());
+    assert(Bytes.concat(Bytes.empty(), buffer(31)) == buffer(31));
+    assert(Bytes.concat(buffer(31), Bytes.empty()) == buffer(31));
+    for n in [0, 1, 7, 31, 32, 127, 1024, 4096] {
+        assert(grow(n) == buffer(n));
+        assert(tail(Bytes.empty(), "x".as_bytes(), n) == buffer(n));
+    };
+    let raw = Bytes.from_array([0, 255, 128, 195, 169]);
+    let twice = Bytes.concat(raw, raw);
+    assert_eq(twice.to_array(), [0, 255, 128, 195, 169, 0, 255, 128, 195, 169]);
+    assert_eq(raw.to_array(), [0, 255, 128, 195, 169]);
+    let text = "abc".repeat(40); let bytes = text.as_bytes(); let view = unsafe { text.as_cstr() };
+    let out = Bytes.concat(bytes, raw);
+    assert_eq(out.len(), 125); assert(bytes == text.as_bytes());
+    assert_eq(text, "abc".repeat(40)); assert_eq(unsafe { view.as_string() }, text);
+
+    let mut state = Bytes.empty(); let mut snapshots: Array[Bytes] = [];
+    for i in 0..128 { snapshots = snapshots.push(state); state = Bytes.concat(state, raw); };
+    for n in 0..128 {
+        assert_eq(snapshots[n].len(), 5 * n);
+        for i in 0..snapshots[n].len() { assert_eq(snapshots[n].at(i), raw.at(i % 5)); };
+    };
+    assert_eq(state.len(), 640);
+    let mut source = buffer(31);
+    let out = Bytes.concat(source, { source = buffer(7); source });
+    assert(out == buffer(38)); assert(source == buffer(7));
+    let published = ref(Bytes.empty()); let receiver = buffer(31);
+    let out = Bytes.concat(receiver, { published.set(receiver); raw });
+    assert_eq(out.len(), 36); assert(published.get() == buffer(31));
+    let mut doubled = buffer(31); doubled = doubled.concat(doubled);
+    assert(doubled == buffer(62));
+    let f: (Bytes, Bytes) -> Bytes = Bytes.concat;
+    assert(f(buffer(31), raw) == Bytes.concat(buffer(31), raw));
+    let partial = Bytes.concat(raw); assert(partial(raw) == twice);
+    let shared = buffer(128);
+    let first = spawn { Bytes.concat(shared, raw) };
+    let second = spawn { Bytes.concat(shared, shared) };
+    assert_eq(first.join().len(), 133); assert(second.join() == buffer(256));
+    assert(shared == buffer(128));
+    println("Bytes.concat: consuming reuse, binary data, immutable aliases and operand order")
+}
