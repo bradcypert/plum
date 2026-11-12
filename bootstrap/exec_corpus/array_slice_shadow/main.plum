@@ -1,0 +1,2 @@
+use custom;
+let main (): Unit = { assert_eq(Array.slice([1, 2], 0, 1), [99]); println("user Array.slice binding preserved"); }

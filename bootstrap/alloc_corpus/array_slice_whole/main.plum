@@ -1,0 +1,3 @@
+let slice (xs: Array[Int]) (n: Int): Array[Int] =
+    if n <= 0 { xs } else { slice(Array.slice(xs, 0, 100), n - 1) }
+let main (): Unit = assert_eq(slice([0, 1, 2, 3], 1000), [0, 1, 2, 3])

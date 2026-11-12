@@ -2563,3 +2563,28 @@ pub let test_array_reverse_permutation (): Unit = {
         assert_eq(Array.reverse(reversed_texts), texts);
     }
 }
+
+// Independent indexed model; extreme and reversed bounds must never overflow.
+pub let test_array_slice_ranges (): Unit = {
+    let mut seed = 90803;
+    let bounds = [0 - 9223372036854775807 - 1, -100, -1, 0, 1, 7, 32, 100, 9223372036854775807];
+    for trial in 0..32 {
+        seed = next_seed(seed);
+        let xs = int_array(seed, trial, []);
+        let saved = xs;
+        let texts = Array.map(xs, |n| (n % 7).to_string().repeat(4));
+        for start in bounds {
+            for end in bounds {
+                let lo = Int.max(0, Int.min(xs.len(), start));
+                let hi = Int.max(lo, Int.min(xs.len(), end));
+                let ys = Array.slice(xs, start, end);
+                let strings = Array.slice(texts, start, end);
+                assert_eq(ys.len(), hi - lo); assert_eq(strings.len(), hi - lo);
+                for i in 0..ys.len() { assert_eq(ys[i], saved[lo + i]); assert_eq(strings[i], texts[lo + i]); };
+            };
+        };
+        assert_eq(Array.take(xs, 7), Array.slice(xs, 0, 7));
+        assert_eq(Array.drop(xs, 7), Array.slice(xs, 7, xs.len()));
+        assert_eq(xs, saved);
+    }
+}

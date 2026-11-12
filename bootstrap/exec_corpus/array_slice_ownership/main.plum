@@ -1,0 +1,124 @@
+use Memory;
+struct Box { text: String }
+enum Item { Empty, Text(String) }
+extern "C" {
+    fn slice_close(n: Int) -> Unit;
+    fn slice_count() -> Int;
+    fn slice_at(i: Int) -> Int;
+    fn slice_pattern(i: Int) -> Float;
+    fn slice_bits(n: Float) -> Int;
+}
+handle Resource { on_drop: slice_close }
+let make (n: Int): Resource = unsafe { Resource.from_raw(n) }
+let text (n: Int): String = n.to_string().repeat(16)
+let ints (n: Int): Array[Int] = [n, n + 1, n + 2, n + 3]
+let slice[T] (xs: Array[T]) (lo: Int) (hi: Int): Array[T] = Array.slice(xs, lo, hi)
+let captured (n: Int): () -> Int = { let owner = make(n); || unsafe { owner.raw() } }
+let check_order (offset: Int) (expected: Array[Int]): Unit = {
+    assert_eq(unsafe { slice_count() }, offset + expected.len());
+    for i in 0..expected.len() { assert_eq(unsafe { slice_at(offset + i) }, expected[i]); }
+}
+let scoped (): Unit = {
+    let xs = [make(1), make(2), make(3), make(4)];
+    let marker = make(5);
+    let ys = slice(xs, 1, 3);
+    assert_eq(unsafe { ys[0].raw() }, 2); assert_eq(unsafe { ys[1].raw() }, 3);
+    assert_eq(unsafe { xs[0].raw() }, 1); assert_eq(unsafe { slice_count() }, 0);
+}
+let temporary (): Unit = {
+    let ys = slice([make(6), make(7), make(8), make(9)], 1, 3);
+    check_order(5, [6, 9]);
+    assert_eq(unsafe { ys[0].raw() }, 7); assert_eq(unsafe { ys[1].raw() }, 8);
+}
+let whole (): Unit = {
+    let xs = [make(10), make(11)]; let marker = make(12);
+    let ys = slice(xs, -1, 9223372036854775807);
+    assert_eq(unsafe { ys[1].raw() }, 11); assert_eq(unsafe { slice_count() }, 9);
+}
+let closures (): Unit = {
+    let xs = [captured(13), captured(14), captured(15)]; let marker = make(16);
+    let ys = slice(xs, 1, 2);
+    assert_eq(ys[0](), 14); assert_eq(xs[0](), 13); assert_eq(unsafe { slice_count() }, 12);
+}
+let live (): Int = match Memory.snapshot() { Some(s) => s.live_bytes, None => -1 }
+let tiny (end: Int): Array[Int] = Array.slice("x".repeat(4096).as_bytes().to_array(), 1, end)
+let compact_work (): Unit = {
+    let before = live();
+    let one = tiny(2);
+    if before >= 0 { assert_eq(live() - before, 24); };
+    assert_eq(one, [120]);
+    let empty = tiny(0);
+    if before >= 0 { assert_eq(live() - before, 24); };
+    assert_eq(empty.len(), 0); assert_eq(one[0], 120);
+}
+let main (): Unit = {
+    let before = live(); compact_work();
+    if before >= 0 { assert_eq(live(), before); };
+    let empty: Array[String] = [];
+    assert_eq(slice(empty, -1, 100), []);
+    assert_eq(slice([text(1)], 0, 1), [text(1)]);
+    assert_eq(slice([0, 1, 2, 3, 4], 1, 4), [1, 2, 3]);
+    assert_eq(slice([0, 1, 2], -10, 100), [0, 1, 2]);
+    assert_eq(slice([0, 1, 2], 2, 1), []);
+    assert_eq(slice([0, 1, 2], 0, -1), []);
+    assert_eq(slice([0, 1, 2], 100, 9223372036854775807), []);
+    assert_eq(slice([0, 1, 2], -9223372036854775807 - 1, 9223372036854775807), [0, 1, 2]);
+    assert_eq(slice([text(1), text(2)], 1, 1), []);
+    assert_eq(slice(Array.filter([text(1), text(2)], |s| false), 0, 100), []);
+    let f: (Array[Int], Int, Int) -> Array[Int] = Array.slice;
+    assert_eq(f([0, 1, 2, 3], 1, 3), [1, 2]);
+    let partial = Array.slice(ints(10));
+    assert_eq(partial(1, 3), [11, 12]);
+    assert_eq(ints(10).slice(1, 3), [11, 12]);
+    assert_eq(Array.take(ints(10), 2), [10, 11]); assert_eq(Array.drop(ints(10), 2), [12, 13]);
+    assert_eq(Array.take(ints(10), -1), []); assert_eq(Array.drop(ints(10), 100), []);
+    assert_eq(slice([true, false, true], 1, 2), [false]);
+    assert_eq(slice([(), (), ()], 1, 2), [()]);
+    let patterns = [unsafe { slice_pattern(0) }, unsafe { slice_pattern(1) }, unsafe { slice_pattern(2) }, unsafe { slice_pattern(3) }];
+    let selected = slice(patterns, 1, 3);
+    for i in 0..2 { assert_eq(unsafe { slice_bits(selected[i]) }, unsafe { slice_bits(slice_pattern(i + 1)) }); };
+    assert_eq(slice([1.25, -0.0, 2.5], 1, 2)[0].to_string(), "-0");
+    let large = "abcd".repeat(25000).as_bytes().to_array();
+    let large = slice(large, 1, 99999);
+    assert_eq(large.len(), 99998); assert_eq(large[0], 98); assert_eq(large[99997], 99);
+
+    // All bounds are evaluated against their normal lexical bindings, after
+    // acquiring the original receiver and before releasing that owner.
+    let mut source = ints(10);
+    let changed = Array.slice(source, { source = [20, 21]; 1 }, source.len());
+    assert_eq(changed, [11]); assert_eq(source, [20, 21]);
+    let original = ints(40); let forwarded = Array.slice(original, -1, 100);
+    let changed = forwarded.set(0, 99);
+    assert_eq(changed, [99, 41, 42, 43]); assert_eq(original, ints(40));
+    let saved = ref(ints(0)); let receiver = ints(30);
+    let changed = Array.slice(receiver, { saved.set(receiver); 1 }, 3);
+    assert_eq(changed, [31, 32]); assert_eq(saved.get(), ints(30));
+
+    let a = text(1); let b = text(2);
+    let bytes = a.as_bytes(); let view = unsafe { a.as_cstr() };
+    let xs = [b, a, a, b]; let snapshot = xs;
+    let ys = slice(xs, 1, 3);
+    assert_eq(ys, [a, a]); assert_eq(snapshot, [b, a, a, b]);
+    assert_eq(bytes.to_hex(), a.as_bytes().to_hex()); assert_eq(unsafe { view.as_string() }, a);
+    assert_eq(slice([b.as_bytes(), a.as_bytes(), b.as_bytes()], 1, 2)[0].to_hex(), a.as_bytes().to_hex());
+    let views = slice([unsafe { b.as_cstr() }, unsafe { a.as_cstr() }], 1, 2);
+    assert_eq(unsafe { views[0].as_string() }, a);
+    assert_eq(slice([Box { text: b }, Box { text: a }], 1, 2)[0].text, a);
+    assert_eq(slice([Text(b), Empty, Text(a)], 1, 3), [Empty, Text(a)]);
+    let nested = [[1], [2], [3]]; let saved = nested;
+    assert_eq(slice(nested, 1, 2), [[2]]); assert_eq(saved, [[1], [2], [3]]);
+    let pairs = slice([(a, 1), (b, 2)], 1, 2);
+    let (s, n) = pairs[0]; assert_eq(s, b); assert_eq(n, 2);
+    let first = ref(a); let second = ref(b);
+    let refs = slice([first, second], 0, 1); first.set(text(3));
+    assert_eq(refs[0].get(), text(3)); assert_eq(second.get(), b);
+    let xs = [Box { text: a }, Box { text: b }];
+    let left = spawn { slice(xs, 0, 1) }; let right = spawn { slice(xs, 1, 2) };
+    assert_eq(left.join()[0].text, a); assert_eq(right.join()[0].text, b); assert_eq(xs[0].text, a);
+
+    scoped(); check_order(0, [5, 1, 2, 3, 4]);
+    temporary(); check_order(5, [6, 9, 7, 8]);
+    whole(); check_order(9, [12, 10, 11]);
+    closures(); check_order(12, [16, 13, 14, 15]);
+    println("Array.slice: clamped ranges, compact copies, operand order and scoped owners")
+}
