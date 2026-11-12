@@ -2750,6 +2750,16 @@ let lv_self_reuse (nm: String) (e: typecheck.TExpr): typecheck.TExpr =
             } else { e },
             _ => e,
         },
+        // Like push, concat keeps every old payload in the replacement. Only
+        // a proven final read of the same assigned slot may preserve its move.
+        TFnCall(m, name, args, targs) =>
+            if cg_is_array_concat(m, name, targs) && args.len() == 2 { match args[0].node {
+                TMove(v) => if v == nm {
+                    typecheck.TExpr { ty: e.ty, node: TFnCall(m, name,
+                        args.set(0, typecheck.TExpr { ty: args[0].ty, node: TMovePreserving(v) }), targs) }
+                } else { e },
+                _ => e,
+            } } else { e },
         TArrayLit(xs) => typecheck.TExpr { ty: e.ty, node: TArrayLitReuse(xs, [nm]) },
         TArrayLitReuse(xs, cands) => typecheck.TExpr { ty: e.ty, node: TArrayLitReuse(xs, lv_cat_names([nm], cands, 0)) },
         TStructLit(sname, fs, None) => typecheck.TExpr { ty: e.ty, node: TStructReuse(sname, fs, [nm]) },
@@ -2951,21 +2961,19 @@ let cg_fn_call (p: CgProgram) (env: Array[CgSlot]) (n: Int) (module_name: String
 let cg_fn_call_real (p: CgProgram) (env: Array[CgSlot]) (n: Int) (module_name: String) (name: String) (args: Array[typecheck.TExpr]) (targs: Array[typecheck.ITy]) (ret: CgTy) (tail: Bool) (pending: String): Emit = {
     let reverse = module_name == "<prelude>" && name == "Array.reverse" && args.len() == 1 && targs.len() == 1;
     let slice = module_name == "<prelude>" && name == "Array.slice" && args.len() == 3 && targs.len() == 1;
-    let owned_array = reverse || slice;
-    let sym = if reverse { "@plum_array_reverse" } else if slice { "@plum_array_slice" } else { match cg_array_concat_sym(p, name, targs) {
-        Some(rt) => rt,
-        None => match cg_runtime_fn(name) {
+    let concat = cg_is_array_concat(module_name, name, targs) && args.len() == 2;
+    let sym = if reverse { "@plum_array_reverse" } else if slice { "@plum_array_slice" }
+        else if concat { "@plum_array_concat" } else { match cg_runtime_fn(name) {
             Some(rt) => rt,
-            None =>
-                if false { "" }
-                else if cg_has_fn_in(p, module_name, name, 0) { "@".concat(cg_sym(module_name, name, cg_concrete_list(p, targs, 0, []))) }
-                else { { cg_fail("prelude function ${name} has no implementation in this backend's runtime yet"); "@plum_missing" } },
-        } } };
+            None => if cg_has_fn_in(p, module_name, name, 0) {
+                "@".concat(cg_sym(module_name, name, cg_concrete_list(p, targs, 0, [])))
+            } else { { cg_fail("prelude function ${name} has no implementation in this backend's runtime yet"); "@plum_missing" } },
+        } };
     let a = cg_args(p, env, n, args);
     // Owned array operations need the concrete input destructor. Normal
     // argument preparation evaluates every operand before consumption and
     // preserves scoped lifetime rules for closures and native handles.
-    let vals = if owned_array {
+    let vals = if reverse || slice || concat {
         a.vals.push("i1 ".concat(if cg_is_heap(cg_elem_ty(ret)) { "1" } else { "0" }))
             .push("ptr ".concat(cg_rel_sym(cg_concrete(p, typecheck.texpr_ty(p.subst, args[0])))))
     } else { a.vals };
@@ -2986,10 +2994,10 @@ let cg_fn_call_real (p: CgProgram) (env: Array[CgSlot]) (n: Int) (module_name: S
     } else { "call " };
     let call = "  ${reg} = call ${cg_llvm_ty(ret)} ${sym}(${cg_join_commas(vals)})\n"
         // Runtime calls normally borrow every prepared owned argument. Padding
-        // and these array operations consume their first argument; only the remaining
-        // language arguments are released here.
-        .concat(if owned_array || Option.is_some(cg_runtime_fn(name)) || name == "Array.concat" {
-            cg_dec_args(p, args, a.vals, if owned_array || name == "plum__string_pad_raw" { 1 } else { 0 }, "")
+        // and these array operations consume their receivers. Concatenation also
+        // consumes its second owner; only remaining language arguments drop here.
+        .concat(if reverse || slice || concat || Option.is_some(cg_runtime_fn(name)) {
+            cg_dec_args(p, args, a.vals, if concat { 2 } else if reverse || slice || name == "plum__string_pad_raw" { 1 } else { 0 }, "")
         } else { "" });
     let code = if cyclic {
         // Releases first, then return the call's own result -- see
@@ -3021,15 +3029,10 @@ let cg_fn_call_real (p: CgProgram) (env: Array[CgSlot]) (n: Int) (module_name: S
 // Other string routines are written in Plum on top of `chars_of`, in `cg_prelude_src`,
 // because prelude source this backend compiles is prelude source it
 // also proves it can handle.
-// `Array.concat[T]` is intercepted and given a single-allocation
-// implementation, with the variant chosen by T: a result holding heap
-// elements needs its own reference to each, one holding `Int`s must not
-// touch them. Choosing by the CALL SITE's instantiated type argument is
-// something only a backend with the typed tree can do.
-let cg_array_concat_sym (p: CgProgram) (name: String) (targs: Array[typecheck.ITy]): Option[String] =
-    if name == "Array.concat" && targs.len() == 1 {
-        if cg_is_heap(cg_of_ity(cg_concrete(p, targs[0]))) { Some("@plum_array_concat_heap") } else { Some("@plum_array_concat") }
-    } else { None }
+// Only the resolved prelude binding has the native consuming contract.
+// Calls, reachability, and payload-preserving self-assignment share this test.
+let cg_is_array_concat (module_name: String) (name: String) (targs: Array[typecheck.ITy]): Bool =
+    module_name == "<prelude>" && name == "Array.concat" && targs.len() == 1
 
 let cg_runtime_fn (name: String): Option[String] =
     if name == "chars_of" { Some("@plum_chars_of") }

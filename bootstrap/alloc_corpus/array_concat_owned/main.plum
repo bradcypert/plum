@@ -1,0 +1,9 @@
+let func (n: Int): () -> Int = || n
+let main (): Unit = {
+    let f = func(7);
+    let mut ints: Array[Int] = [];
+    let mut functions: Array[() -> Int] = [];
+    for i in 0..1024 { ints = Array.concat(ints, [7]); functions = Array.concat(functions, [f]); };
+    assert_eq(ints.len(), 1024); assert_eq(functions.len(), 1024);
+    for i in 0..1024 { assert_eq(ints[i], 7); assert_eq(functions[i](), 7); };
+}
