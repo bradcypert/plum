@@ -1,0 +1,2 @@
+use custom;
+let main (): Unit = { assert_eq(Array.reverse([1, 2]), [99]); println("user Array.reverse binding preserved"); }

@@ -92,6 +92,8 @@ let plum__array_slice_acc[T] (xs: Array[T]) (i: Int) (end: Int) (acc: Array[T]):
 pub let Array.slice[T] (xs: Array[T]) (start: Int) (end: Int): Array[T] =
     plum__array_slice_acc(xs, if start < 0 { 0 } else { start }, end, [])
 
+// The native backend uses an owned permutation. Keep the source definition
+// as a semantic fallback for evaluators without that lowering.
 let plum__array_reverse_acc[T] (xs: Array[T]) (i: Int) (acc: Array[T]): Array[T] =
     if i < 0 { acc } else { plum__array_reverse_acc(xs, i - 1, acc.push(xs[i])) }
 /// A new array in the opposite order.

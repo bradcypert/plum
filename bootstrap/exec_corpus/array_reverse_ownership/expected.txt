@@ -1,0 +1,1 @@
+Array.reverse: permutations, aliases, function values and scoped owners
