@@ -1,8 +1,9 @@
 # x86-64 freestanding target and kernel ABI
 
 Status: implementation contract for [#505](https://github.com/bradcypert/plum/issues/505).
-The build pipeline and core runtime selection are experimental. The boot adapter
-and concrete kernel hooks are not implemented, and this is not a supported platform tier. The
+The build pipeline, core runtime, entry wrapper, and reference kernel hooks are
+experimental. The boot adapter/image is not implemented, and this is not a
+supported platform tier. The
 [tracking issue](https://github.com/bradcypert/plum/issues/514) records the work
 needed to make it executable. Requirements below describe the intended behavior,
 not a claim of boot support. See [build commands](../RUNNING.md#freestanding-objects-and-elf-linking)
@@ -195,10 +196,15 @@ The ordered startup sequence is:
 
 1. Limine maps the ELF and zero-fills BSS, then enters `_start`.
 2. Assembly establishes interrupts/direction flag, private stack, and FP/SIMD state.
-3. Native adapter initializes COM1 and validates boot revision and required
-   responses. Request HHDM, memory map and four-level paging; keep boot pointers
-   borrowed and bootloader memory reserved. Read the HHDM offset from its response.
-4. Initialize the static arena and runtime hooks; failures now use serial/halt.
+3. Native adapter validates boot revision and required responses. Route adapter
+   output through `plum_kernel_write()` and failures through `plum_kernel_panic()`;
+   these reference hooks initialize COM1 on first use without enabling the heap.
+   Request HHDM, memory map and four-level paging; keep boot pointers borrowed and
+   bootloader memory reserved. Read the HHDM offset from its response.
+4. Call `plum_kernel_runtime_init()` from the reference support library to
+   prepare serial output and enable the static arena. Serial initialization is
+   idempotent, so output queued through the hooks in step 3 is not cleared;
+   failures use serial/halt.
 5. Call `plum_kernel_start`, which initializes globals and invokes Plum `main`.
 6. Plum writes `PLUM_KERNEL_OK\n`; returning from `main` reaches the halt hook.
 
@@ -231,7 +237,9 @@ does not establish an unrestricted stdlib or sustained allocator support.
   `codegen/runtime.plum` under `bootstrap/self_host/`.
 - #508: stable `plum_kernel_start` wrapper, entry signature validation,
   one-time initialization and non-returning halt/panic paths (implemented).
-- #509: core runtime hooks, failure routing, and bounded allocator.
+- #509: reference core hooks, COM1 output, failure routing, memory primitives
+  and bounded allocator (implemented in
+  [runtime/freestanding/x86_64](../runtime/freestanding/x86_64/README.md)).
 - #510: pinned boot dependencies, native adapter, image and example.
 - #511: object/ELF inspection, QEMU fixtures, GDB halt checks and CI.
 - #512 and #513: direct low-level language APIs and later kernel facilities.
