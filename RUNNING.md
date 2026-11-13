@@ -215,7 +215,8 @@ for the freestanding profile. Object output currently requires this exact target
 Without `-o`, output is `kernel.o` or `kernel.elf` respectively. `--emit-object`
 and `--linker-script` are mutually exclusive. `link` accepts prebuilt objects only.
 
-**This pipeline does not yet produce a bootable Plum kernel.** It now selects
+The [kernel-hello example](examples/kernel-hello/README.md) adds a pinned Limine
+BIOS ISO and QEMU smoke check on top of this pipeline. The profile selects
 only the core runtime symbols reached by the generated entry, globals, functions,
 and function-pointer initializers. Hosted startup, OS shims and unused runtime
 bodies are excluded. The exported entry is `plum_kernel_start` with C type

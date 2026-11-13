@@ -2,11 +2,11 @@
 
 Status: implementation contract for [#505](https://github.com/bradcypert/plum/issues/505).
 The build pipeline, core runtime, entry wrapper, and reference kernel hooks are
-experimental. The boot adapter/image is not implemented, and this is not a
-supported platform tier. The
-[tracking issue](https://github.com/bradcypert/plum/issues/514) records the work
-needed to make it executable. Requirements below describe the intended behavior,
-not a claim of boot support. See [build commands](../RUNNING.md#freestanding-objects-and-elf-linking)
+experimental. A [boot adapter and BIOS image example](../examples/kernel-hello/README.md)
+now run under QEMU; this is not a supported platform tier. The
+[tracking issue](https://github.com/bradcypert/plum/issues/514) records the
+remaining work. The contract below scopes the initial boot demonstration.
+See [build commands](../RUNNING.md#freestanding-objects-and-elf-linking)
 for the implemented pipeline. Normal hosted builds retain their behavior.
 
 ## Scope and terms
@@ -37,8 +37,9 @@ reclaiming heap follow later; they are not prerequisites for the first message.
 | Inspection / debug | `readelf`, `nm`, `objdump` (or LLVM equivalents), GDB and QEMU's GDB stub |
 
 Use a matching, pinned Limine binary release and protocol header supporting base
-revision 3. The boot-example change (#510) must record their exact versions,
-source URLs and checksums; do not download a moving branch during builds. The
+revision 3. The [boot example](../examples/kernel-hello/README.md#pinned-boot-inputs)
+records exact versions, source URLs and checksums; do not download a moving
+branch during builds. The
 adapter verifies base-revision negotiation and required responses before use.
 The first CI image must also record the exact Clang/LLD/QEMU versions it tests;
 this contract does not claim an untested minimum tool version.
@@ -208,7 +209,7 @@ The ordered startup sequence is:
 5. Call `plum_kernel_start`, which initializes globals and invokes Plum `main`.
 6. Plum writes `PLUM_KERNEL_OK\n`; returning from `main` reaches the halt hook.
 
-The future example's reference invocation, after building `kernel.iso`, is:
+The example's reference invocation, after building `kernel.iso`, is:
 
 ```sh
 qemu-system-x86_64 -machine pc -accel tcg -cpu qemu64 -smp 1 -m 128M \
@@ -240,7 +241,9 @@ does not establish an unrestricted stdlib or sustained allocator support.
 - #509: reference core hooks, COM1 output, failure routing, memory primitives
   and bounded allocator (implemented in
   [runtime/freestanding/x86_64](../runtime/freestanding/x86_64/README.md)).
-- #510: pinned boot dependencies, native adapter, image and example.
+- #510: pinned Limine dependencies, native adapter, scalar hardware helpers,
+  BIOS image and hello/halt smoke (implemented in
+  [examples/kernel-hello](../examples/kernel-hello/README.md)).
 - #511: object/ELF inspection, QEMU fixtures, GDB halt checks and CI.
 - #512 and #513: direct low-level language APIs and later kernel facilities.
 

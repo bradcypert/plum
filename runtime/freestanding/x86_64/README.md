@@ -6,7 +6,8 @@ not a sustained workload: the 1 MiB arena never reclaims storage. Allocations
 will eventually exhaust it even when reference-counted values are released.
 A reclaiming heap is later work.
 
-The boot adapter and bootable image are not supplied here; those are #510.
+A boot adapter and bootable BIOS image are supplied by the
+[kernel-hello example](../../../examples/kernel-hello/README.md) (#510).
 See the [target/entry contract](../../../docs/freestanding-x86_64.md).
 
 ## Initialization and sources

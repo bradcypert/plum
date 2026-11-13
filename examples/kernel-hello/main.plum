@@ -1,0 +1,15 @@
+// These scalar externs use the existing C ABI; no Plum pointer API is needed.
+extern "C" {
+    fn plum_x86_serial_write(bytes: CStr, length: Int) -> Unit;
+    fn plum_x86_interrupts_disable() -> Unit;
+    fn plum_x86_interrupts_enabled() -> Bool;
+    fn plum_x86_halt() -> Unit;
+}
+
+let main (): Unit = unsafe {
+    plum_x86_interrupts_disable();
+    if plum_x86_interrupts_enabled() { panic_raw("interrupts must remain disabled") };
+    let marker = "PLUM_KERNEL_OK\n";
+    plum_x86_serial_write(marker.as_cstr(), 15);
+    plum_x86_halt();
+}
