@@ -218,11 +218,23 @@ and `--linker-script` are mutually exclusive. `link` accepts prebuilt objects on
 **This pipeline does not yet produce a bootable Plum kernel.** It now selects
 only the core runtime symbols reached by the generated entry, globals, functions,
 and function-pointer initializers. Hosted startup, OS shims and unused runtime
-bodies are excluded. A temporary C `main` initializes globals and invokes Plum
-`main`; the boot entry and halt-on-return wrapper are tracked in #508.
+bodies are excluded. The exported entry is `plum_kernel_start` with C type
+`_Noreturn void(void)`; no C `main` is generated. It initializes Plum globals
+once, invokes source `main (): Unit`, then calls `plum_kernel_halt` if `main`
+returns. A second or recursive entry calls `plum_kernel_panic` before rerunning
+any initializer. Parameterized, generic, and non-Unit-returning main functions
+are rejected for this profile.
+
+Before calling `plum_kernel_start`, the native boot adapter must establish the
+CPU state, aligned stack, zero-filled BSS, and initialized kernel hooks/allocator
+specified by the target contract. The wrapper does not set up the allocator:
+global initialization can allocate before source `main` starts. Only one CPU,
+with interrupts disabled, may enter; concurrent entry is unsupported. The
+bootloader's image entry remains native `_start`, which calls this wrapper.
+Neither the wrapper nor the halt/panic hooks may return to the boot adapter.
 
 Supply native implementations of `plum_kernel_alloc`, `plum_kernel_free`,
-`plum_kernel_write`, and `plum_kernel_panic`, plus any required `memcpy`, `memmove`,
+`plum_kernel_write`, `plum_kernel_panic`, and `plum_kernel_halt`, plus any required `memcpy`, `memmove`,
 `memset`, and `memcmp` primitives. Their ABI is in the
 [target contract](docs/freestanding-x86_64.md#core-runtime-and-hooks).
 The compiler supplies these declarations, not device drivers or an allocator.

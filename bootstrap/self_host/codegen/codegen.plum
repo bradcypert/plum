@@ -6033,16 +6033,7 @@ let cg_param_slots (params: Array[CgParam]) (ptys: Array[typecheck.ITy]) (i: Int
 // dispatcher rather than the project's own `main` -- see main.plum's
 // `cmd_test`.
 let cg_entry_named (entry_sym: String): String =
-    if CORE_RUNTIME.get() { cg_lines([
-        // Temporary C entry for runtime fixtures. The boot-facing entry
-        // wrapper and halt-on-return behavior are deliberately left to #508.
-        "define i32 @main(i32 %argc, ptr %argv) {",
-        "entry:",
-        "  call void @plum_init_globals()",
-        "  %r = call i1 ${entry_sym}(i1 false)",
-        "  ret i32 0",
-        "}",
-    ]) } else { cg_hosted_entry(entry_sym) }
+    if CORE_RUNTIME.get() { cg_kernel_entry(entry_sym) } else { cg_hosted_entry(entry_sym) }
 
 let cg_hosted_entry (entry_sym: String): String = cg_lines([
     "define i32 @main(i32 %argc, ptr %argv) {",
@@ -7456,6 +7447,7 @@ pub let cg_emit_program_entry (program0: parser.ProgramNode) (entry: String): St
     let p = cg_build_program(program);
     buildcache.finish("type checking", type_time);
     if !cg_has_fn(p, entry) { cg_fail("no top-level '${entry}' function to compile") };
+    if CORE_RUNTIME.get() { cg_validate_kernel_entry(p, entry) };
     // Globals are roots too: their bodies can call functions that
     // nothing else reaches.
     let reachable_time = buildcache.start(());

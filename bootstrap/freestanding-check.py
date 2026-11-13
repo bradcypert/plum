@@ -92,6 +92,12 @@ with tempfile.TemporaryDirectory(prefix='plum-freestanding-') as tmp:
     ir = (work / 'not-a-kernel.ll').read_text()
     assert f'target triple = "{TARGET}"' in ir
     assert 'target datalayout' in ir and '!"Code Model", i32 2' in ir
+    assert re.search(r'define void @plum_kernel_start\(\).*noreturn', ir)
+    assert not re.search(r'define .*@main\(', ir)
+    assert 'call void @plum_kernel_halt()' in ir
+    assert 'call void @plum_locale_init()' not in ir
+    assert '@atexit' not in ir and '@srand' not in ir
+
     definitions = [line for line in ir.splitlines() if line.startswith('define ')]
     assert definitions and all('noredzone' in line and '"target-cpu"="x86-64"' in line
                                for line in definitions)

@@ -108,15 +108,30 @@ CPUs. Install kernel-owned exception/interrupt handling before those capabilitie
 are introduced (#513). Disabling interrupts does not prevent CPU exceptions or
 NMIs; this early demo has no recovery guarantee for either.
 
-The planned generated external symbol (#508) is `plum_kernel_start` with C type
-`void(void)`. Until that wrapper lands, core runtime fixtures use a C `main`
-that initializes globals and calls Plum code, without hosted startup services.
+The generated external symbol is `plum_kernel_start`, declared in native C as:
+
+```c
+_Noreturn void plum_kernel_start(void);
+```
+
 It initializes Plum globals once and invokes source `let main (): Unit` using
-Plum's internal calling convention. A native caller must never call the mangled
-Plum `main` directly: today `Unit` is represented as LLVM `i1`, not C `void`.
-The wrapper calls the halt hook if `main` returns and never returns itself.
-There is no `argc`/`argv`, locale initialization, exit handler, or clock/random
-seeding. Dynamic initializers run only after hooks and the allocator are ready.
+Plum's internal calling convention. A single Unit parameter and Unit result
+are required; generic entries and other signatures are rejected. A native caller
+must never call the mangled Plum `main` directly: `Unit` is represented as LLVM
+`i1`, not C `void`. No C `main` symbol is emitted for this profile.
+
+The native adapter must finish hook/allocator initialization **before** calling
+`plum_kernel_start`: even an otherwise empty program's global initializers may
+allocate. The wrapper does not initialize the allocator or machine state. Its
+zero-initialized entry guard is set before global initialization, so any repeated
+or recursive entry panics without running initializers or source `main` again.
+This guard assumes the one-CPU, interrupts-disabled calling contract; it is not
+an SMP initialization primitive.
+
+If source `main` returns normally, the wrapper calls `plum_kernel_halt` and never
+returns itself. A runtime failure calls `plum_kernel_panic` instead. Both hooks
+are non-returning; returning from either violates the ABI. There is no
+`argc`/`argv`, locale initialization, exit handler, or clock/random seeding.
 
 ## Core runtime and hooks
 
@@ -214,7 +229,8 @@ does not establish an unrestricted stdlib or sustained allocator support.
   `bootstrap/self_host/main.plum`.
 - #507: runtime selection/reachability in `codegen/codegen.plum` and
   `codegen/runtime.plum` under `bootstrap/self_host/`.
-- #508: replace the hosted `cg_entry_named` path for this profile only.
+- #508: stable `plum_kernel_start` wrapper, entry signature validation,
+  one-time initialization and non-returning halt/panic paths (implemented).
 - #509: core runtime hooks, failure routing, and bounded allocator.
 - #510: pinned boot dependencies, native adapter, image and example.
 - #511: object/ELF inspection, QEMU fixtures, GDB halt checks and CI.
