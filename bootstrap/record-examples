@@ -26,8 +26,7 @@ cd "$root"
 work="$(mktemp -d -t plum-record-XXXXXX)"
 trap 'rm -rf "$work"' EXIT
 
-declare -A no_run=([asteroids]="opens a window (raylib)"
-                  [kernel-hello]="boots under QEMU; output checked by its smoke.py")
+declare -A no_run=([asteroids]="opens a window (raylib)")
 declare -A link_flags=([asteroids]="--link-lib raylib")
 
 for dir in examples/*/; do

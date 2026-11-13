@@ -215,8 +215,11 @@ for the freestanding profile. Object output currently requires this exact target
 Without `-o`, output is `kernel.o` or `kernel.elf` respectively. `--emit-object`
 and `--linker-script` are mutually exclusive. `link` accepts prebuilt objects only.
 
-The [kernel-hello example](examples/kernel-hello/README.md) adds a pinned Limine
-BIOS ISO and QEMU smoke check on top of this pipeline. The profile selects
+The freestanding profile enables external kernels such as
+[Plum-OS](https://github.com/bradcypert/plum-os). The OS owns its bootloader,
+hardware drivers, allocator and QEMU image/test tooling. This repository keeps
+compiler and runtime ABI conformance checks without an OS implementation.
+The profile selects
 only the core runtime symbols reached by the generated entry, globals, functions,
 and function-pointer initializers. Hosted startup, OS shims and unused runtime
 bodies are excluded. The exported entry is `plum_kernel_start` with C type
@@ -239,15 +242,11 @@ Supply native implementations of `plum_kernel_alloc`, `plum_kernel_free`,
 `memset`, and `memcmp` primitives. Their ABI is in the
 [target contract](docs/freestanding-x86_64.md#core-runtime-and-hooks).
 The compiler supplies these declarations without automatically linking an
-implementation. Optional example x86-64 hooks are available in
-[examples/kernel-hello/support](examples/kernel-hello/support/README.md): explicit
-COM1 output and panic/halt, a bounded 1 MiB arena with no-op frees, and the
-memory primitives. When using these example hooks, the adapter must call
-`plum_kernel_runtime_init()` before `plum_kernel_start()`; link the support files explicitly as documented
-there. The arena is for a bounded boot demo and cannot sustain repeated
-allocation indefinitely. These drivers and allocation policies belong to the
-example, not the compiler or standard runtime. An external OS supplies its own
-boot adapter and hooks; OS facilities are maintained outside Plum.
+implementation. Kernel authors implement the hooks and memory primitives.
+[Plum-OS](https://github.com/bradcypert/plum-os) provides a separate working
+consumer, including a bounded boot allocator, COM1 output, panic/halt and BIOS
+image tooling. Its policies are not compiler or standard runtime requirements.
+
 Null allocation results panic before any cell/header write. Output passes
 borrowed bytes and explicit lengths, so embedded NUL bytes are preserved.
 Integer formatting uses stack scratch rather than libc; floating-point

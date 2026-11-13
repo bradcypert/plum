@@ -52,7 +52,7 @@ jobs:
           retention-days: 7
 
   freestanding_checks:
-    name: Linux freestanding object, ELF and boot checks
+    name: Linux freestanding object and ELF checks
     needs: build
     runs-on: ubuntu-latest
     timeout-minutes: 10
@@ -60,9 +60,9 @@ jobs:
       - uses: actions/checkout@v5
       - name: ELF toolchain
         run: |
-          if ! command -v clang >/dev/null || ! command -v ld.lld >/dev/null || ! command -v readelf >/dev/null || ! command -v nm >/dev/null || ! command -v objdump >/dev/null || ! command -v qemu-system-x86_64 >/dev/null || ! command -v xorriso >/dev/null; then
+          if ! command -v clang >/dev/null || ! command -v ld.lld >/dev/null || ! command -v readelf >/dev/null || ! command -v nm >/dev/null || ! command -v objdump >/dev/null; then
             sudo apt-get update
-            sudo apt-get install -y clang lld binutils qemu-system-x86 xorriso
+            sudo apt-get install -y clang lld binutils
           fi
       - uses: actions/download-artifact@v4
         with:
@@ -73,13 +73,6 @@ jobs:
         run: python3 ./bootstrap/freestanding-check.py ./sh.real
       - name: core runtime hooks, ownership and hosted-service rejection
         run: python3 ./bootstrap/freestanding-runtime-check.py ./sh.real
-      - name: actual early kernel hooks and memory primitives
-        run: python3 ./bootstrap/kernel-hooks-check.py ./sh.real
-      - name: pinned BIOS image and bounded QEMU hello/halt smoke
-        run: |
-          python3 examples/kernel-hello/build.py --plum ./sh.real --output /tmp/plum-kernel-hello --release
-          python3 examples/kernel-hello/smoke.py --output /tmp/plum-kernel-hello
-          cat /tmp/plum-kernel-hello/toolchain.json
 
   bootstrap_proofs:
     name: Linux compiler self-hosting and memory checks

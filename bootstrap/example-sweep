@@ -96,21 +96,6 @@ libs=0
 for dir in examples/*/; do
     name="$(basename "$dir")"
 
-    # This example requires a bootloader and executes privileged instructions.
-    # Keep its Plum/FFI compilation in the hosted sweep; the freestanding CI job
-    # builds its full ISO and runs its separate QEMU smoke check.
-    if [ "$name" = "kernel-hello" ]; then
-        if SH_MEM="${SH_MEM:-256M}" SH_TIMEOUT="${SH_TIMEOUT:-240}" ./sh build "$dir" \
-            --target x86_64-unknown-none --emit-object -o "$work/kernel-hello.o" > "$work/kernel-hello.log" 2>&1; then
-            printf 'EMIT  %-24s freestanding object (QEMU smoke in freestanding CI)\n' "$name"
-            emit_only=$((emit_only + 1))
-        else
-            printf 'FAIL  %-24s %s\n' "$name" "$(head -n 1 "$work/kernel-hello.log")"
-            fail=$((fail + 1))
-        fi
-        continue
-    fi
-
     # A directory with no `main.plum` is a LIBRARY: a project that
     # exists to be depended on, like `examples/semver/`. It has no entry
     # point, so it is TYPE-CHECKED rather than emitted and run.
