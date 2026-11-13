@@ -101,7 +101,7 @@ let cg_core_user_externs (program: parser.ProgramNode): Array[String] = {
 
 let cg_core_allowed (name: String) (user: Array[String]): Bool =
     Array.contains(user, name) || Array.contains([
-        "plum_kernel_alloc", "plum_kernel_free", "plum_kernel_write", "plum_kernel_panic",
+        "plum_kernel_alloc", "plum_kernel_free", "plum_kernel_write", "plum_kernel_panic", "plum_kernel_halt",
         "memcpy", "memmove", "memset", "memcmp",
         "llvm.sadd.with.overflow.i64", "llvm.ssub.with.overflow.i64", "llvm.smul.with.overflow.i64"
     ], name)
@@ -120,7 +120,7 @@ let cg_core_runtime (ir: String) (user: Array[String]): String = {
         };
     };
     for item in overrides { items = items.insert(item.name, item); };
-    let selected = cg_core_select(items, ["main"], ["main"], 0, Set.new(()), Set.new(()), user);
+    let selected = cg_core_select(items, [cg_kernel_entry_symbol(())], [cg_kernel_entry_symbol(())], 0, Set.new(()), Set.new(()), user);
     let mut out: Array[String] = [];
     let mut emitted: Set[String] = Set.new(());
     // Preserve deterministic emitter order, preferring replacement bodies.
@@ -168,4 +168,42 @@ pub let test_core_unicode_byte_offsets (): Unit = {
     let source = "; café\n@data = constant [9 x i8] c\"@malloc(\\00\"\ncall ptr @malloc(i64 8)\ncall void @free(ptr @fn$2e.name-1) ; π\n";
     assert_eq(cg_core_symbols(source), ["data", "malloc", "free", "fn$2e.name-1"]);
     assert_eq(cg_core_rewrite(source), "; café\n@data = constant [9 x i8] c\"@malloc(\\00\"\ncall ptr @plum_core_alloc_raw(i64 8)\ncall void @plum_kernel_free(ptr @fn$2e.name-1) ; π\n");
+}
+
+// External callers must establish the boot contract before entering. The
+// wrapper owns only Plum initialization, the internal ABI bridge, and exit.
+let cg_kernel_entry_symbol (): String = "plum_kernel_start"
+
+let cg_validate_kernel_entry (p: CgProgram) (entry: String): Unit =
+    match cg_find_tfn(p, "", entry, 0) {
+        None => cg_fail("freestanding entry requires a top-level main function"),
+        Some(def) => {
+            let valid = def.generics.len() == 0 && def.params.len() == 1
+                && typecheck.subst_apply(def.subst, def.params[0].ty) == ITUnit
+                && typecheck.subst_apply(def.subst, def.ret) == ITUnit;
+            if !valid { cg_fail("freestanding entry requires main (): Unit (one Unit parameter, Unit result, no generics)") }
+        },
+    }
+
+let cg_kernel_entry (entry_sym: String): String = {
+    let repeated = "kernel entry called more than once";
+    cg_lines([
+        "@plum_kernel_entered = internal global i1 false",
+        "@.plum_kernel_reentry = private constant [${repeated.len()} x i8] c\"${repeated}\"",
+        "define void @${cg_kernel_entry_symbol(())}() noreturn {",
+        "entry:",
+        "  %entered = load i1, ptr @plum_kernel_entered",
+        "  br i1 %entered, label %repeat, label %initialize",
+        "repeat:",
+        "  call void @plum_kernel_panic(ptr @.plum_kernel_reentry, i64 ${repeated.len()})",
+        "  unreachable",
+        "initialize:",
+        // One CPU, interrupts disabled: no concurrent callers are supported.
+        "  store i1 true, ptr @plum_kernel_entered",
+        "  call void @plum_init_globals()",
+        "  %r = call i1 ${entry_sym}(i1 false)",
+        "  call void @plum_kernel_halt()",
+        "  unreachable",
+        "}",
+    ])
 }

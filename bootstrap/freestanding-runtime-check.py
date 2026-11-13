@@ -10,7 +10,7 @@ import tempfile
 
 COMPILER = Path(sys.argv[1] if len(sys.argv) > 1 else './sh').resolve()
 TARGET = 'x86_64-unknown-none'
-HOOKS = {'plum_kernel_alloc', 'plum_kernel_free', 'plum_kernel_write', 'plum_kernel_panic'}
+HOOKS = {'plum_kernel_alloc', 'plum_kernel_free', 'plum_kernel_write', 'plum_kernel_panic', 'plum_kernel_halt'}
 MEMORY = {'memcpy', 'memmove', 'memcmp', 'memset'}
 
 
@@ -26,12 +26,26 @@ HARNESS = r'''
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <setjmp.h>
 static long live, baseline;
-void begin(void) { baseline = live; }
+static int ready, global_events, finished;
+static jmp_buf halted;
+extern _Noreturn void plum_kernel_start(void);
+long long init_value(void) {
+    if (!ready) exit(89);
+    ++global_events;
+    return 7;
+}
+void begin(void) {
+    if (!ready || global_events != 1) exit(89);
+    baseline = live;
+}
 void done(void) {
     if (live != baseline) { fprintf(stderr,"live cells: %ld != %ld\n",live,baseline); exit(88); }
+    ++finished;
 }
 void *plum_kernel_alloc(uint64_t size) {
+    if (!ready) exit(89);
     if (getenv("PLUM_TEST_OOM")) return NULL;
     if (size > SIZE_MAX - 16) return NULL;
     void *p = malloc((size_t)size);
@@ -43,9 +57,23 @@ void plum_kernel_write(const uint8_t *p, uint64_t len) { fwrite(p,1,len,stdout);
 _Noreturn void plum_kernel_panic(const uint8_t *p, uint64_t len) {
     fwrite(p,1,len,stderr); fputc('\n',stderr); exit(97);
 }
+_Noreturn void plum_kernel_halt(void) {
+    if (getenv("PLUM_TEST_REENTER")) longjmp(halted, 1);
+    exit(0);
+}
+int main(void) {
+    /* Model boot-adapter setup before any allocation-capable initializer. */
+    ready = 1;
+    if (getenv("PLUM_TEST_REENTER")) {
+        if (setjmp(halted) == 0) plum_kernel_start();
+        if (global_events != 1 || finished != 1) return 89;
+    }
+    plum_kernel_start();
+}
 '''
 
-SOURCE = '''extern "C" { fn begin(); fn done(); }
+SOURCE = '''extern "C" { fn begin(); fn done(); fn init_value() -> Int; }
+let INITIAL: String = (unsafe { init_value() }).to_string()
 struct Pair { text: String, values: Array[Int] }
 enum Choice { Value(Pair), Empty }
 let unused_hosted (): Unit = { Os.cwd(); () }
@@ -53,6 +81,7 @@ use Os;
 use Time;
 let apply (f: (Int) -> Int) (n: Int): Int = f(n)
 let exercise (): Unit = {
+    println(INITIAL);
     let left = "hello";
     let right = left.concat(" world");
     println(left);
@@ -108,17 +137,22 @@ with tempfile.TemporaryDirectory(prefix='plum-core-runtime-') as tmp:
         assert 'IR miss' in first.stderr
         assert 'IR hit' in plum(*args).stderr
         names = {line.split()[-1] for line in run(['nm', '-u', obj]).stdout.splitlines()}
-        assert names <= HOOKS | MEMORY | {'begin', 'done'}, names
+        assert names <= HOOKS | MEMORY | {'begin', 'done', 'init_value'}, names
         assert HOOKS <= names, names
         text = run(['nm', obj]).stdout
+        assert re.search(r'\bT plum_kernel_start$', text, re.M), text
+        assert not re.search(r'\b[Tt] main$', text, re.M), text
         for forbidden in ('plum_dump_stats', 'plum_args', 'plum_locale_init', 'plum_process', 'plum_thread'):
             assert forbidden not in text, forbidden
         exe = work / 'run'
         run(['clang', '-no-pie', obj, hooks, '-o', exe])
         result = run([exe])
-        assert result.stdout == ('hello\nhello world\n@malloc( @free( @malloc_usable_size( "@printf\n'
+        assert result.stdout == ('7\nhello\nhello world\n@malloc( @free( @malloc_usable_size( "@printf\n'
             '2\n4\ntrue\nhello world\n616263646566\n616263646566\n0\n2\ntrue\nc\ncaptured\n42\n0\n'
             '-9223372036854775808\n9223372036854775807\n'), result.stdout
+        repeated = run([exe], ok=False, env=env | {'PLUM_TEST_REENTER': '1'})
+        assert repeated.returncode == 97 and 'kernel entry called more than once' in repeated.stderr, repeated
+        assert repeated.stdout == result.stdout, repeated
         oom = run([exe], ok=False, env=env | {'PLUM_TEST_OOM': '1'})
         assert oom.returncode == 97 and any(message in oom.stderr for message in ('out of memory', 'cannot allocate storage')), oom
 
@@ -151,7 +185,16 @@ with tempfile.TemporaryDirectory(prefix='plum-core-runtime-') as tmp:
         result = plum('build', project, '--target', TARGET, '--emit-object', '-o', work / 'bad.o', ok=False)
         diagnostic = result.stdout + result.stderr
         assert 'freestanding runtime: unsupported hosted operation' in diagnostic, diagnostic
-        assert 'via main ->' in diagnostic, diagnostic
+        assert 'via plum_kernel_start ->' in diagnostic, diagnostic
+
+    for signature in [
+        'let main (): Int = 1',
+        'let main (n: Int): Unit = ()',
+        'let main[T] (value: T): Unit = ()',
+    ]:
+        source.write_text(signature + '\n')
+        result = plum('build', project, '--target', TARGET, '--emit-object', '-o', work / 'invalid-entry.o', ok=False)
+        assert 'freestanding entry requires main (): Unit' in result.stdout + result.stderr, result
 
     # Close the entire link with freestanding test hooks: there must be no
     # libc, host startup files, unresolved symbols or GC-based suppression.
@@ -171,6 +214,7 @@ void plum_kernel_write(const unsigned char *p, unsigned long n) { (void)p; (void
 _Noreturn void plum_kernel_panic(const unsigned char *p, unsigned long n) {
     (void)p; (void)n; for (;;) { __asm__ volatile ("cli; hlt"); }
 }
+_Noreturn void plum_kernel_halt(void) { for (;;) { __asm__ volatile ("cli; hlt"); } }
 void *memcpy(void *d, const void *s, unsigned long n) {
     unsigned char *a=d; const unsigned char *b=s;
     for (unsigned long i=0;i<n;i++) a[i]=b[i]; return d;
@@ -189,7 +233,7 @@ int memcmp(const void *a, const void *b, unsigned long n) {
 }
 """)
     script = work / 'kernel.ld'
-    script.write_text('ENTRY(main)\nPHDRS { text PT_LOAD FLAGS(5); ro PT_LOAD FLAGS(4); data PT_LOAD FLAGS(6); }\n'
+    script.write_text('ENTRY(plum_kernel_start)\nPHDRS { text PT_LOAD FLAGS(5); ro PT_LOAD FLAGS(4); data PT_LOAD FLAGS(6); }\n'
         'SECTIONS { . = 0xffffffff80000000; .text : { *(.text*) } :text '
         '. = ALIGN(4096); .rodata : { *(.rodata*) } :ro '
         '. = ALIGN(4096); .data : { *(.data*) } :data .bss : { *(.bss*) *(COMMON) } :data }\n')
@@ -202,4 +246,4 @@ int memcmp(const void *a, const void *b, unsigned long n) {
     assert 'INTERP' not in run(['readelf', '-l', elf]).stdout
 
     print('freestanding-runtime-check: symbol audit, RC lifetimes, formatting, '
-          'checked failures, OOM, cache reuse and transitive diagnostics passed')
+          'checked failures, OOM, entry initialization/halt/re-entry, cache reuse and transitive diagnostics passed')

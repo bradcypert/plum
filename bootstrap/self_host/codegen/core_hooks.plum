@@ -5,6 +5,7 @@ let cg_core_overrides (): String = cg_lines([
     "declare void @plum_kernel_free(ptr)",
     "declare void @plum_kernel_write(ptr, i64)",
     "declare void @plum_kernel_panic(ptr, i64) noreturn",
+    "declare void @plum_kernel_halt() noreturn",
     "@.plum_core_oom = private constant [13 x i8] c\"out of memory\"",
     "@.plum_core_lf = private constant [1 x i8] c\"\\0A\"",
     "define ptr @plum_core_alloc_raw(i64 %size) {",

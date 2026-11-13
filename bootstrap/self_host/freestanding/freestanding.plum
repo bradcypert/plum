@@ -51,4 +51,4 @@ pub let compile_flags (mode: buildmode.Options): Array[String] =
 // must be read again on every invocation. Native object keys include the
 // effective Clang command, including all of compile_flags.
 pub let cache_key (mode: buildmode.Options): String =
-    "plum-freestanding-v2:".concat(target(())).concat(":").concat(buildmode.cache_key(mode))
+    "plum-freestanding-v3:".concat(target(())).concat(":").concat(buildmode.cache_key(mode))
