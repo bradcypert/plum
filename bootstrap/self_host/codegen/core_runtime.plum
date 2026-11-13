@@ -1,0 +1,171 @@
+// A dependency closure over compiler-owned LLVM definitions. This is not a
+// general LLVM parser: emission uses one-line globals and function headers,
+// with each function ending on its own `}` line. Native inputs never enter it.
+struct CoreItem { name: String, text: String, declaration: Bool, deps: Array[String] }
+
+// Symbols in string literals and comments are data, not dependencies. Include
+// function-pointer/global initializers so indirect calls retain their targets.
+struct CoreRef { name: String, start: Int, end: Int }
+
+let cg_core_symbols (text: String): Array[String] = Array.map(cg_core_refs(text), |r| r.name)
+
+let cg_core_refs (text: String): Array[CoreRef] =
+    cg_core_scan(text.as_bytes(), 0, false, false, [])
+
+let cg_core_scan (bytes: Bytes) (i: Int) (quoted: Bool) (comment: Bool) (out: Array[CoreRef]): Array[CoreRef] =
+    if i >= bytes.len() { out }
+    else {
+        let b = bytes_at_raw(bytes, i);
+        if comment { cg_core_scan(bytes, i + 1, false, b != 10, out) }
+        else if quoted {
+            if b == 92 { cg_core_scan(bytes, i + 2, true, false, out) }
+            else { cg_core_scan(bytes, i + 1, b != 34, false, out) }
+        } else if b == 59 { cg_core_scan(bytes, i + 1, false, true, out) }
+        else if b == 34 { cg_core_scan(bytes, i + 1, true, false, out) }
+        else if b == 64 {
+            let end = cg_core_symbol_end(bytes, i + 1);
+            if end == i + 1 { cg_fail("unsupported LLVM symbol spelling in freestanding runtime") };
+            cg_core_scan(bytes, end, false, false, out.push(CoreRef { name: cg_symbol_ascii(bytes, i + 1, end), start: i + 1, end: end }))
+        } else { cg_core_scan(bytes, i + 1, false, false, out) }
+    }
+
+let cg_core_symbol_end (bytes: Bytes) (i: Int): Int =
+    if i >= bytes.len() || !cg_core_symbol_byte(bytes_at_raw(bytes, i)) { i }
+    else { cg_core_symbol_end(bytes, i + 1) }
+
+let cg_core_symbol_byte (b: Int): Bool = cg_symbol_byte_ok(b) || b == 36 || b == 46 || b == 45
+
+let cg_core_item (text: String) (declaration: Bool): CoreItem = {
+    let symbols = cg_core_symbols(text);
+    if symbols.len() == 0 { cg_fail("missing LLVM symbol in freestanding runtime item") };
+    CoreItem { name: symbols[0], text: text, declaration: declaration, deps: symbols }
+}
+
+let cg_core_items (ir: String): Array[CoreItem] = {
+    let mut out: Array[CoreItem] = [];
+    let mut parts: Array[String] = [];
+    let mut function = false;
+    for line in ir.split("\n") {
+        if function {
+            parts = parts.push(line);
+            if line == "}" {
+                out = out.push(cg_core_item(Array.join(parts, "\n").concat("\n"), false));
+                parts = []; function = false;
+            }
+        } else if line.starts_with("define ") {
+            parts = [line]; function = true;
+        } else if line.starts_with("declare ") || line.starts_with("@") {
+            out = out.push(cg_core_item(line.concat("\n"), line.starts_with("declare ")));
+        }
+    };
+    if function { cg_fail("unterminated LLVM function in freestanding runtime") };
+    out
+}
+
+// Rewrite reference tokens only: a source string such as "@malloc(" must
+// retain both its original bytes and its recorded LLVM array length.
+let cg_core_rewrite (text: String): String = {
+    let bytes = text.as_bytes();
+    let mut parts: Array[String] = [];
+    let mut cursor = 0;
+    for symbol in cg_core_refs(text) {
+        let replacement = if symbol.name == "malloc" { "plum_core_alloc_raw" }
+            else if symbol.name == "free" { "plum_kernel_free" }
+            else if symbol.name == "malloc_usable_size" { "plum_core_capacity_disabled" }
+            else { symbol.name };
+        parts = parts.push(cg_core_span(bytes, cursor, symbol.start)).push(replacement);
+        cursor = symbol.end;
+    };
+    parts = parts.push(cg_core_span(bytes, cursor, bytes.len()));
+    Array.concat_all(parts)
+}
+
+// Token names are ASCII; surrounding spans can contain UTF-8 literals or
+// comments. Scanner boundaries never split a codepoint, so decode only the
+// selected byte range rather than rescanning the original String prefix.
+let cg_core_span (bytes: Bytes) (start: Int) (end: Int): String =
+    match bytes.slice(start, end).as_string() {
+        Ok(text) => text,
+        Err(_) => { cg_fail("invalid UTF-8 span in freestanding LLVM rewrite"); "" },
+    }
+
+// Only application/dependency externs are escape hatches. Externs introduced
+// by stdlib imports must still pass the hosted-service diagnostic below.
+let cg_core_user_externs (program: parser.ProgramNode): Array[String] = {
+    let mut names: Array[String] = [];
+    for item in program.items {
+        match item.kind { IKExtern(block) => for f in block.fns { names = names.push(f.name); }, _ => () };
+    };
+    names
+}
+
+let cg_core_allowed (name: String) (user: Array[String]): Bool =
+    Array.contains(user, name) || Array.contains([
+        "plum_kernel_alloc", "plum_kernel_free", "plum_kernel_write", "plum_kernel_panic",
+        "memcpy", "memmove", "memset", "memcmp",
+        "llvm.sadd.with.overflow.i64", "llvm.ssub.with.overflow.i64", "llvm.smul.with.overflow.i64"
+    ], name)
+
+// Keep ownership/error semantics in the shared runtime; replace the few
+// platform boundaries, then retain only definitions reached from main.
+let cg_core_runtime (ir: String) (user: Array[String]): String = {
+    let originals = cg_core_items(ir);
+    let overrides = cg_core_items(cg_core_overrides(()));
+    let mut items: Map[String, CoreItem] = Map.new(());
+    for item in originals {
+        let rewritten = cg_core_rewrite(item.text);
+        // Old declarations are replaced by the override declarations below.
+        if item.name != "malloc" && item.name != "free" && item.name != "malloc_usable_size" {
+            items = items.insert(item.name, CoreItem { text: rewritten, deps: cg_core_symbols(rewritten), ..item });
+        };
+    };
+    for item in overrides { items = items.insert(item.name, item); };
+    let selected = cg_core_select(items, ["main"], ["main"], 0, Set.new(()), Set.new(()), user);
+    let mut out: Array[String] = [];
+    let mut emitted: Set[String] = Set.new(());
+    // Preserve deterministic emitter order, preferring replacement bodies.
+    for item in Array.concat(originals, overrides) {
+        if selected.contains(item.name) && !emitted.contains(item.name) {
+            emitted = emitted.insert(item.name);
+            out = match items.get(item.name) { Some(v) => out.push(v.text), None => { cg_fail("missing selected core item"); out } };
+        }
+    };
+    // DWARF and other non-symbol module metadata are not runtime code.
+    for line in ir.split("\n") { if line.starts_with("!") || line.starts_with("source_filename = ") { out = out.push(line.concat("\n")); }; };
+    Array.concat_all(out)
+}
+
+let cg_core_select (items: Map[String, CoreItem]) (pending: Array[String]) (paths: Array[String]) (at: Int) (seen: Set[String]) (selected: Set[String]) (user: Array[String]): Set[String] =
+    if at >= pending.len() { selected }
+    else {
+        let name = pending[at];
+        let path = paths[at];
+        if seen.contains(name) { cg_core_select(items, pending, paths, at + 1, seen, selected, user) }
+        else { match items.get(name) {
+            None => { cg_fail("freestanding runtime: missing symbol @${name} (via ${path})"); selected },
+            Some(item) => {
+                if item.declaration && !cg_core_allowed(name, user) {
+                    cg_fail("freestanding runtime: unsupported hosted operation @${name} (via ${path}); provide an explicit native adapter instead")
+                };
+                let mut next = pending;
+                let mut routes = paths;
+                if !item.declaration {
+                    for dep in item.deps {
+                        if dep != name && !seen.contains(dep) { next = next.push(dep); routes = routes.push(path.concat(" -> ").concat(dep)); };
+                    }
+                };
+                cg_core_select(items, next, routes, at + 1, seen.insert(name), selected.insert(name), user)
+            },
+        } }
+    }
+
+pub let test_core_symbol_dependencies (): Unit = {
+    assert_eq(cg_core_rewrite("@x = constant [9 x i8] c\"@malloc(\\00\""), "@x = constant [9 x i8] c\"@malloc(\\00\"");
+    assert_eq(cg_core_symbols("@table = global [2 x ptr] [ptr @fn$2e, ptr @other]\n; @comment\n@bytes = constant [6 x i8] c\"@fake\\00\""), ["table", "fn$2e", "other", "bytes"]);
+}
+
+pub let test_core_unicode_byte_offsets (): Unit = {
+    let source = "; café\n@data = constant [9 x i8] c\"@malloc(\\00\"\ncall ptr @malloc(i64 8)\ncall void @free(ptr @fn$2e.name-1) ; π\n";
+    assert_eq(cg_core_symbols(source), ["data", "malloc", "free", "fn$2e.name-1"]);
+    assert_eq(cg_core_rewrite(source), "; café\n@data = constant [9 x i8] c\"@malloc(\\00\"\ncall ptr @plum_core_alloc_raw(i64 8)\ncall void @plum_kernel_free(ptr @fn$2e.name-1) ; π\n");
+}

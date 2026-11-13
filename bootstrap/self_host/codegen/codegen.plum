@@ -635,6 +635,9 @@ let cg_tail_pop (p: CgProgram) (tail: Bool): String =
 // than the finished module.
 pub struct DbgFile { pub path: String, pub id: Int, pub starts: Array[Int] }
 
+let CORE_RUNTIME: Ref[Bool] = ref(false)
+pub let set_core_runtime (on: Bool): Unit = CORE_RUNTIME.set(on)
+
 let HEAP_STATS: Ref[Bool] = ref(false)
 pub let set_heap_stats (on: Bool): Unit = HEAP_STATS.set(on)
 
@@ -6029,7 +6032,19 @@ let cg_param_slots (params: Array[CgParam]) (ptys: Array[typecheck.ITy]) (i: Int
 // because `test` compiles a program whose entry is a synthesized
 // dispatcher rather than the project's own `main` -- see main.plum's
 // `cmd_test`.
-let cg_entry_named (entry_sym: String): String = cg_lines([
+let cg_entry_named (entry_sym: String): String =
+    if CORE_RUNTIME.get() { cg_lines([
+        // Temporary C entry for runtime fixtures. The boot-facing entry
+        // wrapper and halt-on-return behavior are deliberately left to #508.
+        "define i32 @main(i32 %argc, ptr %argv) {",
+        "entry:",
+        "  call void @plum_init_globals()",
+        "  %r = call i1 ${entry_sym}(i1 false)",
+        "  ret i32 0",
+        "}",
+    ]) } else { cg_hosted_entry(entry_sym) }
+
+let cg_hosted_entry (entry_sym: String): String = cg_lines([
     "define i32 @main(i32 %argc, ptr %argv) {",
     "entry:",
     "  store i32 %argc, ptr @plum_argc",
@@ -7492,7 +7507,7 @@ pub let cg_emit_program_entry (program0: parser.ProgramNode) (entry: String): St
     ]);
     buildcache.finish("IR join", join_time);
     buildcache.count("IR bytes", result.len());
-    result
+    if CORE_RUNTIME.get() { cg_core_runtime(result, cg_core_user_externs(program0)) } else { result }
 }
 
 // Each top-level 0-parameter binding gets a module-level SLOT and one

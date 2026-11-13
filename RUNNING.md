@@ -215,12 +215,38 @@ for the freestanding profile. Object output currently requires this exact target
 Without `-o`, output is `kernel.o` or `kernel.elf` respectively. `--emit-object`
 and `--linker-script` are mutually exclusive. `link` accepts prebuilt objects only.
 
-**This pipeline does not yet produce a bootable Plum kernel.** Generated code
-still includes the hosted runtime and C `main`; the runtime split and kernel
-entry are tracked separately in #507 and #508. Ordinary Plum objects therefore
-still reference hosted symbols. Final ELF linking fails on unresolved symbols,
-while object emission allows them. On a build failure the emitted IR is retained
-at `<output>.ll` for inspection.
+**This pipeline does not yet produce a bootable Plum kernel.** It now selects
+only the core runtime symbols reached by the generated entry, globals, functions,
+and function-pointer initializers. Hosted startup, OS shims and unused runtime
+bodies are excluded. A temporary C `main` initializes globals and invokes Plum
+`main`; the boot entry and halt-on-return wrapper are tracked in #508.
+
+Supply native implementations of `plum_kernel_alloc`, `plum_kernel_free`,
+`plum_kernel_write`, and `plum_kernel_panic`, plus any required `memcpy`, `memmove`,
+`memset`, and `memcmp` primitives. Their ABI is in the
+[target contract](docs/freestanding-x86_64.md#core-runtime-and-hooks).
+The compiler supplies these declarations, not device drivers or an allocator.
+Null allocation results panic before any cell/header write. Output passes
+borrowed bytes and explicit lengths, so embedded NUL bytes are preserved.
+Integer formatting uses stack scratch rather than libc; floating-point
+formatting and libm services are unavailable initially.
+
+The supported core includes checked integer arithmetic, ordinary heap values
+(strings, bytes, arrays, records, variants, closures and references), their
+reference counting and pure operations whose transitive dependencies stay within
+these boundaries. Capacity-dependent reuse is disabled until an allocator
+capacity contract exists; preferred allocations request their required size.
+The hosted allocation policy is unchanged. Explicit application/dependency C
+externs remain available as native adapters; their implementations must satisfy
+the final link and the kernel's execution environment.
+
+Reachable hosted services (including calls through closures or global
+initializers) fail compilation with the unavailable symbol and dependency path.
+Unused imports/functions do not force their hosted services into the core.
+Filesystem, processes, host clocks, arguments/environment, host entropy/random seeding, locale,
+networking/TLS, threads/channels, memory statistics and tracing are unavailable.
+Final linking still fails on missing kernel hooks or primitives. On a build
+failure after IR generation, `<output>.ll` is retained for inspection.
 
 Freestanding IR uses its own cache identity. C/IR objects reuse the existing
 validated object cache with the effective target/compiler flags; custom drivers

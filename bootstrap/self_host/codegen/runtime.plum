@@ -1,35 +1,22 @@
-// Stage 5's RUNTIME — the fixed block of LLVM IR every program this
-// backend emits is prefixed with. See `codegen.plum`'s own top comment
-// for the backend as a whole.
+// Shared LLVM value runtime for the self-hosted backend. Hosted builds
+// include the complete block; the freestanding profile replaces platform
+// boundaries and selects only the symbol closure reached by the program.
 //
-// This is deliberately OURS, not borrowed from the real compiler.
-// `crates/plum-codegen`'s runtime is ~3,000 lines and is parameterized
-// by the program's own tag tables (it generates per-type `to_string`/
-// equality/release functions), so there is no clean "just link against
-// it" boundary to reuse — and writing this one is a few dozen lines,
-// because Stage 5 leaks.
+// Heap values use atomic reference counts and generated type-specific
+// release functions. Reuse is an optimization guarded by ownership and
+// allocation capacity; freestanding builds currently disable capacity-based
+// reuse until a kernel allocator exposes that contract.
 //
-// **Stage 5 never frees.** No refcount word, no `plum_rc_inc`/`dec`, no
-// FBIP. That is the single biggest simplification versus the real
-// backend (3,293 lines of `plum-ir/src/fbip.rs`), and it is a legitimate
-// choice for a bootstrap compiler: the workload is "start, compile one
-// program, exit," where the OS reclaims everything at once. It is a
-// scope cut, stated up front, not an oversight — and it is the first
-// thing that would have to change for this backend to be used for
-// long-running programs.
-//
-// **Cell layouts** (deliberately NOT the real backend's — those carry a
-// refcount word this one has no use for):
-//   Str:    { i64 len, i8 bytes[len], i8 0 }   — data at offset 8
-//   Struct: { field0, field1, ... }            — 8 bytes per field
-//   Enum:   { i64 tag, payload0, ... }         — payload at offset 8
-// Every string keeps a trailing NUL that `.len()` never counts, purely
-// so `printf("%s")` can be pointed straight at the bytes — the same
-// trick, and the same reasoning, as the real backend's own string cells.
+// Cell layouts (8-byte words):
+//   String/Bytes: { rc, length, bytes..., trailing NUL } — data at offset 16
+//   Struct:       { rc, field0, field1, ... }
+//   Enum:         { rc, tag, payload0, ... }
+//   Closure:      { rc, function, release_function, captures... }
+// Negative reference counts mark immortal literal cells. The trailing NUL
+// permits CStr borrowing; byte lengths and freestanding output exclude it.
 
-// One allocation, not one per line. The runtime block alone is ~1200
-// lines, and folding `concat` over it copied the whole accumulated
-// prefix each time.
+// Join once: repeatedly concatenating a multi-thousand-line runtime copies
+// its entire accumulated prefix at every step.
 pub let cg_lines (lines: Array[String]): String =
     Array.concat_all(cg_newline_terminate(lines, 0, []))
 
@@ -269,10 +256,8 @@ pub let cg_runtime (heap: Bool): String = cg_lines([
     "@plum_pat_safe = internal global [16 x ptr] [ptr null, ptr null, ".concat(cg_pat_safe_words(14, "")).concat("]"),
     "",
     "; The one allocation point. Every cell begins with a reference",
-    "; count, initialised to 1: the caller of an allocating expression",
-    "; owns the result. Nothing decrements it yet -- the ownership",
-    "; discipline is a separate change -- so this still leaks, but every",
-    "; cell is now SHAPED for it.",
+    "; count, initialised to 1: the caller owns the result. Generated",
+    "; retains/releases keep shared values alive and reclaim the last owner.",
     "define void @plum_dump_stats() {",
     "entry:",
     "  %e = call ptr @getenv(ptr @.plum_stats_env)",
