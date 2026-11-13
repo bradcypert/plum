@@ -1,8 +1,8 @@
 # x86-64 freestanding target and kernel ABI
 
 Status: implementation contract for [#505](https://github.com/bradcypert/plum/issues/505).
-The build pipeline is experimental; the freestanding runtime and boot adapter
-are not implemented, and this is not a supported platform tier. The
+The build pipeline and core runtime selection are experimental. The boot adapter
+and concrete kernel hooks are not implemented, and this is not a supported platform tier. The
 [tracking issue](https://github.com/bradcypert/plum/issues/514) records the work
 needed to make it executable. Requirements below describe the intended behavior,
 not a claim of boot support. See [build commands](../RUNNING.md#freestanding-objects-and-elf-linking)
@@ -108,7 +108,9 @@ CPUs. Install kernel-owned exception/interrupt handling before those capabilitie
 are introduced (#513). Disabling interrupts does not prevent CPU exceptions or
 NMIs; this early demo has no recovery guarantee for either.
 
-The generated external symbol is `plum_kernel_start` with C type `void(void)`.
+The planned generated external symbol (#508) is `plum_kernel_start` with C type
+`void(void)`. Until that wrapper lands, core runtime fixtures use a C `main`
+that initializes globals and calls Plum code, without hosted startup services.
 It initializes Plum globals once and invokes source `let main (): Unit` using
 Plum's internal calling convention. A native caller must never call the mangled
 Plum `main` directly: today `Unit` is represented as LLVM `i1`, not C `void`.
@@ -156,7 +158,16 @@ the existing scalar FFI (for example a borrowed `CStr` input); raw pointers in
 the hook ABI stay internal to generated runtime/native code. Initial core output
 must not require general printf formatting or float-to-string support.
 
-Supported core features must be explicitly enumerated by #507. Files, processes,
+The implemented core supports checked integer arithmetic, strings/bytes, arrays,
+records, variants, closures, references, their reference counting and pure
+operations whose dependencies need only the permitted memory primitives/hooks.
+Integer formatting is supplied without libc. Float formatting and CStr-to-String
+conversion via host `strlen` are not in the initial core. Capacity-based reuse
+is disabled and preferred allocations request only the required size.
+Runtime selection follows direct calls, globals and function-pointer references;
+explicit user/dependency externs are trusted native adapter boundaries.
+The compiler emits a diagnostic with the symbol path for any reached hosted
+service; unused hosted definitions and declarations are omitted. Files, processes,
 environment variables, host clocks, entropy, networking/TLS, threads/channels,
 host tracing/statistics, locale services, and libm-dependent operations are
 unavailable initially. Reject unsupported reachable operations with diagnostics;

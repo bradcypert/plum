@@ -54,7 +54,8 @@ with tempfile.TemporaryDirectory(prefix='plum-freestanding-') as tmp:
     assert 'REL (Relocatable file)' in header and 'X86-64' in header
     symbols = run(['nm', obj]).stdout
     assert re.search(r'\b[Tt] helper$', symbols, re.M)
-    assert re.search(r'\bU plum_set_utf8_locale$', symbols, re.M), symbols
+    assert re.search(r'\bU plum_kernel_write$', symbols, re.M), symbols
+    assert 'plum_set_utf8_locale' not in symbols
     assert re.search(r'0000000000000017 A asm_marker', symbols)
     leaf = run(['objdump', '-d', '--disassemble=leaf', obj]).stdout
     assert re.search(r'sub.*%rsp', leaf), leaf  # stack allocation, not the red zone

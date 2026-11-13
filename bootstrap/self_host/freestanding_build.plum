@@ -35,7 +35,10 @@ let freestanding_ir (dir: String) (inputs: BuildInputs) (mode: buildmode.Options
         None => {
             buildcache.diagnostic(if key == "" { "IR bypass" } else { "IR miss" });
             buildcache.begin_reads(key != "");
-            codegen.cg_freestanding(emit_program(parser.ProgramNode { items: parse_source_files(inputs.files, 0, []) }, "main", mode))
+            codegen.set_core_runtime(true);
+            let emitted = emit_program(parser.ProgramNode { items: parse_source_files(inputs.files, 0, []) }, "main", mode);
+            codegen.set_core_runtime(false);
+            codegen.cg_freestanding(emitted)
         },
     };
     let err = match Os.write_file(ll, ir) { Ok(_) => "", Err(e) => e };
