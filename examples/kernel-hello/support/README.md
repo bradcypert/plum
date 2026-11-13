@@ -1,10 +1,12 @@
-# Early x86-64 kernel support
+# Example x86-64 kernel hooks
 
-These are the reference kernel hooks for Plum's experimental
+These are optional example kernel hooks for Plum's experimental
 `x86_64-unknown-none` profile. They support a **bounded boot demonstration**,
 not a sustained workload: the 1 MiB arena never reclaims storage. Allocations
 will eventually exhaust it even when reference-counted values are released.
-A reclaiming heap is later work.
+A reclaiming heap belongs in the consuming OS project, outside Plum.
+These hardware and allocator policies are not a standard runtime implementation.
+The compiler supplies only the hook ABI; it does not embed or select these files.
 
 A boot adapter and bootable BIOS image are supplied by the
 [kernel-hello example](../../../examples/kernel-hello/README.md) (#510).
@@ -36,9 +38,9 @@ a project with its own startup assembly and linker script can use:
 
 ```sh
 plum build mykernel --target x86_64-unknown-none \
-  --link-c runtime/freestanding/x86_64/kernel.c \
-  --link-c runtime/freestanding/x86_64/memory.c \
-  --link-c runtime/freestanding/x86_64/platform.c \
+  --link-c examples/kernel-hello/support/kernel.c \
+  --link-c examples/kernel-hello/support/memory.c \
+  --link-c examples/kernel-hello/support/platform.c \
   --link-asm start.S --linker-script kernel.ld -o kernel.elf
 ```
 

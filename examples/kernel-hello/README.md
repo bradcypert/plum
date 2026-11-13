@@ -6,6 +6,25 @@ establishes the environment, and Plum writes `PLUM_KERNEL_OK\n` to COM1 before
 halting. It uses the existing scalar extern ABI; no new pointer types or inline
 assembly in Plum are required.
 
+## Project boundary
+
+Plum enables external kernels; it does not ship an operating system. This
+example is a small compiler/runtime integration fixture, not the starting point
+for an OS maintained inside the language repository.
+
+Plum owns freestanding code generation, object/ELF output, the generated entry
+wrapper, the core runtime hook ABI, and reusable language/FFI capabilities.
+Everything in this directory is optional example code: the Limine adapter,
+UART driver, arena allocator, memory primitives, hardware helpers and image
+packaging are explicitly linked here, never selected or embedded by the compiler.
+External kernels supply their own implementations of the documented hooks and
+choose their own bootloader, hardware drivers and memory policies.
+
+Exception/interrupt tables, timers, physical/virtual memory management, reclaiming
+heaps, scheduling, filesystems and other OS facilities belong in a separate
+kernel project. This fixture stays bounded to boot, serial output, halt and
+small runtime conformance checks; it is not a platform for expanding OS features.
+
 ## Build and run
 
 Run these commands from the repository root on Linux x86-64. Required tools:
@@ -103,7 +122,7 @@ bytes including LF; its CStr terminator is not transmitted. No `strlen` is used.
 Only disable/status interrupt helpers are exposed: enabling interrupts requires
 a kernel-owned IDT and exception handling, which this demo does not supply.
 
-The [reference support](../../runtime/freestanding/x86_64/README.md) uses a
+The [example support](support/README.md) uses a
 1 MiB bump arena with no-op frees. This is a bounded boot demo, not a sustained
 allocator or a general OS runtime. See the
 [target/entry contract](../../docs/freestanding-x86_64.md).

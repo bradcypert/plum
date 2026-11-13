@@ -1,6 +1,6 @@
 #include <stdint.h>
 #include "limine.h"
-#include "../../../runtime/freestanding/x86_64/kernel.h"
+#include "../support/kernel.h"
 
 __attribute__((used, section(".limine_requests_start")))
 static volatile LIMINE_REQUESTS_START_MARKER

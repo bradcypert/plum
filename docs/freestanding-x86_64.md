@@ -9,6 +9,24 @@ remaining work. The contract below scopes the initial boot demonstration.
 See [build commands](../RUNNING.md#freestanding-objects-and-elf-linking)
 for the implemented pipeline. Normal hosted builds retain their behavior.
 
+## Ownership boundary
+
+Plum provides the compiler and language capabilities for an external kernel.
+It does not provide an operating system. The compiler owns the freestanding
+profile, generated entry, core runtime selection and documented hook ABI.
+Kernel authors supply boot integration and hook implementations.
+
+The [kernel-hello fixture](../examples/kernel-hello/README.md) is optional example
+code used to verify that boundary. Its Limine choice, COM1 driver, 1 MiB arena,
+stack size, higher-half layout and image packaging are fixture choices, not
+requirements imposed on every Plum kernel. Compiler target/code-model and ABI
+constraints still apply. The sample support is explicitly linked and never
+embedded or automatically selected by the compiler.
+
+OS facilities such as exception handlers, timers, page/frame allocation,
+reclaiming heaps, scheduling and device drivers belong in an external OS
+repository. They are not follow-on features of Plum's standard runtime.
+
 ## Scope and terms
 
 A **freestanding profile** compiles without an existing operating system's
@@ -18,14 +36,14 @@ boot protocol into the environment the generated Plum entry wrapper requires.
 These are separate boundaries: the compiler does not implement the boot protocol,
 and the core runtime does not implement device drivers.
 
-The first milestone runs one CPU in QEMU, writes `PLUM_KERNEL_OK\n` from Plum
+The integration fixture runs one CPU in QEMU, writes `PLUM_KERNEL_OK\n` from Plum
 through a serial helper, and halts. Subsequent fixtures exercise a checked panic
-and bounded heap operations. Scheduling, interrupts, paging ownership, and a
-reclaiming heap follow later; they are not prerequisites for the first message.
+and bounded heap operations. Scheduling, interrupts, paging ownership and a
+reclaiming heap are external OS work, outside this compiler-support milestone.
 
 ## Target and toolchain
 
-| Property | Initial choice |
+| Property | Reference fixture choice |
 |---|---|
 | LLVM target | `x86_64-unknown-none`, explicitly selected; never inferred from the build host |
 | Representation | Little endian, 64-bit pointers and Plum `Int`, existing Plum heap layouts |
@@ -51,7 +69,8 @@ code; ordinary Plum structs are not protocol structures.
 
 ## ELF layout and code generation
 
-Produce a statically linked ELF64 `ET_EXEC` for x86-64 with entry `_start`.
+For the reference fixture, produce a statically linked ELF64 `ET_EXEC` for
+x86-64 with entry `_start`.
 Use virtual image base `0xffffffff80000000`, static relocation and the kernel
 code model. All image symbols, including the early heap and stack, must remain
 in the upper 2 GiB address range, within code-model displacement limits. Disable
@@ -107,8 +126,9 @@ operations. FP/SIMD is an internal kernel choice, not a boot-protocol call ABI.
 Keep the bootloader's mappings and descriptor environment initially. Do not
 reclaim bootloader memory, load a new CR3, enable interrupts, or start secondary
 CPUs. Install kernel-owned exception/interrupt handling before those capabilities
-are introduced (#513). Disabling interrupts does not prevent CPU exceptions or
-NMIs; this early demo has no recovery guarantee for either.
+are introduced in an external kernel (#513 records the handoff). Disabling
+interrupts does not prevent CPU exceptions or NMIs; this early demo has no
+recovery guarantee for either.
 
 The generated external symbol is `plum_kernel_start`, declared in native C as:
 
@@ -160,15 +180,16 @@ them and must not allocate, call back into Plum, or require initialized globals.
 Panic writes a diagnostic and halts. Halt is a `cli; hlt` loop, including if an
 NMI wakes the CPU. Neither hook calls host `exit` or returns.
 
-Start with a statically reserved, 16-byte-aligned 1 MiB BSS arena. Validate
+The example uses a statically reserved, 16-byte-aligned 1 MiB BSS arena. Validate
 alignment rounding, overflow, and exhaustion. No-op free is allowed only for
 bounded boot fixtures: reference counts still run, but arena space is not
 reclaimed. Disable size-based allocation reuse in this profile initially; do
-not call `malloc_usable_size` or guess allocation capacity. A reclaiming allocator
-and a capacity contract are separate follow-up work.
+not call `malloc_usable_size` or guess allocation capacity. Reclaiming allocators
+belong to external kernels; any future runtime capacity ABI is a separate
+language/runtime design decision.
 
-The console is a polled 16550-compatible COM1 UART at port `0x3f8`, configured by
-native code for 115200 baud, 8 data bits, no parity, one stop bit, with serial
+The example console is a polled 16550-compatible COM1 UART at port `0x3f8`,
+configured by native code for 115200 baud, 8 data bits, no parity, one stop bit, with serial
 interrupts disabled. Output preserves bytes, including LF, without locale or
 terminal translation. To print the first marker, Plum uses a native helper via
 the existing scalar FFI (for example a borrowed `CStr` input); raw pointers in
@@ -240,15 +261,17 @@ does not establish an unrestricted stdlib or sustained allocator support.
   one-time initialization and non-returning halt/panic paths (implemented).
 - #509: reference core hooks, COM1 output, failure routing, memory primitives
   and bounded allocator (implemented in
-  [runtime/freestanding/x86_64](../runtime/freestanding/x86_64/README.md)).
+  [examples/kernel-hello/support](../examples/kernel-hello/support/README.md)).
 - #510: pinned Limine dependencies, native adapter, scalar hardware helpers,
   BIOS image and hello/halt smoke (implemented in
   [examples/kernel-hello](../examples/kernel-hello/README.md)).
 - #511: object/ELF inspection, QEMU fixtures, GDB halt checks and CI.
-- #512 and #513: direct low-level language APIs and later kernel facilities.
+- #512: reusable low-level language/FFI capabilities for external native code.
+- #513: external OS-project handoff; kernel facilities are outside Plum scope.
 
-External specifications inform the boot/toolchain boundary; the profile choices
-and narrower supported surface above are Plum requirements:
+External specifications inform the boot/toolchain boundary. Target/ABI
+constraints are Plum requirements; bootloader and device policies are replaceable
+fixture choices:
 
 - [Limine protocol](https://github.com/limine-bootloader/limine-protocol/blob/trunk/PROTOCOL.md)
   (base revisions, requests, memory layout and machine state; pin the matching

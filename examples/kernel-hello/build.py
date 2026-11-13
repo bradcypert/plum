@@ -11,7 +11,7 @@ import tempfile
 
 HERE = Path(__file__).resolve().parent
 ROOT = HERE.parent.parent
-SUPPORT = ROOT / 'runtime/freestanding/x86_64'
+SUPPORT = HERE / 'support'
 COMMIT = 'aad3edd370955449717a334f0289dee10e2c5f01'  # v8.7.0-binary
 URL = f'https://codeload.github.com/Limine-Bootloader/Limine/tar.gz/{COMMIT}'
 SHA256 = '9c23ca261778cbe015041c02220ce26f45e05f38fe3e0c9913be71961f9023e5'

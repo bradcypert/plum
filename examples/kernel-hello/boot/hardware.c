@@ -1,4 +1,4 @@
-#include "../../../runtime/freestanding/x86_64/kernel.h"
+#include "../support/kernel.h"
 
 /* Plum Int is i64; CStr is a borrowed char pointer; extern Bool is C int,
  * not C _Bool. Unit-returning extern functions use C void. */

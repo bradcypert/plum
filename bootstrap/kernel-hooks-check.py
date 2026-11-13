@@ -9,7 +9,7 @@ import sys
 import tempfile
 
 ROOT = Path(__file__).resolve().parent.parent
-SUPPORT = ROOT / 'runtime/freestanding/x86_64'
+SUPPORT = ROOT / 'examples/kernel-hello/support'
 DRIVER = ROOT / 'bootstrap/kernel-hooks-test.c'
 COMPILER = Path(sys.argv[1] if len(sys.argv) > 1 else ROOT / 'sh').resolve()
 FLAGS = ['--target=x86_64-unknown-none', '-march=x86-64', '-mcmodel=kernel',

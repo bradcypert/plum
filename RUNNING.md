@@ -239,13 +239,15 @@ Supply native implementations of `plum_kernel_alloc`, `plum_kernel_free`,
 `memset`, and `memcmp` primitives. Their ABI is in the
 [target contract](docs/freestanding-x86_64.md#core-runtime-and-hooks).
 The compiler supplies these declarations without automatically linking an
-implementation. Reference x86-64 hooks are available in
-[runtime/freestanding/x86_64](runtime/freestanding/x86_64/README.md): explicit
+implementation. Optional example x86-64 hooks are available in
+[examples/kernel-hello/support](examples/kernel-hello/support/README.md): explicit
 COM1 output and panic/halt, a bounded 1 MiB arena with no-op frees, and the
-memory primitives. The boot adapter must call `plum_kernel_runtime_init()`
-before `plum_kernel_start()`; link the support files explicitly as documented
+memory primitives. When using these example hooks, the adapter must call
+`plum_kernel_runtime_init()` before `plum_kernel_start()`; link the support files explicitly as documented
 there. The arena is for a bounded boot demo and cannot sustain repeated
-allocation indefinitely.
+allocation indefinitely. These drivers and allocation policies belong to the
+example, not the compiler or standard runtime. An external OS supplies its own
+boot adapter and hooks; OS facilities are maintained outside Plum.
 Null allocation results panic before any cell/header write. Output passes
 borrowed bytes and explicit lengths, so embedded NUL bytes are preserved.
 Integer formatting uses stack scratch rather than libc; floating-point
