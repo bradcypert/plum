@@ -73,6 +73,8 @@ jobs:
         run: python3 ./bootstrap/freestanding-check.py ./sh.real
       - name: core runtime hooks, ownership and hosted-service rejection
         run: python3 ./bootstrap/freestanding-runtime-check.py ./sh.real
+      - name: actual early kernel hooks and memory primitives
+        run: python3 ./bootstrap/kernel-hooks-check.py ./sh.real
 
   bootstrap_proofs:
     name: Linux compiler self-hosting and memory checks
