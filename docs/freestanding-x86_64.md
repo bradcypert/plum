@@ -196,11 +196,15 @@ The ordered startup sequence is:
 
 1. Limine maps the ELF and zero-fills BSS, then enters `_start`.
 2. Assembly establishes interrupts/direction flag, private stack, and FP/SIMD state.
-3. Native adapter initializes COM1 and validates boot revision and required
-   responses. Request HHDM, memory map and four-level paging; keep boot pointers
-   borrowed and bootloader memory reserved. Read the HHDM offset from its response.
+3. Native adapter validates boot revision and required responses. Route adapter
+   output through `plum_kernel_write()` and failures through `plum_kernel_panic()`;
+   these reference hooks initialize COM1 on first use without enabling the heap.
+   Request HHDM, memory map and four-level paging; keep boot pointers borrowed and
+   bootloader memory reserved. Read the HHDM offset from its response.
 4. Call `plum_kernel_runtime_init()` from the reference support library to
-   prepare serial output and enable the static arena; failures use serial/halt.
+   prepare serial output and enable the static arena. Serial initialization is
+   idempotent, so output queued through the hooks in step 3 is not cleared;
+   failures use serial/halt.
 5. Call `plum_kernel_start`, which initializes globals and invokes Plum `main`.
 6. Plum writes `PLUM_KERNEL_OK\n`; returning from `main` reaches the halt hook.
 

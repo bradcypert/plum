@@ -74,7 +74,7 @@ in TI's U-Boot source; the PC address/clock and bounded heap are Plum choices.
 ## Verification
 
 Run `python3 bootstrap/kernel-hooks-check.py /path/to/source-built-plum` from
-any directory. It requires Linux x86-64, Clang/LLD, and binutils.
+the repository root. It requires Linux x86-64, Clang/LLD, and binutils.
 
 The harness compiles the actual support sources at `-O0` and `-O2`, audits their
 undefined symbols, and inspects the privileged object's port-I/O/halt opcodes.
