@@ -1,0 +1,2 @@
+error: function wrong: declared return type Float doesn't match body type Int (Int != Float)
+main.plum:1:1

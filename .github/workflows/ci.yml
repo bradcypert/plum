@@ -220,6 +220,8 @@ jobs:
         run: ./bootstrap/test-smoke
       - name: lexer diagnostics preserve source locations
         run: python3 ./bootstrap/lexer-diagnostic-check.py ./sh.real
+      - name: integer aliases, literal bounds and preserved source positions
+        run: python3 ./bootstrap/integer-inference-check.py ./sh.real
       - name: properties hold
         run: ./bootstrap/property-check
       - name: the tutorial still works

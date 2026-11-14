@@ -1,0 +1,2 @@
+error: associated function Int.step is already declared through the Int/I64 alias
+main.plum:2:1

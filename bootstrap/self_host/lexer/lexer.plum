@@ -44,7 +44,7 @@
 
 pub enum Token {
     TokIdent(String),
-    TokInt(Int),
+    TokInt(String),
     TokFloat(Float),
     TokStr(String),
     TokInterpStr(Array[InterpPiece]),
@@ -177,20 +177,22 @@ let scan_digit_run (chars: Array[String]) (pos: Int): Int =
     else if is_digit_char(chars[pos]) || chars[pos] == "_" { scan_digit_run(chars, pos + 1) }
     else { pos }
 
-// Same "collect digits/underscores, strip underscores before parsing"
-// shape as `crates/plum-syntax/src/lexer.rs::lex_number` — reuses
-// `String.parse_int`/`String.parse_float` rather than re-deriving the
-// digit-accumulation those already do.
-//
-// This used to say the fallback "never actually fires: `scan_digit_run`
-// only ever collects real digits/underscores, so the string handed to
-// `parse_int`/`parse_float` is always well-formed by construction."
-// True of its SYNTAX and false of its RANGE, which stopped being a
-// distinction without a difference when `parse_int` learned to reject
-// out-of-range input (2026-08-21). Before that, `99999999999999999999`
-// as a literal compiled to a wrapped garbage number; after it, to
-// `Result.unwrap_or`'s fallback of 0 -- a silent wrong answer either
-// way. It is an error now, which is what the real compiler does too.
+// Keep integer magnitude as text until type checking. Parsing through Int
+// here would lose U64's upper half and reject the magnitude of Int's minimum.
+// Normalize leading zeros to preserve the existing token/AST renderings.
+let canonical_integer_text (text: String): String = {
+    if !text.starts_with("0") || text.len() == 1 { text }
+    else {
+        let chars = chars_of(text);
+        let mut first = 0;
+        let mut leading = true;
+        for c in chars {
+            if leading && c == "0" { first = first + 1; } else { leading = false; };
+        };
+        Array.concat_all(Array.slice(chars, if first == chars.len() { first - 1 } else { first }, chars.len()))
+    }
+}
+
 // The character at `pos`, or "" past the end -- so the exponent scan
 // below can look ahead two or three characters without an index check
 // at every step.
@@ -230,10 +232,11 @@ let lex_number (ctx: LexContext) (chars: Array[String]) (pos: Int): NumResult = 
         }
     } else {
         let text = Array.concat_all(Array.filter(Array.slice(chars, pos, int_end), |c| c != "_"));
-        match String.parse_int(text) {
-            Ok(n) => NumResult { token: TokInt(n), next_pos: int_end },
-            Err(_) => { fail_lex(ctx, pos, "integer literal out of range: ${text} (Int is a 64-bit signed integer)"); NumResult { token: TokInt(0), next_pos: int_end } },
-        }
+        let magnitude = canonical_integer_text(text);
+        if magnitude.len() > 20 || (magnitude.len() == 20 && magnitude > "18446744073709551615") {
+            fail_lex(ctx, pos, "integer literal out of range: ${text} (maximum magnitude is 18446744073709551615)");
+        };
+        NumResult { token: TokInt(magnitude), next_pos: int_end }
     }
 }
 
@@ -572,7 +575,7 @@ pub let tokenize (source: String): Array[Token] = tokenize_spanned(source).token
 // there is a slice.
 //
 // It also recovers a token's ORIGINAL SPELLING, which the token itself
-// does not carry: `TokInt(1000)` is what `1_000` and `1000` both lex
+// does not carry: `TokInt("1000")` is what `1_000` and `1000` both lex
 // to, and `TokStr` holds the decoded text, not the escapes. A
 // formatter that reprinted from the token would silently rewrite both.
 // `slice_of` reads the source instead.

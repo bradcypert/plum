@@ -1,0 +1,20 @@
+let minimum: I64 = -9223372036854775808
+let maximum: Int = 9223372036854775807
+let read (value: Int): String = match value {
+    -9223372036854775808 => "minimum",
+    9223372036854775807 => "maximum",
+    -000_0 => "zero",
+    _ => "other",
+}
+let main (): Unit = {
+    assert_eq(minimum, -9223372036854775807 - 1);
+    assert_eq(maximum, 9223372036854775806 + 1);
+    assert_eq(read(minimum), "minimum");
+    assert_eq(read(maximum), "maximum");
+    assert_eq(read(0), "zero");
+    assert_eq(000_000_042, 42);
+    assert_eq(-0_042, -42);
+    println(minimum.to_string());
+    println(maximum.to_string());
+    println("${-9223372036854775808}");
+}

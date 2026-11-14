@@ -1,0 +1,7 @@
+struct Functions { abs: (Int) -> Int }
+let I64 = Functions { abs: |n| n + 100 }
+let I64.twice (value: I64): Int = value * 3
+pub let run (): I64 = {
+    assert_eq((2).twice(), 6);
+    I64.abs(5)
+}
