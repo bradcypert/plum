@@ -119,7 +119,8 @@ let infer_integer_operands (p2: Program2) (state: FreshState) (env: TyEnv) (acc:
         IntegerOperands { left: left, right: InferResult { subst: left.subst, state: left.state, ..right } }
     } else {
         let left = infer_optional_expected(p2, state, env, acc, lhs, expected);
-        let right = infer_expected(p2, left.state, env, left.subst, rhs, left.ty);
+        let seeded = seed_expected_result(left.subst, left.ty, expected);
+        let right = infer_expected(p2, left.state, env, seeded, rhs, left.ty);
         IntegerOperands { left: left, right: right }
     }
 
@@ -204,3 +205,32 @@ let infer_integer_array_elems (p2: Program2) (state: FreshState) (env: TyEnv) (a
         let s = constrain_operand(r.subst, r.ty, seed.ty, "array element: ");
         infer_integer_array_elems(p2, r.state, env, s, elems, anchor, seed, i + 1, texprs.push(r.texpr))
     }
+
+// An immediately called closure has no stored type yet. Seed its result (or
+// residual function for a partial call) before its body defaults literals.
+let infer_inline_callee (p2: Program2) (state: FreshState) (env: TyEnv) (acc: Subst) (callee: parser.PExpr) (arity: Int) (supplied: Int) (expected: Option[ITy]): InferResult =
+    match expected {
+        None => infer_expr(p2, state, env, acc, callee),
+        Some(want) => {
+            let params = fresh_list(state, arity);
+            let result = fresh(params.state);
+            let call_result = if supplied > 0 && supplied < arity {
+                ITFunction(Array.slice(params.tys, supplied, arity), result.ty)
+            } else { result.ty };
+            let seeded = seed_expected_result(acc, call_result, Some(want));
+            infer_expected(p2, result.state, env, seeded, callee, ITFunction(params.tys, result.ty))
+        },
+    }
+
+let check_integer_negation (subst: Subst) (operand: ITy): Unit =
+    match subst_apply(subst, operand) {
+        ITInteger(k) => if !integer_spec(k).signed { fail_tc("unsigned integer negation is not supported"); },
+        _ => (),
+    }
+
+// Local closure parameters may still be variables at the first negation check.
+// Validate again against the completed body's substitution, before lowering.
+let validate_integer_negations (subst: Subst) (expr: TExpr): Unit = {
+    match expr.node { TUnary(UNeg, operand) => check_integer_negation(subst, operand.ty), _ => () };
+    for child in t_children(expr) { validate_integer_negations(subst, child); };
+}

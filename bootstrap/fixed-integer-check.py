@@ -89,6 +89,20 @@ def main():
         ):
             reject('let main (): Unit = { ' + body + ' () }\n', 'Int', 'U8')
 
+        # Unsigned negation discovered only after closure-call substitutions
+        # must fail in the checker, including release emission, not in codegen.
+        for kind in ('U8', 'U16', 'U32', 'U64'):
+            for body in (
+                f'let neg = |x| -x; let input: {kind} = 0; let output = neg(input);',
+                f'let input: {kind} = 0; let output = (|x| -x)(input);',
+            ):
+                reject('let main (): Unit = { ' + body + ' () }\n',
+                       'error: unsigned integer negation is not supported')
+                failed = run(COMPILER, 'emit-llvm', project, '--release', ok=False)
+                assert 'error: unsigned integer negation is not supported' in failed.stdout + failed.stderr, failed
+        reject('let BAD: U8 = { let neg = |x| -x; let input: U8 = 0; neg(input) }\n'
+               'let main (): Unit = ()\n', 'error: unsigned integer negation is not supported')
+
         # Pattern bounds use the scrutinee kind, including high-half U64.
         reject('let main (): Unit = { let value: U8 = 0; match value { 256 => (), _ => () } }\n',
                'integer literal out of range', 'U8')

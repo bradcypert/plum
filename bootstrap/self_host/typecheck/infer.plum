@@ -829,6 +829,7 @@ let check_fn_typed (p20: Program2) (def: parser.LetDefNode) (module_name: String
         Ok(_) => (),
         Err(e) => fail_tc("function ${def.name}: declared return type ${render_ty(ret_ty)} doesn't match body type ${render_ty(body_ty)} (${e})"),
     };
+    validate_integer_negations(r.subst, r.texpr);
     TFn { name: def.name, module: module_name, path: err_path(()), offset: current_err_offset(()), generics: sig.generics, params: typed_params(def.params, sig.params, r.subst, 0, []), ret: ret_ty, body: r.texpr, subst: r.subst }
 }
 
@@ -921,6 +922,7 @@ let typed_globals_acc (p20: Program2) (globals: Array[GlobalDef]) (i: Int) (acc:
                 }
             },
         };
+        validate_integer_negations(s2, r.texpr);
         typed_globals_acc(p20, globals, i + 1,
             acc.push(TFn { name: globals[i].def.name, module: globals[i].module, path: err_path(()), offset: current_err_offset(()), generics: [], params: [], ret: subst_apply(s2, r.ty), body: r.texpr, subst: s2 }))
     }
@@ -1178,6 +1180,7 @@ let global_ref_ty_in (p2: Program2) (module_name: String) (def: parser.LetDefNod
 let check_global (p20: Program2) (def: parser.LetDefNode) (module_name: String): Unit = {
     let p2 = Program2 { sigs: p20.sigs, globals: p20.globals, ctx: p20.ctx, current: module_name, generics: [] };
     let r = infer_global_initializer(p2, fresh_state_new(()), subst_empty(()), def);
+    validate_integer_negations(r.subst, r.texpr);
     match def.ret_ty {
         None => (),
         Some(t) => {
@@ -1298,7 +1301,7 @@ let infer_unary_value (p2: Program2) (state: FreshState) (env: TyEnv) (acc: Subs
     match op {
         UNot => infer_constrained_unary(op, r, ITBool),
         UNeg => {
-            match subst_apply(r.subst, r.ty) { ITInteger(k) => if !integer_spec(k).signed { fail_tc("unsigned integer negation is not supported"); }, _ => () };
+            check_integer_negation(r.subst, r.ty);
             ir_leaf(r.ty, r.subst, r.state, TUnary(op, r.texpr))
         },
         // `~` flips bits, so it is `Int` and nothing else. `!` is the
@@ -2278,6 +2281,10 @@ let infer_call_shapes (p2: Program2) (state: FreshState) (env: TyEnv) (acc: Subs
                 },
                 None => infer_method_call_expected(p2, state, env, acc, base, method_name, args, expected),
             },
+        },
+        EClosure(params, _) => {
+            let r = infer_inline_callee(p2, state, env, acc, callee, params.len(), args.len(), expected);
+            infer_closure_call(p2, r.state, env, r.subst, subst_apply(r.subst, r.ty), args, r.texpr, expected)
         },
         _ => {
             let r = infer_expr(p2, state, env, acc, callee);
