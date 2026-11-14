@@ -78,6 +78,17 @@ def main():
         reject('enum Value { Number(U64), Empty }\n'
                'extern "C" { fn native(value: Value) -> Unit; }\nlet main (): Unit = ()\n',
                'extern fixed-width integer ABI is not supported yet', 'U64')
+        # Expectations specialize fresh variables, never already-typed values
+        # or closures whose earlier calls have fixed them to Int.
+        for body in (
+            'let value = 1; let xs: Array[U8] = [].push(value);',
+            'let xs = [1]; let bytes: Array[U8] = xs.push(2);',
+            'let f = |x| x; let value = 1; let byte: U8 = f(value);',
+            'let f = |x| x; let first = f(1); let byte: U8 = f(255);',
+            'let value = 1; let byte: U8 = match true { true => value, false => 0 };',
+        ):
+            reject('let main (): Unit = { ' + body + ' () }\n', 'Int', 'U8')
+
         # Pattern bounds use the scrutinee kind, including high-half U64.
         reject('let main (): Unit = { let value: U8 = 0; match value { 256 => (), _ => () } }\n',
                'integer literal out of range', 'U8')

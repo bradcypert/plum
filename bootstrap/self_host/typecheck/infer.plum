@@ -2157,7 +2157,7 @@ let infer_call_shapes (p2: Program2) (state: FreshState) (env: TyEnv) (acc: Subs
     match callee {
         EIdent(name, _) => match tyenv_lookup(env, name) {
             // Same resolve-at-lookup rule as `infer_ident` above.
-            Some(b) => { let ty = subst_apply(acc, b.ty); infer_closure_call(p2, state, env, acc, ty, args, TExpr { ty: ty, node: TIdent(name) }) },
+            Some(b) => { let ty = subst_apply(acc, b.ty); infer_closure_call(p2, state, env, acc, ty, args, TExpr { ty: ty, node: TIdent(name) }, expected) },
             None => infer_named_call(p2, state, env, acc, name, args, expected),
         },
         // `Array.map`/`filter`/`fold` — a NAMESPACE call ("Array" is
@@ -2281,7 +2281,7 @@ let infer_call_shapes (p2: Program2) (state: FreshState) (env: TyEnv) (acc: Subs
         },
         _ => {
             let r = infer_expr(p2, state, env, acc, callee);
-            infer_closure_call(p2, r.state, env, r.subst, subst_apply(r.subst, r.ty), args, r.texpr)
+            infer_closure_call(p2, r.state, env, r.subst, subst_apply(r.subst, r.ty), args, r.texpr, expected)
         },
     }
 
@@ -2411,10 +2411,11 @@ let infer_array_fold_expected (p2: Program2) (state: FreshState) (env: TyEnv) (a
 // currying would work only for the FIRST application in a chain. Same
 // shape as `infer_partial_call`, with a `TClosureCall` body: the callee
 // is a value, so there is no symbol to name.
-let infer_partial_closure_call (p2: Program2) (state: FreshState) (env: TyEnv) (acc: Subst) (ptys: Array[ITy]) (ret: ITy) (args: Array[parser.PExpr]) (callee_texpr: TExpr): InferResult = {
+let infer_partial_closure_call (p2: Program2) (state: FreshState) (env: TyEnv) (acc: Subst) (ptys: Array[ITy]) (ret: ITy) (args: Array[parser.PExpr]) (callee_texpr: TExpr) (expected: Option[ITy]): InferResult = {
     let supplied = Array.slice(ptys, 0, args.len());
     let residual = Array.slice(ptys, args.len(), ptys.len());
-    let ar = infer_call_args(p2, state, env, acc, args, supplied, 0, []);
+    let seeded = seed_expected_result(acc, ITFunction(residual, ret), expected);
+    let ar = infer_call_args(p2, state, env, seeded, args, supplied, 0, []);
     let names = partial_param_names(residual.len(), 0, []);
     let res_tys = Array.map(residual, |t| subst_apply(ar.subst, t));
     let ret_ty = subst_apply(ar.subst, ret);
@@ -2428,21 +2429,22 @@ let infer_partial_closure_call (p2: Program2) (state: FreshState) (env: TyEnv) (
     }
 }
 
-let infer_closure_call (p2: Program2) (state: FreshState) (env: TyEnv) (acc: Subst) (fn_ty: ITy) (args: Array[parser.PExpr]) (callee_texpr: TExpr): InferResult = {
+let infer_closure_call (p2: Program2) (state: FreshState) (env: TyEnv) (acc: Subst) (fn_ty: ITy) (args: Array[parser.PExpr]) (callee_texpr: TExpr) (expected: Option[ITy]): InferResult = {
     match subst_apply(acc, fn_ty) {
         ITFunction(ptys, ret) =>
             if !Array.is_empty(args) && args.len() < ptys.len() {
-                infer_partial_closure_call(p2, state, env, acc, ptys, ret, args, callee_texpr)
-            } else { infer_closure_call_exact(p2, state, env, acc, fn_ty, args, callee_texpr) },
-        _ => infer_closure_call_exact(p2, state, env, acc, fn_ty, args, callee_texpr),
+                infer_partial_closure_call(p2, state, env, acc, ptys, ret, args, callee_texpr, expected)
+            } else { infer_closure_call_exact(p2, state, env, acc, fn_ty, args, callee_texpr, expected) },
+        _ => infer_closure_call_exact(p2, state, env, acc, fn_ty, args, callee_texpr, expected),
     }
 }
 
-let infer_closure_call_exact (p2: Program2) (state: FreshState) (env: TyEnv) (acc: Subst) (fn_ty: ITy) (args: Array[parser.PExpr]) (callee_texpr: TExpr): InferResult = {
+let infer_closure_call_exact (p2: Program2) (state: FreshState) (env: TyEnv) (acc: Subst) (fn_ty: ITy) (args: Array[parser.PExpr]) (callee_texpr: TExpr) (expected: Option[ITy]): InferResult = {
     let fr = fresh_list(state, args.len());
     let retf = fresh(fr.state);
     let s1 = match unify(subst_apply(acc, fn_ty), ITFunction(fr.tys, retf.ty)) { Ok(s) => subst_compose(s, acc), Err(e) => { fail_tc("call: ".concat(e)); acc } };
-    let ar = infer_call_args(p2, retf.state, env, s1, args, Array.map(fr.tys, |t| subst_apply(s1, t)), 0, []);
+    let seeded = seed_expected_result(s1, retf.ty, expected);
+    let ar = infer_call_args(p2, retf.state, env, seeded, args, Array.map(fr.tys, |t| subst_apply(seeded, t)), 0, []);
     ir_leaf(subst_apply(ar.subst, retf.ty), ar.subst, ar.state, TClosureCall(callee_texpr, ar.texprs))
 }
 
@@ -3040,7 +3042,7 @@ let infer_method_call_expected (p2: Program2) (state: FreshState) (env: TyEnv) (
             },
         }
     } else if method_name == "push" && args.len() == 1 {
-        infer_array_push(p2, state, env, acc, base, args[0])
+        infer_array_push(p2, state, env, acc, base, args[0], expected)
     } else if method_name == "set" && args.len() == 2 {
         infer_array_set(p2, state, env, acc, base, args[0], args[1])
     } else if method_name == "get" && Array.is_empty(args) {
@@ -3077,7 +3079,7 @@ let infer_method_call_expected (p2: Program2) (state: FreshState) (env: TyEnv) (
                 Some(info) => match find_field_template(info.fields, method_name) {
                     Some(field_ty) => {
                         let ft = instantiate_template(info.generics, gen_args, field_ty);
-                        infer_closure_call(p2, br.state, env, br.subst, ft, args, TExpr { ty: ft, node: TFieldGet(br.texpr, method_name) })
+                        infer_closure_call(p2, br.state, env, br.subst, ft, args, TExpr { ty: ft, node: TFieldGet(br.texpr, method_name) }, expected)
                     },
                     // No such FIELD -- so try a namespaced function.
                     // The field is looked for first deliberately: a
@@ -3137,11 +3139,12 @@ let infer_len (p2: Program2) (state: FreshState) (env: TyEnv) (acc: Subst) (base
     }
 }
 
-let infer_array_push (p2: Program2) (state: FreshState) (env: TyEnv) (acc: Subst) (base: parser.PExpr) (value_expr: parser.PExpr): InferResult = {
-    let br = infer_expr(p2, state, env, acc, base);
+let infer_array_push (p2: Program2) (state: FreshState) (env: TyEnv) (acc: Subst) (base: parser.PExpr) (value_expr: parser.PExpr) (expected: Option[ITy]): InferResult = {
+    let br = infer_optional_expected(p2, state, env, acc, base, expected);
     let elem_fresh = fresh(br.state);
     let s1 = match unify(subst_apply(br.subst, br.ty), ITStruct("Array", [elem_fresh.ty])) { Ok(s) => subst_compose(s, br.subst), Err(e) => { fail_tc(".push(): ".concat(e)); br.subst } };
-    let vr = infer_expected(p2, elem_fresh.state, env, s1, value_expr, elem_fresh.ty);
+    let seeded = seed_expected_result(s1, ITStruct("Array", [elem_fresh.ty]), expected);
+    let vr = infer_expected(p2, elem_fresh.state, env, seeded, value_expr, elem_fresh.ty);
     let s2 = match unify(subst_apply(vr.subst, vr.ty), subst_apply(vr.subst, elem_fresh.ty)) { Ok(s) => subst_compose(s, vr.subst), Err(e) => { fail_tc(".push() argument: ".concat(e)); vr.subst } };
     ir_leaf(ITStruct("Array", [subst_apply(s2, elem_fresh.ty)]), s2, vr.state, TMethodCall("push", br.texpr, [vr.texpr]))
 }
@@ -3661,14 +3664,15 @@ let infer_match_arms (p2: Program2) (state: FreshState) (env: TyEnv) (acc: Subst
             None => GuardCheckResult { subst: br.subst, state: br.state, tguard: None },
         };
         let bodyr = infer_optional_expected(p2, gr.state, br.env, gr.subst, arms[i].body, result_ty);
-        let new_result = match result_ty {
-            None => subst_apply(bodyr.subst, bodyr.ty),
+        let combined = match result_ty {
+            None => bodyr.subst,
             Some(prev) => match unify(subst_apply(bodyr.subst, prev), subst_apply(bodyr.subst, bodyr.ty)) {
-                Ok(s) => subst_apply(subst_compose(s, bodyr.subst), bodyr.ty),
-                Err(e) => { fail_tc("match arms: ".concat(e)); bodyr.ty },
+                Ok(s) => subst_compose(s, bodyr.subst),
+                Err(e) => { fail_tc("match arms: ".concat(e)); bodyr.subst },
             },
         };
-        infer_match_arms(p2, bodyr.state, env, bodyr.subst, scrutinee_ty, arms, i + 1, Some(new_result),
+        let new_result = subst_apply(combined, bodyr.ty);
+        infer_match_arms(p2, bodyr.state, env, combined, scrutinee_ty, arms, i + 1, Some(new_result),
             tarms.push(TArm { pattern: br.pattern, guard: gr.tguard, body: bodyr.texpr }))
     }
 

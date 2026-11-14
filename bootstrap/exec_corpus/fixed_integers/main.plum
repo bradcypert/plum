@@ -2,12 +2,15 @@ use fixedglobals;
 // This caller-local name must not change a referenced global's annotation.
 struct LocalCell { wrong: Int }
 struct Box[T] { value: T }
+struct CallbackBox[T] { run: (T) -> T }
 struct Words { low: U8, high: U64, callback: (U8) -> U8 }
 enum Packet[T] { Data(T), Empty }
 let GLOBAL: U64 = 18446744073709551615
 let identity[T] (value: T): T = value
 let add[T] (a: T) (b: T): T = a + b
 let show[T] (value: T): String = value.to_string()
+let show_byte (value: U8): String = value.to_string()
+let make_identity[T] (): (T) -> T = { let f: (T) -> T = identity; f }
 let less[T] (a: T) (b: T): Bool = a < b
 let quotient[T] (a: T) (b: T): T = a / b
 let i8_min (): I8 = -128
@@ -26,6 +29,36 @@ let main (): Unit = {
     assert_eq(fixedglobals.INNER, piped_byte);
     assert_eq(fixedglobals.ALIASED, piped_byte);
     assert(fixedglobals.VALUE.to_string().contains("255"));
+    let pushed_empty: Array[U8] = [].push(1);
+    let pushed_chain: Array[U64] = [].push(18446744073709551615).push(0);
+    assert_eq(pushed_empty[0], takes_byte(1));
+    assert_eq(pushed_chain[0], u64_max());
+    let local_identity = |x| x;
+    let from_local: U8 = local_identity(255);
+    let from_immediate: U64 = (|x| x)(18446744073709551615);
+    let from_branch: U16 = (if true { |x| x } else { |x| x })(65535);
+    let from_factory: U64 = make_identity()(18446744073709551615);
+    assert_eq(from_local, takes_byte(255));
+    assert_eq(from_immediate, u64_max());
+    assert_eq(from_branch, branch(true));
+    assert_eq(from_factory, u64_max());
+    let callback_box = CallbackBox { run: |x| x };
+    let from_field: U8 = callback_box.run(255);
+    assert_eq(from_field, takes_byte(255));
+    let local_add = |a, b| a + b;
+    let local_next: (U8) -> U8 = local_add(1);
+    assert_eq(local_next(254), takes_byte(255));
+    let branch_add = |a, b| a + b;
+    let branch_next: (U16) -> U16 = (if true { branch_add } else { branch_add })(1);
+    assert_eq(branch_next(65534), branch(true));
+    let expected_formatter: (U64) -> String = match true { true => show, false => show };
+    assert_eq(expected_formatter(u64_max()), "18446744073709551615");
+    let inferred_formatter = match 0 { 0 => show, 1 => show_byte, _ => show };
+    assert_eq(inferred_formatter(takes_byte(255)), "255");
+    let default_array = [].push(1);
+    let default_identity = |x| x;
+    let default_value: Int = default_identity(default_array[0]);
+    assert_eq(default_value, 1);
     let small: I8 = -128;
     let medium: I16 = -32768;
     let signed: I32 = -2147483648;
