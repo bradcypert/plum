@@ -67,19 +67,62 @@ Tuples work anywhere a type does: nested, inside arrays, as struct
 fields, returned from generic functions. The one thing they lack is
 `.to_string()`; render the elements instead, as above.
 
-## Types: `Int`, `Float`, `Bool`, `String`, `Unit`
+## Types: integers, `Float`, `Bool`, `String`, `Unit`
 
-`I64` aliases the signed 64-bit `Int`. Both names denote one type, including in
-containers, generics and existing C extern declarations. They share associated
-functions: `I64.abs(n)` and `Int.abs(n)` are the same call. Inferred types and
-diagnostics use the canonical spelling `Int`. This alias alone does not add
-narrower/unsigned types or conversion APIs.
+Plum has signed `I8`, `I16`, `I32`, and `Int` integers, and unsigned `U8`,
+`U16`, `U32`, and `U64` integers. `I64` aliases `Int`: both names denote one
+type, including in containers, generics, existing C extern declarations, and
+associated functions such as `I64.abs(n)`. Diagnostics use `Int` for this alias.
 
-Integer literal magnitudes are retained until type checking, so a signed
-minimum such as `-9223372036854775808` is accepted directly, including in a
-pattern. Without another supported integer type, literals still default to
-`Int` and values outside its range are compile-time errors. Preserving a larger
-magnitude in tokens or the AST does not make it a valid `Int` value.
+| Type | Minimum | Maximum |
+| --- | ---: | ---: |
+| `I8` | -128 | 127 |
+| `I16` | -32768 | 32767 |
+| `I32` | -2147483648 | 2147483647 |
+| `Int` / `I64` | -9223372036854775808 | 9223372036854775807 |
+| `U8` | 0 | 255 |
+| `U16` | 0 | 65535 |
+| `U32` | 0 | 4294967295 |
+| `U64` | 0 | 18446744073709551615 |
+
+Each width and signedness is a distinct value type. Typed values never
+implicitly widen, narrow, or change signedness. Arithmetic and comparisons
+require matching operand types. Integer literals adopt a known expected type
+in annotations, returns, arguments, fields, containers, callbacks, and branches;
+otherwise they default to `Int`. Signed minima and `U64`'s full range are valid
+literals. Out-of-range literals are compile-time errors, including in patterns.
+An unannotated binding defaults when its initializer is checked; a later use
+does not change the binding's type. Generic calls infer arguments from left to
+right: an expected result or an earlier argument must determine the integer
+kind before a literal is inferred.
+
+```plum
+let increment (value: U8): U8 = value + 1
+let limit: U64 = 18446744073709551615
+let bytes: Array[U8] = [0, 254, 255]
+let next: U8 = increment(254)
+// let inferred = 1              // Int
+// let byte: U8 = inferred        // type error; no implicit conversion
+```
+
+`+`, `-`, `*`, `/`, and `%` are checked in debug and release builds. Overflow
+and division by zero stop execution. Signed minimum divided or remaindered by
+`-1` also stops execution. Negation is signed-only and checked, including
+negating a runtime `Int` minimum. Unsigned comparisons and division use the
+unsigned mathematical values, even above `Int`'s maximum.
+
+All integer types support decimal `.to_string()`, interpolation, equality,
+ordering, and structural hashing. They work in arrays, records, tuples, enum
+payloads, closures, references, and existing generics. Their mathematical ranges
+do not imply packed or native storage: the current implementation uses a word
+per scalar value in Plum-managed storage.
+
+The first type/arithmetic increment does not yet provide the planned integer
+`from`/`try_from` conversion built-ins (#527). New-width bit operations and
+wrapping/truncating APIs are tracked separately in #525; existing `Int` APIs
+remain available. New-width C extern signatures, including aggregates containing
+these types, are rejected until the scalar ABI work in #526. `Int`/`I64` retain
+the existing C ABI.
 
 `String` is the surface-syntax keyword for text (its type is
 occasionally referred to as `Str` in compiler-internal contexts, but
@@ -116,7 +159,7 @@ let main (): Unit = {
 
 **`==` works on anything; `<`, `<=`, `>` and `>=` need an ordered
 type.** Equality is structural: arrays, structs, enums and their
-payloads, all the way down. Ordering is defined for `Int`, `Float` and
+payloads, all the way down. Ordering is defined for all integer types, `Float` and
 `String` only, and comparing anything else is a compile error naming
 the type. Arrays and structs could be given a lexicographic order and
 deliberately have not been: nothing needs it, enums have no obvious

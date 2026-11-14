@@ -548,6 +548,7 @@ pub let canonical_associated_name (name: String): String =
 
 let resolve_named (ctx: TyContext) (viewer: String) (in_scope: Array[String]) (name: String) (args: Array[ITy]): ITy =
     if canonical_primitive_name(name) == "Int" { check_type_arity(name, 0, args.len()); ITInt }
+    else if Option.is_some(integer_named(name)) { check_type_arity(name, 0, args.len()); match integer_named(name) { Some(t) => t, None => ITUnit } }
     else if name == "Float" { check_type_arity(name, 0, args.len()); ITFloat }
     else if name == "Bool" { check_type_arity(name, 0, args.len()); ITBool }
     else if name == "String" { check_type_arity(name, 0, args.len()); ITStr }

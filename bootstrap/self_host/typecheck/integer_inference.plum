@@ -1,0 +1,206 @@
+// Bidirectional inference only specializes literal expressions. Looking up a
+// bound value always preserves its recorded type; this never inserts casts.
+use parser;
+
+let has_fixed_ty (ty: ITy): Bool = match ty {
+    ITInteger(_) => true,
+    ITStruct(_, args) => Array.any(args, has_fixed_ty),
+    ITEnum(_, args) => Array.any(args, has_fixed_ty),
+    ITTuple(args) => Array.any(args, has_fixed_ty),
+    ITFunction(args, ret) => has_fixed_ty(ret) || Array.any(args, has_fixed_ty),
+    ITRef(inner) => has_fixed_ty(inner),
+    _ => false,
+}
+
+let infer_expected (p2: Program2) (state: FreshState) (env: TyEnv) (acc: Subst) (e: parser.PExpr) (expected0: ITy): InferResult = {
+    let expected = subst_apply(acc, expected0);
+    if !has_fixed_ty(expected) { infer_expr(p2, state, env, acc, e) }
+    else { match e {
+        EInt(text, offset) => match expected {
+            ITInteger(k) => infer_integer_literal(k, text, offset, acc, state),
+            _ => infer_expr(p2, state, env, acc, e),
+        },
+        EUnary(UNeg, EInt(text, offset)) => match expected {
+            ITInteger(k) => infer_integer_literal(k, "-".concat(text), offset, acc, state),
+            _ => infer_expr(p2, state, env, acc, e),
+        },
+        EUnary(UNeg, inner) => match expected {
+            ITInteger(k) => {
+                if !integer_spec(k).signed { fail_tc("unsigned integer negation is not supported"); };
+                let r = infer_expected(p2, state, env, acc, inner, expected);
+                let checked = constrain_operand(r.subst, r.ty, expected, "negation: ");
+                ir_leaf(expected, checked, r.state, TUnary(UNeg, r.texpr))
+            },
+            _ => infer_expr(p2, state, env, acc, e),
+        },
+        EUnsafe(block) => {
+            let was = UNSAFE.get();
+            UNSAFE.set(true);
+            let r = infer_expected_block(p2, state, env, acc, block, expected);
+            UNSAFE.set(was);
+            r
+        },
+        EBinary(BPipe, lhs, rhs) => infer_expected(p2, state, env, acc, parser.desugar_pipe(lhs, rhs), expected),
+        EBinary(op, lhs, rhs) => if integer_arithmetic(op) && Option.is_some(integer_kind(expected)) {
+            infer_binary_expected(p2, state, env, acc, op, lhs, rhs, Some(expected))
+        } else { infer_expr(p2, state, env, acc, e) },
+        EBlock(block) => infer_expected_block(p2, state, env, acc, block, expected),
+        EIf(cond, yes, no) => infer_if_expected(p2, state, env, acc, cond, yes, no, Some(expected)),
+        EMatch(value, arms, _) => infer_match_expected(p2, state, env, acc, value, arms, Some(expected)),
+        EArray(elems) => match expected {
+            ITStruct("Array", args) => {
+                let r = infer_call_args(p2, state, env, acc, elems, Array.map(elems, |elem| args[0]), 0, []);
+                ir_leaf(expected, r.subst, r.state, TArrayLit(r.texprs))
+            },
+            _ => infer_expr(p2, state, env, acc, e),
+        },
+        ETuple(elems) => match expected {
+            ITTuple(tys) => if tys.len() == elems.len() {
+                let r = infer_call_args(p2, state, env, acc, elems, tys, 0, []);
+                ir_leaf(expected, r.subst, r.state, TTupleLit(r.texprs))
+            } else { infer_expr(p2, state, env, acc, e) },
+            _ => infer_expr(p2, state, env, acc, e),
+        },
+        EClosure(params, body) => match expected {
+            ITFunction(ptys, ret) => {
+                if params.len() != ptys.len() { fail_tc("closure expects a different number of parameters here"); };
+                let env2 = extend_closure_params(env, params, ptys, 0);
+                let r = infer_expected(p2, state, env2, acc, body, ret);
+                let s = constrain_operand(r.subst, r.ty, ret, "closure result: ");
+                ir_leaf(subst_apply(s, expected), s, r.state, TClosure(params, r.texpr))
+            },
+            _ => infer_expr(p2, state, env, acc, e),
+        },
+        ECall(callee, args) => {
+            let path = err_path(());
+            let r = infer_call_expected(p2, state, env, acc, callee, args, Some(expected));
+            if REFERENCES_ON.get() { note_expression_reference(p2, path, env, e, r.texpr); };
+            r
+        },
+        EStructLit(path, fields, spread) => infer_struct_lit_expected(p2, state, env, acc, path, fields, spread, Some(expected)),
+        _ => infer_expr(p2, state, env, acc, e),
+    } }
+}
+
+let infer_expected_block (p2: Program2) (state: FreshState) (env: TyEnv) (acc: Subst) (block: parser.PBlock) (expected: ITy): InferResult = {
+    let r = infer_stmts(p2, state, env, acc, block.stmts, 0, [], block.starts);
+    match block.tail {
+        Some(t) => {
+            set_stmt_pos(block_start_at(block.starts, block.stmts.len()));
+            let tr = infer_expected(p2, r.state, r.env, r.subst, t, expected);
+            ir_leaf(tr.ty, tr.subst, tr.state, TBlockE(TBlock { stmts: r.tstmts, tail: Some(tr.texpr), starts: block.starts }))
+        },
+        None => ir_leaf(ITUnit, r.subst, r.state, TBlockE(TBlock { stmts: r.tstmts, tail: None, starts: block.starts })),
+    }
+}
+
+let infer_optional_expected (p2: Program2) (state: FreshState) (env: TyEnv) (acc: Subst) (e: parser.PExpr) (expected: Option[ITy]): InferResult =
+    match expected { Some(t) => infer_expected(p2, state, env, acc, e, t), None => infer_expr(p2, state, env, acc, e) }
+
+let integer_arithmetic (op: parser.BOp): Bool = match op {
+    BAdd => true, BSub => true, BMul => true, BDiv => true, BRem => true, _ => false,
+}
+
+let integer_literal_expression (e: parser.PExpr): Bool = match e {
+    EInt(_, _) => true,
+    EUnary(UNeg, inner) => integer_literal_expression(inner),
+    EBinary(op, lhs, rhs) => integer_arithmetic(op) && integer_literal_expression(lhs) && integer_literal_expression(rhs),
+    _ => false,
+}
+
+struct IntegerOperands { left: InferResult, right: InferResult }
+
+let infer_integer_operands (p2: Program2) (state: FreshState) (env: TyEnv) (acc: Subst) (lhs: parser.PExpr) (rhs: parser.PExpr) (expected: Option[ITy]): IntegerOperands =
+    if integer_literal_expression(lhs) && !integer_literal_expression(rhs) && Option.is_none(expected) {
+        // Only inference order changes; TBinary retains source evaluation
+        // order. Never re-infer either operand or duplicate its references.
+        let right = infer_expr(p2, state, env, acc, rhs);
+        let left = infer_expected(p2, right.state, env, right.subst, lhs, right.ty);
+        IntegerOperands { left: left, right: InferResult { subst: left.subst, state: left.state, ..right } }
+    } else {
+        let left = infer_optional_expected(p2, state, env, acc, lhs, expected);
+        let right = infer_expected(p2, left.state, env, left.subst, rhs, left.ty);
+        IntegerOperands { left: left, right: right }
+    }
+
+let seed_expected_result (acc: Subst) (actual: ITy) (expected: Option[ITy]): Subst = match expected {
+    Some(want) => constrain_operand(acc, actual, want, "expected result: "),
+    None => acc,
+}
+
+let infer_global_initializer (p2: Program2) (state: FreshState) (acc: Subst) (def: parser.LetDefNode): InferResult =
+    match def.ret_ty {
+        Some(ann) => infer_expected(p2, state, tyenv_empty(()), acc, def.body, resolve_ann_seen(p2.ctx, p2.current, [], ann)),
+        None => infer_expr(p2, state, tyenv_empty(()), acc, def.body),
+    }
+
+let infer_variant_call_expected (p2: Program2) (state: FreshState) (env: TyEnv) (acc: Subst) (tag: String) (args: Array[parser.PExpr]) (v: VariantLookup) (expected: Option[ITy]): InferResult = {
+    check_enum_named(p2.ctx, p2.current, v.enum_name);
+    let fr = fresh_list(state, v.enum_generics.len());
+    let ret = ITEnum(v.enum_name, fr.tys);
+    let seeded = seed_expected_result(acc, ret, expected);
+    let payload = Array.map(v.payload, |t| instantiate_template(v.enum_generics, fr.tys, t));
+    if payload.len() != args.len() { fail_tc("variant expects a different number of arguments"); };
+    let ar = infer_call_args(p2, fr.state, env, seeded, args, payload, 0, []);
+    ir_leaf(subst_apply(ar.subst, ret), ar.subst, ar.state, TVariantNew(v.enum_name, tag, ar.texprs))
+}
+
+let first_fixed_within (ctx: TyContext) (t: ITy) (seen: Array[String]): Option[ITy] =
+    match t {
+        ITInteger(_) => Some(t),
+        ITFunction(params, ret) => first_fixed_in_list(ctx, params.push(ret), seen, 0),
+        ITStruct(name, args) =>
+            {
+                // Arguments are finite type syntax. Only expansion of a
+                // declaration's fields needs the nominal recursion guard.
+                let inner = first_fixed_in_list(ctx, args, seen, 0);
+                if Option.is_some(inner) { inner }
+                else if Array.contains(seen, name) { None }
+                else { match find_struct(ctx, name) {
+                    None => None,
+                    Some(_) => first_fixed_in_list(ctx,
+                        Array.map(ctx_field_types(ctx, name), |ft| instantiate_template(ctx_struct_generics(ctx, name), args, ft)),
+                        seen.push(name), 0),
+                } }
+            },
+        ITEnum(name, args) => {
+            let inner = first_fixed_in_list(ctx, args, seen, 0);
+            if Option.is_some(inner) { inner }
+            else if Array.contains(seen, name) { None }
+            else { match ctx_enum_tags(ctx, name) {
+                Some(tags) => first_fixed_in_variants(ctx, name, tags, args, seen.push(name), 0),
+                None => None,
+            } }
+        },
+        ITTuple(elems) => first_fixed_in_list(ctx, elems, seen, 0),
+        ITRef(inner) => first_fixed_within(ctx, inner, seen),
+        _ => None,
+    }
+
+let first_fixed_in_list (ctx: TyContext) (ts: Array[ITy]) (seen: Array[String]) (i: Int): Option[ITy] =
+    if i >= ts.len() { None }
+    else { match first_fixed_within(ctx, ts[i], seen) { Some(x) => Some(x), None => first_fixed_in_list(ctx, ts, seen, i + 1) } }
+
+let first_fixed_in_variants (ctx: TyContext) (enum_name: String) (tags: Array[String]) (args: Array[ITy]) (seen: Array[String]) (i: Int): Option[ITy] =
+    if i >= tags.len() { None }
+    else {
+        let payload = Array.map(ctx_variant_payload(ctx, enum_name, tags[i]), |pt| instantiate_template(ctx_variant_generics(ctx, enum_name, tags[i]), args, pt));
+        match first_fixed_in_list(ctx, payload, seen, 0) {
+            Some(f) => Some(f),
+            None => first_fixed_in_variants(ctx, enum_name, tags, args, seen, i + 1),
+        }
+    }
+
+let integer_array_anchor (elems: Array[parser.PExpr]) (i: Int): Int =
+    if i >= elems.len() { 0 }
+    else if !integer_literal_expression(elems[i]) { i }
+    else { integer_array_anchor(elems, i + 1) }
+
+let infer_integer_array_elems (p2: Program2) (state: FreshState) (env: TyEnv) (acc: Subst) (elems: Array[parser.PExpr]) (anchor: Int) (seed: InferResult) (i: Int) (texprs: Array[TExpr]): CallArgsResult =
+    if i >= elems.len() { CallArgsResult { subst: acc, state: state, texprs: texprs } }
+    else {
+        let r = if i == anchor { InferResult { subst: acc, state: state, ..seed } }
+            else { infer_expected(p2, state, env, acc, elems[i], seed.ty) };
+        let s = constrain_operand(r.subst, r.ty, seed.ty, "array element: ");
+        infer_integer_array_elems(p2, r.state, env, s, elems, anchor, seed, i + 1, texprs.push(r.texpr))
+    }

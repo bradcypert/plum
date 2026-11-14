@@ -1,0 +1,78 @@
+// Plum values retain their mathematical integer kind even though the first
+// implementation stores every integer in one i64 register/aggregate slot.
+// This is not a native layout or foreign ABI promise.
+use typecheck;
+use parser;
+
+let cg_integer_format (kind: typecheck.IntegerKind): String =
+    if typecheck.integer_spec(kind).signed { "plum_int_to_string" } else { "plum_uint_to_string" }
+
+let cg_fixed_range (kind: typecheck.IntegerKind) (value: String) (n: Int): DivGuard = {
+    let spec = typecheck.integer_spec(kind);
+    if spec.bits == 64 { DivGuard { code: "", reg: value, next: n } }
+    else {
+        let lo = cg_reg(n);
+        let hi = cg_reg(n + 1);
+        let ok = cg_reg(n + 2);
+        let cont = cg_label(n + 3);
+        let bad = cg_label(n + 4);
+        let predicate = if spec.signed {
+            "  ${lo} = icmp sge i64 ${value}, -${spec.min_magnitude}\n  ${hi} = icmp sle i64 ${value}, ${spec.max}\n  ${ok} = and i1 ${lo}, ${hi}\n"
+        } else {
+            // Unsigned <= max rejects negative word patterns as well.
+            "  ${ok} = icmp ule i64 ${value}, ${spec.max}\n"
+        };
+        DivGuard { code: predicate.concat("  br i1 ${ok}, label %${cont}, label %${bad}\n${bad}:\n  call void @plum_div_overflow_fail()\n  unreachable\n${cont}:\n"), reg: value, next: n + 5 }
+    }
+}
+
+let cg_fixed_operation (kind: typecheck.IntegerKind) (op: parser.BOp) (lhs: String) (rhs: String) (n: Int): DivGuard = {
+    let spec = typecheck.integer_spec(kind);
+    match op {
+        BAdd => cg_fixed_arithmetic(kind, op, lhs, rhs, n),
+        BSub => cg_fixed_arithmetic(kind, op, lhs, rhs, n),
+        BMul => cg_fixed_arithmetic(kind, op, lhs, rhs, n),
+        BDiv => cg_fixed_division(kind, op, lhs, rhs, n),
+        BRem => cg_fixed_division(kind, op, lhs, rhs, n),
+        _ => {
+            let pred = match op {
+                BLt => if spec.signed { "slt" } else { "ult" },
+                BLe => if spec.signed { "sle" } else { "ule" },
+                BGt => if spec.signed { "sgt" } else { "ugt" },
+                BGe => if spec.signed { "sge" } else { "uge" },
+                _ => { cg_fail("unsupported operator on ${typecheck.integer_name(kind)}"); "eq" },
+            };
+            DivGuard { code: "  ${cg_reg(n)} = icmp ${pred} i64 ${lhs}, ${rhs}\n", reg: cg_reg(n), next: n + 1 }
+        },
+    }
+}
+
+let cg_fixed_arithmetic (kind: typecheck.IntegerKind) (op: parser.BOp) (lhs: String) (rhs: String) (n: Int): DivGuard = {
+    let prefix = if typecheck.integer_spec(kind).signed { "s" } else { "u" };
+    let operation = match op { BAdd => "add", BSub => "sub", _ => "mul" };
+    let word = cg_overflow_guard("llvm.${prefix}${operation}.with.overflow.i64", lhs, rhs, n);
+    let range = cg_fixed_range(kind, word.reg, word.next);
+    DivGuard { code: word.code.concat(range.code), reg: range.reg, next: range.next }
+}
+
+let cg_fixed_division (kind: typecheck.IntegerKind) (op: parser.BOp) (lhs: String) (rhs: String) (n: Int): DivGuard = {
+    let spec = typecheck.integer_spec(kind);
+    let nz = cg_reg(n);
+    let cont = cg_label(n + 1);
+    let bad = cg_label(n + 2);
+    let zero = "  ${nz} = icmp ne i64 ${rhs}, 0\n  br i1 ${nz}, label %${cont}, label %${bad}\n${bad}:\n  call void @plum_div_zero_fail()\n  unreachable\n${cont}:\n";
+    // Guard MIN/-1 even for remainder, matching the existing Int policy.
+    let is_min = cg_reg(n + 3);
+    let is_neg1 = cg_reg(n + 4);
+    let both = cg_reg(n + 5);
+    let safe = cg_label(n + 6);
+    let overflow = cg_label(n + 7);
+    let signed_guard = if spec.signed {
+        "  ${is_min} = icmp eq i64 ${lhs}, -${spec.min_magnitude}\n  ${is_neg1} = icmp eq i64 ${rhs}, -1\n  ${both} = and i1 ${is_min}, ${is_neg1}\n  br i1 ${both}, label %${overflow}, label %${safe}\n${overflow}:\n  call void @plum_div_overflow_fail()\n  unreachable\n${safe}:\n"
+    } else { "" };
+    let opcode = if spec.signed { if op == BDiv { "sdiv" } else { "srem" } } else { if op == BDiv { "udiv" } else { "urem" } };
+    let out = cg_reg(n + 8);
+    DivGuard { code: zero.concat(signed_guard).concat("  ${out} = ${opcode} i64 ${lhs}, ${rhs}\n"), reg: out, next: n + 9 }
+}
+
+let cg_is_fixed (ty: CgTy): Bool = match ty { CgInteger(_) => true, _ => false }
