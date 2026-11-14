@@ -1,0 +1,53 @@
+use parser;
+
+// Range inclusion is a property of two types, never of a literal's value.
+pub let integer_range_fits (source: IntegerKind) (destination: IntegerKind): Bool = {
+    let src = integer_spec(source);
+    let dst = integer_spec(destination);
+    if src.signed { dst.signed && dst.bits >= src.bits }
+    else if dst.signed { dst.bits > src.bits }
+    else { dst.bits >= src.bits }
+}
+
+let integer_conversion_call (namespace: String) (name: String): Bool =
+    (name == "from" || name == "try_from") && Option.is_some(integer_named(namespace))
+
+let infer_integer_conversion (p2: Program2) (state: FreshState) (env: TyEnv) (acc: Subst) (namespace: String) (namespace_offset: Int) (name: String) (args: Array[parser.PExpr]): InferResult = {
+    require_call_arity("${namespace}.${name}", 1, args.len());
+    let dest_ty = match integer_named(namespace) { Some(t) => t, None => ITUnit };
+    note_at(namespace, namespace_offset, dest_ty, 0 - 1);
+    let destination = match integer_kind(dest_ty) { Some(k) => k, None => IntegerI64 };
+    let value = infer_expr(p2, state, env, acc, args[0]);
+    let source_ty = subst_apply(value.subst, value.ty);
+    let source = match integer_kind(source_ty) {
+        Some(k) => k,
+        None => { fail_tc("integer conversion requires a known integer source type, found ${render_ty(source_ty)}"); IntegerI64 },
+    };
+    let fallible = name == "try_from";
+    if !fallible && !integer_range_fits(source, destination) {
+        fail_tc("conversion from ${render_ty(source_ty)} to ${render_ty(dest_ty)} is not range-preserving; use ${namespace}.try_from")
+    };
+    let result_ty = if fallible {
+        ITEnum(parser.qualify_type(parser.PRELUDE_MODULE(), "Result"),
+            [dest_ty, ITStruct(parser.qualify_type(parser.PRELUDE_MODULE(), "IntegerConversionError"), [])])
+    } else { dest_ty };
+    ir_leaf(result_ty, value.subst, value.state, TIntegerConvert(destination, fallible, value.texpr))
+}
+
+// Shared metadata for documentation, completion and hover. These are
+// associated compiler operations, not methods on an integer receiver.
+pub let integer_conversion_builtins (): Array[BuiltinFn] = {
+    let mut items: Array[BuiltinFn] = [];
+    for name in ["Int", "I64", "I8", "I16", "I32", "U8", "U16", "U32", "U64"] {
+        items = items.push(BuiltinFn { name: "${name}.from", detail: "let ${name}.from[S] (value: S): ${name}",
+            doc: "Converts an integer whose entire source type range fits the destination. The source type must be known; signed-to-unsigned conversions require try_from. Evaluates value once. Does not introduce general function overloading or numeric generic constraints." });
+        items = items.push(BuiltinFn { name: "${name}.try_from", detail: "let ${name}.try_from[S] (value: S): Result[${name}, IntegerConversionError]",
+            doc: "Converts an integer when its value fits the destination range. Otherwise returns source and destination IntegerKind tags, without retaining the rejected value or allocating an error message. Evaluates value once. Result and error storage may allocate." });
+    };
+    items
+}
+
+pub let integer_conversion_detail (namespace: String) (name: String): Option[String] =
+    if !integer_conversion_call(namespace, name) { None }
+    else if name == "from" { Some("let ${namespace}.from[S] (value: S): ${namespace}") }
+    else { Some("let ${namespace}.try_from[S] (value: S): Result[${namespace}, IntegerConversionError]") }

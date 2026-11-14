@@ -117,12 +117,46 @@ payloads, closures, references, and existing generics. Their mathematical ranges
 do not imply packed or native storage: the current implementation uses a word
 per scalar value in Plum-managed storage.
 
-The first type/arithmetic increment does not yet provide the planned integer
-`from`/`try_from` conversion built-ins (#527). New-width bit operations and
-wrapping/truncating APIs are tracked separately in #525; existing `Int` APIs
-remain available. New-width C extern signatures, including aggregates containing
-these types, are rejected until the scalar ABI work in #526. `Int`/`I64` retain
-the existing C ABI.
+New-width bit operations and wrapping/truncating APIs are tracked separately in
+#525; existing `Int` APIs remain available. New-width C extern signatures,
+including aggregates containing these types, are rejected until the scalar ABI
+work in #526. `Int`/`I64` retain the existing C ABI.
+
+### Explicit integer conversions
+
+`Destination.from(value)` is allowed only when the destination holds the
+source type's **entire range**. Identity conversions work. For example, `U8`
+to `I16` and `I8` to `Int` are safe; `U8` to `I8`, `Int` to `I32`, and every
+signed-to-unsigned conversion require `try_from`, regardless of the particular
+value. No conversion silently truncates or reinterprets bits.
+
+`Destination.try_from(value)` accepts any known integer source type and returns
+`Result[Destination, IntegerConversionError]`. It returns `Ok` when the value
+fits, or `Err` when it does not. Both conversion forms evaluate the source
+expression exactly once.
+
+```plum
+let byte: U8 = 255
+let wider: I16 = I16.from(byte)
+let checked: Result[I8, IntegerConversionError] = I8.try_from(byte)
+// I8.from(byte) is a type error: U8's full range does not fit I8.
+```
+
+A conversion error has two public fields, `source` and `destination`, of type
+`IntegerKind`. Its tags are `Signed8`, `Signed16`, `Signed32`, `Signed64`,
+`Unsigned8`, `Unsigned16`, `Unsigned32`, and `Unsigned64`. `Int` and `I64` both
+use `Signed64`; the alias does not create another integer kind. The error holds
+neither the rejected value nor an allocated error-message string. Ordinary
+`Result` and error storage may allocate.
+
+These are integer-only compiler built-ins, not a general overloading or generic
+numeric-constraint mechanism. The source's integer type must be known at the
+call. The destination does not contextualize the argument: an unannotated
+literal still defaults to `Int`, so `U8.from(1)` is rejected even though `1`
+fits. Use `U8.try_from(1)` or write `let value: U8 = 1` directly. For values
+above `Int`'s maximum, annotate the source as `U64` before converting it.
+Use call syntax for these built-ins; to pass a conversion as a value, wrap it
+in a typed closure such as `let widen: (U8) -> Int = |x| Int.from(x)`.
 
 `String` is the surface-syntax keyword for text (its type is
 occasionally referred to as `Str` in compiler-internal contexts, but

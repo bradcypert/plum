@@ -2173,7 +2173,7 @@ let infer_call_shapes (p2: Program2) (state: FreshState) (env: TyEnv) (acc: Subs
         // name would otherwise "succeed" as a bogus zero-payload variant
         // construction instead of failing.
         EField(base, method_name) => match base {
-            EIdent(ns, _) => {
+            EIdent(ns, namespace_offset) => {
                 if ns == "Array" && (method_name == "map" || method_name == "filter" || method_name == "fold") {
                     infer_array_ns_call_expected(p2, state, env, acc, method_name, args, expected)
                 } else if Option.is_some(tyenv_lookup(env, ns)) || Option.is_some(find_global_def(p2, ns)) {
@@ -2221,7 +2221,9 @@ let infer_call_shapes (p2: Program2) (state: FreshState) (env: TyEnv) (acc: Subs
                         //
                         // After the declared-function lookup above, so a
                         // real `let Array.reverse` still wins.
-                        None => if builtin_ns_method(ns, method_name) && args.len() >= 1 {
+                        None => if integer_conversion_call(ns, method_name) {
+                            infer_integer_conversion(p2, state, env, acc, ns, namespace_offset, method_name, args)
+                        } else if builtin_ns_method(ns, method_name) && args.len() >= 1 {
                             infer_method_call_expected(p2, state, env, acc, args[0], method_name, Array.slice(args, 1, args.len()), expected)
                         } else { match builtin_sig(ns.concat(".").concat(method_name)) {
                             Some(sig) => infer_fn_call_expected(p2, state, env, acc, sig, args, expected),

@@ -139,7 +139,7 @@ let ident_text (cs: Array[String]) (i: Int) (acc: String): String =
 
 // A struct field's DECLARED TYPE, or a namespaced function's signature.
 let member_detail (items: Array[parser.ItemNode]) (ns: String) (name: String) (i: Int): Option[String] =
-    if i >= items.len() { None }
+    if i >= items.len() { typecheck.integer_conversion_detail(ns, name) }
     else {
         let here = match items[i].kind {
             IKStruct(decl) => if decl.name == ns { field_type_named(decl, name, 0) } else { None },
@@ -601,7 +601,9 @@ let builtin_items (declared: Array[parser.ItemNode]): Array[parser.ItemNode] = {
     let src = builtin_src(Array.filter(typecheck.builtin_methods(), |m|
             !Array.contains(names, builtin_qualified(m.recv, m.name))), 0, "")
         .concat(builtin_fn_src(Array.filter(typecheck.builtin_functions(), |f|
-            !Array.contains(names, f.name)), 0, ""));
+            !Array.contains(names, f.name)), 0, ""))
+        .concat(Array.join(Array.map(typecheck.integer_conversion_builtins(), |f|
+            "/// ${f.doc}\n${BUILTIN_NOTE(())}\npub ${f.detail} = ()\n"), "\n"));
     let lexed = lexer.tokenize_spanned(src);
     parser.set_source_context("<builtins>", src, lexed.starts, lexed.ends);
     let items = parser.parse_program(lexed.tokens).items;
@@ -1550,7 +1552,8 @@ let builtin_completions (ignored: Unit): Array[JsonValue] =
         completion_json("chars_of", "function", "chars_of(s: String): Array[String]"),
         completion_json("ref", "function", "ref(value: T): Ref[T]"),
         completion_json("channel", "function", "channel(): (Sender[T], Receiver[T])"),
-    ], builtin_method_items(typecheck.builtin_methods(), 0, []))
+    ], Array.concat(builtin_method_items(typecheck.builtin_methods(), 0, []),
+        Array.map(typecheck.integer_conversion_builtins(), |f| completion_json(f.name, "function", f.detail))))
 
 // The compiler's own methods, offered under the type they belong to:
 // `Array.map`, `String.split`. A method with no receiver type -- only

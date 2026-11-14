@@ -2647,3 +2647,33 @@ pub let test_bytes_slice_ranges (): Unit = {
         assert_eq(changed.len(), bytes.len() + 2); assert_eq(bytes.to_array(), saved);
     }
 }
+
+// Compare checked conversion and round trips against ordinary Int bounds.
+// Generate full-width signed inputs as well as densely sampled small values.
+pub let test_integer_conversion_roundtrips (): Unit = {
+    let mut seed = 527;
+    for i in 0..1000 {
+        seed = next_seed(seed);
+        let mixed = random_bits(seed);
+        let value = if i % 2 == 0 { rand_between(seed, -1000, 1000) }
+            else if i % 3 == 0 { 0 - mixed } else { mixed };
+        let byte_result = U8.try_from(value);
+        assert_eq(Result.is_ok(byte_result), value >= 0 && value <= 255);
+        match byte_result {
+            Ok(byte) => {
+                assert_eq(Int.from(byte), value);
+                assert_eq(U8.try_from(Int.from(byte)), Ok(byte));
+            },
+            Err(error) => {
+                assert_eq(error.source, IntegerKind.Signed64);
+                assert_eq(error.destination, IntegerKind.Unsigned8);
+            },
+        };
+        let signed_result = I8.try_from(value);
+        assert_eq(Result.is_ok(signed_result), value >= -128 && value <= 127);
+        match signed_result { Ok(byte) => assert_eq(Int.from(byte), value), Err(_) => () };
+        let unsigned_result = U64.try_from(value);
+        assert_eq(Result.is_ok(unsigned_result), value >= 0);
+        match unsigned_result { Ok(word) => assert_eq(Int.try_from(word), Ok(value)), Err(_) => () };
+    };
+}

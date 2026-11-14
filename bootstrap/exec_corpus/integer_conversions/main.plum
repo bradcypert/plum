@@ -1,0 +1,47 @@
+struct Owner { label: String, byte: U8 }
+let byte_source (): U8 = 255
+let owner_source (): Owner = Owner { label: "owned".concat("!"), byte: 255 }
+let GLOBAL: U8 = match U8.try_from(255) { Ok(value) => value, Err(_) => 0 }
+let main (): Unit = {
+    let byte: U8 = 255;
+    let wide: I16 = I16.from(byte);
+    assert_eq(wide, 255);
+    let widen: (U8) -> I16 = |value| I16.from(value);
+    assert_eq(widen(byte), wide);
+    assert_eq(I16.from(byte_source()), wide);
+    assert_eq(I16.from(owner_source().byte), wide);
+    assert(Result.is_err(I8.try_from(owner_source().byte)));
+    assert_eq(Int.from(byte), I64.from(byte));
+    assert_eq(GLOBAL, byte);
+    match I8.try_from(byte) {
+        Ok(_) => panic_raw("expected a range error"),
+        Err(error) => {
+            assert_eq(error.source, IntegerKind.Unsigned8);
+            assert_eq(error.destination, IntegerKind.Signed8);
+            println("${error.source} -> ${error.destination}")
+        },
+    };
+    let full: U64 = 18446744073709551615;
+    assert_eq(U64.from(full), full);
+    assert_eq(U64.try_from(full), Ok(full));
+    assert_eq(Int.try_from(full), Err(IntegerConversionError { source: IntegerKind.Unsigned64, destination: IntegerKind.Signed64 }));
+    assert_eq(I64.try_from(full), Int.try_from(full));
+    assert_eq(U64.try_from(-1), Err(IntegerConversionError { source: IntegerKind.Signed64, destination: IntegerKind.Unsigned64 }));
+    let minimum: Int = -9223372036854775808;
+    assert_eq(I64.try_from(minimum), Ok(minimum));
+    let calls = ref(0);
+    let next = |value| { calls.set(calls.get() + 1); value };
+    assert_eq(U8.try_from(next(255)), Ok(byte));
+    assert_eq(calls.get(), 1);
+    assert_eq(U8.try_from(next(-1)), Err(IntegerConversionError { source: IntegerKind.Signed64, destination: IntegerKind.Unsigned8 }));
+    assert_eq(calls.get(), 2);
+    let get_byte: () -> U8 = || { calls.set(calls.get() + 1); 255 };
+    assert_eq(I16.from(get_byte()), wide);
+    assert_eq(calls.get(), 3);
+    let identity_result = U8.try_from(get_byte());
+    assert_eq(identity_result, Ok(byte));
+    assert_eq(calls.get(), 4);
+    let converted: Array[U8] = [U8.from(byte), match U8.try_from(1) { Ok(value) => value, Err(_) => 0 }];
+    assert_eq(converted[1], 1);
+    println("integer conversions ok")
+}

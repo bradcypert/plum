@@ -202,6 +202,7 @@ pub enum TNode {
     // Plum `String` cell and a raw `char*`.
     TAsCStr(TExpr),
     TAsString(TExpr),
+    TIntegerConvert(IntegerKind, Bool, TExpr),
     // `spawn { .. }` -- the block becomes a zero-parameter CLOSURE (the
     // backend lifts it exactly as it lifts a closure literal, because
     // the body captures locals the same way), and the closure is handed
@@ -309,6 +310,7 @@ pub let t_children (e: TExpr): Array[TExpr] =
         TExternCall(_, xs) => xs,
         TAsCStr(a) => [a],
         TAsString(a) => [a],
+        TIntegerConvert(_, _, a) => [a],
         TSpawn(a) => [a],
         TTaskJoin(a) => [a],
         TChannelSend(a, b) => [a, b],

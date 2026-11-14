@@ -9,6 +9,15 @@ pub enum Option[T] { Some(T), None }
 /// fail says so in its type.
 pub enum Result[T, E] { Ok(T), Err(E) }
 
+/// The mathematical integer kinds used by checked integer conversions.
+/// `Signed64` represents both `Int` and its `I64` alias.
+pub enum IntegerKind { Signed8, Signed16, Signed32, Signed64, Unsigned8, Unsigned16, Unsigned32, Unsigned64 }
+
+/// A checked integer conversion whose value is outside the destination range.
+/// Contains only source and destination kind tags, not the rejected value or
+/// an allocated error message. Ordinary Result and error values may allocate.
+pub struct IntegerConversionError { pub source: IntegerKind, pub destination: IntegerKind }
+
 /// Whether there is a value.
 pub let Option.is_some[T] (o: Option[T]): Bool = match o { Some(_) => true, None => false }
 /// Whether there is no value.

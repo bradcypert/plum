@@ -1,0 +1,2 @@
+Unsigned8 -> Signed8
+integer conversions ok
