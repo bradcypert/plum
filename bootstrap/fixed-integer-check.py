@@ -88,6 +88,33 @@ def main():
         hover = json.loads(run(COMPILER, 'query', project, source, 1, offset + 1).stdout)
         assert 'U64' in hover['type'], hover
 
+        # Contextual ECall inference must record the callee exactly once;
+        # the ordinary Int fallback already records its own call reference.
+        text = ('let identity[T] (value: T): T = value\n'
+                'let main (): Unit = {\n'
+                '    let byte: U8 = identity(255);\n'
+                '    let ordinary = identity(1);\n'
+                '    let piped: U8 = 255 |> identity;\n'
+                '    println("${byte} ${ordinary} ${piped}")\n}\n')
+        source.write_text(text)
+        references = json.loads(run(COMPILER, 'references', project, source, 1, 5, 'false').stdout)
+        offsets = [text.index('identity(255)'), text.index('identity(1)'), text.index('|> identity') + 3]
+        expected_sites = {(text[:off].count('\n'), off - text.rfind('\n', 0, off) - 1) for off in offsets}
+        sites = {(ref['range']['start']['line'], ref['range']['start']['character']) for ref in references}
+        assert len(references) == 3 and sites == expected_sites, references
+        assert all(ref['uri'] == source.as_uri() for ref in references), references
+
+        # Global re-inference must restore the caller's error context before
+        # checking the following statement, even after visiting another file.
+        globals_dir = project / 'globals'
+        globals_dir.mkdir()
+        (globals_dir / 'globals.plum').write_text('pub let VALUE: U8 = 255\n')
+        reject('use globals;\nlet main (): Unit = {\n'
+               '    let value = globals.VALUE;\n    let wrong: U8 = true;\n}\n',
+               f'{source}:4:', 'Bool')
+        (globals_dir / 'globals.plum').unlink()
+        globals_dir.rmdir()
+
         # One binary per mode, many independently selected failure paths. Keep
         # operands behind calls and check that execution stops before 'after'.
         functions, arms, failures = [], [], {}

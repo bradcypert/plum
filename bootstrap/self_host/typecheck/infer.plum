@@ -910,7 +910,7 @@ let typed_globals_acc (p20: Program2) (globals: Array[GlobalDef]) (i: Int) (acc:
         let s2 = match globals[i].def.ret_ty {
             None => r.subst,
             Some(t) => {
-                let declared = resolve_ann(p2.ctx, [], t);
+                let declared = resolve_ann_seen(p2.ctx, p2.current, [], t);
                 match unify(subst_apply(r.subst, r.ty), declared) {
                     Ok(s) => subst_compose(s, r.subst),
                     Err(e) => {
@@ -1102,7 +1102,7 @@ let infer_ident (p2: Program2) (state: FreshState) (env: TyEnv) (acc: Subst) (na
         // instead of at every mention.
         None => match find_global_def(p2, name) {
             Some(def) => {
-                let r = infer_reference_global(p2, state, acc, def);
+                let r = infer_reference_global(p2, state, acc, global_module_of(p2, name), def);
                 // The DECLARED type decides, when there is one.
                 //
                 // Inferring the body was the only source of type here,
@@ -1120,9 +1120,8 @@ let infer_ident (p2: Program2) (state: FreshState) (env: TyEnv) (acc: Subst) (na
                 // rather than simply substituting keeps the body's own
                 // inference consistent with it, and reports a
                 // definition whose value does not match what it claims.
-                let g = global_ref_ty(p2, name, def, r);
-                note_ident(name, offset, g.ty, 0 - 1);
-                ir_leaf(g.ty, g.subst, r.state, TGlobalRef(global_module_of(p2, name), name))
+                note_ident(name, offset, r.ty, 0 - 1);
+                ir_leaf(r.ty, r.subst, r.state, TGlobalRef(global_module_of(p2, name), name))
             },
             // A bare name that turns out to be a FUNCTION is that
             // function as a VALUE -- `Array.map(xs, double)`,
@@ -1158,9 +1157,6 @@ let global_module_of (p2: Program2) (name: String): String =
     match find_global_in(p2.globals, p2.current, name, 0) { Some(_) => p2.current, None => "" }
 
 struct GlobalTy { ty: ITy, subst: Subst }
-
-let global_ref_ty (p2: Program2) (name: String) (def: parser.LetDefNode) (r: InferResult): GlobalTy =
-    global_ref_ty_in(p2, global_module_of(p2, name), def, r)
 
 let global_ref_ty_in (p2: Program2) (module_name: String) (def: parser.LetDefNode) (r: InferResult): GlobalTy =
     match def.ret_ty {
@@ -1769,9 +1765,8 @@ let infer_field (p2: Program2) (state: FreshState) (env: TyEnv) (acc: Subst) (ba
         Some(sig) => infer_partial_call(p2, state, env, acc, sig, []),
         None => match qualified_global(p2, env, base, name) {
             Some(g) => {
-                let r = infer_reference_global(p2, state, acc, g.def);
-                let t = global_ref_ty_in(p2, g.module, g.def, r);
-                ir_leaf(t.ty, t.subst, r.state, TGlobalRef(g.module, name))
+                let r = infer_reference_global(p2, state, acc, g.module, g.def);
+                ir_leaf(r.ty, r.subst, r.state, TGlobalRef(g.module, name))
             },
             None => match qualified_variant(p2, env, base, name) {
                 Some(v) => infer_variant_ref_v(p2, state, acc, name, v),

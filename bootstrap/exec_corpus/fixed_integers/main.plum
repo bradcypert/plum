@@ -1,3 +1,6 @@
+use fixedglobals;
+// This caller-local name must not change a referenced global's annotation.
+struct LocalCell { wrong: Int }
 struct Box[T] { value: T }
 struct Words { low: U8, high: U64, callback: (U8) -> U8 }
 enum Packet[T] { Data(T), Empty }
@@ -14,6 +17,15 @@ let U8.next (byte: U8): U8 = byte + 1
 let branch (yes: Bool): U16 = if yes { 65535 } else { 1 }
 let matched (yes: Bool): I16 = match yes { true => -32768, false => 32767 }
 let main (): Unit = {
+    let piped_byte: U8 = 255 |> identity;
+    let piped_max: U64 = 18446744073709551615 |> identity |> identity;
+    let piped_values: Array[U8] = [0, 255] |> identity;
+    assert_eq(piped_byte, takes_byte(255));
+    assert_eq(piped_max, u64_max());
+    assert_eq(piped_values, [takes_byte(0), 255]);
+    assert_eq(fixedglobals.INNER, piped_byte);
+    assert_eq(fixedglobals.ALIASED, piped_byte);
+    assert(fixedglobals.VALUE.to_string().contains("255"));
     let small: I8 = -128;
     let medium: I16 = -32768;
     let signed: I32 = -2147483648;

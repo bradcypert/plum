@@ -40,6 +40,7 @@ let infer_expected (p2: Program2) (state: FreshState) (env: TyEnv) (acc: Subst) 
             UNSAFE.set(was);
             r
         },
+        EBinary(BPipe, lhs, rhs) => infer_expected(p2, state, env, acc, parser.desugar_pipe(lhs, rhs), expected),
         EBinary(op, lhs, rhs) => if integer_arithmetic(op) && Option.is_some(integer_kind(expected)) {
             infer_binary_expected(p2, state, env, acc, op, lhs, rhs, Some(expected))
         } else { infer_expr(p2, state, env, acc, e) },
@@ -70,7 +71,12 @@ let infer_expected (p2: Program2) (state: FreshState) (env: TyEnv) (acc: Subst) 
             },
             _ => infer_expr(p2, state, env, acc, e),
         },
-        ECall(callee, args) => infer_call_expected(p2, state, env, acc, callee, args, Some(expected)),
+        ECall(callee, args) => {
+            let path = err_path(());
+            let r = infer_call_expected(p2, state, env, acc, callee, args, Some(expected));
+            if REFERENCES_ON.get() { note_expression_reference(p2, path, env, e, r.texpr); };
+            r
+        },
         EStructLit(path, fields, spread) => infer_struct_lit_expected(p2, state, env, acc, path, fields, spread, Some(expected)),
         _ => infer_expr(p2, state, env, acc, e),
     } }

@@ -159,7 +159,7 @@ let main (): Unit = {
 
 **`==` works on anything; `<`, `<=`, `>` and `>=` need an ordered
 type.** Equality is structural: arrays, structs, enums and their
-payloads, all the way down. Ordering is defined for `Int`, `Float` and
+payloads, all the way down. Ordering is defined for all integer types, `Float` and
 `String` only, and comparing anything else is a compile error naming
 the type. Arrays and structs could be given a lexicographic order and
 deliberately have not been: nothing needs it, enums have no obvious

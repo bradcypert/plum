@@ -1,0 +1,5 @@
+use integer_models as model;
+pub struct LocalCell[T] { value: T }
+pub let VALUE: LocalCell[U8] = LocalCell { value: 255 }
+pub let INNER: U8 = VALUE.value
+pub let ALIASED: U8 = model.byte()
