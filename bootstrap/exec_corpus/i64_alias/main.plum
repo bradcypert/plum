@@ -1,0 +1,47 @@
+use shadow;
+extern "C" {
+    fn i64_alias_echo(value: I64) -> Int;
+    fn i64_alias_return(value: Int) -> I64;
+}
+struct Counter { value: I64 }
+enum Payload { Number(I64), Empty }
+let START: I64 = 7
+let I64.twice (value: I64): Int = value * 2
+let Int.plus_three (value: Int): I64 = value + 3
+let identity[T] (value: T): T = value
+let takes_int (value: Int): I64 = value
+let takes_alias (value: I64): Int = value
+let main (): Unit = {
+    let value: I64 = START;
+    assert_eq(takes_int(value), takes_alias(value));
+    let ints: Array[Int] = [value, 9];
+    let aliases: Array[I64] = ints;
+    assert_eq(identity(aliases), ints);
+    let cell: Ref[I64] = ref(value);
+    cell.set(takes_alias(11));
+    assert_eq(cell.get(), 11);
+    assert_eq(Counter { value: value }.value, value);
+    assert_eq(match Number(value) { Number(n) => takes_int(n), Empty => 0 }, value);
+    let tuple: (I64, Int) = (value, 12);
+    assert(tuple == (7, 12));
+    let twice: (Int) -> I64 = I64.twice;
+    let plus_three: (I64) -> Int = Int.plus_three;
+    assert_eq(twice(value), 14);
+    assert_eq(plus_three(value), 10);
+    assert_eq(Int.twice(value), value.twice());
+    assert_eq(I64.plus_three(value), value.plus_three());
+    assert_eq(I64.abs(-7), Int.abs(-7));
+    assert_eq(I64.to_float(value), 7.0);
+    assert_eq(I64.shr_logical(-1, 63), 1);
+    let maximum: I64 = 9223372036854775807;
+    let minimum: Int = -9223372036854775807 - 1;
+    assert_eq(I64.wrapping_add(maximum, 1), minimum);
+    assert_eq(I64.wrapping_sub(minimum, 1), maximum);
+    assert_eq(I64.wrapping_mul(maximum, 2), -2);
+    assert_eq(value << 64, 0);
+    assert_eq(minimum >> 99, -1);
+    assert_eq(unsafe { i64_alias_echo(minimum) }, minimum);
+    assert_eq(unsafe { i64_alias_return(maximum) }, maximum);
+    assert_eq(shadow.run(), 105);
+    println("i64 alias ok");
+}

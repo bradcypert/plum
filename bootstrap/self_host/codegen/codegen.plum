@@ -7388,8 +7388,9 @@ let cg_c_ty (t: CgTy): String = match t { CgBool => "i32", _ => cg_llvm_ty(t) }
 let cg_of_ann (t: parser.Ty): CgTy =
     match t {
         TyPath(segments) => {
-            let name = segments[segments.len() - 1];
-            if name == "Int" { CgInt }
+            // A qualified nominal type ending in I64 is not the primitive alias.
+            let name = parser.join_dot(segments);
+            if typecheck.canonical_primitive_name(name) == "Int" { CgInt }
             else if name == "Float" { CgFloat }
             else if name == "Bool" { CgBool }
             else if name == "CStr" { CgCStr }

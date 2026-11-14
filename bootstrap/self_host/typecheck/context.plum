@@ -539,8 +539,15 @@ let check_type_arity (name: String) (expected: Int) (supplied: Int): Unit =
     if expected == supplied { () }
     else { fail_ctx("type ${name} expects ${expected} type argument(s), got ${supplied}") }
 
+// I64 shares Int's representation and associated-function namespace. Keep
+// normalization at lookup boundaries so values named I64 still shadow it.
+pub let canonical_primitive_name (name: String): String = if name == "I64" { "Int" } else { name }
+
+pub let canonical_associated_name (name: String): String =
+    if name.starts_with("I64.") { "Int".concat(String.slice(name, 3, name.len())) } else { name }
+
 let resolve_named (ctx: TyContext) (viewer: String) (in_scope: Array[String]) (name: String) (args: Array[ITy]): ITy =
-    if name == "Int" { check_type_arity(name, 0, args.len()); ITInt }
+    if canonical_primitive_name(name) == "Int" { check_type_arity(name, 0, args.len()); ITInt }
     else if name == "Float" { check_type_arity(name, 0, args.len()); ITFloat }
     else if name == "Bool" { check_type_arity(name, 0, args.len()); ITBool }
     else if name == "String" { check_type_arity(name, 0, args.len()); ITStr }

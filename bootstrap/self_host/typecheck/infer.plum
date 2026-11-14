@@ -257,6 +257,19 @@ let existing_binding (acc: Array[UseBinding]) (file: String) (local: String) (i:
     else if acc[i].path == file && acc[i].local == local { Some(acc[i].module) }
     else { existing_binding(acc, file, local, i + 1) }
 
+// Alternate spellings must not introduce two definitions of one method.
+let check_integer_alias_collision (sigs: Array[FnSig]) (item: parser.ItemNode) (name: String): Unit = {
+    if name.starts_with("Int.") || name.starts_with("I64.") {
+        let canonical = canonical_associated_name(name);
+        for sig in sigs {
+            if sig.module == item.module && sig.name != name && canonical_associated_name(sig.name) == canonical {
+                set_err_pos(item.path, item.start, name);
+                fail_tc("associated function ${canonical} is already declared through the Int/I64 alias");
+            };
+        };
+    };
+}
+
 let collect_sigs_acc (ctx: TyContext) (items: Array[parser.ItemNode]) (i: Int) (sigs: Array[FnSig]) (globals: Array[GlobalDef]): Program2 =
     if i >= items.len() { Program2 { sigs: sigs, globals: globals, ctx: ctx, current: "", generics: [] } }
     else {
@@ -264,6 +277,7 @@ let collect_sigs_acc (ctx: TyContext) (items: Array[parser.ItemNode]) (i: Int) (
             IKLet(def) => {
                 if Array.is_empty(def.params) { collect_sigs_acc(ctx, items, i + 1, sigs, globals.push(GlobalDef { module: items[i].module, def: def, is_pub: items[i].is_pub, path: items[i].path, offset: items[i].start })) }
                 else {
+                    check_integer_alias_collision(sigs, items[i], def.name);
                     let generic_names = Array.map(def.generics, |g| g.name);
                     let params = Array.map(def.params, |p| resolve_param_ty(ctx, items[i].module, generic_names, p));
                     let ret = match def.ret_ty {
@@ -426,7 +440,7 @@ pub let check_visible (p2: Program2) (sig: FnSig) (ns: String) (name: String): U
 
 let find_sig_in (sigs: Array[FnSig]) (module_name: String) (name: String) (i: Int): Option[FnSig] =
     if i >= sigs.len() { None }
-    else if sigs[i].name == name && sigs[i].module == module_name { Some(sigs[i]) }
+    else if sigs[i].module == module_name && canonical_associated_name(sigs[i].name) == canonical_associated_name(name) { Some(sigs[i]) }
     else { find_sig_in(sigs, module_name, name, i + 1) }
 
 // --- Binding a parameter pattern (only plain-ident/Unit shapes — same
@@ -953,7 +967,7 @@ pub let infer_expr (p2: Program2) (state: FreshState) (env: TyEnv) (acc: Subst) 
 
 let infer_expr_inner (p2: Program2) (state: FreshState) (env: TyEnv) (acc: Subst) (e: parser.PExpr): InferResult =
     match e {
-        EInt(v) => ir_leaf(ITInt, acc, state, TInt(v)),
+        EInt(v, offset) => ir_leaf(ITInt, acc, state, TInt(integer_literal_value(v, offset))),
         EFloat(v) => ir_leaf(ITFloat, acc, state, TFloat(v)),
         EStr(v) => ir_leaf(ITStr, acc, state, TStr(v)),
         EBool(v) => ir_leaf(ITBool, acc, state, TBool(v)),
@@ -1255,7 +1269,28 @@ let infer_index (p2: Program2) (state: FreshState) (env: TyEnv) (acc: Subst) (ba
     ir_leaf(subst_apply(s2, elem_fresh.ty), s2, ir.state, TIndex(br.texpr, ir.texpr))
 }
 
-let infer_unary (p2: Program2) (state: FreshState) (env: TyEnv) (acc: Subst) (op: parser.UOp) (inner: parser.PExpr): InferResult = {
+// Literal text is not forced through signed Int by the lexer. Resolve its
+// signed range here, retaining the original source position for diagnostics.
+let integer_literal_value (text: String) (offset: Int): Int =
+    match String.parse_int(text) {
+        Ok(value) => value,
+        Err(_) => {
+            set_stmt_pos(offset);
+            fail_tc("integer literal out of range: ${text} (Int is a 64-bit signed integer)");
+            0
+        },
+    }
+
+let infer_unary (p2: Program2) (state: FreshState) (env: TyEnv) (acc: Subst) (op: parser.UOp) (inner: parser.PExpr): InferResult =
+    match op {
+        UNeg => match inner {
+            EInt(text, offset) => ir_leaf(ITInt, acc, state, TInt(integer_literal_value("-".concat(text), offset))),
+            _ => infer_unary_value(p2, state, env, acc, op, inner),
+        },
+        _ => infer_unary_value(p2, state, env, acc, op, inner),
+    }
+
+let infer_unary_value (p2: Program2) (state: FreshState) (env: TyEnv) (acc: Subst) (op: parser.UOp) (inner: parser.PExpr): InferResult = {
     let r = infer_expr(p2, state, env, acc, inner);
     match op {
         UNot => infer_constrained_unary(op, r, ITBool),
@@ -2739,7 +2774,7 @@ pub struct BuiltinMethod { pub recv: String, pub name: String, pub detail: Strin
 // Whether `Ns.name` names one of the methods below -- which is what
 // makes `Ns.name(x, ..)` mean `x.name(..)`.
 pub let builtin_ns_method (ns: String) (name: String): Bool =
-    has_builtin_method(builtin_methods(), ns, name, 0)
+    has_builtin_method(builtin_methods(), canonical_primitive_name(ns), name, 0)
 
 let has_builtin_method (ms: Array[BuiltinMethod]) (ns: String) (name: String) (i: Int): Bool =
     if i >= ms.len() { false }
@@ -3594,7 +3629,7 @@ let bind_pattern_ty (p2: Program2) (state: FreshState) (acc: Subst) (env: TyEnv)
     match pattern {
         PWildcard => BindResult { env: env, subst: acc, state: state, pattern: TPWildcard },
         PIdent(name, off) => { note_binding(name, off, scrutinee_ty); BindResult { env: tyenv_extend(env, name, scrutinee_ty, off), subst: acc, state: state, pattern: TPIdent(name, off) } },
-        PInt(v) => BindResult { env: env, subst: unify_pattern_prim(acc, scrutinee_ty, ITInt), state: state, pattern: TPInt(v) },
+        PInt(v, offset) => BindResult { env: env, subst: unify_pattern_prim(acc, scrutinee_ty, ITInt), state: state, pattern: TPInt(integer_literal_value(v, offset)) },
         PFloat(v) => BindResult { env: env, subst: unify_pattern_prim(acc, scrutinee_ty, ITFloat), state: state, pattern: TPFloat(v) },
         PStr(v) => BindResult { env: env, subst: unify_pattern_prim(acc, scrutinee_ty, ITStr), state: state, pattern: TPStr(v) },
         PBool(v) => BindResult { env: env, subst: unify_pattern_prim(acc, scrutinee_ty, ITBool), state: state, pattern: TPBool(v) },
@@ -3616,7 +3651,7 @@ let or_pattern_category (alts: Array[parser.PPattern]): OrPatternCategory =
 
 let or_alternative_category (pattern: parser.PPattern): OrPatternCategory =
     match pattern {
-        PInt(_) => OrLiteral,
+        PInt(_, _) => OrLiteral,
         PFloat(_) => OrLiteral,
         PStr(_) => OrLiteral,
         PBool(_) => OrLiteral,
@@ -3633,12 +3668,12 @@ let or_pattern_category_rest (alts: Array[parser.PPattern]) (i: Int) (category: 
 // disambiguate, plus mixed and empty lists that cannot take the literal
 // fast path.
 pub let test_or_pattern_categories (): Unit = {
-    assert(match or_pattern_category([PInt(1), PFloat(2.0), PStr("yes"), PBool(true)]) { OrLiteral => true, _ => false });
+    assert(match or_pattern_category([PInt("1", -1), PFloat(2.0), PStr("yes"), PBool(true)]) { OrLiteral => true, _ => false });
     assert(match or_pattern_category([PVariant(["None"], []), PVariant(["Some"], [PIdent("x", 0)])]) { OrTagShaped => true, _ => false });
     assert(match or_pattern_category([PVariant(["Pair"], [PWildcard, PWildcard])]) { OrTagShaped => true, _ => false });
     assert(match or_pattern_category([PTuple([PWildcard]), PTuple([PWildcard])]) { OrStructural => true, _ => false });
     assert(match or_pattern_category([PStruct(["Pair"], [], true)]) { OrStructural => true, _ => false });
-    assert(match or_pattern_category([PInt(1), PWildcard]) { OrStructural => true, _ => false });
+    assert(match or_pattern_category([PInt("1", -1), PWildcard]) { OrStructural => true, _ => false });
     assert(match or_pattern_category([PVariant(["None"], []), POr([PVariant(["None"], [])])]) { OrStructural => true, _ => false });
     assert(match or_pattern_category([]) { OrStructural => true, _ => false });
 }

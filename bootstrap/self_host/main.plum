@@ -143,7 +143,7 @@ let member_detail (items: Array[parser.ItemNode]) (ns: String) (name: String) (i
     else {
         let here = match items[i].kind {
             IKStruct(decl) => if decl.name == ns { field_type_named(decl, name, 0) } else { None },
-            IKLet(def) => if def.name == ns.concat(".").concat(name) { Some(def_signature(def)) } else { None },
+            IKLet(def) => if typecheck.canonical_associated_name(def.name) == typecheck.canonical_primitive_name(ns).concat(".").concat(name) { Some(def_signature(def)) } else { None },
             _ => None,
         };
         match here { Some(d) => Some(d), None => member_detail(items, ns, name, i + 1) }
@@ -273,7 +273,7 @@ let members_of (items: Array[parser.ItemNode]) (ns: String) (i: Int) (acc: Array
             // A field is offered as a field, with its declared type as
             // the detail -- `x: Int`, not a signature.
             IKStruct(decl) => if decl.name == ns { fields_of(decl, 0, acc) } else { acc },
-            IKLet(def) => if def.name.starts_with(ns.concat(".")) {
+            IKLet(def) => if typecheck.canonical_associated_name(def.name).starts_with(typecheck.canonical_primitive_name(ns).concat(".")) {
                 acc.push(completion_json(method_name_of(def.name), "function", def_signature(def)))
             } else { acc },
             _ => acc,

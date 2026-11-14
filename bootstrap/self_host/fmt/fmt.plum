@@ -133,7 +133,7 @@ let expr_edits (chars: Source) (e: parser.PExpr) (acc: Array[Edit]): Array[Edit]
             let a = field_edits(chars, fields, 0, acc);
             match spread { Some(x) => expr_edits(chars, x, a), None => a }
         },
-        EInt(_) => acc,
+        EInt(_, _) => acc,
         EFloat(_) => acc,
         EStr(_) => acc,
         EBool(_) => acc,

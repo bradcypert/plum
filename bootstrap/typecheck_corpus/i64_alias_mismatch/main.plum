@@ -1,0 +1,2 @@
+let wrong (value: I64): Float = value
+let main (): Unit = ()

@@ -1,0 +1,2 @@
+let bad (value: I64[Int]): Int = value
+let main (): Unit = ()

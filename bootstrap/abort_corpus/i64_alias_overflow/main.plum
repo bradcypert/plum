@@ -1,0 +1,6 @@
+let maximum (): I64 = 9223372036854775807
+let main (): Unit = {
+    println("before");
+    println((maximum() + 1).to_string());
+    println("unreachable")
+}

@@ -69,6 +69,18 @@ fields, returned from generic functions. The one thing they lack is
 
 ## Types: `Int`, `Float`, `Bool`, `String`, `Unit`
 
+`I64` aliases the signed 64-bit `Int`. Both names denote one type, including in
+containers, generics and existing C extern declarations. They share associated
+functions: `I64.abs(n)` and `Int.abs(n)` are the same call. Inferred types and
+diagnostics use the canonical spelling `Int`. This alias alone does not add
+narrower/unsigned types or conversion APIs.
+
+Integer literal magnitudes are retained until type checking, so a signed
+minimum such as `-9223372036854775808` is accepted directly, including in a
+pattern. Without another supported integer type, literals still default to
+`Int` and values outside its range are compile-time errors. Preserving a larger
+magnitude in tokens or the AST does not make it a valid `Int` value.
+
 `String` is the surface-syntax keyword for text (its type is
 occasionally referred to as `Str` in compiler-internal contexts, but
 `String` is what you write in source). `Int`/`Float` conversions are

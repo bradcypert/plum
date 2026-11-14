@@ -168,7 +168,7 @@ pub let parse (path: String) (src: String): Manifest = {
 // The line between data and program, in one function. Everything
 // allowed here is inert; everything else names or calls something.
 let check_value (path: String) (src: String) (e: parser.PExpr): Unit = match e {
-    EInt(_) => (),
+    EInt(_, _) => (),
     EFloat(_) => (),
     EStr(_) => (),
     EBool(_) => (),
@@ -514,7 +514,7 @@ pub let test_native_dependency_contract (): Unit = {
 let hash_version_field (path: String) (fields: Array[parser.FieldInitNode]): Int =
     match field_named(fields, "hash_version", 0) {
         None => 1,
-        Some(EInt(v)) => if v == 1 || v == 2 { v } else { fail(path, "`hash_version` must be 1 or 2"); 1 },
+        Some(EInt(v, _)) => if v == "1" { 1 } else if v == "2" { 2 } else { fail(path, "`hash_version` must be 1 or 2"); 1 },
         _ => { fail(path, "`hash_version` must be the integer 1 or 2"); 1 },
     }
 
