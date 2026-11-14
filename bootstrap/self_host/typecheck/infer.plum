@@ -211,6 +211,12 @@ let extern_sigs (ctx: TyContext) (fns: Array[parser.ExternFnNode]) (i: Int) (acc
     else {
         let params = Array.map(fns[i].params, |q| resolve_ann(ctx, [], q.ty));
         let ret = match fns[i].ret_ty { Some(t) => resolve_ann(ctx, [], t), None => ITUnit };
+        for ty in params.push(ret) {
+            match first_fixed_within(ctx, ty, []) {
+                Some(t) => fail_tc("extern fixed-width integer ABI is not supported yet: ${render_ty(t)} (see #526)"),
+                None => (),
+            };
+        };
         match ret { ITCStr => fail_tc("extern functions cannot return an owned CStr; return RawCStr and copy it while its native owner is alive"), _ => () };
         extern_sigs(ctx, fns, i + 1, acc.push(FnSig { name: fns[i].name, module: "", generics: [], params: params, ret: ret, is_extern: true, is_pub: true }))
     }
@@ -879,7 +885,7 @@ let typed_globals_acc (p20: Program2) (globals: Array[GlobalDef]) (i: Int) (acc:
         // global's recorded location belong to its own definition.
         set_err_pos(globals[i].path, globals[i].offset, globals[i].def.name);
         let p2 = Program2 { sigs: p20.sigs, globals: p20.globals, ctx: p20.ctx, current: globals[i].module, generics: [] };
-        let r = infer_expr(p2, fresh_state_new(()), tyenv_empty(()), subst_empty(()), globals[i].def.body);
+        let r = infer_global_initializer(p2, fresh_state_new(()), subst_empty(()), globals[i].def);
         // The declared type, unified with what the initializer inferred.
         //
         // This was missing entirely: a global's annotation was parsed
@@ -1035,7 +1041,7 @@ let infer_expr_for_return (p2: Program2) (state: FreshState) (env: TyEnv) (acc: 
         ECall(EField(EIdent("Array", _), "fold"), args) =>
             if args.len() == 3 { infer_array_fold_expected(p2, state, env, acc, args[0], args[1], args[2], Some(expected)) }
             else { infer_expr(p2, state, env, acc, e) },
-        _ => infer_expr(p2, state, env, acc, e),
+        _ => infer_expected(p2, state, env, acc, e, expected),
     }
 
 // A closure literal's params get FRESH type variables (no annotations
@@ -1096,7 +1102,7 @@ let infer_ident (p2: Program2) (state: FreshState) (env: TyEnv) (acc: Subst) (na
         // instead of at every mention.
         None => match find_global_def(p2, name) {
             Some(def) => {
-                let r = infer_reference_global(p2, state, acc, def.body);
+                let r = infer_reference_global(p2, state, acc, def);
                 // The DECLARED type decides, when there is one.
                 //
                 // Inferring the body was the only source of type here,
@@ -1175,7 +1181,7 @@ let global_ref_ty_in (p2: Program2) (module_name: String) (def: parser.LetDefNod
 // for its errors alone.
 let check_global (p20: Program2) (def: parser.LetDefNode) (module_name: String): Unit = {
     let p2 = Program2 { sigs: p20.sigs, globals: p20.globals, ctx: p20.ctx, current: module_name, generics: [] };
-    let r = infer_expr(p2, fresh_state_new(()), tyenv_empty(()), subst_empty(()), def.body);
+    let r = infer_global_initializer(p2, fresh_state_new(()), subst_empty(()), def);
     match def.ret_ty {
         None => (),
         Some(t) => {
@@ -1243,9 +1249,10 @@ let infer_array_lit (p2: Program2) (state: FreshState) (env: TyEnv) (acc: Subst)
         let f = fresh(state);
         ir_leaf(ITStruct("Array", [f.ty]), acc, f.state, TArrayLit([]))
     } else {
-        let r = infer_list(p2, state, env, acc, elems, 0, [], []);
-        let u = unify_all_same(r.tys, r.subst);
-        ir_leaf(ITStruct("Array", [u.ty]), u.subst, r.state, TArrayLit(r.texprs))
+        let anchor = integer_array_anchor(elems, 0);
+        let seed = infer_expr(p2, state, env, acc, elems[anchor]);
+        let r = infer_integer_array_elems(p2, seed.state, env, seed.subst, elems, anchor, seed, 0, []);
+        ir_leaf(ITStruct("Array", [subst_apply(r.subst, seed.ty)]), r.subst, r.state, TArrayLit(r.texprs))
     }
 
 // Unifies every entry of `tys` against the FIRST one — the array-
@@ -1294,7 +1301,10 @@ let infer_unary_value (p2: Program2) (state: FreshState) (env: TyEnv) (acc: Subs
     let r = infer_expr(p2, state, env, acc, inner);
     match op {
         UNot => infer_constrained_unary(op, r, ITBool),
-        UNeg => ir_leaf(r.ty, r.subst, r.state, TUnary(op, r.texpr)),
+        UNeg => {
+            match subst_apply(r.subst, r.ty) { ITInteger(k) => if !integer_spec(k).signed { fail_tc("unsigned integer negation is not supported"); }, _ => () };
+            ir_leaf(r.ty, r.subst, r.state, TUnary(op, r.texpr))
+        },
         // `~` flips bits, so it is `Int` and nothing else. `!` is the
         // `Bool` one; keeping them separate is what stops `~flag` and
         // `!count` from silently meaning something.
@@ -1315,9 +1325,13 @@ let infer_constrained_unary (op: parser.UOp) (r: InferResult) (required: ITy): I
     ir_leaf(required, s, r.state, TUnary(op, r.texpr))
 }
 
-let infer_binary (p2: Program2) (state: FreshState) (env: TyEnv) (acc: Subst) (op: parser.BOp) (lhs: parser.PExpr) (rhs: parser.PExpr): InferResult = {
-    let lr = infer_expr(p2, state, env, acc, lhs);
-    let rr = infer_expr(p2, lr.state, env, lr.subst, rhs);
+let infer_binary (p2: Program2) (state: FreshState) (env: TyEnv) (acc: Subst) (op: parser.BOp) (lhs: parser.PExpr) (rhs: parser.PExpr): InferResult =
+    infer_binary_expected(p2, state, env, acc, op, lhs, rhs, None)
+
+let infer_binary_expected (p2: Program2) (state: FreshState) (env: TyEnv) (acc: Subst) (op: parser.BOp) (lhs: parser.PExpr) (rhs: parser.PExpr) (expected: Option[ITy]): InferResult = {
+    let operands = infer_integer_operands(p2, state, env, acc, lhs, rhs, expected);
+    let lr = operands.left;
+    let rr = operands.right;
     let combined = match unify(subst_apply(rr.subst, lr.ty), subst_apply(rr.subst, rr.ty)) {
         Ok(s) => subst_compose(s, rr.subst),
         Err(e) => { fail_tc("'${op_name(op)}': ${e}"); rr.subst },
@@ -1489,6 +1503,7 @@ let is_unrenderable (ctx: TyContext) (t: ITy): Bool =
 let is_known_unordered (t: ITy): Bool =
     match t {
         ITInt => false,
+        ITInteger(_) => false,
         ITFloat => false,
         ITStr => false,
         ITVar(_) => false,
@@ -1754,7 +1769,7 @@ let infer_field (p2: Program2) (state: FreshState) (env: TyEnv) (acc: Subst) (ba
         Some(sig) => infer_partial_call(p2, state, env, acc, sig, []),
         None => match qualified_global(p2, env, base, name) {
             Some(g) => {
-                let r = infer_reference_global(p2, state, acc, g.def.body);
+                let r = infer_reference_global(p2, state, acc, g.def);
                 let t = global_ref_ty_in(p2, g.module, g.def, r);
                 ir_leaf(t.ty, t.subst, r.state, TGlobalRef(g.module, name))
             },
@@ -2135,17 +2150,20 @@ let channel_elem_ty (p2: Program2) (callee: parser.PExpr) (args: Array[parser.PE
     }
 
 let infer_call (p2: Program2) (state: FreshState) (env: TyEnv) (acc: Subst) (callee: parser.PExpr) (args: Array[parser.PExpr]): InferResult =
+    infer_call_expected(p2, state, env, acc, callee, args, None)
+
+let infer_call_expected (p2: Program2) (state: FreshState) (env: TyEnv) (acc: Subst) (callee: parser.PExpr) (args: Array[parser.PExpr]) (expected: Option[ITy]): InferResult =
     match channel_elem_ty(p2, callee, args) {
         Some(elem) => ir_leaf(ITTuple([ITStruct("Sender", [elem]), ITStruct("Receiver", [elem])]), acc, state, TChannelNew),
-        None => infer_call_shapes(p2, state, env, acc, callee, args),
+        None => infer_call_shapes(p2, state, env, acc, callee, args, expected),
     }
 
-let infer_call_shapes (p2: Program2) (state: FreshState) (env: TyEnv) (acc: Subst) (callee: parser.PExpr) (args: Array[parser.PExpr]): InferResult =
+let infer_call_shapes (p2: Program2) (state: FreshState) (env: TyEnv) (acc: Subst) (callee: parser.PExpr) (args: Array[parser.PExpr]) (expected: Option[ITy]): InferResult =
     match callee {
         EIdent(name, _) => match tyenv_lookup(env, name) {
             // Same resolve-at-lookup rule as `infer_ident` above.
             Some(b) => { let ty = subst_apply(acc, b.ty); infer_closure_call(p2, state, env, acc, ty, args, TExpr { ty: ty, node: TIdent(name) }) },
-            None => infer_named_call(p2, state, env, acc, name, args),
+            None => infer_named_call(p2, state, env, acc, name, args, expected),
         },
         // `Array.map`/`filter`/`fold` — a NAMESPACE call ("Array" is
         // never a bound value), checked the same way `interp/interp.
@@ -2159,13 +2177,13 @@ let infer_call_shapes (p2: Program2) (state: FreshState) (env: TyEnv) (acc: Subs
         EField(base, method_name) => match base {
             EIdent(ns, _) => {
                 if ns == "Array" && (method_name == "map" || method_name == "filter" || method_name == "fold") {
-                    infer_array_ns_call(p2, state, env, acc, method_name, args)
+                    infer_array_ns_call_expected(p2, state, env, acc, method_name, args, expected)
                 } else if Option.is_some(tyenv_lookup(env, ns)) || Option.is_some(find_global_def(p2, ns)) {
                     // `ns` names a real VALUE, so this is an ordinary
                     // method/struct-field call on it — checked BEFORE the
                     // module and builtin cases so a local can never be
                     // shadowed by a module or prelude name.
-                    infer_method_call(p2, state, env, acc, base, method_name, args)
+                    infer_method_call_expected(p2, state, env, acc, base, method_name, args, expected)
                 } else {
                     // An ASSOCIATED function declared in source (`let
                     // Array.reverse[T] (..)`) is checked before the
@@ -2182,7 +2200,7 @@ let infer_call_shapes (p2: Program2) (state: FreshState) (env: TyEnv) (acc: Subs
                     // qualified name in the current module then the
                     // root.
                     match find_sig(p2, ns.concat(".").concat(method_name)) {
-                        Some(sig) => infer_fn_call(p2, state, env, acc, sig, args),
+                        Some(sig) => infer_fn_call_expected(p2, state, env, acc, sig, args, expected),
                         // `Array.len(xs)` IS `xs.len()`. `T.f(x)` is the
                         // method-call mechanism, so a namespaced call to
                         // a builtin method has to mean the method call --
@@ -2206,9 +2224,9 @@ let infer_call_shapes (p2: Program2) (state: FreshState) (env: TyEnv) (acc: Subs
                         // After the declared-function lookup above, so a
                         // real `let Array.reverse` still wins.
                         None => if builtin_ns_method(ns, method_name) && args.len() >= 1 {
-                            infer_method_call(p2, state, env, acc, args[0], method_name, Array.slice(args, 1, args.len()))
+                            infer_method_call_expected(p2, state, env, acc, args[0], method_name, Array.slice(args, 1, args.len()), expected)
                         } else { match builtin_sig(ns.concat(".").concat(method_name)) {
-                            Some(sig) => infer_fn_call(p2, state, env, acc, sig, args),
+                            Some(sig) => infer_fn_call_expected(p2, state, env, acc, sig, args, expected),
                             // A MODULE-qualified call (`lexer.tokenize(src)`).
                             // `main.plum` merges every module's items into one
                             // program, so the callee is just an ordinary
@@ -2226,7 +2244,7 @@ let infer_call_shapes (p2: Program2) (state: FreshState) (env: TyEnv) (acc: Subs
                             // `lexer.tokenize` and `parser.tokenize` were
                             // the same function.
                             None => match find_module_sig(p2, ns, method_name) {
-                                Some(sig) => { check_visible(p2, sig, ns, method_name); infer_fn_call(p2, state, env, acc, sig, args) },
+                                Some(sig) => { check_visible(p2, sig, ns, method_name); infer_fn_call_expected(p2, state, env, acc, sig, args, expected) },
                                 // `Shade.Light(x)` -- a payload variant
                                 // said with its enum. After the function
                                 // lookups, so a declared `Ns.name` still
@@ -2234,8 +2252,7 @@ let infer_call_shapes (p2: Program2) (state: FreshState) (env: TyEnv) (acc: Subs
                                 // whose error would name the wrong thing.
                                 None => match qualified_variant(p2, env, base, method_name) {
                                     Some(v) => {
-                                        let ar = infer_list(p2, state, env, acc, args, 0, [], []);
-                                        infer_variant_v(p2, ar.state, ar.subst, method_name, ar.tys, ar.texprs, v)
+                                        infer_variant_call_expected(p2, state, env, acc, method_name, args, v, expected)
                                     },
                                     // `Os.exit(3)` where the file DOES
                                     // `use Os;`. The module is here and
@@ -2247,7 +2264,7 @@ let infer_call_shapes (p2: Program2) (state: FreshState) (env: TyEnv) (acc: Subs
                                     // line is `use Os;`. See issue #38.
                                     None => if module_in_program(p2, ns) {
                                         { fail_tc(no_member_message(p2, ns, method_name)); ir_unsupported(acc, state, "no ${method_name} in ${ns}") }
-                                    } else { infer_method_call(p2, state, env, acc, base, method_name, args) },
+                                    } else { infer_method_call_expected(p2, state, env, acc, base, method_name, args, expected) },
                                 },
                             },
                         } } }
@@ -2259,12 +2276,12 @@ let infer_call_shapes (p2: Program2) (state: FreshState) (env: TyEnv) (acc: Subs
             // a method call, which is what `module_path_of` decides.
             _ => match module_path_of(p2, env, base) {
                 Some(ns) => match find_module_sig(p2, ns, method_name) {
-                    Some(sig) => { check_visible(p2, sig, ns, method_name); infer_fn_call(p2, state, env, acc, sig, args) },
+                    Some(sig) => { check_visible(p2, sig, ns, method_name); infer_fn_call_expected(p2, state, env, acc, sig, args, expected) },
                     None => if module_in_program(p2, ns) {
                         { fail_tc(no_member_message(p2, ns, method_name)); ir_unsupported(acc, state, "no ${method_name} in ${ns}") }
-                    } else { infer_method_call(p2, state, env, acc, base, method_name, args) },
+                    } else { infer_method_call_expected(p2, state, env, acc, base, method_name, args, expected) },
                 },
-                None => infer_method_call(p2, state, env, acc, base, method_name, args),
+                None => infer_method_call_expected(p2, state, env, acc, base, method_name, args, expected),
             },
         },
         _ => {
@@ -2281,18 +2298,21 @@ let require_call_arity (name: String) (expected: Int) (actual: Int): Unit =
         fail_tc("${name} expects ${expected.to_string()} argument(s), got ${actual.to_string()}")
     }
 
-let infer_array_ns_call (p2: Program2) (state: FreshState) (env: TyEnv) (acc: Subst) (fn_name: String) (args: Array[parser.PExpr]): InferResult = {
+let infer_array_ns_call (p2: Program2) (state: FreshState) (env: TyEnv) (acc: Subst) (fn_name: String) (args: Array[parser.PExpr]): InferResult =
+    infer_array_ns_call_expected(p2, state, env, acc, fn_name, args, None)
+
+let infer_array_ns_call_expected (p2: Program2) (state: FreshState) (env: TyEnv) (acc: Subst) (fn_name: String) (args: Array[parser.PExpr]) (expected: Option[ITy]): InferResult = {
     // Method syntax reaches here with the receiver prepended, so both
     // spellings share the same signature and validation.
     if fn_name == "map" {
         require_call_arity("Array.map", 2, args.len());
-        infer_array_map(p2, state, env, acc, args[0], args[1])
+        infer_array_map_expected(p2, state, env, acc, args[0], args[1], expected)
     } else if fn_name == "filter" {
         require_call_arity("Array.filter", 2, args.len());
         infer_array_filter(p2, state, env, acc, args[0], args[1])
     } else if fn_name == "fold" {
         require_call_arity("Array.fold", 3, args.len());
-        infer_array_fold(p2, state, env, acc, args[0], args[1], args[2])
+        infer_array_fold_expected(p2, state, env, acc, args[0], args[1], args[2], expected)
     }
     else { { fail_tc("unsupported Array.${fn_name}(...) call"); ir_unsupported(acc, state, "Array.".concat(fn_name)) } }
 }
@@ -2328,11 +2348,18 @@ let infer_closure_seeded (p2: Program2) (state: FreshState) (env: TyEnv) (acc: S
         _ => infer_expr(p2, state, env, acc, f_expr),
     }
 
-let infer_array_map (p2: Program2) (state: FreshState) (env: TyEnv) (acc: Subst) (arr_expr: parser.PExpr) (f_expr: parser.PExpr): InferResult = {
+let infer_array_map (p2: Program2) (state: FreshState) (env: TyEnv) (acc: Subst) (arr_expr: parser.PExpr) (f_expr: parser.PExpr): InferResult =
+    infer_array_map_expected(p2, state, env, acc, arr_expr, f_expr, None)
+
+let infer_array_map_expected (p2: Program2) (state: FreshState) (env: TyEnv) (acc: Subst) (arr_expr: parser.PExpr) (f_expr: parser.PExpr) (expected: Option[ITy]): InferResult = {
     let ar = infer_expr(p2, state, env, acc, arr_expr);
     let elem_fresh = fresh(ar.state);
     let s1 = match unify(subst_apply(ar.subst, ar.ty), ITStruct("Array", [elem_fresh.ty])) { Ok(s) => subst_compose(s, ar.subst), Err(e) => { fail_tc("Array.map: ".concat(e)); ar.subst } };
-    let fr = infer_closure_seeded(p2, elem_fresh.state, env, s1, f_expr, [subst_apply(s1, elem_fresh.ty)]);
+    let result_hint = match expected { Some(ITStruct("Array", args)) => Some(args[0]), _ => None };
+    let fr = match result_hint {
+        Some(t) => infer_expected(p2, elem_fresh.state, env, s1, f_expr, ITFunction([subst_apply(s1, elem_fresh.ty)], t)),
+        None => infer_closure_seeded(p2, elem_fresh.state, env, s1, f_expr, [subst_apply(s1, elem_fresh.ty)]),
+    };
     let out_fresh = fresh(fr.state);
     let s2 = match unify(subst_apply(fr.subst, fr.ty), ITFunction([subst_apply(s1, elem_fresh.ty)], out_fresh.ty)) { Ok(s) => subst_compose(s, fr.subst), Err(e) => { fail_tc("Array.map function argument: ".concat(e)); fr.subst } };
     ir_leaf(ITStruct("Array", [subst_apply(s2, out_fresh.ty)]), s2, out_fresh.state, TArrayNs("map", [ar.texpr, fr.texpr]))
@@ -2355,7 +2382,7 @@ let infer_array_fold_expected (p2: Program2) (state: FreshState) (env: TyEnv) (a
     let ar = infer_expr(p2, state, env, acc, arr_expr);
     let elem_fresh = fresh(ar.state);
     let s1 = match unify(subst_apply(ar.subst, ar.ty), ITStruct("Array", [elem_fresh.ty])) { Ok(s) => subst_compose(s, ar.subst), Err(e) => { fail_tc("Array.fold: ".concat(e)); ar.subst } };
-    let ir = infer_expr(p2, elem_fresh.state, env, s1, init_expr);
+    let ir = infer_optional_expected(p2, elem_fresh.state, env, s1, init_expr, expected);
     let s_init = match expected {
         Some(t) => match unify(subst_apply(ir.subst, ir.ty), subst_apply(ir.subst, t)) {
             Ok(s) => subst_compose(s, ir.subst),
@@ -2363,7 +2390,10 @@ let infer_array_fold_expected (p2: Program2) (state: FreshState) (env: TyEnv) (a
         },
         None => ir.subst,
     };
-    let fr = infer_closure_seeded(p2, ir.state, env, s_init, f_expr, [subst_apply(s_init, ir.ty), subst_apply(s_init, elem_fresh.ty)]);
+    let callback_params = [subst_apply(s_init, ir.ty), subst_apply(s_init, elem_fresh.ty)];
+    let callback_ty = ITFunction(callback_params, subst_apply(s_init, ir.ty));
+    let fr = if has_fixed_ty(callback_ty) { infer_expected(p2, ir.state, env, s_init, f_expr, callback_ty) }
+        else { infer_closure_seeded(p2, ir.state, env, s_init, f_expr, callback_params) };
     let acc_ty = subst_apply(fr.subst, ir.ty);
     let elem_ty = subst_apply(fr.subst, elem_fresh.ty);
     let s2 = match unify(subst_apply(fr.subst, fr.ty), ITFunction([acc_ty, elem_ty], acc_ty)) { Ok(s) => subst_compose(s, fr.subst), Err(e) => { fail_tc("Array.fold function argument: ".concat(e)); fr.subst } };
@@ -2435,6 +2465,7 @@ let ity_namespace (t: ITy): Option[String] =
         ITStr => Some("String"),
         ITBytes => Some("Bytes"),
         ITInt => Some("Int"),
+        ITInteger(k) => Some(integer_name(k)),
         ITFloat => Some("Float"),
         ITBool => Some("Bool"),
         // The BARE name: an associated function is declared
@@ -2494,16 +2525,19 @@ let find_sig_for_method (p2: Program2) (base_ty: ITy) (qualified: String): Optio
     }
 
 let infer_namespaced_method (p2: Program2) (state: FreshState) (env: TyEnv) (acc: Subst) (base_ty: ITy) (base: parser.PExpr) (method_name: String) (args: Array[parser.PExpr]): InferResult =
+    infer_namespaced_method_expected(p2, state, env, acc, base_ty, base, method_name, args, None)
+
+let infer_namespaced_method_expected (p2: Program2) (state: FreshState) (env: TyEnv) (acc: Subst) (base_ty: ITy) (base: parser.PExpr) (method_name: String) (args: Array[parser.PExpr]) (expected: Option[ITy]): InferResult =
     match ity_namespace(base_ty) {
         None => { fail_tc(no_method_message(base_ty, method_name)); ir_unsupported(acc, state, "unsupported method call") },
         Some(ns) => {
             let qualified = ns.concat(".").concat(method_name);
             match find_sig_for_method(p2, base_ty, qualified) {
-                Some(sig) => infer_fn_call(p2, state, env, acc, sig, Array.concat([base], args)),
+                Some(sig) => infer_fn_call_expected(p2, state, env, acc, sig, Array.concat([base], args), expected),
                 // A declaration wins over a builtin of the same name,
                 // the shadowing order used everywhere else here.
                 None => match builtin_sig(qualified) {
-                    Some(sig) => infer_fn_call(p2, state, env, acc, sig, Array.concat([base], args)),
+                    Some(sig) => infer_fn_call_expected(p2, state, env, acc, sig, Array.concat([base], args), expected),
                     // `Array.map`/`filter`/`fold` have no `FnSig` to
                     // find at all: their types depend on the closure
                     // they are handed, so they are checked by hand.
@@ -2511,7 +2545,7 @@ let infer_namespaced_method (p2: Program2) (state: FreshState) (env: TyEnv) (acc
                     // `Array.map(xs, f)` already uses rather than
                     // getting a second implementation.
                     None => if ns == "Array" && (method_name == "map" || method_name == "filter" || method_name == "fold") {
-                        infer_array_ns_call(p2, state, env, acc, method_name, Array.concat([base], args))
+                        infer_array_ns_call_expected(p2, state, env, acc, method_name, Array.concat([base], args), expected)
                     } else {
                         fail_tc(no_method_message(base_ty, method_name));
                         ir_unsupported(acc, state, "unsupported method call")
@@ -2521,29 +2555,33 @@ let infer_namespaced_method (p2: Program2) (state: FreshState) (env: TyEnv) (acc
         },
     }
 
-let infer_named_call (p2: Program2) (state: FreshState) (env: TyEnv) (acc: Subst) (name: String) (args: Array[parser.PExpr]): InferResult =
+let infer_named_call (p2: Program2) (state: FreshState) (env: TyEnv) (acc: Subst) (name: String) (args: Array[parser.PExpr]) (expected: Option[ITy]): InferResult =
     if name == "println" { infer_println_call(p2, state, env, acc, args) }
     else {
         match find_sig(p2, name) {
-            Some(sig) => infer_fn_call(p2, state, env, acc, sig, args),
+            Some(sig) => infer_fn_call_expected(p2, state, env, acc, sig, args, expected),
             // A user-declared function wins over a builtin of the same
             // name — same shadowing order the real compiler uses, where
             // the prelude is prepended and a later declaration takes
             // precedence.
             None => match builtin_sig(name) {
-                Some(sig) => infer_fn_call(p2, state, env, acc, sig, args),
+                Some(sig) => infer_fn_call_expected(p2, state, env, acc, sig, args, expected),
                 // `ref(v)` is checked HERE, alongside the other
                 // builtins and after `find_sig`, so a user-declared
                 // `ref` still shadows it — the same precedence every
                 // other builtin gets. It can't go in `builtin_sig`
                 // because its result type depends on its argument's.
                 None => if name == "ref" && args.len() == 1 {
-                    let r = infer_expr(p2, state, env, acc, args[0]);
+                    let inner = match expected { Some(ITRef(t)) => Some(t), _ => None };
+                    let r = infer_optional_expected(p2, state, env, acc, args[0], inner);
                     ir_leaf(ITRef(subst_apply(r.subst, r.ty)), r.subst, r.state, TRefNew(r.texpr))
                 } else {
-                    let ar = infer_list(p2, state, env, acc, args, 0, [], []);
-                    if is_capitalized_name(name) { infer_variant(p2, ar.state, ar.subst, name, ar.tys, ar.texprs) }
-                    else { { fail_tc("unbound function: ".concat(name)); ir_unsupported(ar.subst, ar.state, "unbound function ".concat(name)) } }
+                    if is_capitalized_name(name) {
+                        match resolve_variant(p2, name) {
+                            Some(v) => infer_variant_call_expected(p2, state, env, acc, name, args, v, expected),
+                            None => { fail_tc(unbound_message(name)); ir_unsupported(acc, state, "unbound variant ".concat(name)) },
+                        }
+                    } else { { fail_tc("unbound function: ".concat(name)); ir_unsupported(acc, state, "unbound function ".concat(name)) } }
                 },
             },
         }
@@ -2584,7 +2622,10 @@ let infer_println_call (p2: Program2) (state: FreshState) (env: TyEnv) (acc: Sub
 // Supplied expressions run once, left-to-right, at construction time.
 // Bind their values outside the closure so ordinary capture ownership and
 // liveness apply to the results rather than to the expressions' inputs.
-let infer_partial_call (p2: Program2) (state: FreshState) (env: TyEnv) (acc: Subst) (sig: FnSig) (args: Array[parser.PExpr]): InferResult = {
+let infer_partial_call (p2: Program2) (state: FreshState) (env: TyEnv) (acc: Subst) (sig: FnSig) (args: Array[parser.PExpr]): InferResult =
+    infer_partial_call_expected(p2, state, env, acc, sig, args, None)
+
+let infer_partial_call_expected (p2: Program2) (state: FreshState) (env: TyEnv) (acc: Subst) (sig: FnSig) (args: Array[parser.PExpr]) (expected: Option[ITy]): InferResult = {
     // Ordinary function types cannot preserve an unsafe-call obligation.
     // Do not erase it through eta expansion or partial application, even
     // when the function value is constructed inside an unsafe block.
@@ -2596,7 +2637,8 @@ let infer_partial_call (p2: Program2) (state: FreshState) (env: TyEnv) (acc: Sub
     let inst_ret = instantiate_template(sig.generics, fr.tys, sig.ret);
     let supplied = Array.slice(inst_params, 0, args.len());
     let residual = Array.slice(inst_params, args.len(), inst_params.len());
-    let ar = infer_call_args(p2, fr.state, env, acc, args, supplied, 0, []);
+    let seeded = seed_expected_result(acc, ITFunction(residual, inst_ret), expected);
+    let ar = infer_call_args(p2, fr.state, env, seeded, args, supplied, 0, []);
     let names = partial_param_names(residual.len(), 0, []);
     let res_tys = Array.map(residual, |t| subst_apply(ar.subst, t));
     let ret_ty = subst_apply(ar.subst, inst_ret);
@@ -2649,7 +2691,10 @@ let is_explicit_unsafe_call (sig: FnSig): Bool =
         (sig.name == "Bytes.from_cstr" || sig.name == "bytes_from_cstr_raw")) ||
         (sig.module == "NativeBuffer" && (sig.name == "with_mut" || sig.name == "with_text"))
 
-let infer_fn_call (p2: Program2) (state: FreshState) (env: TyEnv) (acc: Subst) (sig: FnSig) (args: Array[parser.PExpr]): InferResult = {
+let infer_fn_call (p2: Program2) (state: FreshState) (env: TyEnv) (acc: Subst) (sig: FnSig) (args: Array[parser.PExpr]): InferResult =
+    infer_fn_call_expected(p2, state, env, acc, sig, args, None)
+
+let infer_fn_call_expected (p2: Program2) (state: FreshState) (env: TyEnv) (acc: Subst) (sig: FnSig) (args: Array[parser.PExpr]) (expected: Option[ITy]): InferResult = {
     if is_explicit_unsafe_call(sig) && !UNSAFE.get() {
         fail_tc("calling '${sig.name}' requires an 'unsafe' block")
     };
@@ -2680,16 +2725,17 @@ let infer_fn_call (p2: Program2) (state: FreshState) (env: TyEnv) (acc: Subst) (
         // deliberately does not swallow.
         // Use the ordinary call path so generic return types are
         // instantiated and recorded for monomorphization as usual.
-        infer_fn_call(p2, state, env, acc, sig, [ETuple([])])
+        infer_fn_call_expected(p2, state, env, acc, sig, [ETuple([])], expected)
     } else {
         if !Array.is_empty(args) && args.len() < sig.params.len() {
-            infer_partial_call(p2, state, env, acc, sig, args)
+            infer_partial_call_expected(p2, state, env, acc, sig, args, expected)
         } else {
             if sig.params.len() != args.len() { fail_tc("call to ${sig.name}: expected ${sig.params.len()} argument(s), found ${args.len()}") };
             let fr = fresh_list(state, sig.generics.len());
             let inst_params = Array.map(sig.params, |t| instantiate_template(sig.generics, fr.tys, t));
             let inst_ret = instantiate_template(sig.generics, fr.tys, sig.ret);
-            let ar = infer_call_args(p2, fr.state, env, acc, args, inst_params, 0, []);
+            let seeded = seed_expected_result(acc, inst_ret, expected);
+            let ar = infer_call_args(p2, fr.state, env, seeded, args, inst_params, 0, []);
             ir_leaf(subst_apply(ar.subst, inst_ret), ar.subst, ar.state, TFnCall(sig.module, sig.name, ar.texprs, fr.tys))
         }
     }
@@ -2716,8 +2762,8 @@ let infer_call_args (p2: Program2) (state: FreshState) (env: TyEnv) (acc: Subst)
         // user-defined, and patching the three builtins individually
         // just hid it (see `plum_types::Infer::infer_call_with_callee`).
         let seeded = match subst_apply(acc, param_tys[i]) {
-            ITFunction(ptys, _) => infer_closure_seeded(p2, state, env, acc, args[i], ptys),
-            _ => infer_expr(p2, state, env, acc, args[i]),
+            ITFunction(ptys, ret) => if has_fixed_ty(ITFunction(ptys, ret)) { infer_expected(p2, state, env, acc, args[i], ITFunction(ptys, ret)) } else { infer_closure_seeded(p2, state, env, acc, args[i], ptys) },
+            want => infer_expected(p2, state, env, acc, args[i], want),
         };
         let r = seeded;
         let s2 = match unify(subst_apply(r.subst, r.ty), subst_apply(r.subst, param_tys[i])) {
@@ -2818,6 +2864,9 @@ pub let builtin_methods (): Array[BuiltinMethod] = [
 ]
 
 let infer_method_call (p2: Program2) (state: FreshState) (env: TyEnv) (acc: Subst) (base: parser.PExpr) (method_name: String) (args: Array[parser.PExpr]): InferResult =
+    infer_method_call_expected(p2, state, env, acc, base, method_name, args, None)
+
+let infer_method_call_expected (p2: Program2) (state: FreshState) (env: TyEnv) (acc: Subst) (base: parser.PExpr) (method_name: String) (args: Array[parser.PExpr]) (expected: Option[ITy]): InferResult =
     if method_name == "hash" {
         if args.len() != 0 { fail_tc(".hash() takes no arguments") };
         let r = infer_expr(p2, state, env, acc, base);
@@ -2839,7 +2888,7 @@ let infer_method_call (p2: Program2) (state: FreshState) (env: TyEnv) (acc: Subs
         let br = infer_expr(p2, state, env, acc, base);
         let bt = subst_apply(br.subst, br.ty);
         match unify(bt, ITStr) {
-            Err(_) => infer_namespaced_method(p2, br.state, env, br.subst, bt, base, "concat", args),
+            Err(_) => infer_namespaced_method_expected(p2, br.state, env, br.subst, bt, base, "concat", args, expected),
             Ok(s0) => {
                 let s1 = subst_compose(s0, br.subst);
                 let ar = infer_expr(p2, br.state, env, s1, args[0]);
@@ -2865,7 +2914,7 @@ let infer_method_call (p2: Program2) (state: FreshState) (env: TyEnv) (acc: Subs
         // known, which is why this has to be checked per arm rather
         // than once. Every String-receiver primitive does the same.
         match unify(bt, ITStr) {
-            Err(_) => infer_namespaced_method(p2, br.state, env, br.subst, bt, base, method_name, args),
+            Err(_) => infer_namespaced_method_expected(p2, br.state, env, br.subst, bt, base, method_name, args, expected),
             Ok(s0) => {
                 let s1 = subst_compose(s0, br.subst);
                 let ar = infer_expr(p2, br.state, env, s1, args[0]);
@@ -2966,7 +3015,7 @@ let infer_method_call (p2: Program2) (state: FreshState) (env: TyEnv) (acc: Subs
         let r = infer_expr(p2, state, env, acc, base);
         let bt = subst_apply(r.subst, r.ty);
         match unify(bt, match bt { ITRawCStr => ITRawCStr, _ => ITCStr }) {
-            Err(_) => infer_namespaced_method(p2, r.state, env, r.subst, bt, base, "as_string", args),
+            Err(_) => infer_namespaced_method_expected(p2, r.state, env, r.subst, bt, base, "as_string", args, expected),
             Ok(x) => {
                 if !UNSAFE.get() { fail_tc(".as_string() on CStr or RawCStr requires an unsafe block: the bytes must be valid UTF-8 and a RawCStr must remain readable through its NUL terminator"); };
                 ir_leaf(ITStr, subst_compose(x, r.subst), r.state, TAsString(r.texpr))
@@ -2984,7 +3033,7 @@ let infer_method_call (p2: Program2) (state: FreshState) (env: TyEnv) (acc: Subs
         let bt = subst_apply(br.subst, br.ty);
         let ef = fresh(br.state);
         match unify(bt, ITStruct("Array", [ef.ty])) {
-            Err(_) => infer_namespaced_method(p2, ef.state, env, br.subst, bt, base, "remove", args),
+            Err(_) => infer_namespaced_method_expected(p2, ef.state, env, br.subst, bt, base, "remove", args, expected),
             Ok(s0) => {
                 let s1 = subst_compose(s0, br.subst);
                 let ir = infer_expr(p2, ef.state, env, s1, args[0]);
@@ -3014,7 +3063,8 @@ let infer_method_call (p2: Program2) (state: FreshState) (env: TyEnv) (acc: Subs
         // `r.set(v)` on a `Ref[T]`. Distinguished from `Array.set`
         // above purely by ARITY -- the array form takes an index too.
         let r = infer_expr(p2, state, env, acc, base);
-        let vr = infer_expr(p2, r.state, env, r.subst, args[0]);
+        let want = match subst_apply(r.subst, r.ty) { ITRef(t) => t, _ => ITUnit };
+        let vr = infer_expected(p2, r.state, env, r.subst, args[0], want);
         let s1 = match unify(subst_apply(vr.subst, r.ty), ITRef(subst_apply(vr.subst, vr.ty))) {
             Ok(s) => subst_compose(s, vr.subst),
             Err(e) => { fail_tc(".set() receiver: ".concat(e)); vr.subst },
@@ -3039,14 +3089,14 @@ let infer_method_call (p2: Program2) (state: FreshState) (env: TyEnv) (acc: Subs
                     // record of closures is a dispatch mechanism, and
                     // a `S.read` must not be able to shadow a `read`
                     // field. See DESIGN.md.
-                    None => infer_namespaced_method(p2, br.state, env, br.subst, base_ty, base, method_name, args),
+                    None => infer_namespaced_method_expected(p2, br.state, env, br.subst, base_ty, base, method_name, args, expected),
                 },
                 // Not a declared struct at all -- `Array` reaches here,
                 // being an `ITStruct` the checker builds rather than
                 // one anybody declared.
-                None => infer_namespaced_method(p2, br.state, env, br.subst, base_ty, base, method_name, args),
+                None => infer_namespaced_method_expected(p2, br.state, env, br.subst, base_ty, base, method_name, args, expected),
             },
-            _ => infer_namespaced_method(p2, br.state, env, br.subst, base_ty, base, method_name, args),
+            _ => infer_namespaced_method_expected(p2, br.state, env, br.subst, base_ty, base, method_name, args, expected),
         }
     }
 
@@ -3096,7 +3146,7 @@ let infer_array_push (p2: Program2) (state: FreshState) (env: TyEnv) (acc: Subst
     let br = infer_expr(p2, state, env, acc, base);
     let elem_fresh = fresh(br.state);
     let s1 = match unify(subst_apply(br.subst, br.ty), ITStruct("Array", [elem_fresh.ty])) { Ok(s) => subst_compose(s, br.subst), Err(e) => { fail_tc(".push(): ".concat(e)); br.subst } };
-    let vr = infer_expr(p2, elem_fresh.state, env, s1, value_expr);
+    let vr = infer_expected(p2, elem_fresh.state, env, s1, value_expr, elem_fresh.ty);
     let s2 = match unify(subst_apply(vr.subst, vr.ty), subst_apply(vr.subst, elem_fresh.ty)) { Ok(s) => subst_compose(s, vr.subst), Err(e) => { fail_tc(".push() argument: ".concat(e)); vr.subst } };
     ir_leaf(ITStruct("Array", [subst_apply(s2, elem_fresh.ty)]), s2, vr.state, TMethodCall("push", br.texpr, [vr.texpr]))
 }
@@ -3107,7 +3157,7 @@ let infer_array_set (p2: Program2) (state: FreshState) (env: TyEnv) (acc: Subst)
     let s1 = match unify(subst_apply(br.subst, br.ty), ITStruct("Array", [elem_fresh.ty])) { Ok(s) => subst_compose(s, br.subst), Err(e) => { fail_tc(".set(): ".concat(e)); br.subst } };
     let ir = infer_expr(p2, elem_fresh.state, env, s1, idx_expr);
     let s2 = match unify(subst_apply(ir.subst, ir.ty), ITInt) { Ok(s) => subst_compose(s, ir.subst), Err(e) => { fail_tc(".set() index: ".concat(e)); ir.subst } };
-    let vr = infer_expr(p2, ir.state, env, s2, value_expr);
+    let vr = infer_expected(p2, ir.state, env, s2, value_expr, elem_fresh.ty);
     let s3 = match unify(subst_apply(vr.subst, vr.ty), subst_apply(vr.subst, elem_fresh.ty)) { Ok(s) => subst_compose(s, vr.subst), Err(e) => { fail_tc(".set() value: ".concat(e)); vr.subst } };
     ir_leaf(ITStruct("Array", [subst_apply(s3, elem_fresh.ty)]), s3, vr.state, TMethodCall("set", br.texpr, [ir.texpr, vr.texpr]))
 }
@@ -3167,7 +3217,10 @@ let infer_stmts (p2: Program2) (state: FreshState) (env: TyEnv) (acc: Subst) (st
             // repo -- corpus, examples, or the compiler's own 30,000
             // lines -- annotates a local.
             SLet(_, pattern, ann, value) => {
-                let r = infer_expr(p2, state, env, acc, value);
+                let r = match ann {
+                    Some(t) => infer_expected(p2, state, env, acc, value, resolve_ann_seen(p2.ctx, p2.current, p2.generics, t)),
+                    None => infer_expr(p2, state, env, acc, value),
+                };
                 let vty = subst_apply(r.subst, r.ty);
                 let checked = match ann {
                     None => LetTy { ty: vty, subst: r.subst },
@@ -3191,7 +3244,7 @@ let infer_stmts (p2: Program2) (state: FreshState) (env: TyEnv) (acc: Subst) (st
                     Some(b) => note_local_reference(err_path(()), name, starts[i], b.def_offset),
                     None => (),
                 };
-                let r = infer_expr(p2, state, env, acc, value);
+                let r = match tyenv_lookup(env, name) { Some(b) => infer_expected(p2, state, env, acc, value, b.ty), None => infer_expr(p2, state, env, acc, value) };
                 // `match`, NOT `Option.unwrap_or` — a real mistake
                 // caught immediately by an actual test failure, not
                 // spotted by inspection: `Option.unwrap_or`'s fallback
@@ -3213,13 +3266,16 @@ let infer_stmts (p2: Program2) (state: FreshState) (env: TyEnv) (acc: Subst) (st
         }
     }
 
-let infer_if (p2: Program2) (state: FreshState) (env: TyEnv) (acc: Subst) (cond: parser.PExpr) (then_branch: parser.PBlock) (else_branch: Option[parser.PExpr]): InferResult = {
+let infer_if (p2: Program2) (state: FreshState) (env: TyEnv) (acc: Subst) (cond: parser.PExpr) (then_branch: parser.PBlock) (else_branch: Option[parser.PExpr]): InferResult =
+    infer_if_expected(p2, state, env, acc, cond, then_branch, else_branch, None)
+
+let infer_if_expected (p2: Program2) (state: FreshState) (env: TyEnv) (acc: Subst) (cond: parser.PExpr) (then_branch: parser.PBlock) (else_branch: Option[parser.PExpr]) (expected: Option[ITy]): InferResult = {
     let cr = infer_expr(p2, state, env, acc, cond);
     let s1 = match unify(subst_apply(cr.subst, cr.ty), ITBool) { Ok(s) => subst_compose(s, cr.subst), Err(e) => { fail_tc("'if' condition: ".concat(e)); cr.subst } };
-    let tr = infer_block(p2, cr.state, env, s1, then_branch);
+    let tr = match expected { Some(t) => infer_expected_block(p2, cr.state, env, s1, then_branch, t), None => infer_block(p2, cr.state, env, s1, then_branch) };
     match else_branch {
         Some(e) => {
-            let er = infer_expr(p2, tr.state, env, tr.subst, e);
+            let er = infer_expected(p2, tr.state, env, tr.subst, e, tr.ty);
             let s2 = match unify(subst_apply(er.subst, tr.ty), subst_apply(er.subst, er.ty)) { Ok(s) => subst_compose(s, er.subst), Err(err) => { fail_tc("'if'/'else' branches: ".concat(err)); er.subst } };
             ir_leaf(subst_apply(s2, tr.ty), s2, er.state, TIf(cr.texpr, tr.texpr, Some(er.texpr)))
         },
@@ -3310,7 +3366,10 @@ let expand_nested_acc (p2: Program2) (info: StructInfo) (fields: Array[parser.Fi
         expand_nested_acc(p2, info, fields, base, i + 1, acc.push(parser.FieldInitNode { offset: fields[i].offset, name: outer, extra_path: [], value: inner }))
     }
 
-let infer_struct_lit (p2: Program2) (state: FreshState) (env: TyEnv) (acc: Subst) (path: Array[String]) (fields0: Array[parser.FieldInitNode]) (spread: Option[parser.PExpr]): InferResult = {
+let infer_struct_lit (p2: Program2) (state: FreshState) (env: TyEnv) (acc: Subst) (path: Array[String]) (fields0: Array[parser.FieldInitNode]) (spread: Option[parser.PExpr]): InferResult =
+    infer_struct_lit_expected(p2, state, env, acc, path, fields0, spread, None)
+
+let infer_struct_lit_expected (p2: Program2) (state: FreshState) (env: TyEnv) (acc: Subst) (path: Array[String]) (fields0: Array[parser.FieldInitNode]) (spread: Option[parser.PExpr]) (expected: Option[ITy]): InferResult = {
     // The WHOLE path. Taking the last segment meant `dark.P { y: .. }`
     // resolved to `light.P` and then reported "struct light.P has no
     // field named y" -- an error about the wrong struct, naming a
@@ -3331,7 +3390,8 @@ let infer_struct_lit (p2: Program2) (state: FreshState) (env: TyEnv) (acc: Subst
         Some(info) => {
             let fields = expand_nested_updates(p2, info, fields0, spread);
             let fr = fresh_list(state, info.generics.len());
-            let r = infer_struct_fields(p2, fr.state, env, acc, info, fr.tys, fields, 0, []);
+            let seeded = seed_expected_result(acc, ITStruct(info.name, fr.tys), expected);
+            let r = infer_struct_fields(p2, fr.state, env, seeded, info, fr.tys, fields, 0, []);
             let lit_ty = ITStruct(info.name, Array.map(fr.tys, |t| subst_apply(r.subst, t)));
             // The spread base must be the SAME struct type -- `Game {
             // ..point }` is a type error, not a partial copy.
@@ -3369,8 +3429,8 @@ let infer_struct_fields (p2: Program2) (state: FreshState) (env: TyEnv) (acc: Su
             None => ITUnit,
         };
         let r = match subst_apply(acc, field_ty0) {
-            ITFunction(ptys, _) => infer_closure_seeded(p2, state, env, acc, fields[i].value, ptys),
-            _ => infer_expr(p2, state, env, acc, fields[i].value),
+            ITFunction(ptys, ret) => if has_fixed_ty(ITFunction(ptys, ret)) { infer_expected(p2, state, env, acc, fields[i].value, ITFunction(ptys, ret)) } else { infer_closure_seeded(p2, state, env, acc, fields[i].value, ptys) },
+            want => infer_expected(p2, state, env, acc, fields[i].value, want),
         };
         check_field_visible(p2.ctx, p2.current, info.name, fields[i].name);
         let field_ty = match find_field_template(info.fields, fields[i].name) {
@@ -3382,6 +3442,9 @@ let infer_struct_fields (p2: Program2) (state: FreshState) (env: TyEnv) (acc: Su
     }
 
 let infer_match (p2: Program2) (state: FreshState) (env: TyEnv) (acc: Subst) (scrutinee: parser.PExpr) (arms: Array[parser.MatchArmNode]): InferResult =
+    infer_match_expected(p2, state, env, acc, scrutinee, arms, None)
+
+let infer_match_expected (p2: Program2) (state: FreshState) (env: TyEnv) (acc: Subst) (scrutinee: parser.PExpr) (arms: Array[parser.MatchArmNode]) (expected: Option[ITy]): InferResult =
     if Array.is_empty(arms) {
         // Every lowered match branches to its first arm. Enforce the
         // nonempty shape here for all scrutinee types, before inference
@@ -3395,7 +3458,7 @@ let infer_match (p2: Program2) (state: FreshState) (env: TyEnv) (acc: Subst) (sc
         // whichever arm happened to be checked last.
         let here = current_err_offset(());
         let sr = infer_expr(p2, state, env, acc, scrutinee);
-        let ar = infer_match_arms(p2, sr.state, env, sr.subst, subst_apply(sr.subst, sr.ty), arms, 0, None, []);
+        let ar = infer_match_arms(p2, sr.state, env, sr.subst, subst_apply(sr.subst, sr.ty), arms, 0, expected, []);
         set_stmt_pos(here);
         check_exhaustive(p2, subst_apply(ar.subst, sr.ty), ar.tarms);
         ir_leaf(ar.ty, ar.subst, ar.state, TMatch(sr.texpr, ar.tarms))
@@ -3602,7 +3665,7 @@ let infer_match_arms (p2: Program2) (state: FreshState) (env: TyEnv) (acc: Subst
             },
             None => GuardCheckResult { subst: br.subst, state: br.state, tguard: None },
         };
-        let bodyr = infer_expr(p2, gr.state, br.env, gr.subst, arms[i].body);
+        let bodyr = infer_optional_expected(p2, gr.state, br.env, gr.subst, arms[i].body, result_ty);
         let new_result = match result_ty {
             None => subst_apply(bodyr.subst, bodyr.ty),
             Some(prev) => match unify(subst_apply(bodyr.subst, prev), subst_apply(bodyr.subst, bodyr.ty)) {
@@ -3629,7 +3692,13 @@ let bind_pattern_ty (p2: Program2) (state: FreshState) (acc: Subst) (env: TyEnv)
     match pattern {
         PWildcard => BindResult { env: env, subst: acc, state: state, pattern: TPWildcard },
         PIdent(name, off) => { note_binding(name, off, scrutinee_ty); BindResult { env: tyenv_extend(env, name, scrutinee_ty, off), subst: acc, state: state, pattern: TPIdent(name, off) } },
-        PInt(v, offset) => BindResult { env: env, subst: unify_pattern_prim(acc, scrutinee_ty, ITInt), state: state, pattern: TPInt(integer_literal_value(v, offset)) },
+        PInt(v, offset) => {
+            let ty = subst_apply(acc, scrutinee_ty);
+            match ty {
+                ITInteger(k) => { let r = infer_integer_literal(k, v, offset, acc, state); let bits = match r.texpr.node { TInt(n) => n, _ => 0 }; BindResult { env: env, subst: acc, state: state, pattern: TPInt(bits) } },
+                _ => BindResult { env: env, subst: unify_pattern_prim(acc, scrutinee_ty, ITInt), state: state, pattern: TPInt(integer_literal_value(v, offset)) },
+            }
+        },
         PFloat(v) => BindResult { env: env, subst: unify_pattern_prim(acc, scrutinee_ty, ITFloat), state: state, pattern: TPFloat(v) },
         PStr(v) => BindResult { env: env, subst: unify_pattern_prim(acc, scrutinee_ty, ITStr), state: state, pattern: TPStr(v) },
         PBool(v) => BindResult { env: env, subst: unify_pattern_prim(acc, scrutinee_ty, ITBool), state: state, pattern: TPBool(v) },

@@ -81,6 +81,7 @@ let cg_fail (msg: String): Unit = panic_raw("self-hosted codegen: ".concat(msg))
 // a type language. `typecheck/types.plum`'s `ITy` is the type language.
 pub enum CgTy {
     CgInt,
+    CgInteger(typecheck.IntegerKind),
     CgFloat,
     CgBool,
     CgUnit,
@@ -148,6 +149,7 @@ pub enum CgTy {
 let cg_llvm_ty (t: CgTy): String =
     match t {
         CgInt => "i64",
+        CgInteger(_) => "i64",
         CgFloat => "double",
         CgBool => "i1",
         CgUnit => "i1",
@@ -167,6 +169,7 @@ let cg_llvm_ty (t: CgTy): String =
 let cg_ty_name (t: CgTy): String =
     match t {
         CgInt => "Int",
+        CgInteger(k) => typecheck.integer_name(k),
         CgFloat => "Float",
         CgBool => "Bool",
         CgUnit => "Unit",
@@ -1222,7 +1225,7 @@ let cg_expr (p: CgProgram) (env: Array[CgSlot]) (n: Int) (e: typecheck.TExpr): E
         TResetBefore(source, token, body) => cg_reset_before(p, env, n, source, token, body, false, ""),
         TMatchReleaseBefore(token, body) => cg_match_release_before(p, env, n, token, body, false, ""),
         TReleaseBefore(names, body) => cg_release_before(p, env, n, names, body, false, ""),
-        TInt(v) => Emit { code: "", allocas: "", releases: "", globals: "", val: v.to_string(), ty: CgInt, n: n },
+        TInt(v) => Emit { code: "", allocas: "", releases: "", globals: "", val: v.to_string(), ty: cg_ty(p, e), n: n },
         TFloat(v) => cg_float_literal(v, n),
         TBool(v) => Emit { code: "", allocas: "", releases: "", globals: "", val: if v { "1" } else { "0" }, ty: CgBool, n: n },
         TUnitLit => cg_unit_emit(n),
@@ -1319,6 +1322,7 @@ let cg_concrete (p: CgProgram) (t: typecheck.ITy): typecheck.ITy =
 let cg_of_ity (t: typecheck.ITy): CgTy =
     match t {
         ITInt => CgInt,
+        ITInteger(k) => CgInteger(k),
         ITFloat => CgFloat,
         ITBool => CgBool,
         ITStr => CgStr,
@@ -1529,6 +1533,21 @@ let cg_move_ident (p: CgProgram) (env: Array[CgSlot]) (n: Int) (name: String) (t
 
 let cg_unary (p: CgProgram) (env: Array[CgSlot]) (n: Int) (op: parser.UOp) (inner: typecheck.TExpr): Emit = {
     let r = cg_expr(p, env, n, inner);
+    let fixed = match r.ty { CgInteger(k) => Some(k), _ => None };
+    match fixed {
+        Some(k) => if op == UNeg {
+            if !typecheck.integer_spec(k).signed { cg_fail("unsigned integer negation is not supported"); };
+            let g = cg_fixed_arithmetic(k, BSub, "0", r.val, r.n);
+            Emit { code: r.code.concat(g.code), allocas: r.allocas, releases: r.releases, globals: r.globals, val: g.reg, ty: r.ty, n: g.next }
+        } else { cg_unary_plain(r, op) },
+        None => if op == UNeg && cg_ty_eq(r.ty, CgInt) {
+            let g = cg_overflow_guard("llvm.ssub.with.overflow.i64", "0", r.val, r.n);
+            Emit { code: r.code.concat(g.code), allocas: r.allocas, releases: r.releases, globals: r.globals, val: g.reg, ty: r.ty, n: g.next }
+        } else { cg_unary_plain(r, op) },
+    }
+}
+
+let cg_unary_plain (r: Emit) (op: parser.UOp): Emit = {
     let reg = cg_reg(r.n);
     let line = match op {
         UNeg => match r.ty {
@@ -1604,6 +1623,10 @@ let cg_strict_binary (p: CgProgram) (env: Array[CgSlot]) (n: Int) (op: parser.BO
         let line = "  ${cmp} = call i64 @plum_str_cmp_raw(ptr ${a.val}, ptr ${b.val})\n"
             .concat("  ").concat(res).concat(" = ").concat(cg_str_rel_pred(op)).concat(" i64 ").concat(cmp).concat(", 0\n");
         Emit { code: code.concat(line).concat(a.drop).concat(b.drop), allocas: allocas, releases: releases, globals: globals, val: res, ty: CgBool, n: b.n + 2 }
+    } else if cg_is_fixed(a.ty) {
+        let kind = match a.ty { CgInteger(k) => k, _ => IntegerI64 };
+        let g = cg_fixed_operation(kind, op, a.val, b.val, b.n);
+        Emit { code: code.concat(g.code), allocas: allocas, releases: releases, globals: globals, val: g.reg, ty: ty, n: g.next }
     } else if cg_is_checked_arith(op, a.ty) {
         // CHECKED. `+`, `-` and `*` on Int stop the program on overflow
         // rather than wrapping -- see `cg_overflow_guard`.
@@ -3234,6 +3257,7 @@ let cg_to_string (p: CgProgram) (env: Array[CgSlot]) (n: Int) (base: typecheck.T
         // emitting a copy would be pure waste.
         CgStr => b,
         CgInt => Emit { code: b.code.concat("  ").concat(reg).concat(" = call ptr @plum_int_to_string(i64 ").concat(b.val).concat(")\n"), allocas: b.allocas, releases: b.releases, globals: b.globals, val: reg, ty: CgStr, n: b.n + 1 },
+        CgInteger(k) => Emit { code: b.code.concat("  ${reg} = call ptr @${cg_integer_format(k)}(i64 ${b.val})\n"), allocas: b.allocas, releases: b.releases, globals: b.globals, val: reg, ty: CgStr, n: b.n + 1 },
         CgFloat => Emit { code: b.code.concat("  ").concat(reg).concat(" = call ptr @plum_float_to_string(double ").concat(b.val).concat(")\n"), allocas: b.allocas, releases: b.releases, globals: b.globals, val: reg, ty: CgStr, n: b.n + 1 },
         CgBool => Emit { code: b.code.concat("  ").concat(reg).concat(" = call ptr @plum_bool_to_string(i1 ").concat(b.val).concat(")\n"), allocas: b.allocas, releases: b.releases, globals: b.globals, val: reg, ty: CgStr, n: b.n + 1 },
         CgUnit => { cg_fail("Unit has no .to_string()"); cg_unit_emit(b.n) },
@@ -5490,6 +5514,7 @@ let cg_select_arms (p: CgProgram) (env: Array[CgSlot]) (n: Int) (arms: Array[typ
 let cg_zero_of (t: CgTy): String =
     match t {
         CgInt => "0",
+        CgInteger(_) => "0",
         CgFloat => "0.0",
         CgBool => "0",
         CgUnit => "0",
@@ -6081,7 +6106,7 @@ let cg_eq_sym (t: typecheck.ITy): String = cg_type_symbol("eq", t)
 // Is this type compared by VALUE inline, or does it need a function?
 let cg_eq_is_primitive (t: typecheck.ITy): Bool =
     match t {
-        ITInt => true, ITFloat => true, ITBool => true, ITUnit => true, ITStr => true, ITCStr => true, ITRawCStr => true,
+        ITInteger(_) => true, ITInt => true, ITFloat => true, ITBool => true, ITUnit => true, ITStr => true, ITCStr => true, ITRawCStr => true,
         // Compared by the same length-then-`memcmp` the runtime already
         // does for a String, so it needs no generated function.
         ITBytes => true,
@@ -6102,6 +6127,7 @@ let cg_eq_code (t: typecheck.ITy) (av: String) (bv: String) (n: Int): EqEmit = {
         ITBytes => "  ${reg} = call i1 @plum_str_eq(ptr ${av}, ptr ${bv})\n",
         ITFloat => "  ${reg} = fcmp oeq double ${av}, ${bv}\n",
         ITInt => "  ${reg} = icmp eq i64 ${av}, ${bv}\n",
+        ITInteger(_) => "  ${reg} = icmp eq i64 ${av}, ${bv}\n",
         ITBool => "  ${reg} = icmp eq i1 ${av}, ${bv}\n",
         ITUnit => "  ${reg} = icmp eq i1 ${av}, ${bv}\n",
         // A defaulted (unconstrained) type is compared as its defaulted
@@ -6215,6 +6241,7 @@ struct StrEmit { code: String, consts: String, val: String, n: Int }
 let cg_render_val (owner: typecheck.ITy) (t: typecheck.ITy) (val: String) (n: Int): StrEmit =
     match t {
         ITInt => StrEmit { code: "  ${cg_reg(n)} = call ptr @plum_int_to_string(i64 ${val})\n", consts: "", val: cg_reg(n), n: n + 1 },
+        ITInteger(k) => StrEmit { code: "  ${cg_reg(n)} = call ptr @${cg_integer_format(k)}(i64 ${val})\n", consts: "", val: cg_reg(n), n: n + 1 },
         ITFloat => StrEmit { code: "  ${cg_reg(n)} = call ptr @plum_float_to_string(double ${val})\n", consts: "", val: cg_reg(n), n: n + 1 },
         ITBool => StrEmit { code: "  ${cg_reg(n)} = call ptr @plum_bool_to_string(i1 ${val})\n", consts: "", val: cg_reg(n), n: n + 1 },
         // Unreachable in practice: `.to_string()` on a `CStr` is
@@ -6703,7 +6730,7 @@ let cg_rc_enabled (unit: Unit): Bool = true
 
 let cg_is_heap (t: CgTy): Bool =
     match t {
-        CgInt => false, CgFloat => false, CgBool => false, CgUnit => false,
+        CgInteger(_) => false, CgInt => false, CgFloat => false, CgBool => false, CgUnit => false,
         // CStr shares String/Bytes ownership. RawCStr belongs to native code.
         CgCStr => true,
         CgRawCStr => false,

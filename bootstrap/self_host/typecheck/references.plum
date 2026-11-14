@@ -36,10 +36,10 @@ let note_local_reference (path: String) (name: String) (off: Int) (binding: Int)
 // Global initializers are checked once in their own source context. Name
 // lookup re-infers them as well, under the caller's error context; those
 // repeated walks must not invent reference sites in the caller's file.
-let infer_reference_global (p2: Program2) (state: FreshState) (acc: Subst) (body: parser.PExpr): InferResult = {
+let infer_reference_global (p2: Program2) (state: FreshState) (acc: Subst) (def: parser.LetDefNode): InferResult = {
     let recording = REFERENCES_ON.get();
     REFERENCES_ON.set(false);
-    let result = infer_expr(p2, state, tyenv_empty(()), acc, body);
+    let result = infer_global_initializer(p2, state, acc, def);
     REFERENCES_ON.set(recording);
     result
 }

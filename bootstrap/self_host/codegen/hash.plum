@@ -21,6 +21,7 @@ let cg_hash_code (t: typecheck.ITy) (v: String) (n: Int): HashEmit = {
     let out = cg_reg(n + 2);
     let code = match t {
         ITInt => "  ${out} = call i64 @plum_hash_word(i64 ${v})\n",
+        ITInteger(_) => "  ${out} = call i64 @plum_hash_word(i64 ${v})\n",
         ITFloat => "  ${r} = fcmp oeq double ${v}, 0.0\n"
             .concat("  ${raw} = bitcast double ${v} to i64\n")
             .concat("  ${out}_bits = select i1 ${r}, i64 0, i64 ${raw}\n")

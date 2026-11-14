@@ -222,6 +222,8 @@ jobs:
         run: python3 ./bootstrap/lexer-diagnostic-check.py ./sh.real
       - name: integer aliases, literal bounds and preserved source positions
         run: python3 ./bootstrap/integer-inference-check.py ./sh.real
+      - name: fixed-width integer values and checked arithmetic
+        run: python3 ./bootstrap/fixed-integer-check.py ./sh.real
       - name: properties hold
         run: ./bootstrap/property-check
       - name: the tutorial still works
