@@ -1272,9 +1272,9 @@ let infer_index (p2: Program2) (state: FreshState) (env: TyEnv) (acc: Subst) (ba
 // Literal text is not forced through signed Int by the lexer. Resolve its
 // signed range here, retaining the original source position for diagnostics.
 let integer_literal_value (text: String) (offset: Int): Int =
-    match String.parse_int(text) {
-        Ok(value) => value,
-        Err(_) => {
+    match integer_literal_bits(IntegerI64, text) {
+        Some(value) => value,
+        None => {
             set_stmt_pos(offset);
             fail_tc("integer literal out of range: ${text} (Int is a 64-bit signed integer)");
             0
