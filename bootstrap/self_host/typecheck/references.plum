@@ -33,15 +33,23 @@ let reference_source_path (path: String): Bool =
 let note_local_reference (path: String) (name: String) (off: Int) (binding: Int): Unit =
     if REFERENCES_ON.get() && binding >= 0 { add_reference(path, off, name, "local:${path}:${binding}", off == binding) } else { () }
 
-// Global initializers are checked once in their own source context. Name
-// lookup re-infers them as well, under the caller's error context; those
-// repeated walks must not invent reference sites in the caller's file.
-let infer_reference_global (p2: Program2) (state: FreshState) (acc: Subst) (body: parser.PExpr): InferResult = {
+// Re-infer a referenced initializer in its declaration's module and source
+// context, including file-local use aliases. Suppress repeated references,
+// then restore the caller's context before continuing its inference.
+let infer_reference_global (p2: Program2) (state: FreshState) (acc: Subst) (module_name: String) (def: parser.LetDefNode): InferResult = {
     let recording = REFERENCES_ON.get();
+    let caller = ERR.get();
     REFERENCES_ON.set(false);
-    let result = infer_expr(p2, state, tyenv_empty(()), acc, body);
+    match find_global_in_module(p2.globals, module_name, def.name, 0) {
+        Some(global) => set_err_pos(global.path, global.offset, def.name),
+        None => (),
+    };
+    let declaring = Program2 { current: module_name, generics: [], ..p2 };
+    let result = infer_global_initializer(declaring, state, acc, def);
+    let annotated = global_ref_ty_in(declaring, module_name, def, result);
+    ERR.set(caller);
     REFERENCES_ON.set(recording);
-    result
+    InferResult { ty: annotated.ty, subst: annotated.subst, ..result }
 }
 
 pub let reference_declaration (item: parser.ItemNode) (name: String): Unit =

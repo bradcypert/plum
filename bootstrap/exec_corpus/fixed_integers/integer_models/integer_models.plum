@@ -1,0 +1,1 @@
+pub let byte (): U8 = 255

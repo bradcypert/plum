@@ -19,6 +19,7 @@ let cg_symbol_types (types: Array[typecheck.ITy]): String = {
 // and an arity, tuples/functions carry an arity, and Ref carries one type.
 // Unconstrained variables share Unit's identity, matching backend defaulting.
 let cg_ity_mangle (t: typecheck.ITy): String = match t {
+    ITInteger(k) => "N".concat(typecheck.integer_name(k)).concat("."),
     ITInt => "i", ITFloat => "f", ITBool => "b", ITStr => "s",
     ITCStr => "c", ITRawCStr => "p", ITBytes => "y", ITUnit => "u",
     ITStruct(name, args) => Array.concat_all(["S", cg_symbol_atom(name), ".", cg_symbol_types(args)]),
@@ -86,7 +87,9 @@ pub let test_symbol_identities (): Unit = {
     assert(!cg_inst_eq(CgInst { module: "a.b", name: "id", targs: [ITInt] },
         CgInst { module: "a_b", name: "id", targs: [ITInt] }));
 
-    let leaves = [ITInt, ITFloat, ITBool, ITStr, ITCStr, ITRawCStr, ITBytes, ITUnit,
+    let leaves = [ITInteger(IntegerI8), ITInteger(IntegerI16), ITInteger(IntegerI32),
+        ITInteger(IntegerU8), ITInteger(IntegerU16), ITInteger(IntegerU32), ITInteger(IntegerU64),
+        ITInt, ITFloat, ITBool, ITStr, ITCStr, ITRawCStr, ITBytes, ITUnit,
         ITStruct("Int", []), ITEnum("Int", []), ITStruct("Box_Int", []),
         ITStruct("a.b.Value", []), ITStruct("a_b.Value", [])];
     let mut types = leaves;

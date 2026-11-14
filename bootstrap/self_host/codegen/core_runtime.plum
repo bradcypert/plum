@@ -103,7 +103,8 @@ let cg_core_allowed (name: String) (user: Array[String]): Bool =
     Array.contains(user, name) || Array.contains([
         "plum_kernel_alloc", "plum_kernel_free", "plum_kernel_write", "plum_kernel_panic", "plum_kernel_halt",
         "memcpy", "memmove", "memset", "memcmp",
-        "llvm.sadd.with.overflow.i64", "llvm.ssub.with.overflow.i64", "llvm.smul.with.overflow.i64"
+        "llvm.sadd.with.overflow.i64", "llvm.ssub.with.overflow.i64", "llvm.smul.with.overflow.i64",
+        "llvm.uadd.with.overflow.i64", "llvm.usub.with.overflow.i64", "llvm.umul.with.overflow.i64"
     ], name)
 
 // Keep ownership/error semantics in the shared runtime; replace the few

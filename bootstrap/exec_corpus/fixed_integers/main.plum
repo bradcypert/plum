@@ -1,0 +1,194 @@
+use fixedglobals;
+// This caller-local name must not change a referenced global's annotation.
+struct LocalCell { wrong: Int }
+struct Box[T] { value: T }
+struct CallbackBox[T] { run: (T) -> T }
+struct Words { low: U8, high: U64, callback: (U8) -> U8 }
+enum Packet[T] { Data(T), Empty }
+let GLOBAL: U64 = 18446744073709551615
+let identity[T] (value: T): T = value
+let add[T] (a: T) (b: T): T = a + b
+let show[T] (value: T): String = value.to_string()
+let show_byte (value: U8): String = value.to_string()
+let make_identity[T] (): (T) -> T = { let f: (T) -> T = identity; f }
+let less[T] (a: T) (b: T): Bool = a < b
+let quotient[T] (a: T) (b: T): T = a / b
+let i8_min (): I8 = -128
+let u64_max (): U64 = { 18446744073709551615 }
+let takes_byte (byte: U8): U8 = byte
+let U8.next (byte: U8): U8 = byte + 1
+let branch (yes: Bool): U16 = if yes { 65535 } else { 1 }
+let matched (yes: Bool): I16 = match yes { true => -32768, false => 32767 }
+let main (): Unit = {
+    let piped_byte: U8 = 255 |> identity;
+    let piped_max: U64 = 18446744073709551615 |> identity |> identity;
+    let piped_values: Array[U8] = [0, 255] |> identity;
+    assert_eq(piped_byte, takes_byte(255));
+    assert_eq(piped_max, u64_max());
+    assert_eq(piped_values, [takes_byte(0), 255]);
+    assert_eq(fixedglobals.INNER, piped_byte);
+    assert_eq(fixedglobals.ALIASED, piped_byte);
+    assert(fixedglobals.VALUE.to_string().contains("255"));
+    let inline_byte: U8 = (|unused| 255)(());
+    let inline_max: U64 = (|unused| 18446744073709551615)(());
+    let inline_math: U8 = (|x| x + 1)(254);
+    let inline_values: Array[U8] = (|unused| [0, 255])(());
+    let inline_partial: (U8) -> U8 = (|a, b| a + b)(1);
+    assert_eq(inline_byte, takes_byte(255));
+    assert_eq(inline_max, u64_max());
+    assert_eq(inline_math, inline_byte);
+    assert_eq(inline_values[1], inline_byte);
+    assert_eq(inline_partial(254), inline_byte);
+    let inline_calls = ref(0);
+    let inline_once: U8 = (|unused| { inline_calls.set(inline_calls.get() + 1); 255 })(());
+    assert_eq(inline_once, inline_byte);
+    assert_eq(inline_calls.get(), 1);
+    let late_signed = |x| -x;
+    let signed_input: I8 = -127;
+    assert_eq(late_signed(signed_input), 127);
+    let late_float = |x| -x;
+    assert(late_float(1.5) == -1.5);
+    let pushed_empty: Array[U8] = [].push(1);
+    let pushed_chain: Array[U64] = [].push(18446744073709551615).push(0);
+    assert_eq(pushed_empty[0], takes_byte(1));
+    assert_eq(pushed_chain[0], u64_max());
+    let local_identity = |x| x;
+    let from_local: U8 = local_identity(255);
+    let from_immediate: U64 = (|x| x)(18446744073709551615);
+    let from_branch: U16 = (if true { |x| x } else { |x| x })(65535);
+    let from_factory: U64 = make_identity()(18446744073709551615);
+    assert_eq(from_local, takes_byte(255));
+    assert_eq(from_immediate, u64_max());
+    assert_eq(from_branch, branch(true));
+    assert_eq(from_factory, u64_max());
+    let callback_box = CallbackBox { run: |x| x };
+    let from_field: U8 = callback_box.run(255);
+    assert_eq(from_field, takes_byte(255));
+    let local_add = |a, b| a + b;
+    let local_next: (U8) -> U8 = local_add(1);
+    assert_eq(local_next(254), takes_byte(255));
+    let branch_add = |a, b| a + b;
+    let branch_next: (U16) -> U16 = (if true { branch_add } else { branch_add })(1);
+    assert_eq(branch_next(65534), branch(true));
+    let expected_formatter: (U64) -> String = match true { true => show, false => show };
+    assert_eq(expected_formatter(u64_max()), "18446744073709551615");
+    let inferred_formatter = match 0 { 0 => show, 1 => show_byte, _ => show };
+    assert_eq(inferred_formatter(takes_byte(255)), "255");
+    let default_array = [].push(1);
+    let default_identity = |x| x;
+    let default_value: Int = default_identity(default_array[0]);
+    assert_eq(default_value, 1);
+    let small: I8 = -128;
+    let medium: I16 = -32768;
+    let signed: I32 = -2147483648;
+    let byte: U8 = 255;
+    let short: U16 = 65535;
+    let word: U32 = 4294967295;
+    let full: U64 = 18446744073709551615;
+    let half: U64 = 9223372036854775808;
+    println("${small} ${medium} ${signed} ${byte} ${short} ${word} ${full} ${half}");
+    assert_eq(i8_min(), small);
+    assert_eq(u64_max(), full);
+    assert_eq(GLOBAL, full);
+    assert(full > half && half > 1 && 1 < half);
+    assert(full >= half && half <= full && !(full < half) && !(half > full));
+    assert_eq(full / 2, 9223372036854775807);
+    assert_eq(full % 2, 1);
+    assert_eq(half + 1, 9223372036854775809);
+    assert_eq(full - 1, 18446744073709551614);
+    let product: U64 = 4294967295 * 4294967295;
+    assert_eq(product, 18446744065119617025);
+    let signed_math: I8 = -100 / 3;
+    let signed_rem: I8 = -100 % 3;
+    assert_eq(signed_math, -33);
+    assert_eq(signed_rem, -1);
+    let neg: I8 = -signed_math;
+    assert_eq(neg, 33);
+    let block: U32 = { let base: U32 = 40; base + 2 };
+    assert_eq(block, 42);
+    assert_eq(takes_byte(254).next(), 255);
+    assert_eq(branch(true), short);
+    assert_eq(matched(true), medium);
+    let generic: U8 = identity(255);
+    assert_eq(generic, byte);
+    assert_eq(add(byte - 1, takes_byte(1)), byte);
+    let boxed: Box[U64] = Box { value: 18446744073709551615 };
+    assert_eq(boxed.value, full);
+    let packet: Packet[U8] = Data(255);
+    let unpacked: U8 = match packet { Data(value) => value, Empty => 0 };
+    assert_eq(unpacked, byte);
+    let option: Option[U64] = Some(18446744073709551615);
+    assert_eq(Option.unwrap_or(option, half), full);
+    let pair: (U8, U64) = (255, 18446744073709551615);
+    let (first, second) = pair;
+    assert_eq(first, byte);
+    assert_eq(second, full);
+    let words = Words { low: 255, high: 18446744073709551615, callback: |x| x + 1 };
+    assert_eq(words.callback(254), byte);
+    let callback: (U8) -> U8 = |x| { x + 1 };
+    assert_eq(callback(254), byte);
+    let captured = |x| full - x;
+    assert_eq(captured(half), 9223372036854775807);
+    let values: Array[U8] = [0, 254, 255];
+    let pushed = values.push(1).set(0, 2);
+    assert_eq(pushed[0], 2);
+    assert_eq(pushed[3], 1);
+    assert_eq(values, [0, 254, 255]);
+    assert_eq([0, byte], [takes_byte(0), byte]);
+    assert_eq([byte, 0], [byte, takes_byte(0)]);
+    let mapped: Array[U8] = Array.map([1, 2], |x| 255);
+    assert_eq(mapped, [byte, byte]);
+    let mapped_method: Array[U8] = values.map(|x| 1);
+    assert_eq(mapped_method, [takes_byte(1), 1, 1]);
+    let total: U8 = Array.fold([1, 2], 0, |acc, x| acc + 1);
+    assert_eq(total, 2);
+    let total_method: U8 = values.fold(0, |acc, x| acc + 1);
+    assert_eq(total_method, 3);
+    let cell: Ref[U64] = ref(18446744073709551615);
+    cell.set(9223372036854775808);
+    assert_eq(cell.get(), half);
+    let mut mutable: U8 = 1;
+    mutable = 255;
+    assert_eq(mutable, byte);
+    assert(match full { 18446744073709551615 => true, _ => false });
+    assert(match small { -128 => true, _ => false });
+    assert_eq(identity(values).to_string(), "[0, 254, 255]");
+    assert_eq(boxed.to_string(), "Box { value: 18446744073709551615 }");
+    assert_eq(identity(full).hash(), full.hash());
+    assert_eq(identity(byte).hash(), byte.hash());
+    assert_eq(show(full), "18446744073709551615");
+    assert_eq(show(small), "-128");
+    let one: U64 = 1;
+    let two: U64 = 2;
+    assert(!less(half, one));
+    assert_eq(quotient(half, two), 4611686018427387904);
+    let plus_one: (U8) -> U8 = add(1);
+    assert_eq(plus_one(254), byte);
+    let mapping: Map[U64, U8] = Map.new(());
+    let inserted = mapping.insert(18446744073709551615, 255);
+    assert_eq(inserted.get(full), Some(byte));
+    let order = ref("");
+    let mark: (U8) -> U8 = |x| { order.set(order.get().concat(x.to_string())); x };
+    let marked = [0, mark(2), mark(3)];
+    assert_eq(marked, [takes_byte(0), 2, 3]);
+    assert_eq(order.get(), "23");
+    order.set("");
+    let ordered_sum = mark(1) + mark(2);
+    assert_eq(ordered_sum, 3);
+    assert_eq(order.get(), "12");
+    let nested_neg: I8 = -(1 + 2);
+    assert_eq(nested_neg, -3);
+    let unsafe_literal: U8 = unsafe { 255 };
+    assert_eq(unsafe_literal, byte);
+    let mut unsigned_counter: U8 = 0;
+    for value in 0..256 {
+        assert_eq(unsigned_counter.to_string(), value.to_string());
+        if value < 255 { unsigned_counter = unsigned_counter + 1; };
+    };
+    let mut signed_counter: I8 = -128;
+    for value in - 128..128 {
+        assert_eq(signed_counter.to_string(), value.to_string());
+        if value < 127 { signed_counter = signed_counter + 1; };
+    };
+    println("fixed integers ok")
+}

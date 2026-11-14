@@ -18,6 +18,7 @@
 
 pub enum ITy {
     ITInt,
+    ITInteger(IntegerKind),
     ITFloat,
     ITBool,
     ITStr,
@@ -154,6 +155,7 @@ pub let unify (a: ITy) (b: ITy): Result[Subst, String] =
 let unify_non_var (a: ITy) (b: ITy): Result[Subst, String] =
     match a {
         ITInt => match b { ITInt => Ok(subst_empty(())), _ => type_mismatch(a, b) },
+        ITInteger(k) => match b { ITInteger(other) => if k == other { Ok(subst_empty(())) } else { type_mismatch(a, b) }, _ => type_mismatch(a, b) },
         ITFloat => match b { ITFloat => Ok(subst_empty(())), _ => type_mismatch(a, b) },
         ITBool => match b { ITBool => Ok(subst_empty(())), _ => type_mismatch(a, b) },
         ITStr => match b { ITStr => Ok(subst_empty(())), _ => type_mismatch(a, b) },
@@ -256,6 +258,7 @@ let type_mismatch (a: ITy) (b: ITy): Result[Subst, String] = Err(render_ty(a).co
 
 pub let render_ty (ty: ITy): String =
     match ty {
+        ITInteger(k) => integer_name(k),
         ITInt => "Int", ITFloat => "Float", ITBool => "Bool", ITStr => "String", ITUnit => "Unit", ITCStr => "CStr", ITRawCStr => "RawCStr",
         ITBytes => "Bytes",
         ITVar(id) => "T".concat(id.to_string()),

@@ -1,12 +1,12 @@
 // Integer ranges are properties of the language's value types, independent
 // of their eventual storage layout. Int and I64 share the same kind.
-// Keep this separate from ITy until the typed-IR and lowering paths can
-// preserve each new kind end to end; recognizing a type name alone is unsafe.
-enum IntegerKind { IntegerI8, IntegerI16, IntegerI32, IntegerI64, IntegerU8, IntegerU16, IntegerU32, IntegerU64 }
+// ITInt remains the canonical representation of Int/I64; ITInteger carries
+// the other seven kinds through inference, specialization and lowering.
+pub enum IntegerKind { IntegerI8, IntegerI16, IntegerI32, IntegerI64, IntegerU8, IntegerU16, IntegerU32, IntegerU64 }
 
-struct IntegerSpec { bits: Int, signed: Bool, max: String, min_magnitude: String }
+pub struct IntegerSpec { pub bits: Int, pub signed: Bool, pub max: String, pub min_magnitude: String }
 
-let integer_spec (kind: IntegerKind): IntegerSpec = match kind {
+pub let integer_spec (kind: IntegerKind): IntegerSpec = match kind {
     IntegerI8 => IntegerSpec { bits: 8, signed: true, max: "127", min_magnitude: "128" },
     IntegerI16 => IntegerSpec { bits: 16, signed: true, max: "32767", min_magnitude: "32768" },
     IntegerI32 => IntegerSpec { bits: 32, signed: true, max: "2147483647", min_magnitude: "2147483648" },
@@ -37,8 +37,8 @@ let integer_literal_bits (kind: IntegerKind) (text: String): Option[Int] = {
         let limit = if negative { spec.min_magnitude } else { spec.max };
         if !valid || (negative && !spec.signed) || !integer_magnitude_le(magnitude, limit) { None }
         else {
-            // The future typed U64 literal can carry this raw word through
-            // TInt without a signed conversion of its mathematical value.
+            // TInt carries this raw word together with its inferred integer
+            // type, without a signed conversion of its mathematical value.
             // Wrapping only happens after the mathematical range check.
             let mut bits = 0;
             for i in start..bytes.len() {
@@ -103,5 +103,48 @@ pub let test_integer_literal_small_ranges (): Unit = {
         else { assert(Option.is_none(signed)); };
         if value >= 0 && value <= 255 { assert_eq(unsigned, Some(value)); }
         else { assert(Option.is_none(unsigned)); };
+    };
+}
+
+pub let integer_name (kind: IntegerKind): String = match kind {
+    IntegerI8 => "I8", IntegerI16 => "I16", IntegerI32 => "I32", IntegerI64 => "Int",
+    IntegerU8 => "U8", IntegerU16 => "U16", IntegerU32 => "U32", IntegerU64 => "U64",
+}
+
+let integer_named (name: String): Option[ITy] = match name {
+    "Int" => Some(ITInt), "I64" => Some(ITInt),
+    "I8" => Some(ITInteger(IntegerI8)), "I16" => Some(ITInteger(IntegerI16)), "I32" => Some(ITInteger(IntegerI32)),
+    "U8" => Some(ITInteger(IntegerU8)), "U16" => Some(ITInteger(IntegerU16)), "U32" => Some(ITInteger(IntegerU32)), "U64" => Some(ITInteger(IntegerU64)),
+    _ => None,
+}
+
+let integer_kind (ty: ITy): Option[IntegerKind] = match ty {
+    ITInt => Some(IntegerI64), ITInteger(k) => Some(k), _ => None,
+}
+
+let infer_integer_literal (kind: IntegerKind) (text: String) (offset: Int) (acc: Subst) (state: FreshState): InferResult = {
+    let ty = if kind == IntegerI64 { ITInt } else { ITInteger(kind) };
+    let bits = match integer_literal_bits(kind, text) {
+        Some(v) => v,
+        None => { set_stmt_pos(offset); fail_tc("integer literal out of range: ${text} for ${integer_name(kind)}"); 0 },
+    };
+    ir_leaf(ty, acc, state, TInt(bits))
+}
+
+pub let test_integer_type_identity (): Unit = {
+    let kinds = [IntegerI8, IntegerI16, IntegerI32, IntegerU8, IntegerU16, IntegerU32, IntegerU64];
+    assert_eq(integer_named("I64"), Some(ITInt));
+    assert_eq(integer_named("Int"), Some(ITInt));
+    assert_eq(integer_named("types.U8"), None);
+    for k in kinds {
+        let ty = ITInteger(k);
+        assert_eq(integer_named(integer_name(k)), Some(ty));
+        assert_eq(render_ty(ty), integer_name(k));
+        assert(Result.is_err(unify(ty, ITInt)));
+        assert(Result.is_err(unify(ITInt, ty)));
+        assert_eq(subst_apply(subst_single(0, ty), ITStruct("Array", [ITVar(0)])), ITStruct("Array", [ty]));
+        for other in kinds {
+            assert_eq(Result.is_ok(unify(ty, ITInteger(other))), k == other);
+        };
     };
 }
