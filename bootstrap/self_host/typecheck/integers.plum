@@ -1,0 +1,107 @@
+// Integer ranges are properties of the language's value types, independent
+// of their eventual storage layout. Int and I64 share the same kind.
+// Keep this separate from ITy until the typed-IR and lowering paths can
+// preserve each new kind end to end; recognizing a type name alone is unsafe.
+enum IntegerKind { IntegerI8, IntegerI16, IntegerI32, IntegerI64, IntegerU8, IntegerU16, IntegerU32, IntegerU64 }
+
+struct IntegerSpec { bits: Int, signed: Bool, max: String, min_magnitude: String }
+
+let integer_spec (kind: IntegerKind): IntegerSpec = match kind {
+    IntegerI8 => IntegerSpec { bits: 8, signed: true, max: "127", min_magnitude: "128" },
+    IntegerI16 => IntegerSpec { bits: 16, signed: true, max: "32767", min_magnitude: "32768" },
+    IntegerI32 => IntegerSpec { bits: 32, signed: true, max: "2147483647", min_magnitude: "2147483648" },
+    IntegerI64 => IntegerSpec { bits: 64, signed: true, max: "9223372036854775807", min_magnitude: "9223372036854775808" },
+    IntegerU8 => IntegerSpec { bits: 8, signed: false, max: "255", min_magnitude: "0" },
+    IntegerU16 => IntegerSpec { bits: 16, signed: false, max: "65535", min_magnitude: "0" },
+    IntegerU32 => IntegerSpec { bits: 32, signed: false, max: "4294967295", min_magnitude: "0" },
+    IntegerU64 => IntegerSpec { bits: 64, signed: false, max: "18446744073709551615", min_magnitude: "0" },
+}
+
+// Input is canonical decimal text from the lexer/pattern parser: optional
+// minus, then ASCII digits without leading zeroes. Validate that invariant
+// here as well, so malformed input cannot accidentally pass a length check.
+// Range comparison happens BEFORE any signed parsing or wrapping arithmetic.
+let integer_literal_bits (kind: IntegerKind) (text: String): Option[Int] = {
+    let bytes = text.as_bytes();
+    let negative = bytes.len() > 0 && bytes_at_raw(bytes, 0) == 45;
+    let start = if negative { 1 } else { 0 };
+    if bytes.len() <= start { None }
+    else if bytes.len() > start + 1 && bytes_at_raw(bytes, start) == 48 { None }
+    else {
+        let mut valid = true;
+        for i in start..bytes.len() {
+            if bytes_at_raw(bytes, i) < 48 || bytes_at_raw(bytes, i) > 57 { valid = false; };
+        };
+        let spec = integer_spec(kind);
+        let magnitude = if negative { String.slice(text, 1, text.len()) } else { text };
+        let limit = if negative { spec.min_magnitude } else { spec.max };
+        if !valid || (negative && !spec.signed) || !integer_magnitude_le(magnitude, limit) { None }
+        else {
+            // The future typed U64 literal can carry this raw word through
+            // TInt without a signed conversion of its mathematical value.
+            // Wrapping only happens after the mathematical range check.
+            let mut bits = 0;
+            for i in start..bytes.len() {
+                bits = Int.wrapping_add(Int.wrapping_mul(bits, 10), bytes_at_raw(bytes, i) - 48);
+            };
+            Some(if negative { Int.wrapping_sub(0, bits) } else { bits })
+        }
+    }
+}
+
+let integer_magnitude_le (value: String) (limit: String): Bool =
+    value.len() < limit.len() || (value.len() == limit.len() && value <= limit)
+
+pub let test_integer_literal_ranges (): Unit = {
+    // Keep compiler sources buildable by the checked-in bootstrap seed,
+    // which predates direct signed-minimum literal support.
+    let int_min = -9223372036854775807 - 1;
+    let kinds = [IntegerI8, IntegerI16, IntegerI32, IntegerI64, IntegerU8, IntegerU16, IntegerU32, IntegerU64];
+    let over_max = ["128", "32768", "2147483648", "9223372036854775808", "256", "65536", "4294967296", "18446744073709551616"];
+    let under_min = ["-129", "-32769", "-2147483649", "-9223372036854775809", "-1", "-1", "-1", "-1"];
+    let maxima = [127, 32767, 2147483647, 9223372036854775807, 255, 65535, 4294967295, -1];
+    let minima = [-128, -32768, -2147483648, int_min, 0, 0, 0, 0];
+    let widths = [8, 16, 32, 64, 8, 16, 32, 64];
+    for i in 0..kinds.len() {
+        let kind = kinds[i];
+        let spec = integer_spec(kind);
+        assert(Option.is_some(integer_literal_bits(kind, "0")));
+        assert_eq(spec.bits, widths[i]);
+        assert_eq(integer_literal_bits(kind, spec.max), Some(maxima[i]));
+        assert(Option.is_none(integer_literal_bits(kind, over_max[i])));
+        assert(Option.is_none(integer_literal_bits(kind, under_min[i])));
+        if spec.signed {
+            assert_eq(integer_literal_bits(kind, "-".concat(spec.min_magnitude)), Some(minima[i]));
+            assert(Option.is_some(integer_literal_bits(kind, "-".concat(spec.max))));
+            assert_eq(integer_literal_bits(kind, "-0"), Some(0));
+        } else {
+            assert(Option.is_none(integer_literal_bits(kind, "-0")));
+        };
+        for text in ["", "-", "+1", "00", "01", "-01", "1_0", "1.0", " 1", "1 ", "é", "１２", "12a", "a12", "999999999999999999999999999999999999999999999999999999999999999999"] {
+            assert(Option.is_none(integer_literal_bits(kind, text)));
+        };
+    };
+    assert_eq(integer_literal_bits(IntegerI64, "-9223372036854775808"), Some(int_min));
+    assert_eq(integer_literal_bits(IntegerI64, "9223372036854775807"), Some(9223372036854775807));
+    assert_eq(integer_literal_bits(IntegerU64, "9223372036854775808"), Some(int_min));
+    assert_eq(integer_literal_bits(IntegerU64, "18446744073709551614"), Some(-2));
+    assert_eq(integer_literal_bits(IntegerU64, "18446744073709551615"), Some(-1));
+    assert_eq(integer_literal_bits(IntegerU32, "4294967295"), Some(4294967295));
+    assert_eq(integer_spec(IntegerI64).bits, 64);
+    assert_eq(integer_spec(IntegerU64).bits, 64);
+}
+
+pub let test_integer_literal_small_ranges (): Unit = {
+    // Exhaust every value in both eight-bit domains, including rejection
+    // immediately outside each domain. Expected values use existing Int
+    // arithmetic, independently of the decimal accumulation above.
+    for value in - 130..258 {
+        let text = value.to_string();
+        let signed = integer_literal_bits(IntegerI8, text);
+        let unsigned = integer_literal_bits(IntegerU8, text);
+        if value >= -128 && value <= 127 { assert_eq(signed, Some(value)); }
+        else { assert(Option.is_none(signed)); };
+        if value >= 0 && value <= 255 { assert_eq(unsigned, Some(value)); }
+        else { assert(Option.is_none(unsigned)); };
+    };
+}
