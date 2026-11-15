@@ -113,6 +113,9 @@ let exercise (): Unit = {
     state.set(state.get() + 1);
     println(state.get().to_string());
     println((1.5 + 2.5) == 4.0);
+    let mut words: Array[String] = [];
+    for i in 0..16 { words = words.push(i.to_string()); };
+    assert(words.len() == 16 && words[15] == "15");
     let sum = Array.concat(["a", "b"], ["c"]);
     println(sum[2]);
     let capture = "captured";

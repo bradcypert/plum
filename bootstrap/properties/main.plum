@@ -2758,3 +2758,17 @@ pub let test_empty_array_results (): Unit = {
         assert_eq(chars_of(""), []);
     };
 }
+
+pub let test_array_push_snapshots (): Unit = {
+    for count in [0, 1, 2, 3, 7, 8, 15, 16, 31, 64] {
+        for seed in [-4, 0, 29] {
+            let mut values: Array[Int] = []; let mut versions: Array[Array[Int]] = [];
+            for i in 0..count { versions = versions.push(values); values = values.push(seed + i); };
+            assert_eq(values.len(), count); assert_eq(versions.len(), count);
+            for i in 0..count {
+                assert_eq(values[i], seed + i); assert_eq(versions[i].len(), i);
+                for j in 0..i { assert_eq(versions[i][j], seed + j); };
+            };
+        };
+    };
+}
