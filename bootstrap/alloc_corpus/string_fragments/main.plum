@@ -1,0 +1,8 @@
+let main (): Unit = {
+    let text = "x".repeat(65536); let blank = " \t\u{2003}".repeat(64);
+    for i in 0..512 {
+        let whole = text.split("absent"); assert_eq(whole.len(), 1); assert_eq(whole[0], text);
+        let empty = ",,,".split(","); assert_eq(empty.len(), 4); assert_eq(empty[3], "");
+        assert_eq(blank.trim(), ""); assert_eq(blank.trim_start(), ""); assert_eq(blank.trim_end(), "");
+    };
+}

@@ -2714,3 +2714,22 @@ pub let test_ascii_character_storage (): Unit = {
         for i in 0..chars.len() { assert_eq(chars[i].as_bytes().at(0), Some(values[i])); assert_eq(changed[i].len(), 2); };
     }
 }
+
+pub let test_string_fragment_storage (): Unit = {
+    let mut seed = 2207;
+    for count in [0, 1, 2, 7, 8, 9, 15, 16, 17, 31, 32, 33, 64] {
+        let mut words: Array[String] = [];
+        for i in 0..count { seed = next_seed(seed); words = words.push(seed.to_string().concat("é")); };
+        for separator in ["|", "::", "🙂"] {
+            let text = Array.join(words, separator);
+            let parts = text.split(separator); let saved = parts;
+            assert_eq(parts, if count == 0 { [""] } else { words });
+            assert_eq(Array.join(parts, separator), text);
+            let changed = parts.set(0, "changed"); assert_eq(changed[0], "changed");
+            assert_eq(parts, saved);
+            assert_eq(" \u{2003}".concat(text).concat("\u{2003}\t ").trim(), text);
+            assert_eq(" \u{2003}".concat(text).trim_start(), text);
+            assert_eq(text.concat("\u{2003}\t ").trim_end(), text);
+        };
+    }
+}
