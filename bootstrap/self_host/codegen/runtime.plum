@@ -31,6 +31,16 @@ let cg_pat_safe_words (n: Int) (acc: String): String =
     if n <= 0 { acc }
     else { cg_pat_safe_words(n - 1, if acc == "" { "ptr @plum_pat_safe" } else { acc.concat(", ptr @plum_pat_safe") }) }
 
+// Immortal one-byte ASCII cells use the ordinary String header/NUL layout.
+// Keep the LLVM declaration on one line for freestanding symbol selection.
+let cg_ascii_cells (): String = {
+    let mut cells: Array[String] = [];
+    for i in 0..128 {
+        cells = cells.push("{ i64, i64, [2 x i8] } { i64 -1, i64 1, [2 x i8] [i8 ${i}, i8 0] }");
+    };
+    "@.plum_ascii_cells = private constant [128 x { i64, i64, [2 x i8] }] [".concat(Array.join(cells, ", ")).concat("], align 8")
+}
+
 pub let cg_runtime (heap: Bool): String = cg_lines([
     "; --- Stage 5 runtime (self-hosted backend) ---",
     "declare ptr @malloc(i64)",
@@ -487,6 +497,28 @@ pub let cg_runtime (heap: Bool): String = cg_lines([
     "free:",
     "  call void @plum_free(ptr %p)",
     "  ret void",
+    "}",
+    "",
+    // Character units may share literal-shaped cells. Keep the general raw
+    // byte constructor fresh for numeric/native producers and their accounting.
+    cg_ascii_cells(()),
+    "; Pool only a complete one-byte ASCII unit. Grouped continuation bytes",
+    "; and every non-ASCII unit keep independent compact storage.",
+    "define ptr @plum_str_unit(ptr %bytes, i64 %len) {",
+    "entry:",
+    "  %single = icmp eq i64 %len, 1",
+    "  br i1 %single, label %byte, label %copy",
+    "byte:",
+    "  %value = load i8, ptr %bytes",
+    "  %ascii = icmp ult i8 %value, 128",
+    "  br i1 %ascii, label %cached, label %copy",
+    "cached:",
+    "  %index = zext i8 %value to i64",
+    "  %cell = getelementptr [128 x { i64, i64, [2 x i8] }], ptr @.plum_ascii_cells, i64 0, i64 %index",
+    "  ret ptr %cell",
+    "copy:",
+    "  %out = call ptr @plum_str_new(ptr %bytes, i64 %len)",
+    "  ret ptr %out",
     "}",
     "",
     "; A string cell from raw bytes + a byte length.",
@@ -2353,6 +2385,7 @@ pub let cg_runtime (heap: Bool): String = cg_lines([
     "; chars_of and one for split's empty strings at both ends. Count",
     "; codepoints first so the sole result array has exact capacity,",
     "; including for multibyte input. No temporary owning array exists.",
+    "; ASCII units and padding use immortal cells; longer/raw units allocate.",
     "define ptr @plum_chars_of(ptr %s) {",
     "entry:",
     "  %out = call ptr @plum_str_codepoints(ptr %s, i64 0)",
@@ -2381,9 +2414,8 @@ pub let cg_runtime (heap: Bool): String = cg_lines([
     "  %padded = icmp ne i64 %padding, 0",
     "  br i1 %padded, label %leading, label %scan",
     "leading:",
-    "  %empty1 = call ptr @plum_str_new(ptr @.plum_fmt_line, i64 0)",
     "  %e0 = getelementptr i8, ptr %out, i64 16",
-    "  store ptr %empty1, ptr %e0",
+    "  store ptr @.plum_str_empty, ptr %e0",
     "  br label %scan",
     "scan:",
     "  %ip = alloca i64",
@@ -2403,7 +2435,7 @@ pub let cg_runtime (heap: Bool): String = cg_lines([
     "emit:",
     "  %clen = sub i64 %end, %start",
     "  %cstart = getelementptr i8, ptr %data, i64 %start",
-    "  %ch = call ptr @plum_str_new(ptr %cstart, i64 %clen)",
+    "  %ch = call ptr @plum_str_unit(ptr %cstart, i64 %clen)",
     "  %n = load i64, ptr %np",
     "  %noff = mul i64 %n, 8",
     "  %slot0 = getelementptr i8, ptr %out, i64 %noff",
@@ -2419,8 +2451,7 @@ pub let cg_runtime (heap: Bool): String = cg_lines([
     "  %lastoff = mul i64 %final, 8",
     "  %lastp0 = getelementptr i8, ptr %out, i64 %lastoff",
     "  %lastp = getelementptr i8, ptr %lastp0, i64 16",
-    "  %empty2 = call ptr @plum_str_new(ptr @.plum_fmt_line, i64 0)",
-    "  store ptr %empty2, ptr %lastp",
+    "  store ptr @.plum_str_empty, ptr %lastp",
     "  br label %return",
     "return:",
     "  ret ptr %out",

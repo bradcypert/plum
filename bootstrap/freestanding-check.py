@@ -32,7 +32,10 @@ with tempfile.TemporaryDirectory(prefix='plum-freestanding-') as tmp:
     # This must never be discovered for the freestanding target.
     (native / 'posix' / 'host.c').write_text('#error hosted POSIX source selected\n')
     (app / 'main.plum').write_text('extern "C" { fn helper() -> Int; }\n'
-                                  'let main (): Unit = println((unsafe { helper() }).to_string())\n')
+        'let main (): Unit = { let chars = chars_of("aé\\x00");\n'
+        'assert(chars.len() == 3 && chars[0] == "a" && chars[1] == "é" && chars[2] == "\\x00");\n'
+        'assert(chars[0].concat("!") == "a!");\n'
+        'println((unsafe { helper() }).to_string()); }\n')
     (native / 'value.h').write_text('#define VALUE 7\n')
     (native / 'helper.c').write_text('#include "value.h"\nlong long helper(void) { return VALUE; }\n'
         'long leaf(long x) { volatile long pad[8]; pad[0] = x; return pad[0]; }\n')
