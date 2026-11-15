@@ -2993,7 +2993,7 @@ let cg_fn_call_real (p: CgProgram) (env: Array[CgSlot]) (n: Int) (module_name: S
     let concat = cg_is_array_concat(module_name, name, targs) && args.len() == 2;
     let bytes_concat = module_name == "<prelude>" && name == "bytes_concat_raw" && args.len() == 2;
     let sym = if reverse { "@plum_array_reverse" } else if slice { "@plum_array_slice" }
-        else if concat { "@plum_array_concat" } else if bytes_concat { "@plum_str_concat_reuse" } else { match cg_runtime_fn(name) {
+        else if concat { "@plum_array_concat" } else if bytes_concat { "@plum_str_concat_reuse" } else { match cg_runtime_fn(module_name, name) {
             Some(rt) => rt,
             None => if cg_has_fn_in(p, module_name, name, 0) {
                 "@".concat(cg_sym(module_name, name, cg_concrete_list(p, targs, 0, [])))
@@ -3028,7 +3028,7 @@ let cg_fn_call_real (p: CgProgram) (env: Array[CgSlot]) (n: Int) (module_name: S
         // layout, and the second prepared owner keeps even self-aliases shared.
         // Padding and array operations also consume their receivers; Array
         // concat consumes both. Only remaining language arguments drop here.
-        .concat(if reverse || slice || concat || Option.is_some(cg_runtime_fn(name)) {
+        .concat(if reverse || slice || concat || Option.is_some(cg_runtime_fn(module_name, name)) {
             cg_dec_args(p, args, a.vals, if concat { 2 } else if reverse || slice || bytes_concat || name == "plum__string_pad_raw" { 1 } else { 0 }, "")
         } else { "" });
     let code = if cyclic {
@@ -3066,7 +3066,7 @@ let cg_fn_call_real (p: CgProgram) (env: Array[CgSlot]) (n: Int) (module_name: S
 let cg_is_array_concat (module_name: String) (name: String) (targs: Array[typecheck.ITy]): Bool =
     module_name == "<prelude>" && name == "Array.concat" && targs.len() == 1
 
-let cg_runtime_fn (name: String): Option[String] =
+let cg_runtime_fn (module_name: String) (name: String): Option[String] =
     if name == "chars_of" { Some("@plum_chars_of") }
     else if name == "panic_raw" { Some("@plum_panic") }
     else if name == "args" { Some("@plum_args") }
@@ -3112,6 +3112,27 @@ let cg_runtime_fn (name: String): Option[String] =
     else if name == "wrapping_add_raw" { Some("@plum_wrapping_add") }
     else if name == "wrapping_sub_raw" { Some("@plum_wrapping_sub") }
     else if name == "wrapping_mul_raw" { Some("@plum_wrapping_mul") }
+    else if module_name == "<prelude>" && name == "i8_wrapping_add_raw" { Some("@plum_i8_wrapping_add") }
+    else if module_name == "<prelude>" && name == "i8_wrapping_sub_raw" { Some("@plum_i8_wrapping_sub") }
+    else if module_name == "<prelude>" && name == "i8_wrapping_mul_raw" { Some("@plum_i8_wrapping_mul") }
+    else if module_name == "<prelude>" && name == "i16_wrapping_add_raw" { Some("@plum_i16_wrapping_add") }
+    else if module_name == "<prelude>" && name == "i16_wrapping_sub_raw" { Some("@plum_i16_wrapping_sub") }
+    else if module_name == "<prelude>" && name == "i16_wrapping_mul_raw" { Some("@plum_i16_wrapping_mul") }
+    else if module_name == "<prelude>" && name == "i32_wrapping_add_raw" { Some("@plum_i32_wrapping_add") }
+    else if module_name == "<prelude>" && name == "i32_wrapping_sub_raw" { Some("@plum_i32_wrapping_sub") }
+    else if module_name == "<prelude>" && name == "i32_wrapping_mul_raw" { Some("@plum_i32_wrapping_mul") }
+    else if module_name == "<prelude>" && name == "u8_wrapping_add_raw" { Some("@plum_u8_wrapping_add") }
+    else if module_name == "<prelude>" && name == "u8_wrapping_sub_raw" { Some("@plum_u8_wrapping_sub") }
+    else if module_name == "<prelude>" && name == "u8_wrapping_mul_raw" { Some("@plum_u8_wrapping_mul") }
+    else if module_name == "<prelude>" && name == "u16_wrapping_add_raw" { Some("@plum_u16_wrapping_add") }
+    else if module_name == "<prelude>" && name == "u16_wrapping_sub_raw" { Some("@plum_u16_wrapping_sub") }
+    else if module_name == "<prelude>" && name == "u16_wrapping_mul_raw" { Some("@plum_u16_wrapping_mul") }
+    else if module_name == "<prelude>" && name == "u32_wrapping_add_raw" { Some("@plum_u32_wrapping_add") }
+    else if module_name == "<prelude>" && name == "u32_wrapping_sub_raw" { Some("@plum_u32_wrapping_sub") }
+    else if module_name == "<prelude>" && name == "u32_wrapping_mul_raw" { Some("@plum_u32_wrapping_mul") }
+    else if module_name == "<prelude>" && name == "u64_wrapping_add_raw" { Some("@plum_u64_wrapping_add") }
+    else if module_name == "<prelude>" && name == "u64_wrapping_sub_raw" { Some("@plum_u64_wrapping_sub") }
+    else if module_name == "<prelude>" && name == "u64_wrapping_mul_raw" { Some("@plum_u64_wrapping_mul") }
     else if name == "abs_raw" { Some("@plum_abs_raw") }
     else if name == "sqrt_raw" { Some("@plum_sqrt_raw") }
     else if name == "pow_raw" { Some("@plum_pow_raw") }

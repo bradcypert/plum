@@ -117,8 +117,13 @@ payloads, closures, references, and existing generics. Their mathematical ranges
 do not imply packed or native storage: the current implementation uses a word
 per scalar value in Plum-managed storage.
 
-New-width bit operations and wrapping/truncating APIs are tracked separately in
-#525; existing `Int` APIs remain available. New-width C extern signatures,
+`Type.wrapping_add(a, b)`, `wrapping_sub`, and `wrapping_mul` are available
+for every integer type. Both operands must have that type. Results wrap modulo
+2^N, where N is the type width; signed results use two's-complement
+interpretation. These named operations support checksums, hashes, and binary
+protocols without changing ordinary checked arithmetic. Existing `Int`/`I64`
+wrapping behavior is unchanged. Truncating conversions and new-width bit
+operations remain tracked in #525. New-width C extern signatures,
 including aggregates containing these types, are rejected until the scalar ABI
 work in #526. `Int`/`I64` retain the existing C ABI.
 

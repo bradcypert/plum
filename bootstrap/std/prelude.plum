@@ -580,6 +580,91 @@ pub let Int.wrapping_sub (a: Int) (b: Int): Int = wrapping_sub_raw(a, b)
 /// followed by a mix.
 pub let Int.wrapping_mul (a: Int) (b: Int): Int = wrapping_mul_raw(a, b)
 
+// Fixed-width wrapping uses the same named primitive path as Int.
+let i8_wrapping_add_raw (a: I8) (b: I8): I8 = 0
+/// Adds modulo 2^8; interprets the result as signed two’s complement. Ordinary arithmetic remains checked.
+pub let I8.wrapping_add (a: I8) (b: I8): I8 = i8_wrapping_add_raw(a, b)
+
+let i8_wrapping_sub_raw (a: I8) (b: I8): I8 = 0
+/// Subtracts modulo 2^8; interprets the result as signed two’s complement. Ordinary arithmetic remains checked.
+pub let I8.wrapping_sub (a: I8) (b: I8): I8 = i8_wrapping_sub_raw(a, b)
+
+let i8_wrapping_mul_raw (a: I8) (b: I8): I8 = 0
+/// Multiplies modulo 2^8; interprets the result as signed two’s complement. Ordinary arithmetic remains checked.
+pub let I8.wrapping_mul (a: I8) (b: I8): I8 = i8_wrapping_mul_raw(a, b)
+
+let i16_wrapping_add_raw (a: I16) (b: I16): I16 = 0
+/// Adds modulo 2^16; interprets the result as signed two’s complement. Ordinary arithmetic remains checked.
+pub let I16.wrapping_add (a: I16) (b: I16): I16 = i16_wrapping_add_raw(a, b)
+
+let i16_wrapping_sub_raw (a: I16) (b: I16): I16 = 0
+/// Subtracts modulo 2^16; interprets the result as signed two’s complement. Ordinary arithmetic remains checked.
+pub let I16.wrapping_sub (a: I16) (b: I16): I16 = i16_wrapping_sub_raw(a, b)
+
+let i16_wrapping_mul_raw (a: I16) (b: I16): I16 = 0
+/// Multiplies modulo 2^16; interprets the result as signed two’s complement. Ordinary arithmetic remains checked.
+pub let I16.wrapping_mul (a: I16) (b: I16): I16 = i16_wrapping_mul_raw(a, b)
+
+let i32_wrapping_add_raw (a: I32) (b: I32): I32 = 0
+/// Adds modulo 2^32; interprets the result as signed two’s complement. Ordinary arithmetic remains checked.
+pub let I32.wrapping_add (a: I32) (b: I32): I32 = i32_wrapping_add_raw(a, b)
+
+let i32_wrapping_sub_raw (a: I32) (b: I32): I32 = 0
+/// Subtracts modulo 2^32; interprets the result as signed two’s complement. Ordinary arithmetic remains checked.
+pub let I32.wrapping_sub (a: I32) (b: I32): I32 = i32_wrapping_sub_raw(a, b)
+
+let i32_wrapping_mul_raw (a: I32) (b: I32): I32 = 0
+/// Multiplies modulo 2^32; interprets the result as signed two’s complement. Ordinary arithmetic remains checked.
+pub let I32.wrapping_mul (a: I32) (b: I32): I32 = i32_wrapping_mul_raw(a, b)
+
+let u8_wrapping_add_raw (a: U8) (b: U8): U8 = 0
+/// Adds modulo 2^8; returns the unsigned low bits. Ordinary arithmetic remains checked.
+pub let U8.wrapping_add (a: U8) (b: U8): U8 = u8_wrapping_add_raw(a, b)
+
+let u8_wrapping_sub_raw (a: U8) (b: U8): U8 = 0
+/// Subtracts modulo 2^8; returns the unsigned low bits. Ordinary arithmetic remains checked.
+pub let U8.wrapping_sub (a: U8) (b: U8): U8 = u8_wrapping_sub_raw(a, b)
+
+let u8_wrapping_mul_raw (a: U8) (b: U8): U8 = 0
+/// Multiplies modulo 2^8; returns the unsigned low bits. Ordinary arithmetic remains checked.
+pub let U8.wrapping_mul (a: U8) (b: U8): U8 = u8_wrapping_mul_raw(a, b)
+
+let u16_wrapping_add_raw (a: U16) (b: U16): U16 = 0
+/// Adds modulo 2^16; returns the unsigned low bits. Ordinary arithmetic remains checked.
+pub let U16.wrapping_add (a: U16) (b: U16): U16 = u16_wrapping_add_raw(a, b)
+
+let u16_wrapping_sub_raw (a: U16) (b: U16): U16 = 0
+/// Subtracts modulo 2^16; returns the unsigned low bits. Ordinary arithmetic remains checked.
+pub let U16.wrapping_sub (a: U16) (b: U16): U16 = u16_wrapping_sub_raw(a, b)
+
+let u16_wrapping_mul_raw (a: U16) (b: U16): U16 = 0
+/// Multiplies modulo 2^16; returns the unsigned low bits. Ordinary arithmetic remains checked.
+pub let U16.wrapping_mul (a: U16) (b: U16): U16 = u16_wrapping_mul_raw(a, b)
+
+let u32_wrapping_add_raw (a: U32) (b: U32): U32 = 0
+/// Adds modulo 2^32; returns the unsigned low bits. Ordinary arithmetic remains checked.
+pub let U32.wrapping_add (a: U32) (b: U32): U32 = u32_wrapping_add_raw(a, b)
+
+let u32_wrapping_sub_raw (a: U32) (b: U32): U32 = 0
+/// Subtracts modulo 2^32; returns the unsigned low bits. Ordinary arithmetic remains checked.
+pub let U32.wrapping_sub (a: U32) (b: U32): U32 = u32_wrapping_sub_raw(a, b)
+
+let u32_wrapping_mul_raw (a: U32) (b: U32): U32 = 0
+/// Multiplies modulo 2^32; returns the unsigned low bits. Ordinary arithmetic remains checked.
+pub let U32.wrapping_mul (a: U32) (b: U32): U32 = u32_wrapping_mul_raw(a, b)
+
+let u64_wrapping_add_raw (a: U64) (b: U64): U64 = 0
+/// Adds modulo 2^64; returns the unsigned low bits. Ordinary arithmetic remains checked.
+pub let U64.wrapping_add (a: U64) (b: U64): U64 = u64_wrapping_add_raw(a, b)
+
+let u64_wrapping_sub_raw (a: U64) (b: U64): U64 = 0
+/// Subtracts modulo 2^64; returns the unsigned low bits. Ordinary arithmetic remains checked.
+pub let U64.wrapping_sub (a: U64) (b: U64): U64 = u64_wrapping_sub_raw(a, b)
+
+let u64_wrapping_mul_raw (a: U64) (b: U64): U64 = 0
+/// Multiplies modulo 2^64; returns the unsigned low bits. Ordinary arithmetic remains checked.
+pub let U64.wrapping_mul (a: U64) (b: U64): U64 = u64_wrapping_mul_raw(a, b)
+
 // i traverses the borrowed prefix [0, n); no optional byte cell is needed.
 let plum__string_hash_acc (b: Bytes) (i: Int) (n: Int) (h: Int): Int =
     if i >= n { h & 9223372036854775807 }
