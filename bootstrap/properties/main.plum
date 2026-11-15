@@ -2677,3 +2677,21 @@ pub let test_integer_conversion_roundtrips (): Unit = {
         match unsigned_result { Ok(word) => assert_eq(Int.try_from(word), Ok(value)), Err(_) => () };
     };
 }
+
+pub let test_array_remove_persistence (): Unit = {
+    let mut seed = 6137;
+    for trial in 0..64 {
+        seed = next_seed(seed);
+        let xs = int_array(seed, 1 + trial % 33, []);
+        let index = rand_between(seed, 0, xs.len() - 1); let saved = xs;
+        let out = xs.remove(index);
+        assert_eq(out.len(), xs.len() - 1);
+        for i in 0..out.len() { assert_eq(out[i], saved[if i < index { i } else { i + 1 }]); };
+        assert_eq(xs, saved);
+        let texts = Array.map(xs, |n| n.to_string()); let strings = texts.remove(index);
+        for i in 0..strings.len() { assert_eq(strings[i], texts[if i < index { i } else { i + 1 }]); };
+        let mut remaining = out;
+        for i in 0..out.len() { remaining = remaining.remove(remaining.len() - 1); };
+        assert_eq(remaining, []);
+    }
+}

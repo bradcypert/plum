@@ -1,0 +1,11 @@
+let main (): Unit = {
+    let mut ints = "x".repeat(4096).as_bytes().to_array();
+    for i in 0..4096 { ints = ints.remove(ints.len() - 1); };
+    assert_eq(ints, []);
+    let mut front = "x".repeat(1024).as_bytes().to_array();
+    for i in 0..1024 { front = front.remove(0); };
+    assert_eq(front, []);
+    let mut strings = Array.map("x".repeat(1024).as_bytes().to_array(), |n| n.to_string());
+    for i in 0..1024 { strings = strings.remove(strings.len() - 1); };
+    assert_eq(strings, []);
+}
