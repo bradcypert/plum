@@ -68,6 +68,23 @@ def main():
             exe = work / 'core'
             run('clang', '-no-pie', obj, hooks, '-o', exe)
             run(exe)
+        # User bindings with primitive-like names must retain their bodies and
+        # their transitive callees, including when used as function values.
+        definitions = ['let only_user (): Int = 73']
+        checks = []
+        for kind in ('i8', 'i16', 'i32', 'u8', 'u16', 'u32', 'u64'):
+            for op in ('add', 'sub', 'mul'):
+                name = f'{kind}_wrapping_{op}_raw'
+                definitions.append(f'let {name} (a: Int) (b: Int): Int = only_user()')
+                checks.append(f'assert_eq({name}(1, 2), 73);')
+                checks.append(f'let f_{name} = {name}; assert_eq(f_{name}(1, 2), 73);')
+        source.write_text('\n'.join(definitions) + '\nlet main (): Unit = {\n' +
+                          '\n'.join(checks) + '\n()}\n')
+        for mode in ([], ['--release']):
+            exe = work / 'collisions'
+            run(COMPILER, 'build', project, *mode, '-o', exe)
+            run(exe)
+
         for kind in ('I8', 'I16', 'I32', 'U8', 'U16', 'U32', 'U64'):
             source.write_text(f'let main (): Unit = {{ let n = 1; let x = {kind}.wrapping_add(n, 1); () }}')
             for action in ('check', 'emit-llvm'):
