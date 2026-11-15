@@ -1,0 +1,70 @@
+use Memory;
+struct Box { text: String }
+struct Owner { resource: Resource }
+enum Item { Text(String), Empty }
+extern "C" { fn map_close(n: Int) -> Unit; fn map_total() -> Int; }
+handle Resource { on_drop: map_close }
+let make (n: Int): Resource = unsafe { Resource.from_raw(n) }
+let live (): Int = match Memory.snapshot() { Some(s) => s.live_bytes, None => -1 }
+let texts (): Array[String] = ["a".repeat(32), "b".repeat(32)]
+let lengths (xs: Array[String]): Array[Int] = xs.map(|s| s.len())
+let scoped (xs: Array[Resource]): Array[Int] = xs.map(|r| {
+    assert_eq(unsafe { map_total() }, 0); unsafe { r.raw() }
+})
+let nested (xs: Array[Owner]): Array[Int] = xs.map(|o| {
+    assert_eq(unsafe { map_total() }, 2); unsafe { o.resource.raw() }
+})
+let closures (): Unit = {
+    let r = make(4); let f = || unsafe { r.raw() };
+    let mut xs = [f]; xs = xs.map(|g| { assert_eq(unsafe { map_total() }, 4); g });
+    assert_eq(xs[0](), 4); assert_eq(unsafe { map_total() }, 4);
+}
+let round (): Unit = {
+    let mut xs = texts();
+    for i in 0..128 { xs = xs.map(|s| s.concat("!")); };
+    assert_eq(xs, ["a".repeat(32).concat("!".repeat(128)), "b".repeat(32).concat("!".repeat(128))]);
+    let mut xs = texts(); xs = xs.map(|s| s); assert_eq(xs, texts());
+    // Filter still needs the original value after its consuming predicate.
+    let mut xs = texts(); xs = xs.filter(|s| s.concat("!").len() > 0); assert_eq(xs, texts());
+    assert_eq(lengths(texts()), [32, 32]);
+    let saved = ref(""); let xs = texts();
+    let out = xs.map(|s| { saved.set(s); s.len() });
+    assert_eq(out, [32, 32]); assert_eq(saved.get(), "b".repeat(32));
+    let xs = texts(); let boxes = xs.map(|s| Box { text: s });
+    assert_eq(boxes[0].text, "a".repeat(32)); assert_eq(boxes[1].text, "b".repeat(32));
+    let xs = texts(); let items = xs.map(|s| Text(s));
+    assert_eq(items, [Text("a".repeat(32)), Text("b".repeat(32))]);
+    let xs = texts(); let callbacks = xs.map(|s| { || s });
+    assert_eq(callbacks[0](), "a".repeat(32)); assert_eq(callbacks[1](), "b".repeat(32));
+    assert_eq(callbacks[0](), "a".repeat(32));
+    let append = |s: String| s.concat(s); assert_eq(append("a".repeat(32)), "a".repeat(64));
+    let captured = "c".repeat(32); let append = |s: String| captured.concat(s);
+    assert_eq(append("!"), captured.concat("!")); assert_eq(append("?"), captured.concat("?"));
+    let xs = texts(); let views = xs.map(|s| s.as_cstr());
+    assert_eq(unsafe { views[0].as_string() }, "a".repeat(32));
+    assert_eq(unsafe { views[1].as_string() }, "b".repeat(32));
+    // A unique parent can still contain a shared child.
+    let original = "z".repeat(32); let bytes = original.as_bytes(); let view = original.as_cstr();
+    let mut xs = [original, original]; xs = xs.map(|s| s.concat("!"));
+    assert_eq(xs, [original.concat("!"), original.concat("!")]); assert_eq(original, "z".repeat(32));
+    assert_eq(bytes.to_hex(), "7a".repeat(32)); assert_eq(unsafe { view.as_string() }, original);
+    let mut xs = texts(); let snapshot = xs; xs = xs.map(|s| s.concat("!"));
+    assert_eq(snapshot, texts()); assert_eq(xs[0], "a".repeat(32).concat("!"));
+    let shared = texts(); let left = spawn { shared.map(|s| s.concat("!")) };
+    let right = spawn { shared.map(|s| s.concat("?")) };
+    assert_eq(left.join()[0], "a".repeat(32).concat("!"));
+    assert_eq(right.join()[1], "b".repeat(32).concat("?")); assert_eq(shared, texts());
+    let empty: Array[String] = []; assert_eq(empty.map(|s| s.concat("!")), []);
+}
+let main (): Unit = {
+    let baseline = live(); round(); if baseline >= 0 { assert_eq(live(), baseline); };
+    assert_eq(scoped([make(0), make(1)]), [0, 1]); assert_eq(unsafe { map_total() }, 2);
+    assert_eq(nested([Owner { resource: make(2) }, Owner { resource: make(3) }]), [2, 3]);
+    assert_eq(unsafe { map_total() }, 4); closures(); assert_eq(unsafe { map_total() }, 5);
+    let check_scope = |xs: Array[Resource]| {
+        let out = Array.map(xs, |r: Resource| unsafe { Resource.raw(r) });
+        assert_eq(unsafe { map_total() }, 5); out
+    };
+    assert_eq(check_scope([make(5), make(6)]), [5, 6]); assert_eq(unsafe { map_total() }, 7);
+    println("Array.map: moved child references, immutable aliases and scoped cleanup")
+}
