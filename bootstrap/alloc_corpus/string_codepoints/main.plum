@@ -1,6 +1,6 @@
 // One array per call, sized by codepoints rather than UTF-8 bytes.
-// Each iteration creates six strings for split and four for chars_of;
-// literal inputs are static. The byte ceiling pins exact array capacity.
+// Each iteration creates three non-ASCII strings per call and one exact
+// array. ASCII characters and empty split edges share immortal storage.
 let main (): Unit = {
     for i in 0..1000 {
         let pieces = "aé中😀".split("");

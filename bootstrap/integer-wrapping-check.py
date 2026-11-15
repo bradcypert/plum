@@ -70,14 +70,21 @@ def main():
             run(exe)
         # User bindings with primitive-like names must retain their bodies and
         # their transitive callees, including when used as function values.
-        definitions = ['let only_user (): Int = 73']
+        definitions = ['let only_user (): Int = 73',
+                       'let only_value_helper (): Int = 91']
         checks = []
         for kind in ('i8', 'i16', 'i32', 'u8', 'u16', 'u32', 'u64'):
             for op in ('add', 'sub', 'mul'):
                 name = f'{kind}_wrapping_{op}_raw'
-                definitions.append(f'let {name} (a: Int) (b: Int): Int = only_user()')
-                checks.append(f'assert_eq({name}(1, 2), 73);')
-                checks.append(f'let f_{name} = {name}; assert_eq(f_{name}(1, 2), 73);')
+                value_only = kind == 'u64' and op == 'mul'
+                helper = 'only_value_helper' if value_only else 'only_user'
+                expected = 91 if value_only else 73
+                definitions.append(f'let {name} (a: Int) (b: Int): Int = {helper}()')
+                # This wrapper and its helper must be retained solely through
+                # the function-value reference, independently of direct calls.
+                if not value_only:
+                    checks.append(f'assert_eq({name}(1, 2), 73);')
+                checks.append(f'let f_{name} = {name}; assert_eq(f_{name}(1, 2), {expected});')
         source.write_text('\n'.join(definitions) + '\nlet main (): Unit = {\n' +
                           '\n'.join(checks) + '\n()}\n')
         for mode in ([], ['--release']):

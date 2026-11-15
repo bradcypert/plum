@@ -1142,12 +1142,14 @@ let plum__string_trim_end_raw (s: String): String = ""
 
 /// Whitespace removed from the start, using the same Unicode whitespace
 /// predicate as String.trim. Unchanged input shares its owned storage;
-/// changed input copies only the retained UTF-8 bytes.
+/// changed nonempty input copies only the retained UTF-8 bytes. Empty
+/// results use shared static storage.
 pub let String.trim_start (s: String): String = plum__string_trim_start_raw(s)
 
 /// Whitespace removed from the end, using the same Unicode whitespace
 /// predicate as String.trim. Unchanged input shares its owned storage;
-/// changed input copies only the retained UTF-8 bytes.
+/// changed nonempty input copies only the retained UTF-8 bytes. Empty
+/// results use shared static storage.
 pub let String.trim_end (s: String): String = plum__string_trim_end_raw(s)
 
 /// Split on newlines.

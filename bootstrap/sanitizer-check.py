@@ -83,6 +83,9 @@ def main():
             run([compiler, 'build', root / 'bootstrap/exec_corpus/literal_emission', '--sanitize=address', '--memory-stats', *flags, '-o', literal])
             run([literal], contains='literal emission preserves sections, order, aliases and reuse')
             for name, message in [('string_slice', 'slices preserve codepoint bounds, raw bytes, aliases and bounded stack'),
+                                  ('string_fragment_storage', 'String fragments: shared identities, static empties, bounded stack builder and compact parts'),
+                                  ('ascii_character_storage', 'ASCII characters: immutable pooled cells, Unicode/raw grouping, aliases and bounded heap'),
+                                  ('array_remove_ownership', 'Array.remove: consuming reuse, exact shared copies, scalar bits and scoped owners'),
                                   ('bytes_slice_ownership', 'byte slices: shared identities, static empties, compact subranges and immutable aliases'),
                                   ('bytes_concat_ownership', 'Bytes.concat: consuming reuse, binary data, immutable aliases and operand order'),
                                   ('array_concat_ownership', 'Array.concat: owned batch appends, immutable aliases, operand order and scoped owners'),
