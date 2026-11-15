@@ -2772,3 +2772,22 @@ pub let test_array_push_snapshots (): Unit = {
         };
     };
 }
+
+pub let test_array_map_string_growth (): Unit = {
+    for count in [0, 1, 2, 7, 16] {
+        for rounds in [0, 1, 2, 17, 64] {
+            let mut values: Array[String] = [];
+            for i in 0..count { values = values.push(i.to_string().repeat(8)); };
+            let saved = values;
+            for round in 0..rounds { values = values.map(|s| s.concat("!")); };
+            assert_eq(values.len(), count); assert_eq(saved.len(), count);
+            for i in 0..count {
+                let original = i.to_string().repeat(8);
+                assert_eq(saved[i], original);
+                assert_eq(values[i], original.concat("!".repeat(rounds)));
+            };
+            let sizes = values.map(|s| s.len());
+            for i in 0..count { assert_eq(sizes[i], i.to_string().len() * 8 + rounds); };
+        };
+    };
+}

@@ -1,0 +1,10 @@
+// The unique parent transfers each String to its consuming callback.
+// Retaining it first would force 32,768 full String copies instead of
+// geometric reserve growth. Bound both allocation count and traffic.
+let main (): Unit = {
+    let mut xs: Array[String] = [];
+    for i in 0..128 { xs = xs.push(i.to_string().repeat(16)); };
+    for round in 0..256 { xs = xs.map(|s| s.concat("!")); };
+    assert_eq(xs.len(), 128);
+    for i in 0..128 { assert_eq(xs[i], i.to_string().repeat(16).concat("!".repeat(256))); };
+}

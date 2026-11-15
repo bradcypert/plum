@@ -1,0 +1,1 @@
+Array.map: moved child references, immutable aliases and scoped cleanup

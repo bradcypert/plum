@@ -2237,8 +2237,8 @@ let cg_reads_max (name: String) (e: typecheck.TExpr): Int =
         TMatchReleaseBefore(_, body) => cg_reads_max(name, body),
         TReleaseBefore(names, body) => cg_cap2((if Array.contains(names, name) { 1 } else { 0 }) + cg_reads_max(name, body)),
         TResetBefore(source, _, body) => cg_cap2((if name == source { 1 } else { 0 }) + cg_reads_max(name, body)),
-        TMatch(sc, arms) => cg_cap2(cg_reads_max(name, sc) + cg_reads_max_arms(name, arms, 0, 0)),
-        TMatchReuse(sc, arms, _, _) => cg_cap2(cg_reads_max(name, sc) + cg_reads_max_arms(name, arms, 0, 0)),
+        TMatch(sc, arms) => cg_cap2(cg_reads_max(name, sc) + cg_reads_max_arms(name, arms, 0, 0, 0)),
+        TMatchReuse(sc, arms, _, _) => cg_cap2(cg_reads_max(name, sc) + cg_reads_max_arms(name, arms, 0, 0, 0)),
         TBlockE(b) => cg_reads_max_block(name, b),
         // A loop body and a closure body can both run more than once, so
         // one syntactic read there is not one dynamic read. Two is
@@ -2264,7 +2264,20 @@ let cg_reads_max (name: String) (e: typecheck.TExpr): Int =
 let cg_movable_params (body: typecheck.TExpr) (ps: Array[typecheck.TParam]) (i: Int) (acc: Array[String]): Array[String] =
     if i >= ps.len() { acc } else {
         cg_movable_params(body, ps, i + 1,
-            if cg_reads_max(ps[i].name, body) <= 1 { acc.push(ps[i].name) } else { acc })
+            if cg_reads_max(ps[i].name, body) <= 1 && !lv_reset_conflict(ps[i].name, body) { acc.push(ps[i].name) } else { acc })
+    }
+
+// Captures belong to the closure cell and must never enter this set.
+// Count the rewritten body, including any additional reuse-candidate reads,
+// just as named functions do. A lifted closure owns only its parameters.
+// Scoped parameters retain their original cleanup time within each call.
+// The set is name-based: reject rebound names so it cannot authorize a
+// move from a different local slot that happens to have the same spelling.
+let cg_closure_movable (p: CgProgram) (body: typecheck.TExpr) (params: Array[String]) (itys: Array[typecheck.ITy]) (i: Int) (acc: Array[String]): Array[String] =
+    if i >= params.len() { acc } else {
+        cg_closure_movable(p, body, params, itys, i + 1,
+            if cg_can_release_early(p, cg_concrete(p, itys[i])) && cg_reads_max(params[i], body) <= 1
+                && !lv_reset_conflict(params[i], body) { acc.push(params[i]) } else { acc })
     }
 
 let cg_is_movable (p: CgProgram) (name: String): Bool = cg_name_in(p.movable, name, 0)
@@ -2425,6 +2438,7 @@ let lv_reset_conflict (source: String) (e: typecheck.TExpr): Bool = {
             TSAssign(nm, _) => nm == source, TSExpr(_) => false,
         }),
         TMatch(_, arms) => Array.any(arms, |a| Array.contains(lv_pat_names(a.pattern, []), source)),
+        TMatchReuse(_, arms, _, _) => Array.any(arms, |a| Array.contains(lv_pat_names(a.pattern, []), source)),
         TFor(pat, _, _, _) => Array.contains(lv_pat_names(pat, []), source),
         TForArray(pat, _, _) => Array.contains(lv_pat_names(pat, []), source),
         TClosure(ps, _) => Array.contains(ps, source),
@@ -2608,11 +2622,10 @@ let lv_node (ctx: LvCtx) (node: typecheck.TNode): typecheck.TNode =
         // the cell's own slot, so the closure's release drops it a
         // second time. A closure called twice then reads freed memory.
         //
-        // The continuation still carries `body`, which is what keeps the
-        // closure's own parameters live: a lambda's parameters are not
-        // in `cg_movable_params` (that is computed for the enclosing
-        // function), so the interlock that stops `Some(x)` recycling
-        // `x`'s own cell into itself is this, and only this.
+        // The continuation also keeps parameters live during rewriting:
+        // `Some(x)` must not recycle x's own cell while storing x in it.
+        // The lifted function computes its movable parameters afterward,
+        // counting the rewritten body's additional candidate reads.
         TClosure(ps, body) => TClosure(ps, lv_expr(LvCtx { exprs: lv_future_exprs([body], 0), names: [], writes: [], scope: lv_cat_names([], ps, 0), replaced: [] }, body)),
         // `spawn` runs its block on another thread, at a time nothing
         // here orders. Everything it touches stays live.
@@ -2837,17 +2850,19 @@ let cg_reads_max_list (name: String) (xs: Array[typecheck.TExpr]) (i: Int) (acc:
 let cg_reads_max_fields (name: String) (fs: Array[typecheck.TFieldInit]) (i: Int) (acc: Int): Int =
     if i >= fs.len() { cg_cap2(acc) } else { cg_reads_max_fields(name, fs, i + 1, cg_cap2(acc + cg_reads_max(name, fs[i].value))) }
 
-// Arms are alternatives, so the maximum. An arm whose pattern REBINDS the
-// name shadows it, and reads below refer to something else.
-let cg_reads_max_arms (name: String) (arms: Array[typecheck.TArm]) (i: Int) (best: Int): Int =
+// Bodies are alternatives, but reaching a later arm may evaluate every
+// preceding guard. Carry those reads into each path's count. Pattern-bound
+// names shadow the outer name in both the guard and body.
+let cg_reads_max_arms (name: String) (arms: Array[typecheck.TArm]) (i: Int) (prior: Int) (best: Int): Int =
     if i >= arms.len() { best } else {
-        let here = if cg_pattern_binds(arms[i].pattern, name) { 0 } else {
-            cg_cap2(cg_reads_max(name, arms[i].body) + match arms[i].guard {
-                Some(g) => cg_reads_max(name, g),
-                None => 0,
-            })
-        };
-        cg_reads_max_arms(name, arms, i + 1, cg_max2(best, here))
+        let shadow = cg_pattern_binds(arms[i].pattern, name);
+        let guard = if shadow { 0 } else { match arms[i].guard {
+            Some(g) => cg_reads_max(name, g),
+            None => 0,
+        } };
+        let reached = cg_cap2(prior + guard);
+        let here = cg_cap2(reached + (if shadow { 0 } else { cg_reads_max(name, arms[i].body) }));
+        cg_reads_max_arms(name, arms, i + 1, reached, cg_max2(best, here))
     }
 
 let cg_reads_max_block (name: String) (b: typecheck.TBlock): Int =
@@ -4067,7 +4082,7 @@ let cg_closure (p: CgProgram) (env: Array[CgSlot]) (n: Int) (params: Array[Strin
     // A lifted closure is a different function. Its calls must not mark
     // the enclosing named function for replay; closures are emitted with
     // tail=false and retain their existing cleanup and frame policy.
-    let closure_p = CgProgram { tail_observation: None, ..p };
+    let closure_p = CgProgram { movable: cg_closure_movable(p, body, params, param_itys, 0, []), tail_observation: None, ..p };
     let inner = cg_expr(closure_p, inner_env, n + 1, body);
     let lifted = "define ${cg_llvm_ty(inner.ty)} ${fn_name}(ptr %env".concat(cg_closure_param_decls(param_tys, 0, "")).concat(") {\nentry:\n")
         .concat(cg_capture_loads(used, 0, ""))
@@ -4080,8 +4095,8 @@ let cg_closure (p: CgProgram) (env: Array[CgSlot]) (n: Int) (params: Array[Strin
         // and every heap ARGUMENT it was handed.
         //
         // The argument half is the one that bites: a caller hands a
-        // closure an owned value -- `Array.map` explicitly increments
-        // each element first, "the closure consumes what it is given"
+        // closure an owned value -- `Array.map` transfers a unique slot
+        // or retains a shared element, "the closure consumes what it is given"
         // -- and nothing ever gave it back. `Array.map` over an array
         // of heap elements leaked one cell PER ELEMENT, which is how
         // the JSON stringifier came to leak proportionally to the
@@ -4330,10 +4345,9 @@ let cg_array_ns_call (p: CgProgram) (env: Array[CgSlot]) (n: Int) (fn_name: Stri
 
 // `Array.map(xs, f)` building its result into `xs`'s own cell.
 //
-// Element types that need releasing are handled, not refused. The loop
-// drops the source's own reference to element `i` once the closure has
-// taken its own -- see `cg_reuse_elem_drop`, which is also why `same`
-// is computed BEFORE the loop rather than after it.
+// A reused slot transfers its reference into the consuming callback.
+// A shared source retains the argument instead. Scoped values keep the
+// old retain/call/drop order so observable cleanup is not brought forward.
 //
 // Acquire an owned source through ordinary argument lowering. A later
 // callback operand may read, capture or replace its slot. Its resulting
@@ -4348,6 +4362,7 @@ let cg_array_map_reuse (p: CgProgram) (env: Array[CgSlot]) (n: Int) (nm: String)
         Some(slot) => {
             let elem = cg_elem_ty(slot.ty);
             let elem_ity = cg_array_elem_ity(p, slot.ity);
+            let move_elem = cg_is_heap(elem) && cg_can_release_early(p, elem_ity);
             let a = cg_move_or_own(p, env, n, args[0]);
             let old = a.val;
             let f = cg_expr(p, env, a.n, args[1]);
@@ -4359,16 +4374,15 @@ let cg_array_map_reuse (p: CgProgram) (env: Array[CgSlot]) (n: Int) (nm: String)
             let lp = cg_array_loop(iv, len, f.n + 4);
             let b = lp.body_n;
             let ev = cg_reg(b + 3);
+            let slot_ptr = cg_elem_ptr_reg(b);
             let body = cg_elem_ptr_lines(old, lp.idx_reg, b)
-                .concat("  ").concat(ev).concat(" = load ").concat(cg_llvm_ty(elem)).concat(", ptr ").concat(cg_elem_ptr_reg(b)).concat("\n")
-                .concat(cg_inc(elem, ev))
+                .concat(if move_elem {
+                    "  ${ev} = call ptr @plum_array_map_arg(ptr ${slot_ptr}, i1 ${same})\n"
+                } else {
+                    "  ${ev} = load ${cg_llvm_ty(elem)}, ptr ${slot_ptr}\n".concat(cg_inc(elem, ev))
+                })
                 .concat(cg_invoke(f.val, ret, ", ${cg_llvm_ty(elem)} ${ev}", b + 4))
-                // Before the store, so the slot is not left holding a
-                // reference nobody owns. Safe when the closure returned
-                // the element it was given: that value carries the
-                // reference the `cg_inc` above added, so it survives
-                // this drop and the store below re-homes it.
-                .concat(cg_reuse_elem_drop(elem_ity, same, ev, b + 9))
+                .concat(if move_elem { "" } else { cg_reuse_elem_drop(elem_ity, same, ev, b + 9) })
                 .concat(cg_elem_ptr_lines(out, lp.idx_reg, b + 6))
                 .concat("  store ").concat(cg_llvm_ty(ret)).concat(" ").concat(cg_reg(b + 5)).concat(", ptr ").concat(cg_elem_ptr_reg(b + 6)).concat("\n");
             let ldrop = cg_label(b + 11);
@@ -4377,10 +4391,8 @@ let cg_array_map_reuse (p: CgProgram) (env: Array[CgSlot]) (n: Int) (nm: String)
                 code: a.code.concat(f.code)
                     .concat("  ").concat(len).concat(" = call i64 @plum_array_len(ptr ").concat(old).concat(")\n")
                     .concat("  ").concat(out).concat(" = call ptr @plum_array_reuse(ptr ").concat(old).concat(", i64 ").concat(len).concat(")\n")
-                    // Hoisted above the loop because the BODY needs it
-                    // too: whether each element's source reference is
-                    // this loop's to drop is the same question as
-                    // whether the cell was recycled.
+                    // For nonempty sources, equality proves that the
+                    // loop owns the slots it transfers or releases.
                     .concat("  ").concat(same).concat(" = icmp eq ptr ").concat(out).concat(", ").concat(old).concat("\n")
                     .concat(lp.pre).concat(body).concat(lp.post)
                     // The source is only released when it was NOT reused.
@@ -4542,7 +4554,7 @@ let cg_array_reuse_slot (p: CgProgram) (env: Array[CgSlot]) (cand: String) (args
         match cg_lookup(env, cand) {
             None => None,
             // No condition on the ELEMENT type any more: the loop
-            // body drops what it overwrites. What is left is only
+            // body transfers or drops what it overwrites. What is left is only
             // "is this actually an array slot".
             Some(slot) => match slot.ty { CgArray(_) => Some(slot), _ => None },
         }
