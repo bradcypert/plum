@@ -96,6 +96,7 @@ def main():
                                   ('array_reverse_ownership', 'Array.reverse: permutations, aliases, function values and scoped owners'),
                                   ('array_set_ownership', 'Array.set: consuming reuse, persistent snapshots, operand aliases and scalar/heap ownership'),
                                   ('array_callback_ownership', 'Array callbacks: receiver captures, operand order, immutable aliases and consuming reuse'),
+                                  ('array_map_transfer', 'Array.map: moved child references, immutable aliases and scoped cleanup'),
                                   ('string_char_len', 'character counts preserve UTF-8, NULs, aliases and bounded stack'),
                                   ('statement_cleanup_order', 'statement cleanup preserves LIFO groups, tail calls and escaped owners'),
                                   ('branch_emission', 'branch emission preserves guards, sections, effects and tail calls'),
