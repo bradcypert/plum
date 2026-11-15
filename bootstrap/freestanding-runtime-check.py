@@ -80,7 +80,12 @@ let unused_hosted (): Unit = { Os.cwd(); () }
 use Os;
 use Time;
 let apply (f: (Int) -> Int) (n: Int): Int = f(n)
+let rewrite (n: Int): Array[String] = {
+    let mut xs = ["initial"]; assert(xs.len() == 1);
+    for i in 0..n { xs = [i.to_string()]; }; xs
+}
 let exercise (): Unit = {
+    assert(rewrite(1)[0] == "0" && rewrite(1)[0] == "0");
     println(INITIAL);
     let left = "hello";
     let right = left.concat(" world");

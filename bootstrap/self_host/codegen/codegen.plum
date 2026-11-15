@@ -3487,8 +3487,11 @@ let cg_array_lit (p: CgProgram) (env: Array[CgSlot]) (n: Int) (elems: Array[type
 // Arrays cannot go through `cg_reuse_cell` like a struct or an enum.
 // A struct's size is a property of its TYPE; an array's is a property
 // of the individual cell, written in the cell's own header. So
-// recycling one means `@plum_array_reuse`, which sizes it, writes the
-// header, and declines when anybody else can still see it.
+// recycling one means `@plum_array_reset`, using the individual cell
+// capacity rather than a type size. The runtime consumes the offered owner
+// and checks uniqueness/capacity before releasing children or writing a header.
+// Shared and static
+// candidates are released normally; only a fitting unique cell is reset.
 let cg_array_lit_reuse (p: CgProgram) (env: Array[CgSlot]) (n: Int) (elems: Array[typecheck.TExpr]) (cands: Array[String]) (ty: CgTy): Emit =
     match cg_array_lit_cand(p, env, cands, 0) {
         None => cg_array_lit(p, env, n, elems, ty),
@@ -3496,41 +3499,20 @@ let cg_array_lit_reuse (p: CgProgram) (env: Array[CgSlot]) (n: Int) (elems: Arra
             let a = cg_args(p, env, n, elems);
             let old = cg_reg(a.n);
             let cell = cg_reg(a.n + 1);
-            let same = cg_reg(a.n + 2);
-            let ldrop = cg_label(a.n + 3);
-            let ljoin = cg_label(a.n + 4);
+            let elem_rel = if cg_is_heap(cg_elem_ty(slot.ty)) { cg_rel_sym(cg_array_elem_ity(p, slot.ity)) } else { "null" };
+            let rel = cg_rel_sym(cg_concrete(p, slot.ity));
             Emit {
                 code: a.code
                     .concat("  ").concat(old).concat(" = load ptr, ptr ").concat(slot.ptr).concat("\n")
                     .concat("  store ptr null, ptr ").concat(slot.ptr).concat("\n")
-                    // The old elements are released and the length
-                    // zeroed BEFORE the cell is offered up, so that
-                    // whichever way the offer goes -- recycled here, or
-                    // released below -- nothing releases them twice.
-                    .concat(cg_array_clear_call(p, slot, old))
-                    .concat("  ").concat(cell).concat(" = call ptr @plum_array_reuse(ptr ").concat(old).concat(", i64 ").concat(elems.len().to_string()).concat(")\n")
-                    .concat("  ").concat(same).concat(" = icmp eq ptr ").concat(cell).concat(", ").concat(old).concat("\n")
-                    .concat("  br i1 ").concat(same).concat(", label %").concat(ljoin).concat(", label %").concat(ldrop).concat("\n")
-                    .concat(ldrop).concat(":\n")
-                    // Null-safe and static-safe, both of which happen:
-                    // the slot is null on the first pass, and may hold
-                    // a hoisted constant cell.
-                    .concat(cg_dec(cg_concrete(p, slot.ity), old))
-                    .concat("  br label %").concat(ljoin).concat("\n")
-                    .concat(ljoin).concat(":\n")
+                    .concat("  ").concat(cell).concat(" = call ptr @plum_array_reset(ptr ").concat(old)
+                        .concat(", i64 ").concat(elems.len().to_string()).concat(", ptr ").concat(elem_rel).concat(", ptr ").concat(rel).concat(")\n")
                     .concat(cg_store_elem_vals(cell, a.vals)),
                 allocas: a.allocas, releases: a.releases, globals: a.globals,
-                val: cell, ty: ty, n: a.n + 5,
+                val: cell, ty: ty, n: a.n + 2,
             }
         },
     }
-
-// Nothing to release when the elements are scalars, which is the
-// common case and emits no call at all.
-let cg_array_clear_call (p: CgProgram) (slot: CgSlot) (old: String): String =
-    if cg_is_heap(cg_elem_ty(slot.ty)) {
-        "  call void @plum_array_clear(ptr ${old}, ptr ${cg_rel_sym(cg_array_elem_ity(p, slot.ity))})\n"
-    } else { "" }
 
 let cg_store_elem_vals (cell: String) (vals: Array[String]): String = {
     let mut parts: Array[String] = [];
@@ -3543,7 +3525,7 @@ let cg_store_elem_vals (cell: String) (vals: Array[String]): String = {
 }
 
 // An array slot the move analysis has not already claimed. Unlike
-// `cg_reuse_cand` there is no size test: `@plum_array_reuse` does that
+// `cg_reuse_cand` there is no size test: `@plum_array_reset` does that
 // itself, against the cell's real capacity rather than its type.
 let cg_array_lit_cand (p: CgProgram) (env: Array[CgSlot]) (cands: Array[String]) (i: Int): Option[CgSlot] =
     if i >= cands.len() { None }

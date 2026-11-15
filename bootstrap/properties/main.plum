@@ -2733,3 +2733,14 @@ pub let test_string_fragment_storage (): Unit = {
         };
     }
 }
+
+pub let test_array_literal_reset (): Unit = {
+    for count in [0, 1, 2, 7, 8, 9, 32, 64] {
+        let seed = count.to_string().repeat(16);
+        let mut values = [seed]; let saved = values;
+        for i in 0..count { values = [i.to_string(), values[0]]; };
+        assert_eq(saved, [seed]);
+        if count == 0 { assert_eq(values, [seed]); }
+        else { assert_eq(values, [(count - 1).to_string(), if count == 1 { seed } else { (count - 2).to_string() }]); };
+    };
+}
