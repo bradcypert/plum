@@ -2344,7 +2344,7 @@ pub let cg_runtime (heap: Bool): String = cg_lines([
     "  %isnull = icmp eq ptr %a, null",
     "  br i1 %isnull, label %fresh, label %check",
     "check:",
-    "  %rc = load i64, ptr %a",
+    "  %rc = load atomic i64, ptr %a monotonic, align 8",
     "  %sole = icmp eq i64 %rc, 1",
     "  br i1 %sole, label %sized, label %fresh",
     "sized:",

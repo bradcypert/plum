@@ -4346,8 +4346,8 @@ let cg_array_ns_call (p: CgProgram) (env: Array[CgSlot]) (n: Int) (fn_name: Stri
 // `Array.map(xs, f)` building its result into `xs`'s own cell.
 //
 // A reused slot transfers its reference into the consuming callback.
-// A shared source retains the argument instead. Scoped values keep the
-// old retain/call/drop order so observable cleanup is not brought forward.
+// A shared source retains the argument instead. Scoped values keep a
+// separate source owner through all callbacks, preserving cleanup timing.
 //
 // Acquire an owned source through ordinary argument lowering. A later
 // callback operand may read, capture or replace its slot. Its resulting
@@ -4359,56 +4359,66 @@ let cg_array_ns_call (p: CgProgram) (env: Array[CgSlot]) (n: Int) (fn_name: Stri
 let cg_array_map_reuse (p: CgProgram) (env: Array[CgSlot]) (n: Int) (nm: String) (args: Array[typecheck.TExpr]) (cand: String): Emit =
     match cg_array_reuse_slot(p, env, cand, args) {
         None => cg_array_ns_call(p, env, n, nm, args),
-        Some(slot) => {
-            let elem = cg_elem_ty(slot.ty);
-            let elem_ity = cg_array_elem_ity(p, slot.ity);
-            let move_elem = cg_is_heap(elem) && cg_can_release_early(p, elem_ity);
-            let a = cg_move_or_own(p, env, n, args[0]);
-            let old = a.val;
-            let f = cg_expr(p, env, a.n, args[1]);
-            let ret = cg_closure_ret(f.ty);
-            let len = cg_reg(f.n);
-            let out = cg_reg(f.n + 1);
-            let iv = cg_reg(f.n + 2);
-            let same = cg_reg(f.n + 3);
-            let lp = cg_array_loop(iv, len, f.n + 4);
-            let b = lp.body_n;
-            let ev = cg_reg(b + 3);
-            let slot_ptr = cg_elem_ptr_reg(b);
-            let body = cg_elem_ptr_lines(old, lp.idx_reg, b)
-                .concat(if move_elem {
-                    "  ${ev} = call ptr @plum_array_map_arg(ptr ${slot_ptr}, i1 ${same})\n"
-                } else {
-                    "  ${ev} = load ${cg_llvm_ty(elem)}, ptr ${slot_ptr}\n".concat(cg_inc(elem, ev))
-                })
-                .concat(cg_invoke(f.val, ret, ", ${cg_llvm_ty(elem)} ${ev}", b + 4))
-                .concat(if move_elem { "" } else { cg_reuse_elem_drop(elem_ity, same, ev, b + 9) })
-                .concat(cg_elem_ptr_lines(out, lp.idx_reg, b + 6))
-                .concat("  store ").concat(cg_llvm_ty(ret)).concat(" ").concat(cg_reg(b + 5)).concat(", ptr ").concat(cg_elem_ptr_reg(b + 6)).concat("\n");
-            let ldrop = cg_label(b + 11);
-            let lskip = cg_label(b + 12);
-            Emit {
-                code: a.code.concat(f.code)
-                    .concat("  ").concat(len).concat(" = call i64 @plum_array_len(ptr ").concat(old).concat(")\n")
-                    .concat("  ").concat(out).concat(" = call ptr @plum_array_reuse(ptr ").concat(old).concat(", i64 ").concat(len).concat(")\n")
-                    // For nonempty sources, equality proves that the
-                    // loop owns the slots it transfers or releases.
-                    .concat("  ").concat(same).concat(" = icmp eq ptr ").concat(out).concat(", ").concat(old).concat("\n")
-                    .concat(lp.pre).concat(body).concat(lp.post)
-                    // The source is only released when it was NOT reused.
-                    // When it was, the cell IS the result and releasing it
-                    // would free what is being returned.
-                    .concat("  br i1 ").concat(same).concat(", label %").concat(lskip).concat(", label %").concat(ldrop).concat("\n")
-                    .concat(ldrop).concat(":\n")
-                    .concat(cg_dec(cg_concrete(p, slot.ity), old))
-                    .concat("  br label %").concat(lskip).concat("\n")
-                    .concat(lskip).concat(":\n")
-                    .concat(cg_dec_cg(f.ty, f.val)),
-                allocas: "  ${iv} = alloca i64\n${a.allocas}${f.allocas}",
-                releases: a.releases.concat(f.releases), globals: a.globals.concat(f.globals), val: out, ty: CgArray(ret), n: b + 13,
-            }
-        },
+        Some(slot) => cg_array_map_owned(p, env, cg_move_or_own(p, env, n, args[0]), cg_concrete(p, slot.ity), true, args[1]),
     }
+
+// Both source acquisition paths hand over one owned reference. Test reuse
+// after evaluating the callback, so published/captured aliases are visible.
+// Scoped elements keep a separate source alive through every callback:
+// transferring/dropping those slots would bring their finalization forward.
+// Only named reuse candidates keep empty builder capacity. General empty
+// results retain their pooled representation: offer no storage for reuse,
+// then release the original source through the ordinary cleanup below.
+let cg_array_map_owned (p: CgProgram) (env: Array[CgSlot]) (a: BorrowEmit) (arr_ity: typecheck.ITy) (keep_empty: Bool) (f_e: typecheck.TExpr): Emit = {
+    let elem = cg_elem_ty(a.ty);
+    let elem_ity = cg_array_elem_ity(p, arr_ity);
+    let reuse = cg_rc_enabled(()) && cg_can_release_early(p, elem_ity);
+    let move_elem = cg_is_heap(elem) && reuse;
+    let old = a.val;
+    let f = cg_expr(p, env, a.n, f_e);
+    let ret = cg_closure_ret(f.ty);
+    let len = cg_reg(f.n);
+    let out = cg_reg(f.n + 1);
+    let candidate = if keep_empty { old } else { out.concat("_candidate") };
+    let iv = cg_reg(f.n + 2);
+    let same = cg_reg(f.n + 3);
+    let lp = cg_array_loop(iv, len, f.n + 4);
+    let b = lp.body_n;
+    let ev = cg_reg(b + 3);
+    let slot_ptr = cg_elem_ptr_reg(b);
+    let body = cg_elem_ptr_lines(old, lp.idx_reg, b)
+        .concat(if move_elem {
+            "  ${ev} = call ptr @plum_array_map_arg(ptr ${slot_ptr}, i1 ${same})\n"
+        } else {
+            "  ${ev} = load ${cg_llvm_ty(elem)}, ptr ${slot_ptr}\n".concat(cg_inc(elem, ev))
+        })
+        .concat(cg_invoke(f.val, ret, ", ${cg_llvm_ty(elem)} ${ev}", b + 4))
+        .concat(cg_elem_ptr_lines(out, lp.idx_reg, b + 6))
+        .concat("  store ").concat(cg_llvm_ty(ret)).concat(" ").concat(cg_reg(b + 5)).concat(", ptr ").concat(cg_elem_ptr_reg(b + 6)).concat("\n");
+    let ldrop = cg_label(b + 11);
+    let lskip = cg_label(b + 12);
+    Emit {
+        code: a.code.concat(f.code)
+            .concat("  ").concat(len).concat(" = call i64 @plum_array_len(ptr ").concat(old).concat(")\n")
+            .concat(if reuse && !keep_empty {
+                "  ${out}_empty = icmp eq i64 ${len}, 0\n  ${candidate} = select i1 ${out}_empty, ptr null, ptr ${old}\n"
+            } else { "" })
+            .concat(if reuse { "  ${out} = call ptr @plum_array_reuse(ptr ${candidate}, i64 ${len})\n" }
+            else { "  ${out} = call ptr @plum_array_new_result(i64 ${len})\n" })
+            // For nonempty sources, equality proves that the
+            // loop owns the slots it transfers or releases.
+            .concat(if reuse { "  ${same} = icmp eq ptr ${out}, ${old}\n" } else { "" })
+            .concat(lp.pre).concat(body).concat(lp.post)
+            .concat(if reuse {
+                "  br i1 ${same}, label %${lskip}, label %${ldrop}\n${ldrop}:\n"
+                    .concat(cg_dec(arr_ity, old))
+                    .concat("  br label %${lskip}\n${lskip}:\n")
+            } else { cg_dec(arr_ity, old) })
+            .concat(cg_dec_cg(f.ty, f.val)),
+        allocas: "  ${iv} = alloca i64\n${a.allocas}${f.allocas}",
+        releases: a.releases.concat(f.releases), globals: a.globals.concat(f.globals), val: out, ty: CgArray(ret), n: b + 13,
+    }
+}
 
 // The element type an `Array[T]` holds, as an `ITy` -- which is what
 // picking a release function needs, and what a `CgTy` cannot say.
@@ -4423,9 +4433,8 @@ let cg_array_elem_ity (p: CgProgram) (arr: typecheck.ITy): typecheck.ITy = {
 // For nonempty sources, `same` proves unique ownership of the result.
 // Static empty inputs may also forward, but their loops visit no slots.
 // The reference a nonempty source held in slot `i` then has
-// nowhere left to live: the slot is about to hold something else
-// (`map`), or the element is being dropped or moved forward
-// (`filter`). Releasing it here is what stops it leaking, and this is
+// nowhere left to live: filter drops or moves the element forward.
+// Releasing it here is what stops it leaking, and this is
 // the whole of the loop-body change that lets arrays of strings and
 // structs be recycled at all.
 //
@@ -4560,39 +4569,8 @@ let cg_array_reuse_slot (p: CgProgram) (env: Array[CgSlot]) (cand: String) (args
         }
     } else { None }
 
-let cg_array_map (p: CgProgram) (env: Array[CgSlot]) (n: Int) (arr_e: typecheck.TExpr) (f_e: typecheck.TExpr): Emit = {
-    let a = cg_expr(p, env, n, arr_e);
-    let elem = cg_elem_ty(a.ty);
-    let f = cg_expr(p, env, a.n, f_e);
-    let ret = cg_closure_ret(f.ty);
-    let len = cg_reg(f.n);
-    let out = cg_reg(f.n + 1);
-    let iv = cg_reg(f.n + 2);
-    let lp = cg_array_loop(iv, len, f.n + 3);
-    let b = lp.body_n;
-    let ev = cg_reg(b + 3);
-    let body = cg_elem_ptr_lines(a.val, lp.idx_reg, b)
-        .concat("  ").concat(ev).concat(" = load ").concat(cg_llvm_ty(elem)).concat(", ptr ").concat(cg_elem_ptr_reg(b)).concat("\n")
-        // Rule 4: the closure consumes what it is given, so the
-        // borrowed element has to become owned first. The source array
-        // keeps its own reference.
-        .concat(cg_inc(elem, ev))
-        .concat(cg_invoke(f.val, ret, ", ${cg_llvm_ty(elem)} ${ev}", b + 4))
-        .concat(cg_elem_ptr_lines(out, lp.idx_reg, b + 6))
-        .concat("  store ").concat(cg_llvm_ty(ret)).concat(" ").concat(cg_reg(b + 5)).concat(", ptr ").concat(cg_elem_ptr_reg(b + 6)).concat("\n");
-    let code = a.code.concat(f.code)
-        .concat("  ").concat(len).concat(" = call i64 @plum_array_len(ptr ").concat(a.val).concat(")\n")
-        .concat("  ").concat(out).concat(" = call ptr @plum_array_new_result(i64 ").concat(len).concat(")\n")
-        .concat(lp.pre).concat(body).concat(lp.post)
-        // Both operands arrived OWNED (`cg_expr`, not `cg_borrow`), so
-        // both are this call's to release. Neither was, which leaked
-        // the source array and the closure cell on every
-        // `Array.map`/`filter`/`fold` -- invisible when an array is
-        // used once, real the moment one is folded over twice.
-        .concat(cg_dec(cg_concrete(p, typecheck.texpr_ty(p.subst, arr_e)), a.val))
-        .concat(cg_dec_cg(f.ty, f.val));
-    Emit { code: code, allocas: "  ${iv} = alloca i64\n${a.allocas}${f.allocas}", releases: a.releases.concat(f.releases), globals: a.globals.concat(f.globals), val: out, ty: CgArray(ret), n: b + 9 }
-}
+let cg_array_map (p: CgProgram) (env: Array[CgSlot]) (n: Int) (arr_e: typecheck.TExpr) (f_e: typecheck.TExpr): Emit =
+    cg_array_map_owned(p, env, cg_borrow_owned(p, env, n, arr_e), cg_concrete(p, typecheck.texpr_ty(p.subst, arr_e)), false, f_e)
 
 // The output array is allocated at the INPUT's length and its length
 // header is patched down afterwards to however many elements were kept.
