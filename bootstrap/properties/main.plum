@@ -2791,3 +2791,25 @@ pub let test_array_map_string_growth (): Unit = {
         };
     };
 }
+
+let map_words (count: Int): Array[String] = {
+    let mut values: Array[String] = [];
+    for i in 0..count { values = values.push(i.to_string().repeat(8)); };
+    values
+}
+pub let test_array_map_owned_sources (): Unit = {
+    for count in [0, 1, 2, 7, 16, 31] {
+        let out = map_words(count).map(|s| s.concat("!")).map(|s| s.concat("?"));
+        assert_eq(out.len(), count);
+        for i in 0..count { assert_eq(out[i], i.to_string().repeat(8).concat("!?")); };
+        for rounds in [0, 1, 2, 17] {
+            let mut values = map_words(count); let saved = values;
+            for round in 0..rounds { values = values.map(|s| s.concat("!")).map(|s| s.concat("?")); };
+            assert_eq(values.len(), count); assert_eq(saved.len(), count);
+            for i in 0..count {
+                let initial = i.to_string().repeat(8); assert_eq(saved[i], initial);
+                assert_eq(values[i], initial.concat("!?".repeat(rounds)));
+            };
+        };
+    };
+}
