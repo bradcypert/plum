@@ -35,6 +35,10 @@ with tempfile.TemporaryDirectory(prefix='plum-freestanding-') as tmp:
         'let main (): Unit = { let chars = chars_of("aé\\x00");\n'
         'assert(chars.len() == 3 && chars[0] == "a" && chars[1] == "é" && chars[2] == "\\x00");\n'
         'assert(chars[0].concat("!") == "a!");\n'
+        'let parts = "a::b".split("::");\n'
+        'assert(parts.len() == 2 && parts[0] == "a" && parts[1] == "b");\n'
+        'assert(",,,,,,,,".split(",").len() == 9);\n'
+        'assert(" \\u{2003}\\t ".trim() == "");\n'
         'println((unsafe { helper() }).to_string()); }\n')
     (native / 'value.h').write_text('#define VALUE 7\n')
     (native / 'helper.c').write_text('#include "value.h"\nlong long helper(void) { return VALUE; }\n'

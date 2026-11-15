@@ -205,13 +205,15 @@ subnormal value or signed zero.
 
 Whitespace removed from the start, using the same Unicode whitespace
 predicate as String.trim. Unchanged input shares its owned storage;
-changed input copies only the retained UTF-8 bytes.
+changed nonempty input copies only the retained UTF-8 bytes. Empty
+results use shared static storage.
 
 ## `let String.trim_end (s: String): String`
 
 Whitespace removed from the end, using the same Unicode whitespace
 predicate as String.trim. Unchanged input shares its owned storage;
-changed input copies only the retained UTF-8 bytes.
+changed nonempty input copies only the retained UTF-8 bytes. Empty
+results use shared static storage.
 
 ## `let String.lines (s: String): Array[String]`
 
