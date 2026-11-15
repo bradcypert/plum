@@ -135,14 +135,13 @@ jobs:
       - name: corpus
         run: ./bootstrap/corpus-check --shard ${{ matrix.shard }}/2
 
-  # In run 43153341707 the general sanitizer suite took 8m09s; storage
-  # suites then exhausted the combined job's 15-minute limit. Run them
-  # independently with the same freshly built compiler and full coverage.
+  # The sanitizer suite alone takes about 14m30s on hosted Linux. Leave
+  # headroom for setup, compiler self-tests, cleanup and runner variance.
   runtime_checks:
     name: Linux sanitizer and ownership checks
     needs: build
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v5
       - name: clang toolchain
