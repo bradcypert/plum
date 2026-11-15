@@ -86,6 +86,10 @@ let rewrite (n: Int): Array[String] = {
 }
 let exercise (): Unit = {
     assert(rewrite(1)[0] == "0" && rewrite(1)[0] == "0");
+    let empty: Array[Int] = []; let strings = empty.map(|x| x.to_string());
+    assert(strings.len() == 0 && empty.filter(|x| true).len() == 0);
+    assert(strings.push("value")[0] == "value" && strings.len() == 0);
+    assert(chars_of("").len() == 0);
     println(INITIAL);
     let left = "hello";
     let right = left.concat(" world");

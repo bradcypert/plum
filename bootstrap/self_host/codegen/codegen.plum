@@ -4407,9 +4407,9 @@ let cg_array_elem_ity (p: CgProgram) (arr: typecheck.ITy): typecheck.ITy = {
 // Dropping the SOURCE array's own reference to element `i`, and only
 // when the cell was actually recycled.
 //
-// `@plum_array_reuse` hands back the pointer it was given only when the
-// refcount was 1, so `same` means "we are the sole owner, and this cell
-// IS the result". The reference the source held in slot `i` then has
+// For nonempty sources, `same` proves unique ownership of the result.
+// Static empty inputs may also forward, but their loops visit no slots.
+// The reference a nonempty source held in slot `i` then has
 // nowhere left to live: the slot is about to hold something else
 // (`map`), or the element is being dropped or moved forward
 // (`filter`). Releasing it here is what stops it leaking, and this is
@@ -4513,8 +4513,7 @@ let cg_array_filter_reuse (p: CgProgram) (env: Array[CgSlot]) (n: Int) (nm: Stri
                     .concat("  store i64 0, ptr ").concat(cnt).concat("\n")
                     .concat(lp.pre).concat(body).concat(lp.post)
                     .concat("  ").concat(final_cnt).concat(" = load i64, ptr ").concat(cnt).concat("\n")
-                    .concat("  ").concat(final_cnt).concat("p = getelementptr i8, ptr ").concat(out).concat(", i64 8\n")
-                    .concat("  store i64 ").concat(final_cnt).concat(", ptr ").concat(final_cnt).concat("p\n")
+                    .concat("  call void @plum_array_filter_finish(ptr ").concat(out).concat(", i64 ").concat(final_cnt).concat(")\n")
                     // Released only when the cell was NOT reused. When
                     // it was, the cell IS the result.
                     .concat("  br i1 ").concat(same).concat(", label %").concat(lskip).concat(", label %").concat(ldrop).concat("\n")
@@ -4570,7 +4569,7 @@ let cg_array_map (p: CgProgram) (env: Array[CgSlot]) (n: Int) (arr_e: typecheck.
         .concat("  store ").concat(cg_llvm_ty(ret)).concat(" ").concat(cg_reg(b + 5)).concat(", ptr ").concat(cg_elem_ptr_reg(b + 6)).concat("\n");
     let code = a.code.concat(f.code)
         .concat("  ").concat(len).concat(" = call i64 @plum_array_len(ptr ").concat(a.val).concat(")\n")
-        .concat("  ").concat(out).concat(" = call ptr @plum_array_new(i64 ").concat(len).concat(")\n")
+        .concat("  ").concat(out).concat(" = call ptr @plum_array_new_result(i64 ").concat(len).concat(")\n")
         .concat(lp.pre).concat(body).concat(lp.post)
         // Both operands arrived OWNED (`cg_expr`, not `cg_borrow`), so
         // both are this call's to release. Neither was, which leaked
@@ -4620,12 +4619,11 @@ let cg_array_filter (p: CgProgram) (env: Array[CgSlot]) (n: Int) (arr_e: typeche
     let final_cnt = cg_reg(b + 13);
     let code = a.code.concat(f.code)
         .concat("  ").concat(len).concat(" = call i64 @plum_array_len(ptr ").concat(a.val).concat(")\n")
-        .concat("  ").concat(out).concat(" = call ptr @plum_array_new(i64 ").concat(len).concat(")\n")
+        .concat("  ").concat(out).concat(" = call ptr @plum_array_new_result(i64 ").concat(len).concat(")\n")
         .concat("  store i64 0, ptr ").concat(cnt).concat("\n")
         .concat(lp.pre).concat(body).concat(lp.post)
         .concat("  ").concat(final_cnt).concat(" = load i64, ptr ").concat(cnt).concat("\n")
-        .concat("  ").concat(final_cnt).concat("p = getelementptr i8, ptr ").concat(out).concat(", i64 8\n")
-        .concat("  store i64 ").concat(final_cnt).concat(", ptr ").concat(final_cnt).concat("p\n")
+        .concat("  call void @plum_array_filter_finish(ptr ").concat(out).concat(", i64 ").concat(final_cnt).concat(")\n")
         // Both operands arrived OWNED (`cg_expr`, not `cg_borrow`), so
         // both are this call's to release. Neither was, which leaked
         // the source array and the closure cell on every

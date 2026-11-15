@@ -1,0 +1,52 @@
+use Memory;
+extern "C" { fn empty_close(n: Int) -> Unit; fn empty_closed(n: Int) -> Int; }
+handle Resource { on_drop: empty_close }
+let make (n: Int): Resource = unsafe { Resource.from_raw(n) }
+let closed (n: Int): Int = unsafe { empty_closed(n) }
+let live (): Int = match Memory.snapshot() { Some(s) => s.live_bytes, None => -1 }
+let mapped (xs: Array[Int]): Array[String] = { let out = xs.map(|x| x.to_string()); assert_eq(xs.len(), 0); out }
+let filtered (xs: Array[Int]): Array[Int] = { let out = xs.filter(|x| x > 0); assert_eq(xs.len(), 0); out }
+let consume_map (xs: Array[Int]): Array[String] = xs.map(|x| x.to_string())
+let consume_filter (xs: Array[String]): Array[String] = xs.filter(|x| x.len() > 0)
+let memory_round (): Unit = {
+    let before = live(); let empty: Array[Int] = [];
+    let strings = mapped(empty); let ints = filtered(empty); let units = empty.map(|x| ());
+    let chars = chars_of(""); let argv = args();
+    if before >= 0 { assert_eq(live(), before); };
+    assert_eq(strings, []); assert_eq(ints, []); assert_eq(units, []); assert_eq(chars, []); assert_eq(argv, []);
+    assert_eq(consume_map(empty), []); assert_eq(consume_filter(strings), []);
+    assert_eq(strings.push("grown"), ["grown"]); assert_eq(strings, []);
+    let mut values = chars_of("");
+    for i in 0..4 { values = [i.to_string()]; };
+    assert_eq(values, ["3"]); assert_eq(chars_of(""), []);
+}
+let reserved (): Unit = {
+    let mut values = "x".repeat(4096).as_bytes().to_array(); values = values.filter(|x| false);
+    let before = live();
+    for i in 0..1000 { values = values.map(|x| x); values = values.push(i); values = values.filter(|x| false); };
+    if before >= 0 { assert_eq(live(), before); };
+    assert_eq(values, []);
+}
+let callbacks (): Unit = {
+    let events = ref(0); let empty: Array[Int] = [];
+    let out = Array.map({ events.set(events.get() * 10 + 1); empty }, {
+        events.set(events.get() * 10 + 2);
+        let owner = make(1);
+        |x: Int| { events.set(999); unsafe { owner.raw() } + x }
+    });
+    assert_eq(events.get(), 12); assert_eq(out, []); assert_eq(closed(1), 1);
+    let out = Array.filter(empty, {
+        events.set(events.get() * 10 + 3);
+        let owner = make(2);
+        |x: Int| { events.set(999); unsafe { owner.raw() } == x }
+    });
+    assert_eq(events.get(), 123); assert_eq(out, []); assert_eq(closed(2), 1);
+}
+let main (): Unit = {
+    let baseline = live(); memory_round(); reserved(); callbacks();
+    if baseline >= 0 { assert_eq(live(), baseline); };
+    let source: Array[Int] = []; let left = spawn { consume_map(source).push("left") };
+    let right = spawn { filtered(source).push(42) };
+    assert_eq(left.join(), ["left"]); assert_eq(right.join(), [42]); assert_eq(source, []);
+    println("Empty Array results: shared values, writable builders, callback lifetimes and retained reuse")
+}
