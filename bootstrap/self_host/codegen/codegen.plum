@@ -2237,8 +2237,8 @@ let cg_reads_max (name: String) (e: typecheck.TExpr): Int =
         TMatchReleaseBefore(_, body) => cg_reads_max(name, body),
         TReleaseBefore(names, body) => cg_cap2((if Array.contains(names, name) { 1 } else { 0 }) + cg_reads_max(name, body)),
         TResetBefore(source, _, body) => cg_cap2((if name == source { 1 } else { 0 }) + cg_reads_max(name, body)),
-        TMatch(sc, arms) => cg_cap2(cg_reads_max(name, sc) + cg_reads_max_arms(name, arms, 0, 0)),
-        TMatchReuse(sc, arms, _, _) => cg_cap2(cg_reads_max(name, sc) + cg_reads_max_arms(name, arms, 0, 0)),
+        TMatch(sc, arms) => cg_cap2(cg_reads_max(name, sc) + cg_reads_max_arms(name, arms, 0, 0, 0)),
+        TMatchReuse(sc, arms, _, _) => cg_cap2(cg_reads_max(name, sc) + cg_reads_max_arms(name, arms, 0, 0, 0)),
         TBlockE(b) => cg_reads_max_block(name, b),
         // A loop body and a closure body can both run more than once, so
         // one syntactic read there is not one dynamic read. Two is
@@ -2264,17 +2264,20 @@ let cg_reads_max (name: String) (e: typecheck.TExpr): Int =
 let cg_movable_params (body: typecheck.TExpr) (ps: Array[typecheck.TParam]) (i: Int) (acc: Array[String]): Array[String] =
     if i >= ps.len() { acc } else {
         cg_movable_params(body, ps, i + 1,
-            if cg_reads_max(ps[i].name, body) <= 1 { acc.push(ps[i].name) } else { acc })
+            if cg_reads_max(ps[i].name, body) <= 1 && !lv_reset_conflict(ps[i].name, body) { acc.push(ps[i].name) } else { acc })
     }
 
 // Captures belong to the closure cell and must never enter this set.
 // Count the rewritten body, including any additional reuse-candidate reads,
 // just as named functions do. A lifted closure owns only its parameters.
 // Scoped parameters retain their original cleanup time within each call.
+// The set is name-based: reject rebound names so it cannot authorize a
+// move from a different local slot that happens to have the same spelling.
 let cg_closure_movable (p: CgProgram) (body: typecheck.TExpr) (params: Array[String]) (itys: Array[typecheck.ITy]) (i: Int) (acc: Array[String]): Array[String] =
     if i >= params.len() { acc } else {
         cg_closure_movable(p, body, params, itys, i + 1,
-            if cg_can_release_early(p, cg_concrete(p, itys[i])) && cg_reads_max(params[i], body) <= 1 { acc.push(params[i]) } else { acc })
+            if cg_can_release_early(p, cg_concrete(p, itys[i])) && cg_reads_max(params[i], body) <= 1
+                && !lv_reset_conflict(params[i], body) { acc.push(params[i]) } else { acc })
     }
 
 let cg_is_movable (p: CgProgram) (name: String): Bool = cg_name_in(p.movable, name, 0)
@@ -2435,6 +2438,7 @@ let lv_reset_conflict (source: String) (e: typecheck.TExpr): Bool = {
             TSAssign(nm, _) => nm == source, TSExpr(_) => false,
         }),
         TMatch(_, arms) => Array.any(arms, |a| Array.contains(lv_pat_names(a.pattern, []), source)),
+        TMatchReuse(_, arms, _, _) => Array.any(arms, |a| Array.contains(lv_pat_names(a.pattern, []), source)),
         TFor(pat, _, _, _) => Array.contains(lv_pat_names(pat, []), source),
         TForArray(pat, _, _) => Array.contains(lv_pat_names(pat, []), source),
         TClosure(ps, _) => Array.contains(ps, source),
@@ -2846,17 +2850,19 @@ let cg_reads_max_list (name: String) (xs: Array[typecheck.TExpr]) (i: Int) (acc:
 let cg_reads_max_fields (name: String) (fs: Array[typecheck.TFieldInit]) (i: Int) (acc: Int): Int =
     if i >= fs.len() { cg_cap2(acc) } else { cg_reads_max_fields(name, fs, i + 1, cg_cap2(acc + cg_reads_max(name, fs[i].value))) }
 
-// Arms are alternatives, so the maximum. An arm whose pattern REBINDS the
-// name shadows it, and reads below refer to something else.
-let cg_reads_max_arms (name: String) (arms: Array[typecheck.TArm]) (i: Int) (best: Int): Int =
+// Bodies are alternatives, but reaching a later arm may evaluate every
+// preceding guard. Carry those reads into each path's count. Pattern-bound
+// names shadow the outer name in both the guard and body.
+let cg_reads_max_arms (name: String) (arms: Array[typecheck.TArm]) (i: Int) (prior: Int) (best: Int): Int =
     if i >= arms.len() { best } else {
-        let here = if cg_pattern_binds(arms[i].pattern, name) { 0 } else {
-            cg_cap2(cg_reads_max(name, arms[i].body) + match arms[i].guard {
-                Some(g) => cg_reads_max(name, g),
-                None => 0,
-            })
-        };
-        cg_reads_max_arms(name, arms, i + 1, cg_max2(best, here))
+        let shadow = cg_pattern_binds(arms[i].pattern, name);
+        let guard = if shadow { 0 } else { match arms[i].guard {
+            Some(g) => cg_reads_max(name, g),
+            None => 0,
+        } };
+        let reached = cg_cap2(prior + guard);
+        let here = cg_cap2(reached + (if shadow { 0 } else { cg_reads_max(name, arms[i].body) }));
+        cg_reads_max_arms(name, arms, i + 1, reached, cg_max2(best, here))
     }
 
 let cg_reads_max_block (name: String) (b: typecheck.TBlock): Int =
