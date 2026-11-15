@@ -3112,6 +3112,27 @@ let cg_runtime_fn (name: String): Option[String] =
     else if name == "wrapping_add_raw" { Some("@plum_wrapping_add") }
     else if name == "wrapping_sub_raw" { Some("@plum_wrapping_sub") }
     else if name == "wrapping_mul_raw" { Some("@plum_wrapping_mul") }
+    else if name == "i8_wrapping_add_raw" { Some("@plum_i8_wrapping_add") }
+    else if name == "i8_wrapping_sub_raw" { Some("@plum_i8_wrapping_sub") }
+    else if name == "i8_wrapping_mul_raw" { Some("@plum_i8_wrapping_mul") }
+    else if name == "i16_wrapping_add_raw" { Some("@plum_i16_wrapping_add") }
+    else if name == "i16_wrapping_sub_raw" { Some("@plum_i16_wrapping_sub") }
+    else if name == "i16_wrapping_mul_raw" { Some("@plum_i16_wrapping_mul") }
+    else if name == "i32_wrapping_add_raw" { Some("@plum_i32_wrapping_add") }
+    else if name == "i32_wrapping_sub_raw" { Some("@plum_i32_wrapping_sub") }
+    else if name == "i32_wrapping_mul_raw" { Some("@plum_i32_wrapping_mul") }
+    else if name == "u8_wrapping_add_raw" { Some("@plum_u8_wrapping_add") }
+    else if name == "u8_wrapping_sub_raw" { Some("@plum_u8_wrapping_sub") }
+    else if name == "u8_wrapping_mul_raw" { Some("@plum_u8_wrapping_mul") }
+    else if name == "u16_wrapping_add_raw" { Some("@plum_u16_wrapping_add") }
+    else if name == "u16_wrapping_sub_raw" { Some("@plum_u16_wrapping_sub") }
+    else if name == "u16_wrapping_mul_raw" { Some("@plum_u16_wrapping_mul") }
+    else if name == "u32_wrapping_add_raw" { Some("@plum_u32_wrapping_add") }
+    else if name == "u32_wrapping_sub_raw" { Some("@plum_u32_wrapping_sub") }
+    else if name == "u32_wrapping_mul_raw" { Some("@plum_u32_wrapping_mul") }
+    else if name == "u64_wrapping_add_raw" { Some("@plum_u64_wrapping_add") }
+    else if name == "u64_wrapping_sub_raw" { Some("@plum_u64_wrapping_sub") }
+    else if name == "u64_wrapping_mul_raw" { Some("@plum_u64_wrapping_mul") }
     else if name == "abs_raw" { Some("@plum_abs_raw") }
     else if name == "sqrt_raw" { Some("@plum_sqrt_raw") }
     else if name == "pow_raw" { Some("@plum_pow_raw") }

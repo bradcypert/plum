@@ -387,11 +387,17 @@ Every declaration, linked to the page that documents it.
 
 ### [prelude.I16](prelude.I16.md)
 
+- [`let I16.wrapping_add (a: I16) (b: I16): I16`](prelude.I16.md#I16.wrapping_add)
+- [`let I16.wrapping_sub (a: I16) (b: I16): I16`](prelude.I16.md#I16.wrapping_sub)
+- [`let I16.wrapping_mul (a: I16) (b: I16): I16`](prelude.I16.md#I16.wrapping_mul)
 - [`let I16.from (value: S): I16`](prelude.I16.md#I16.from)
 - [`let I16.try_from (value: S): Result[I16, IntegerConversionError]`](prelude.I16.md#I16.try_from)
 
 ### [prelude.I32](prelude.I32.md)
 
+- [`let I32.wrapping_add (a: I32) (b: I32): I32`](prelude.I32.md#I32.wrapping_add)
+- [`let I32.wrapping_sub (a: I32) (b: I32): I32`](prelude.I32.md#I32.wrapping_sub)
+- [`let I32.wrapping_mul (a: I32) (b: I32): I32`](prelude.I32.md#I32.wrapping_mul)
 - [`let I32.from (value: S): I32`](prelude.I32.md#I32.from)
 - [`let I32.try_from (value: S): Result[I32, IntegerConversionError]`](prelude.I32.md#I32.try_from)
 
@@ -402,6 +408,9 @@ Every declaration, linked to the page that documents it.
 
 ### [prelude.I8](prelude.I8.md)
 
+- [`let I8.wrapping_add (a: I8) (b: I8): I8`](prelude.I8.md#I8.wrapping_add)
+- [`let I8.wrapping_sub (a: I8) (b: I8): I8`](prelude.I8.md#I8.wrapping_sub)
+- [`let I8.wrapping_mul (a: I8) (b: I8): I8`](prelude.I8.md#I8.wrapping_mul)
 - [`let I8.from (value: S): I8`](prelude.I8.md#I8.from)
 - [`let I8.try_from (value: S): Result[I8, IntegerConversionError]`](prelude.I8.md#I8.try_from)
 
@@ -538,20 +547,32 @@ Every declaration, linked to the page that documents it.
 
 ### [prelude.U16](prelude.U16.md)
 
+- [`let U16.wrapping_add (a: U16) (b: U16): U16`](prelude.U16.md#U16.wrapping_add)
+- [`let U16.wrapping_sub (a: U16) (b: U16): U16`](prelude.U16.md#U16.wrapping_sub)
+- [`let U16.wrapping_mul (a: U16) (b: U16): U16`](prelude.U16.md#U16.wrapping_mul)
 - [`let U16.from (value: S): U16`](prelude.U16.md#U16.from)
 - [`let U16.try_from (value: S): Result[U16, IntegerConversionError]`](prelude.U16.md#U16.try_from)
 
 ### [prelude.U32](prelude.U32.md)
 
+- [`let U32.wrapping_add (a: U32) (b: U32): U32`](prelude.U32.md#U32.wrapping_add)
+- [`let U32.wrapping_sub (a: U32) (b: U32): U32`](prelude.U32.md#U32.wrapping_sub)
+- [`let U32.wrapping_mul (a: U32) (b: U32): U32`](prelude.U32.md#U32.wrapping_mul)
 - [`let U32.from (value: S): U32`](prelude.U32.md#U32.from)
 - [`let U32.try_from (value: S): Result[U32, IntegerConversionError]`](prelude.U32.md#U32.try_from)
 
 ### [prelude.U64](prelude.U64.md)
 
+- [`let U64.wrapping_add (a: U64) (b: U64): U64`](prelude.U64.md#U64.wrapping_add)
+- [`let U64.wrapping_sub (a: U64) (b: U64): U64`](prelude.U64.md#U64.wrapping_sub)
+- [`let U64.wrapping_mul (a: U64) (b: U64): U64`](prelude.U64.md#U64.wrapping_mul)
 - [`let U64.from (value: S): U64`](prelude.U64.md#U64.from)
 - [`let U64.try_from (value: S): Result[U64, IntegerConversionError]`](prelude.U64.md#U64.try_from)
 
 ### [prelude.U8](prelude.U8.md)
 
+- [`let U8.wrapping_add (a: U8) (b: U8): U8`](prelude.U8.md#U8.wrapping_add)
+- [`let U8.wrapping_sub (a: U8) (b: U8): U8`](prelude.U8.md#U8.wrapping_sub)
+- [`let U8.wrapping_mul (a: U8) (b: U8): U8`](prelude.U8.md#U8.wrapping_mul)
 - [`let U8.from (value: S): U8`](prelude.U8.md#U8.from)
 - [`let U8.try_from (value: S): Result[U8, IntegerConversionError]`](prelude.U8.md#U8.try_from)
