@@ -278,6 +278,8 @@ Every declaration, linked to the page that documents it.
 
 ## [prelude](prelude.md)
 
+- [`enum IntegerKind`](prelude.md#IntegerKind)
+- [`struct IntegerConversionError`](prelude.md#IntegerConversionError)
 - [`let print (s: String): Unit`](prelude.md#print)
 - [`struct Zipped`](prelude.md#Zipped)
 - [`let assert (cond: Bool): Unit`](prelude.md#assert)
@@ -383,6 +385,26 @@ Every declaration, linked to the page that documents it.
 - [`let Float.to_int (self: Float): Int`](prelude.Float.md#Float.to_int)
 - [`let Float.round_to_int (self: Float): Int`](prelude.Float.md#Float.round_to_int)
 
+### [prelude.I16](prelude.I16.md)
+
+- [`let I16.from (value: S): I16`](prelude.I16.md#I16.from)
+- [`let I16.try_from (value: S): Result[I16, IntegerConversionError]`](prelude.I16.md#I16.try_from)
+
+### [prelude.I32](prelude.I32.md)
+
+- [`let I32.from (value: S): I32`](prelude.I32.md#I32.from)
+- [`let I32.try_from (value: S): Result[I32, IntegerConversionError]`](prelude.I32.md#I32.try_from)
+
+### [prelude.I64](prelude.I64.md)
+
+- [`let I64.from (value: S): I64`](prelude.I64.md#I64.from)
+- [`let I64.try_from (value: S): Result[I64, IntegerConversionError]`](prelude.I64.md#I64.try_from)
+
+### [prelude.I8](prelude.I8.md)
+
+- [`let I8.from (value: S): I8`](prelude.I8.md#I8.from)
+- [`let I8.try_from (value: S): Result[I8, IntegerConversionError]`](prelude.I8.md#I8.try_from)
+
 ### [prelude.Int](prelude.Int.md)
 
 - [`let Int.abs (a: Int): Int`](prelude.Int.md#Int.abs)
@@ -401,6 +423,8 @@ Every declaration, linked to the page that documents it.
 - [`let Int.wrapping_sub (a: Int) (b: Int): Int`](prelude.Int.md#Int.wrapping_sub)
 - [`let Int.wrapping_mul (a: Int) (b: Int): Int`](prelude.Int.md#Int.wrapping_mul)
 - [`let Int.to_float (self: Int): Float`](prelude.Int.md#Int.to_float)
+- [`let Int.from (value: S): Int`](prelude.Int.md#Int.from)
+- [`let Int.try_from (value: S): Result[Int, IntegerConversionError]`](prelude.Int.md#Int.try_from)
 
 ### [prelude.Map](prelude.Map.md)
 
@@ -511,3 +535,23 @@ Every declaration, linked to the page that documents it.
 - [`let String.lines (s: String): Array[String]`](prelude.String.md#String.lines)
 - [`let String.concat (self: String) (other: String): String`](prelude.String.md#String.concat)
 - [`let String.as_cstr (self: String): CStr`](prelude.String.md#String.as_cstr)
+
+### [prelude.U16](prelude.U16.md)
+
+- [`let U16.from (value: S): U16`](prelude.U16.md#U16.from)
+- [`let U16.try_from (value: S): Result[U16, IntegerConversionError]`](prelude.U16.md#U16.try_from)
+
+### [prelude.U32](prelude.U32.md)
+
+- [`let U32.from (value: S): U32`](prelude.U32.md#U32.from)
+- [`let U32.try_from (value: S): Result[U32, IntegerConversionError]`](prelude.U32.md#U32.try_from)
+
+### [prelude.U64](prelude.U64.md)
+
+- [`let U64.from (value: S): U64`](prelude.U64.md#U64.from)
+- [`let U64.try_from (value: S): Result[U64, IntegerConversionError]`](prelude.U64.md#U64.try_from)
+
+### [prelude.U8](prelude.U8.md)
+
+- [`let U8.from (value: S): U8`](prelude.U8.md#U8.from)
+- [`let U8.try_from (value: S): Result[U8, IntegerConversionError]`](prelude.U8.md#U8.try_from)

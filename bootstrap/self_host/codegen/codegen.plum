@@ -1281,6 +1281,7 @@ let cg_expr (p: CgProgram) (env: Array[CgSlot]) (n: Int) (e: typecheck.TExpr): E
         },
         TAsCStr(inner) => cg_as_cstr(p, env, n, inner),
         TAsString(inner) => cg_as_string(p, env, n, inner),
+        TIntegerConvert(dest, fallible, inner) => cg_integer_convert(p, env, n, dest, fallible, inner),
         TChannelNew => cg_channel_new(p, env, n, cg_ty(p, e)),
         TChannelSend(ch, v) => cg_channel_send(p, env, n, ch, v),
         TChannelRecv(ch) => cg_channel_recv(p, env, n, ch, cg_ty(p, e)),
@@ -2205,6 +2206,7 @@ let cg_reads_max (name: String) (e: typecheck.TExpr): Int =
         TExternCall(_, xs) => cg_reads_max_list(name, xs, 0, 0),
         TAsCStr(a) => cg_reads_max(name, a),
         TAsString(a) => cg_reads_max(name, a),
+        TIntegerConvert(_, _, a) => cg_reads_max(name, a),
         TRefNew(a) => cg_reads_max(name, a),
         TBinary(_, a, b) => cg_cap2(cg_reads_max(name, a) + cg_reads_max(name, b)),
         TIndex(a, b) => cg_cap2(cg_reads_max(name, a) + cg_reads_max(name, b)),
@@ -2523,6 +2525,7 @@ let lv_node (ctx: LvCtx) (node: typecheck.TNode): typecheck.TNode =
         TSelect(arms) => TSelect(lv_select_arms(ctx, arms, 0, [])),
         TAsCStr(a) => TAsCStr(lv_expr(ctx, a)),
         TAsString(a) => TAsString(lv_expr(ctx, a)),
+        TIntegerConvert(dest, fallible, a) => TIntegerConvert(dest, fallible, lv_expr(ctx, a)),
         TRefNew(a) => TRefNew(lv_expr(ctx, a)),
         TBinary(op, a, b) => TBinary(op, lv_expr(lv_with(ctx, [b]), a), lv_expr(ctx, b)),
         TIndex(a, b) => TIndex(lv_expr(lv_with(ctx, [b]), a), lv_expr(ctx, b)),
@@ -7491,7 +7494,7 @@ pub let cg_emit_program_entry (program0: parser.ProgramNode) (entry: String): St
     // ANYWHERE reachable, not just where `==` is used, so the closure
     // starts from every function's parameter and return types and from
     // every equality type already found.
-    let rels = cg_rel_types_of(p, insts, 0, cg_rel_close_list(p, Array.concat(eqs, HASH_TYPES.get()), 0, []));
+    let rels = cg_rel_types_of(p, insts, 0, cg_rel_in_globals(p, 0, cg_rel_close_list(p, Array.concat(eqs, HASH_TYPES.get()), 0, [])));
     buildcache.finish("helper discovery", helper_time);
     let global_time = buildcache.start(());
     let gl = cg_emit_globals(p, 0, 1000000, "", "");
@@ -7568,8 +7571,15 @@ let cg_emit_globals (p: CgProgram) (i: Int) (n: Int) (slots: String) (body: Stri
         cg_emit_globals(p, i + 1, r.n, slots.concat(r.globals).concat(slot), body.concat(init))
     }
 
-// Every aggregate type compared with `==`/`!=` anywhere in the
-// reachable program, closed over its own components.
+// Initializers may create temporary heap values absent from reachable
+// function bodies. Use the same substitution as global emission.
+let cg_rel_in_globals (p: CgProgram) (i: Int) (acc: Array[typecheck.ITy]): Array[typecheck.ITy] =
+    if i >= p.globals.len() { acc } else {
+        let g = p.globals[i];
+        let gp = CgProgram { fns: p.fns, globals: p.globals, ctx: p.ctx, enums: p.enums, subst: g.subst, generics: [], targs: [], movable: [], cur_sym: "", cur_frame: false, tail_rel: "", tail_ok: false, cur_proto: "", tail_observation: None, type_facts: p.type_facts };
+        cg_rel_in_globals(p, i + 1, cg_rel_in(gp, g.body, acc))
+    }
+
 // Every heap type a reachable function can hold: its parameters, its
 // return type, and the type of every `let` in its body. `cg_rel_close`
 // pulls in the component types from there.
@@ -7610,6 +7620,7 @@ let cg_rel_in (p: CgProgram) (e: typecheck.TExpr) (acc: Array[typecheck.ITy]): A
         TExternCall(_, xs) => cg_rel_in_list(p, xs, 0, here),
         TAsCStr(a) => cg_rel_in(p, a, here),
         TAsString(a) => cg_rel_in(p, a, here),
+        TIntegerConvert(_, _, a) => cg_rel_in(p, a, here),
         TRefNew(a) => cg_rel_in(p, a, here),
         TUnary(_, a) => cg_rel_in(p, a, here),
         TBinary(_, a, b) => cg_rel_in(p, b, cg_rel_in(p, a, here)),
@@ -7716,6 +7727,7 @@ let cg_eq_in (p: CgProgram) (e: typecheck.TExpr) (acc: Array[typecheck.ITy]): Ar
         TExternCall(_, xs) => cg_eq_in_list(p, xs, 0, acc),
         TAsCStr(a) => cg_eq_in(p, a, acc),
         TAsString(a) => cg_eq_in(p, a, acc),
+        TIntegerConvert(_, _, a) => cg_eq_in(p, a, acc),
         TRefNew(a) => cg_eq_in(p, a, acc),
         TUnary(_, a) => cg_eq_in(p, a, acc),
         TFieldGet(a, _) => cg_eq_in(p, a, acc),
@@ -7817,6 +7829,7 @@ let cg_calls_in (p: CgProgram) (e: typecheck.TExpr) (acc: Array[CgInst]): Array[
         TExternCall(_, xs) => cg_calls_in_list(p, xs, acc),
         TAsCStr(a) => cg_calls_in(p, a, acc),
         TAsString(a) => cg_calls_in(p, a, acc),
+        TIntegerConvert(_, _, a) => cg_calls_in(p, a, acc),
         TRefNew(a) => cg_calls_in(p, a, acc),
         TUnary(_, a) => cg_calls_in(p, a, acc),
         TBinary(_, a, b) => cg_calls_in(p, b, cg_calls_in(p, a, acc)),

@@ -120,3 +120,15 @@ followed by a mix.
 The integer as a `Float`. Plum never converts between numeric types on its own, so this is how it is said.
 
 Implemented by the compiler itself, so it has no Plum source to read.
+
+## `let Int.from (value: S): Int`
+
+Converts an integer whose entire source type range fits the destination. The source type must be known; signed-to-unsigned conversions require try_from. Evaluates value once. Does not introduce general function overloading or numeric generic constraints.
+
+Implemented by the compiler itself, so it has no Plum source to read.
+
+## `let Int.try_from (value: S): Result[Int, IntegerConversionError]`
+
+Converts an integer when its value fits the destination range. Otherwise returns source and destination IntegerKind tags, without retaining the rejected value or allocating an error message. Evaluates value once. Result and error storage may allocate.
+
+Implemented by the compiler itself, so it has no Plum source to read.

@@ -139,7 +139,7 @@ let ident_text (cs: Array[String]) (i: Int) (acc: String): String =
 
 // A struct field's DECLARED TYPE, or a namespaced function's signature.
 let member_detail (items: Array[parser.ItemNode]) (ns: String) (name: String) (i: Int): Option[String] =
-    if i >= items.len() { None }
+    if i >= items.len() { typecheck.integer_conversion_detail(ns, name) }
     else {
         let here = match items[i].kind {
             IKStruct(decl) => if decl.name == ns { field_type_named(decl, name, 0) } else { None },
@@ -232,7 +232,8 @@ let cmd_members (dir: String) (path: String) (line: Int) (col: Int): Unit = {
                         None => println("[]"),
                         Some(ty) => println(lsp.encode_json(JsonArray(
                             members_of(items, type_namespace(ty), 0,
-                                builtin_members(typecheck.builtin_methods(), type_namespace(ty), 0, []))))),
+                                builtin_members(typecheck.builtin_methods(), type_namespace(ty), 0,
+                                    integer_conversion_members(type_namespace(ty), 0, [])))))),
                     }
                 }
             }
@@ -289,6 +290,17 @@ let builtin_members (ms: Array[typecheck.BuiltinMethod]) (ns: String) (i: Int) (
     else if ms[i].recv == ns || ms[i].recv == "" {
         builtin_members(ms, ns, i + 1, acc.push(completion_json(ms[i].name, "function", ms[i].detail)))
     } else { builtin_members(ms, ns, i + 1, acc) }
+
+let integer_conversion_members (ns: String) (i: Int) (acc: Array[JsonValue]): Array[JsonValue] = {
+    let names = ["from", "try_from"];
+    if i >= names.len() { acc } else {
+        let next = match typecheck.integer_conversion_detail(ns, names[i]) {
+            None => acc,
+            Some(detail) => acc.push(completion_json(names[i], "function", detail)),
+        };
+        integer_conversion_members(ns, i + 1, next)
+    }
+}
 
 let fields_of (decl: parser.StructDeclNode) (i: Int) (acc: Array[JsonValue]): Array[JsonValue] =
     if i >= decl.fields.len() { acc }
@@ -601,7 +613,9 @@ let builtin_items (declared: Array[parser.ItemNode]): Array[parser.ItemNode] = {
     let src = builtin_src(Array.filter(typecheck.builtin_methods(), |m|
             !Array.contains(names, builtin_qualified(m.recv, m.name))), 0, "")
         .concat(builtin_fn_src(Array.filter(typecheck.builtin_functions(), |f|
-            !Array.contains(names, f.name)), 0, ""));
+            !Array.contains(names, f.name)), 0, ""))
+        .concat(Array.join(Array.map(typecheck.integer_conversion_builtins(), |f|
+            "/// ${f.doc}\n${BUILTIN_NOTE(())}\npub ${f.detail} = ()\n"), "\n"));
     let lexed = lexer.tokenize_spanned(src);
     parser.set_source_context("<builtins>", src, lexed.starts, lexed.ends);
     let items = parser.parse_program(lexed.tokens).items;
@@ -1550,7 +1564,8 @@ let builtin_completions (ignored: Unit): Array[JsonValue] =
         completion_json("chars_of", "function", "chars_of(s: String): Array[String]"),
         completion_json("ref", "function", "ref(value: T): Ref[T]"),
         completion_json("channel", "function", "channel(): (Sender[T], Receiver[T])"),
-    ], builtin_method_items(typecheck.builtin_methods(), 0, []))
+    ], Array.concat(builtin_method_items(typecheck.builtin_methods(), 0, []),
+        Array.map(typecheck.integer_conversion_builtins(), |f| completion_json(f.name, "function", f.detail))))
 
 // The compiler's own methods, offered under the type they belong to:
 // `Array.map`, `String.split`. A method with no receiver type -- only
