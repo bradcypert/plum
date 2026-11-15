@@ -1,0 +1,5 @@
+let main (): Unit = {
+    let mut values = "x".repeat(4096).as_bytes().to_array(); values = values.filter(|x| false);
+    for i in 0..1000 { values = values.map(|x| x); values = values.push(i); values = values.filter(|x| false); };
+    assert_eq(values, []);
+}

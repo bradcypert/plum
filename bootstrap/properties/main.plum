@@ -2744,3 +2744,17 @@ pub let test_array_literal_reset (): Unit = {
         else { assert_eq(values, [(count - 1).to_string(), if count == 1 { seed } else { (count - 2).to_string() }]); };
     };
 }
+
+pub let test_empty_array_results (): Unit = {
+    for count in [0, 1, 2, 7, 8, 16, 64] {
+        let mut source: Array[Int] = [];
+        for i in 0..count { source = source.push(i); };
+        let empty = source.slice(0, 0); let saved = empty; let calls = ref(0);
+        let strings = empty.map(|x| { calls.set(calls.get() + 1); x.to_string() });
+        let filtered = empty.filter(|x| { calls.set(calls.get() + 1); x > 0 });
+        assert_eq(calls.get(), 0); assert_eq(strings, []); assert_eq(filtered, []);
+        assert_eq(strings.push("value"), ["value"]); assert_eq(filtered.push(count), [count]);
+        assert_eq(empty, saved); assert_eq(empty, []); assert_eq(source.len(), count);
+        assert_eq(chars_of(""), []);
+    };
+}
