@@ -1,0 +1,8 @@
+let main (): Unit = {
+    let mut words: Array[String] = [];
+    for i in 0..1000 { words = [i.to_string(), "tail"]; assert_eq(words[1], "tail"); };
+    assert_eq(words, ["999", "tail"]);
+    let mut values: Array[Int] = [];
+    for i in 0..1000 { values = [i, i + 1]; };
+    assert_eq(values, [999, 1000]);
+}

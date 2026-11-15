@@ -31,7 +31,7 @@ def main():
                 else:
                     source += 'let main (): Unit = { let mut xs = [identity("seed")];\nxs = [\n' + values + '\n];\n'
                     function = b'plum.f..main.0.'
-                    expected_call = b'call ptr @plum_array_reuse('
+                    expected_call = b'call ptr @plum_array_reset('
                 source += f'assert_eq(xs.len(), {width}); println("ok") }}\n'
                 (project / 'main.plum').write_text(source)
                 for mode, flags in (('debug', []), ('release', ['--release'])):
