@@ -102,11 +102,37 @@ def main():
         hover = json.loads(run(COMPILER, 'query', app, source, 1, offset + 1).stdout)
         assert 'I16.from' in hover['type'], hover
 
+        for namespace in (*KINDS, 'I64'):
+            text = f'let main (): Unit = {{ let result = {namespace}.try_from(1); () }}\n'
+            source.write_text(text)
+            column = text.index('.try_from') + 2
+            members = json.loads(run(COMPILER, 'members', app, source, 1, column).stdout)
+            details = {item['name']: item['detail'] for item in members}
+            assert {'from', 'try_from', 'to_string'} <= details.keys(), details
+            assert '.from' in details['from'] and '.try_from' in details['try_from'], details
+        text = 'let main (): Unit = { let value = "x"; value.len(); () }\n'
+        source.write_text(text)
+        members = json.loads(run(COMPILER, 'members', app, source, 1,
+                                 text.index('.len') + 2).stdout)
+        names = {item['name'] for item in members}
+        assert 'len' in names and not {'from', 'try_from'} & names, names
+
+        # These temporary owned values occur only in global initializers, so
+        # reachable function bodies cannot accidentally supply their helpers.
+        globals_app = work / 'globals'
+        globals_app.mkdir()
+        (globals_app / 'main.plum').write_text(
+            'let GOOD: U8 = match U8.try_from(255) { Ok(v) => v, Err(_) => 0 }\n'
+            'let BAD: Int = match I8.try_from(255) { Ok(_) => 0, Err(_) => 1 }\n'
+            'let ARRAY: Int = { let values = [Some("owned")]; values.len() }\n'
+            'let main (): Unit = { assert_eq(GOOD, 255); assert_eq(BAD, 1); '
+            'assert_eq(ARRAY, 1); println("globals ok"); }\n')
+
         hooks = work / 'hooks.c'
         hooks.write_text(HOOKS)
         for project, expected in ((ROOT / 'bootstrap/exec_corpus/integer_conversions',
                                    (ROOT / 'bootstrap/exec_corpus/integer_conversions/expected.txt').read_text()),
-                                  (app, 'matrix ok\n')):
+                                  (app, 'matrix ok\n'), (globals_app, 'globals ok\n')):
             if project == app:
                 source.write_text(matrix)
             for mode in ([], ['--release']):

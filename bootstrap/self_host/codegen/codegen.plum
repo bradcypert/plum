@@ -7494,7 +7494,7 @@ pub let cg_emit_program_entry (program0: parser.ProgramNode) (entry: String): St
     // ANYWHERE reachable, not just where `==` is used, so the closure
     // starts from every function's parameter and return types and from
     // every equality type already found.
-    let rels = cg_rel_types_of(p, insts, 0, cg_rel_close_list(p, Array.concat(eqs, HASH_TYPES.get()), 0, []));
+    let rels = cg_rel_types_of(p, insts, 0, cg_rel_in_globals(p, 0, cg_rel_close_list(p, Array.concat(eqs, HASH_TYPES.get()), 0, [])));
     buildcache.finish("helper discovery", helper_time);
     let global_time = buildcache.start(());
     let gl = cg_emit_globals(p, 0, 1000000, "", "");
@@ -7571,8 +7571,15 @@ let cg_emit_globals (p: CgProgram) (i: Int) (n: Int) (slots: String) (body: Stri
         cg_emit_globals(p, i + 1, r.n, slots.concat(r.globals).concat(slot), body.concat(init))
     }
 
-// Every aggregate type compared with `==`/`!=` anywhere in the
-// reachable program, closed over its own components.
+// Initializers may create temporary heap values absent from reachable
+// function bodies. Use the same substitution as global emission.
+let cg_rel_in_globals (p: CgProgram) (i: Int) (acc: Array[typecheck.ITy]): Array[typecheck.ITy] =
+    if i >= p.globals.len() { acc } else {
+        let g = p.globals[i];
+        let gp = CgProgram { fns: p.fns, globals: p.globals, ctx: p.ctx, enums: p.enums, subst: g.subst, generics: [], targs: [], movable: [], cur_sym: "", cur_frame: false, tail_rel: "", tail_ok: false, cur_proto: "", tail_observation: None, type_facts: p.type_facts };
+        cg_rel_in_globals(p, i + 1, cg_rel_in(gp, g.body, acc))
+    }
+
 // Every heap type a reachable function can hold: its parameters, its
 // return type, and the type of every `let` in its body. `cg_rel_close`
 // pulls in the component types from there.
