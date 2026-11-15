@@ -1,0 +1,7 @@
+// 512 shared copies plus at most 9 growth cells for the versions builder.
+let main (): Unit = {
+    let mut values: Array[Int] = []; let mut versions: Array[Array[Int]] = [];
+    for i in 0..512 { versions = versions.push(values); values = values.push(i); };
+    for i in 0..512 { assert_eq(versions[i].len(), i); if i > 0 { assert_eq(versions[i][i - 1], i - 1); }; };
+    assert_eq(values.len(), 512); assert_eq(values[511], 511);
+}

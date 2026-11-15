@@ -3684,7 +3684,8 @@ let cg_index (p: CgProgram) (env: Array[CgSlot]) (n: Int) (base: typecheck.TExpr
 // an n-element accumulation O(n^2) unless it happened to match
 // the literal `acc = acc.push(x)` assignment shape. The parser
 // accumulates `Array[Token]` through a tail-recursive call, which never
-// did. The copy branch doubles, so a moved receiver amortizes to O(1).
+// did. Unique growth reserves geometrically, so a moved receiver amortizes
+// to O(1); shared nonempty copies use exact storage for their new length.
 let cg_array_push (p: CgProgram) (env: Array[CgSlot]) (n: Int) (base: typecheck.TExpr) (value: typecheck.TExpr) (ty: CgTy): Emit = {
     let bty = cg_concrete(p, typecheck.texpr_ty(p.subst, base));
     let elem = cg_elem_ty(ty);

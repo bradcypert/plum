@@ -82,7 +82,8 @@ def main():
             literal = Path(work) / ('literal-emission' + str(len(flags)))
             run([compiler, 'build', root / 'bootstrap/exec_corpus/literal_emission', '--sanitize=address', '--memory-stats', *flags, '-o', literal])
             run([literal], contains='literal emission preserves sections, order, aliases and reuse')
-            for name, message in [('empty_array_results', 'Empty Array results: shared values, writable builders, callback lifetimes and retained reuse'),
+            for name, message in [('array_push_ownership', 'Array.push: owned growth, exact shared copies, operand order and child lifetimes'),
+                                  ('empty_array_results', 'Empty Array results: shared values, writable builders, callback lifetimes and retained reuse'),
                                   ('array_literal_reset', 'Array literal reset: unique reuse, shared/static owners, RHS reads and exact cleanup'),
                                   ('string_slice', 'slices preserve codepoint bounds, raw bytes, aliases and bounded stack'),
                                   ('string_fragment_storage', 'String fragments: shared identities, static empties, bounded stack builder and compact parts'),

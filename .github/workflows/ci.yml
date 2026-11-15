@@ -189,6 +189,8 @@ jobs:
         run: python3 ./bootstrap/string-pad-check.py ./sh.real --sanitize
       - name: array concatenation preserves owned growth and exact snapshots
         run: python3 ./bootstrap/array-concat-check.py ./sh.real --sanitize
+      - name: array push preserves owned growth, exact copies and allocation failures
+        run: python3 ./bootstrap/array-push-check.py ./sh.real --sanitize
       - name: opt-in memory snapshots preserve ownership, reuse and concurrency
         run: python3 ./bootstrap/memory-stats-check.py ./sh.real
 
@@ -541,6 +543,7 @@ jobs:
           PATH="$(brew --prefix llvm)/bin:$PATH" python3 ./bootstrap/primitive-format-check.py ./sh.real --sanitize
           PATH="$(brew --prefix llvm)/bin:$PATH" python3 ./bootstrap/string-pad-check.py ./sh.real --sanitize
           PATH="$(brew --prefix llvm)/bin:$PATH" python3 ./bootstrap/array-concat-check.py ./sh.real --sanitize
+          PATH="$(brew --prefix llvm)/bin:$PATH" python3 ./bootstrap/array-push-check.py ./sh.real --sanitize
 
       # The language server is the one feature that was BROKEN on macOS
       # and fixed blind: it re-invokes the compiler through
@@ -992,6 +995,8 @@ jobs:
         run: python3 ./bootstrap/string-pad-check.py ./sh.real
       - name: array concatenation preserves owned growth and exact snapshots
         run: python3 ./bootstrap/array-concat-check.py ./sh.real
+      - name: array push preserves owned growth, exact copies and allocation failures
+        run: python3 ./bootstrap/array-push-check.py ./sh.real
       - name: opt-in memory snapshots preserve ownership and native threads
         run: python3 ./bootstrap/memory-stats-check.py ./sh.real
 
