@@ -2695,3 +2695,22 @@ pub let test_array_remove_persistence (): Unit = {
         assert_eq(remaining, []);
     }
 }
+
+pub let test_ascii_character_storage (): Unit = {
+    let mut seed = 913;
+    for trial in 0..64 {
+        let mut values: Array[Int] = [];
+        for i in 0..trial { seed = next_seed(seed); values = values.push(rand_between(seed, 0, 127)); };
+        let text = Bytes.from_array(values).as_string().unwrap_or("");
+        let chars = chars_of(text); let split = text.split("");
+        assert_eq(chars.len(), values.len()); assert_eq(split.len(), values.len() + 2);
+        for i in 0..chars.len() {
+            assert_eq(chars[i].len(), 1); assert_eq(chars[i].as_bytes().at(0), Some(values[i]));
+            assert_eq(split[i + 1], chars[i]);
+            assert_eq(chars_of(chars[i]), [chars[i]]);
+        };
+        assert_eq(Array.join(chars, ""), text); assert_eq(Array.join(split, ""), text);
+        let changed = Array.map(chars, |c| c.concat("!"));
+        for i in 0..chars.len() { assert_eq(chars[i].as_bytes().at(0), Some(values[i])); assert_eq(changed[i].len(), 2); };
+    }
+}
