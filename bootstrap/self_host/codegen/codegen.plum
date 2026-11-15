@@ -3721,23 +3721,22 @@ let cg_array_set (p: CgProgram) (env: Array[CgSlot]) (n: Int) (base: typecheck.T
     Emit { code: code, allocas: b.allocas.concat(i.allocas).concat(v.allocas), releases: b.releases.concat(i.releases).concat(v.releases), globals: b.globals.concat(i.globals).concat(v.globals), val: cell, ty: ty, n: v.n + 6 }
 }
 
-// `xs.remove(i)`: the runtime does the copy, this does the counting.
-// Every element that SURVIVES into the new array gains a reference, and
-// the source array is then released -- which drops the removed
-// element's last reference along with the source's own. Same ownership
-// shape as the shared-input branch of `cg_array_set`.
+// Prepare both operands before the consuming runtime checks uniqueness. Ordinary
+// evaluation preserves scoped handle/closure owners; removal must not shorten
+// their payload lifetimes through a payload-preserving self-assignment hint.
 let cg_array_remove (p: CgProgram) (env: Array[CgSlot]) (n: Int) (base: typecheck.TExpr) (idx: typecheck.TExpr) (ty: CgTy): Emit = {
     let b = cg_expr(p, env, n, base);
     let i = cg_expr(p, env, b.n, idx);
     let cell = cg_reg(i.n);
-    let len = cg_reg(i.n + 1);
-    let elem = cg_elem_ty(b.ty);
+    let bty = cg_concrete(p, typecheck.texpr_ty(p.subst, base));
+    let ety = cg_array_elem_ity(p, bty);
+    let heap = cg_is_heap(cg_elem_ty(b.ty));
     let code = b.code.concat(i.code)
-        .concat("  ").concat(cell).concat(" = call ptr @plum_array_remove(ptr ").concat(b.val).concat(", i64 ").concat(i.val).concat(")\n")
-        .concat("  ").concat(len).concat(" = call i64 @plum_array_len(ptr ").concat(cell).concat(")\n")
-        .concat(cg_inc_elems(elem, cell, len, cell.concat("_ie")))
-        .concat(cg_dec(cg_concrete(p, typecheck.texpr_ty(p.subst, base)), b.val));
-    Emit { code: code, allocas: b.allocas.concat(i.allocas), releases: b.releases.concat(i.releases), globals: b.globals.concat(i.globals), val: cell, ty: ty, n: i.n + 2 }
+        .concat("  ${cell} = call ptr @plum_array_remove(ptr ${b.val}, i64 ${i.val}, i1 ")
+        .concat(if heap { "1" } else { "0" })
+        .concat(", ptr ${cg_rel_sym(bty)}, ptr ")
+        .concat(if heap { cg_rel_sym(ety) } else { "null" }).concat(")\n");
+    Emit { code: code, allocas: b.allocas.concat(i.allocas), releases: b.releases.concat(i.releases), globals: b.globals.concat(i.globals), val: cell, ty: ty, n: i.n + 1 }
 }
 
 // A call into an `extern "C"` function. No mangling, no specialization,
