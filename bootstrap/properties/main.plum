@@ -2410,6 +2410,20 @@ pub let test_string_reverse_laws (): Unit = {
     assert_eq(String.reverse(""), ""); assert_eq(String.reverse("🙂"), "🙂")
 }
 
+// Separate models avoid retaining an alias to each consumed loop input.
+pub let test_string_reverse_owned_loops (): Unit = {
+    for unit in ["", "a", "é", "aé中🙂\x00é"] {
+        let reversed = Array.concat_all(Array.reverse(chars_of(unit)));
+        for count in [0, 1, 2, 7, 32, 127] {
+            let mut text = unit.repeat(count);
+            for i in 0..8 {
+                text = String.reverse(text);
+                assert_eq(text, if i % 2 == 0 { reversed.repeat(count) } else { unit.repeat(count) });
+            };
+        };
+    };
+}
+
 // Every byte widens unsigned and the result has independent Array storage.
 pub let test_bytes_array_conversion (): Unit = {
     let mut values: Array[Int] = [];

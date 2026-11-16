@@ -10,6 +10,7 @@ extern int plum_toupper_cp(int), plum_tolower_cp(int);
 extern void plum_set_utf8_locale(void);
 extern void *plum_str_case(void *, int64_t);
 extern void *plum_str_reverse(void *);
+extern void *plum_str_reverse_reuse(void *);
 extern void *plum_bytes_to_array(void *);
 extern int64_t plum_bytes_array_size(int64_t);
 extern void *plum_alloc_preferred(int64_t, int64_t, int64_t);
@@ -749,6 +750,19 @@ static void reversal(void) {
             CHECK(plum_n_alloc-allocs==(units>1?1:0));CHECK(plum_b_alloc-traffic==(units>1?(int64_t)n+17:0));
             plum_rel_str(src);if(shared)plum_rel_str(src);value(out,(char *)expected,(int64_t)n);plum_rel_str(out);
         }
+        for(int shared=0;shared<2;shared++) {
+            void *src=text((char *)input,(int64_t)n,4096);if(shared)plum_rc_inc(src);
+            int64_t allocs=plum_n_alloc,traffic=plum_b_alloc;attempts=0;failures=shared?0:1;
+            void *out=plum_str_reverse_reuse(src);failures=0;
+            value(out,(char *)expected,(int64_t)n);
+            if(!n) {CHECK(out!=src && *(int64_t *)out==-1 && attempts==0);}
+            else if(!shared || units==1) {CHECK(out==src && *(int64_t *)out==1+shared && attempts==0);}
+            else {CHECK(out!=src && attempts==1 && requests[0]==(int64_t)n+17);}
+            CHECK(plum_n_alloc-allocs==(shared && units>1?1:0));
+            CHECK(plum_b_alloc-traffic==(shared && units>1?(int64_t)n+17:0));
+            if(shared) {value(src,(char *)input,(int64_t)n);plum_rel_str(src);}
+            value(out,(char *)expected,(int64_t)n);plum_rel_str(out);
+        }
     }
     /* One malformed unit can be arbitrarily long; no backward decoder or stack. */
     const int64_t n=1024*1024;char *large=malloc((size_t)n);CHECK(large);memset(large,0x80,(size_t)n);
@@ -761,6 +775,11 @@ static void reversal(void) {
     CHECK(field(3)==4113 && origin_field(3)==4113);
 #endif
     value(out,"x",1);plum_rel_str(out);
+    /* The consuming path must not allocate or accumulate native stack. */
+    large=malloc((size_t)n);CHECK(large);memset(large,'a',(size_t)n);large[n-1]='Z';
+    src=text(large,n,n);attempts=0;failures=1;out=plum_str_reverse_reuse(src);failures=0;
+    CHECK(out==src && attempts==0);large[0]='Z';large[n-1]='a';value(out,large,n);
+    plum_rel_str(out);free(large);
 #ifdef PLUM_HEAP_STATS
     CHECK(field(2)==0 && field(3)==0);
 #endif
@@ -821,7 +840,12 @@ int main(int argc, char **argv) {
         }
         else if (!strncmp(argv[1], "reverse-", 8)) {
             int64_t input[]={1,-1};
-            if (!strcmp(argv[1],"reverse-negative")) plum_str_reverse(input);
+            if (!strcmp(argv[1],"reverse-owned-negative")) plum_str_reverse_reuse(input);
+            else if (!strcmp(argv[1],"reverse-owned-large")) { input[1]=INT64_MAX;plum_str_reverse_reuse(input); }
+            else if (!strcmp(argv[1],"reverse-owned-oom")) {
+                struct {int64_t rc,n;char bytes[3];} s={2,2,"ab"};failures=1;plum_str_reverse_reuse(&s);
+            }
+            else if (!strcmp(argv[1],"reverse-negative")) plum_str_reverse(input);
             else if (!strcmp(argv[1],"reverse-large")) { input[1]=INT64_MAX;plum_str_reverse(input); }
             else if (!strcmp(argv[1],"reverse-oom")) {
                 struct {int64_t rc,n;char bytes[3];} s={1,2,"ab"};failures=1;plum_str_reverse(&s);
