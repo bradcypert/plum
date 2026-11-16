@@ -4765,7 +4765,8 @@ let cg_first_reuse_cand (p: CgProgram) (env: Array[CgSlot]) (cands: Array[String
 // both today -- that one takes a String base, this one takes a struct
 // or an enum -- but "nothing can be both" is a fact about two other
 // functions, and it is cheaper to enforce it here than to notice later
-// that one of them changed.
+// that one of them changed. Scoped cleanup is checked by cg_reuse_of_ity
+// for both direct candidates and reset tokens.
 let cg_reuse_cand (p: CgProgram) (env: Array[CgSlot]) (cand: String) (want: Int): Option[ReuseCand] =
     if cg_rc_enabled(()) && !cg_is_movable(p, cand) {
         match cg_lookup(env, cand) {
@@ -4775,33 +4776,37 @@ let cg_reuse_cand (p: CgProgram) (env: Array[CgSlot]) (cand: String) (want: Int)
     } else { None }
 
 let cg_reuse_of_ity (p: CgProgram) (slot: CgSlot) (ity: typecheck.ITy) (want: Int): Option[ReuseCand] =
-    match ity {
-        ITStruct(sname, args) =>
-            if sname == "Array" { None }
-            // A handle cell is never recycled INTO. Its one word is a
-            // shim handle, not a field, and dropping it means telling
-            // the shim -- which the generic child-drop cannot do.
-            else if cg_is_handle(p, sname) { None }
-            else {
-                let bytes = 8 + 8 * typecheck.ctx_field_names(p.ctx, sname).len();
-                if bytes >= want {
-                    // Instantiated exactly the way `cg_emit_rel_fn` does
-                    // it, so a generic struct's children are the same
-                    // types its release function would walk.
-                    Some(ReuseCand { slot: slot, reset: slot.name.starts_with("<reset:"), bytes: bytes, drop_sym: "",
-                        children: Array.map(typecheck.ctx_field_types(p.ctx, sname),
-                            |ft| typecheck.instantiate_template(typecheck.ctx_struct_generics(p.ctx, sname), args, ft)) })
-                } else { None }
-            },
-        ITEnum(ename, args) =>
-            if cg_enum_cell_size(p, ename) >= want {
-                // An enum that owns nothing needs no drop at all; one
-                // that does gets its generated companion, which is the
-                // tag switch this site would otherwise have to inline.
-                Some(ReuseCand { slot: slot, reset: slot.name.starts_with("<reset:"), bytes: cg_enum_cell_size(p, ename), children: [],
-                    drop_sym: if cg_enum_owns(p, cg_find_enum(p, ename).variants, args, 0) { cg_relc_sym(ity) } else { "" } })
-            } else { None },
-        _ => None,
+    // Reuse drops the old cell or its children before scope exit. Keep
+    // observable cleanup scoped, including through reset-token callers.
+    if !cg_can_release_early(p, ity) { None } else {
+        match ity {
+            ITStruct(sname, args) =>
+                if sname == "Array" { None }
+                // A handle cell is never recycled INTO. Its one word is a
+                // shim handle, not a field, and dropping it means telling
+                // the shim -- which the generic child-drop cannot do.
+                else if cg_is_handle(p, sname) { None }
+                else {
+                    let bytes = 8 + 8 * typecheck.ctx_field_names(p.ctx, sname).len();
+                    if bytes >= want {
+                        // Instantiated exactly the way `cg_emit_rel_fn` does
+                        // it, so a generic struct's children are the same
+                        // types its release function would walk.
+                        Some(ReuseCand { slot: slot, reset: slot.name.starts_with("<reset:"), bytes: bytes, drop_sym: "",
+                            children: Array.map(typecheck.ctx_field_types(p.ctx, sname),
+                                |ft| typecheck.instantiate_template(typecheck.ctx_struct_generics(p.ctx, sname), args, ft)) })
+                    } else { None }
+                },
+            ITEnum(ename, args) =>
+                if cg_enum_cell_size(p, ename) >= want {
+                    // An enum that owns nothing needs no drop at all; one
+                    // that does gets its generated companion, which is the
+                    // tag switch this site would otherwise have to inline.
+                    Some(ReuseCand { slot: slot, reset: slot.name.starts_with("<reset:"), bytes: cg_enum_cell_size(p, ename), children: [],
+                        drop_sym: if cg_enum_owns(p, cg_find_enum(p, ename).variants, args, 0) { cg_relc_sym(ity) } else { "" } })
+                } else { None },
+            _ => None,
+        }
     }
 
 let cg_all_plain (tys: Array[typecheck.ITy]) (i: Int): Bool =
