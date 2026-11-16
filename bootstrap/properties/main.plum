@@ -2881,3 +2881,19 @@ pub let test_parameter_owned_forwarding (): Unit = {
         let saved = capture(source); assert_eq(saved(), source); assert_eq(saved(), source);
     };
 }
+
+pub let test_closure_last_use (): Unit = {
+    let change = |s: String| { assert(s.starts_with("")); String.reverse(s) };
+    let later = |s: String| { let out = String.reverse(s); assert(s.starts_with("")); out };
+    let nest = |s: Option[String]| { assert(Option.is_some(s)); Some(s) };
+    for count in [0, 1, 2, 7, 32, 127] {
+        let source = "aé中🙂\x00é".repeat(count);
+        let model = Array.concat_all(Array.reverse(chars_of(source)));
+        assert_eq(change("aé中🙂\x00é".repeat(count)), model);
+        assert_eq(change(source), model); assert_eq(later(source), model);
+        assert_eq(nest(Some(source)), Some(Some(source)));
+        let captured = || { assert(source.starts_with("")); String.reverse(source) };
+        assert_eq(captured(), model); assert_eq(captured(), model);
+        assert_eq(source, "aé中🙂\x00é".repeat(count));
+    };
+}

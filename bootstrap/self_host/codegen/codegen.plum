@@ -2605,7 +2605,7 @@ let lv_node (ctx: LvCtx) (node: typecheck.TNode): typecheck.TNode =
             exprs: ctx.exprs, names: lv_cat_names(ctx.names, names, 0), writes: ctx.writes, scope: ctx.scope, replaced: ctx.replaced,
         }, body)),
         TBlockE(b) => TBlockE(lv_block(ctx, b, 0, ctx.scope, [])),
-        // A loop body and a closure body can run AGAIN. Pushing the body
+        // A loop body can run AGAIN. Pushing the body
         // into its own continuation is the back edge: anything the body
         // reads is live at the end of the body, so nothing read in a
         // loop is ever dead inside it.
@@ -2626,11 +2626,12 @@ let lv_node (ctx: LvCtx) (node: typecheck.TNode): typecheck.TNode =
         // the cell's own slot, so the closure's release drops it a
         // second time. A closure called twice then reads freed memory.
         //
-        // The continuation also keeps parameters live during rewriting:
-        // `Some(x)` must not recycle x's own cell while storing x in it.
-        // The lifted function computes its movable parameters afterward,
-        // counting the rewritten body's additional candidate reads.
-        TClosure(ps, body) => TClosure(ps, lv_expr(LvCtx { exprs: lv_future_exprs([body], 0), names: [], writes: [], scope: lv_cat_names([], ps, 0), replaced: [] }, body)),
+        // Each invocation owns fresh parameter slots, so it has no back
+        // edge to the previous call. Analyse its last uses like a named
+        // function. A consuming read clears its slot before constructor
+        // reuse inspects it; captures remain outside this frame's scope.
+        // Movable-parameter counting still includes reuse-candidate reads.
+        TClosure(ps, body) => TClosure(ps, lv_expr(LvCtx { exprs: LvFutureEmpty, names: [], writes: [], scope: lv_cat_names([], ps, 0), replaced: [] }, body)),
         // `spawn` runs its block on another thread, at a time nothing
         // here orders. Everything it touches stays live.
         TSpawn(a) => TSpawn(lv_expr(lv_with(ctx, [a]), a)),

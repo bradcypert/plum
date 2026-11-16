@@ -1,0 +1,9 @@
+let main (): Unit = {
+    let change = |s: String| {
+        assert(s.starts_with("ab") || s.starts_with("ba"));
+        String.reverse(s)
+    };
+    let mut text = "ab".repeat(4096);
+    for i in 0..512 { text = change(text); };
+    assert_eq(text, "ab".repeat(4096));
+}
