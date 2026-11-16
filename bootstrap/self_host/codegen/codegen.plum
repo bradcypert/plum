@@ -4619,7 +4619,7 @@ let cg_array_fold (p: CgProgram) (env: Array[CgSlot]) (n: Int) (arr_e: typecheck
         // Later operands may publish or capture the source. Observe their
         // aliases before transferring any ordinary child references. Scoped
         // children keep the original source lifetime through every callback.
-        .concat(if move_elem { "  ${len}_rc = load atomic i64, ptr ${a.val} monotonic, align 8\n  ${move} = icmp eq i64 ${len}_rc, 1\n" } else { "" })
+        .concat(if move_elem { "  ${len}_rc = load atomic i64, ptr ${a.val} acquire, align 8\n  ${move} = icmp eq i64 ${len}_rc, 1\n" } else { "" })
         .concat("  store ").concat(acc_ty).concat(" ").concat(init.val).concat(", ptr ").concat(acc).concat("\n")
         .concat(lp.pre).concat(body).concat(lp.post)
         .concat("  ").concat(out).concat(" = load ").concat(acc_ty).concat(", ptr ").concat(acc).concat("\n")
