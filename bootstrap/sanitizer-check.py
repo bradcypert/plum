@@ -102,6 +102,7 @@ def main():
                                   ('array_fold_ownership', 'Array.fold: owned arguments, prompt reclamation, operand aliases and scoped cleanup'),
                                   ('string_reverse', 'String reversal: codepoint groups, raw bytes, NULs, immutable aliases and large inputs'),
                                   ('parameter_move_paths', 'Parameter moves preserve shadowed locals and failed guard continuations'),
+                                  ('parameter_forwarding', 'Parameter forwarding: owned reads, prompt release, constructors, aliases and scoped cleanup'),
                                   ('string_char_len', 'character counts preserve UTF-8, NULs, aliases and bounded stack'),
                                   ('statement_cleanup_order', 'statement cleanup preserves LIFO groups, tail calls and escaped owners'),
                                   ('branch_emission', 'branch emission preserves guards, sections, effects and tail calls'),
