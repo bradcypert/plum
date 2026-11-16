@@ -3007,6 +3007,7 @@ let cg_fn_call_real (p: CgProgram) (env: Array[CgSlot]) (n: Int) (module_name: S
     let slice = module_name == "<prelude>" && name == "Array.slice" && args.len() == 3 && targs.len() == 1;
     let concat = cg_is_array_concat(module_name, name, targs) && args.len() == 2;
     let bytes_concat = module_name == "<prelude>" && name == "bytes_concat_raw" && args.len() == 2;
+    let string_reverse = module_name == "<prelude>" && name == "plum__string_reverse_raw" && args.len() == 1;
     let sym = if reverse { "@plum_array_reverse" } else if slice { "@plum_array_slice" }
         else if concat { "@plum_array_concat" } else if bytes_concat { "@plum_str_concat_reuse" } else { match cg_runtime_fn(module_name, name) {
             Some(rt) => rt,
@@ -3044,7 +3045,7 @@ let cg_fn_call_real (p: CgProgram) (env: Array[CgSlot]) (n: Int) (module_name: S
         // Padding and array operations also consume their receivers; Array
         // concat consumes both. Only remaining language arguments drop here.
         .concat(if reverse || slice || concat || Option.is_some(cg_runtime_fn(module_name, name)) {
-            cg_dec_args(p, args, a.vals, if concat { 2 } else if reverse || slice || bytes_concat || name == "plum__string_pad_raw" { 1 } else { 0 }, "")
+            cg_dec_args(p, args, a.vals, if concat { 2 } else if reverse || slice || bytes_concat || string_reverse || name == "plum__string_pad_raw" { 1 } else { 0 }, "")
         } else { "" });
     let code = if cyclic {
         // Releases first, then return the call's own result -- see
@@ -3175,7 +3176,7 @@ let cg_runtime_fn (module_name: String) (name: String): Option[String] =
     else if name == "plum__percent_decode_validated_raw" { Some("@plum_percent_decode_validated") }
     else if name == "plum__hex_decode_validated_raw" { Some("@plum_hex_decode_validated") }
     else if name == "plum__bytes_to_hex_raw" { Some("@plum_bytes_to_hex") }
-    else if name == "plum__string_reverse_raw" { Some("@plum_str_reverse") }
+    else if module_name == "<prelude>" && name == "plum__string_reverse_raw" { Some("@plum_str_reverse_reuse") }
     else if name == "plum__string_repeat_raw" { Some("@plum_str_repeat") }
     else if name == "plum__int_bits_raw" { Some("@plum_int_bits") }
     else if name == "plum__string_pad_raw" { Some("@plum_str_pad") }

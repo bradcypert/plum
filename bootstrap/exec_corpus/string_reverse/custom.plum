@@ -1,0 +1,2 @@
+// The runtime contract belongs to the prelude binding, not this spelling.
+pub let plum__string_reverse_raw (s: String): String = s.concat(" custom")

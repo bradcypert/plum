@@ -100,6 +100,7 @@ def main():
                                   ('array_map_sources', 'Array.map sources: owned temporaries, pipelines, aliases and scoped cleanup'),
                                   ('array_filter_sources', 'Array.filter sources: owned temporaries, predicates, aliases and scoped cleanup'),
                                   ('array_fold_ownership', 'Array.fold: owned arguments, prompt reclamation, operand aliases and scoped cleanup'),
+                                  ('string_reverse', 'String reversal: codepoint groups, raw bytes, NULs, immutable aliases and large inputs'),
                                   ('parameter_move_paths', 'Parameter moves preserve shadowed locals and failed guard continuations'),
                                   ('string_char_len', 'character counts preserve UTF-8, NULs, aliases and bounded stack'),
                                   ('statement_cleanup_order', 'statement cleanup preserves LIFO groups, tail calls and escaped owners'),

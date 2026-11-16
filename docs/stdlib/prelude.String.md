@@ -8,7 +8,8 @@ Part of [`prelude`](prelude.md).
 
 The string with its CHARACTERS (codepoints) reversed, not its bytes.
 Combining marks reverse independently; this does not reverse graphemes.
-Uses one exact-sized output allocation without character arrays or strings.
+Reuses uniquely owned input storage; shared input copies into one exact-sized
+allocation. Uses constant scratch without character arrays or strings.
 Empty output uses static storage; a single character shares input storage.
 
 ## `let String.is_empty (s: String): Bool`
