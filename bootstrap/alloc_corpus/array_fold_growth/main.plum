@@ -1,0 +1,11 @@
+// A consumed Array transfers ordinary elements into the fold callback.
+// Each appended String can retain its reserve capacity across rounds.
+let words (): Array[String] = {
+    let mut xs: Array[String] = []; for i in 0..128 { xs = xs.push(i.to_string().repeat(16)); }; xs
+}
+let again (xs: Array[String]) (n: Int): Array[String] =
+    if n <= 0 { xs } else { again(Array.fold(xs, [], |acc: Array[String], s: String| acc.push(s.concat("!"))), n - 1) }
+let main (): Unit = {
+    let xs = again(words(), 256); assert_eq(xs.len(), 128);
+    for i in 0..128 { assert_eq(xs[i], i.to_string().repeat(16).concat("!".repeat(256))); };
+}
