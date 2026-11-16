@@ -407,42 +407,16 @@ jobs:
           test "${{ needs.cache_objects.result }}" = success
           test "${{ needs.freestanding_checks.result }}" = success
 
-  # Does the compiler work somewhere that is not the developer's Linux
-  # box? Only `bootstrap/platform-smoke` runs here, deliberately -- see
-  # that script's header. The rest of `bootstrap/` is Linux-only
-  # tooling (GNU `timeout`, ASan leak detection, the `./sh` cgroup
-  # wrapper), and making it portable would be work spent on the
-  # development environment rather than on the thing users install.
-  #
-  # Correctness is still established on Linux. What this leg answers is
-  # narrower and is the question that does not transfer: does the
-  # bootstrap path work, does the shell-out to `clang` work, do the
-  # embedded C shims compile against a different libc, and do real
-  # programs still print the right thing.
-  #
-  # macos-15 is arm64, which is also the second CPU architecture this
-  # project targets -- so one runner covers a second OS and a second
-  # architecture at once. It finishes in under a minute.
-  #
-  # **Intel macOS is deliberately NOT here**, and is in `release.yml`
-  # instead, as `macos-15-intel`. It was `macos-13` on both until
-  # 2026-08-25, when that image turned out to have been RETIRED --
-  # `actions/runner-images` publishes only macos-15 and macos-26 now.
-  #
-  # A `runs-on` naming a retired image does not fail. It queues until
-  # GitHub's 24-hour job timeout kills it, and while it waits the whole
-  # RUN counts as in progress, so no job's logs can be downloaded. One
-  # run here sat at `24h0m1s` and blocked every other leg's diagnosis
-  # for a day. Every job in both workflows now sets `timeout-minutes`.
-  #
-  # (Cost is not the reason. This repository is public, so Actions
-  # minutes are free on every runner size.)
-  platforms-build:
-    name: build macOS compiler from seed
-    runs-on: macos-15
-    # A runner that never arrives must fail in minutes, not in
-    # GitHub's default 24 hours. See the retired-image note above.
-    timeout-minutes: 30
+  # Validate native Darwin/ARM64 behavior on the current stable image.
+  # Two self-contained jobs use two Mac VMs instead of a build VM followed
+  # by three fresh validation VMs. Keep smoke and memory work parallel, but
+  # avoid losing all validation to runner-capacity failures after building.
+  # Release builds still test macOS 15 separately in release.yml.
+  platforms-smoke:
+    name: macOS build, platform and LSP smoke
+    runs-on: macos-26
+    # Budget for the bootstrap build, platform suite and language server.
+    timeout-minutes: 40
     steps:
       - uses: actions/checkout@v5
 
@@ -467,28 +441,6 @@ jobs:
           cat directory-entries.out
           diff -u bootstrap/exec_corpus/directory_entries/expected.txt directory-entries.out
 
-      - name: archive freshly built compiler
-        run: tar -czf plum-macos-compiler.tar.gz sh.real
-      - uses: actions/upload-artifact@v4
-        with:
-          name: plum-macos-compiler
-          path: plum-macos-compiler.tar.gz
-          if-no-files-found: error
-          compression-level: 0
-          retention-days: 7
-
-  platforms-smoke:
-    name: macOS platform smoke
-    needs: platforms-build
-    runs-on: macos-15
-    timeout-minutes: 30
-    steps:
-      - uses: actions/checkout@v5
-      - uses: actions/download-artifact@v4
-        with:
-          name: plum-macos-compiler
-      - name: restore freshly built compiler
-        run: tar -xzf plum-macos-compiler.tar.gz
       - name: real programs work on macOS
         run: ./bootstrap/platform-smoke ./sh.real
       - name: listeners reserve their port and release failed sockets
@@ -504,18 +456,28 @@ jobs:
       - name: process captures preserve output and report failures
         run: PLUM=./sh.real ./bootstrap/process-capture-smoke
 
+      - name: the language server answers a real session
+        run: ./bootstrap/lsp-smoke ./sh.real
+
   platforms-memory-and-debug:
     name: macOS memory and debug checks
-    needs: platforms-build
-    runs-on: macos-15
-    timeout-minutes: 30
+    runs-on: macos-26
+    # Include bootstrap and sanitizer setup in this suite's time budget.
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v5
-      - uses: actions/download-artifact@v4
-        with:
-          name: plum-macos-compiler
-      - name: restore freshly built compiler
-        run: tar -xzf plum-macos-compiler.tar.gz
+
+      # clang ships with the Xcode command line tools, already present
+      # on every GitHub macOS runner. Printed rather than installed so
+      # a failure names the version that produced it.
+      - name: clang version
+        run: clang --version
+
+      - name: seed -> compiler
+        run: |
+          ./bootstrap/from-seed -o sh.seed
+          ./sh.seed build bootstrap/self_host -o sh.real
+
       # Peak RSS, asserted. `./sh`'s cgroup ceiling needs a user session
       # bus that no runner has, so it silently degrades here and every
       # `SH_MEM` in `bootstrap/` is inert on CI. This uses `getrusage`
@@ -544,44 +506,17 @@ jobs:
           PATH="$(brew --prefix llvm)/bin:$PATH" python3 ./bootstrap/array-concat-check.py ./sh.real --sanitize
           PATH="$(brew --prefix llvm)/bin:$PATH" python3 ./bootstrap/array-push-check.py ./sh.real --sanitize
 
-      # The language server is the one feature that was BROKEN on macOS
-      # and fixed blind: it re-invokes the compiler through
-      # `/proc/self/exe`, which does not exist here, so it could never
-      # have worked. `Os.self_exe` replaced that, and nothing tested
-      # the result on a Mac until this step. Shipping a release that
-      # advertises editor support without ever running it on the
-      # platform is the gap this closes.
-      #
-      # `lsp-smoke` needs a Python only to BUILD the session -- a stream
-      # of Content-Length-framed JSON. macOS runners have one.
-  platforms-lsp:
-    name: macOS language server smoke
-    needs: platforms-build
-    runs-on: macos-15
-    timeout-minutes: 30
-    steps:
-      - uses: actions/checkout@v5
-      - uses: actions/download-artifact@v4
-        with:
-          name: plum-macos-compiler
-      - name: restore freshly built compiler
-        run: tar -xzf plum-macos-compiler.tar.gz
-      - name: the language server answers a real session
-        run: ./bootstrap/lsp-smoke ./sh.real
-
   platforms:
-    name: macos-15 builds and runs real programs
+    name: macOS builds and runs real programs
     if: ${{ always() }}
-    needs: [platforms-build, platforms-smoke, platforms-memory-and-debug, platforms-lsp]
+    needs: [platforms-smoke, platforms-memory-and-debug]
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
       - name: every macOS validation passed
         run: |
-          test "${{ needs.platforms-build.result }}" = success
           test "${{ needs.platforms-smoke.result }}" = success
           test "${{ needs.platforms-memory-and-debug.result }}" = success
-          test "${{ needs.platforms-lsp.result }}" = success
 
   # Linux on arm64 -- a second ARCHITECTURE on the reference OS.
   #
