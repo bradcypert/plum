@@ -304,7 +304,7 @@ entry:
   %isnull = icmp eq ptr %v, null
   br i1 %isnull, label %no, label %check
 check:
-  %rc = load atomic i64, ptr %v monotonic, align 8
+  %rc = load atomic i64, ptr %v acquire, align 8
   %sole = icmp eq i64 %rc, 1
   br i1 %sole, label %sized, label %no
 sized:
@@ -666,7 +666,7 @@ identity:
   ret ptr %s
 capacity:
   %required = add i64 %length, 17
-  %rc = load atomic i64, ptr %s monotonic, align 8
+  %rc = load atomic i64, ptr %s acquire, align 8
   %unique = icmp eq i64 %rc, 1
   %different = icmp ne ptr %s, %fill
   %candidate = and i1 %unique, %different
@@ -1360,7 +1360,7 @@ entry:
   %lb = load i64, ptr %lbp
   %need = call i64 @plum_str_concat_length(i64 %la, i64 %lb)
   %required = add i64 %need, 17
-  %rc = load atomic i64, ptr %a monotonic, align 8
+  %rc = load atomic i64, ptr %a acquire, align 8
   %uniq = icmp eq i64 %rc, 1
   br i1 %uniq, label %maybe, label %copy
 maybe:
@@ -1864,7 +1864,7 @@ done:
 ; children and releases the consumed input via its typed release function.
 define ptr @plum_array_ensure_unique(ptr %a, i1 %heap, ptr %rel) {
 entry:
-  %rc = load atomic i64, ptr %a monotonic, align 8
+  %rc = load atomic i64, ptr %a acquire, align 8
   %sole = icmp eq i64 %rc, 1
   br i1 %sole, label %reuse, label %copy
 reuse:
@@ -2004,7 +2004,7 @@ right_identity:
 prepare:
   %payload_bytes = mul i64 %total, 8
   %required = add i64 %payload_bytes, 16
-  %rc = load atomic i64, ptr %a monotonic, align 8
+  %rc = load atomic i64, ptr %a acquire, align 8
   %unique = icmp eq i64 %rc, 1
   br i1 %unique, label %capacity, label %shared
 capacity:
@@ -2091,7 +2091,7 @@ entry:
   %newlen = call i64 @plum_array_push_length(i64 %len)
   %payload = mul i64 %newlen, 8
   %required = add i64 %payload, 16
-  %rc = load atomic i64, ptr %a monotonic, align 8
+  %rc = load atomic i64, ptr %a acquire, align 8
   %unique = icmp eq i64 %rc, 1
   br i1 %unique, label %capacity, label %allocate
 capacity:
@@ -2215,7 +2215,7 @@ entry:
   %isnull = icmp eq ptr %a, null
   br i1 %isnull, label %fresh, label %check
 check:
-  %rc = load atomic i64, ptr %a monotonic, align 8
+  %rc = load atomic i64, ptr %a acquire, align 8
   %sole = icmp eq i64 %rc, 1
   br i1 %sole, label %sized, label %fresh
 sized:
@@ -2755,7 +2755,7 @@ prepare:
   %next = getelementptr i64, ptr %slot, i64 1
   %tail = sub i64 %nlen, %idx
   %tailbytes = mul i64 %tail, 8
-  %rc = load atomic i64, ptr %a monotonic, align 8
+  %rc = load atomic i64, ptr %a acquire, align 8
   %unique = icmp eq i64 %rc, 1
   br i1 %unique, label %owned, label %copy
 owned:
@@ -55026,19 +55026,19 @@ entry:
   store ptr null, ptr %t4213, !dbg !323
   %t4226 = alloca ptr, !dbg !323
   store ptr null, ptr %t4226, !dbg !323
-  ; plum.off 424636
+  ; plum.off 424634
   %t4210 = call ptr @plum.f.parser.current_path.0.(i1 0), !dbg !324
   %t4209_pre = load ptr, ptr %t4209, !dbg !324
   call void @plum_rel_str(ptr %t4209_pre), !dbg !324
   store ptr null, ptr %t4209, !dbg !324
   store ptr %t4210, ptr %t4209, !dbg !324
-  ; plum.off 424677
+  ; plum.off 424675
   %t4212 = call ptr @plum.f.codegen.cg_prelude_src.0.(i1 0), !dbg !325
   %t4211_pre = load ptr, ptr %t4211, !dbg !325
   call void @plum_rel_str(ptr %t4211_pre), !dbg !325
   store ptr null, ptr %t4211, !dbg !325
   store ptr %t4212, ptr %t4211, !dbg !325
-  ; plum.off 424711
+  ; plum.off 424709
   %t4214 = load ptr, ptr %t4211, !dbg !326
   call void @plum_rc_inc(ptr %t4214), !dbg !326
   %t4215 = call ptr @plum.f.lexer.tokenize_spanned.0.(ptr %t4214), !dbg !326
@@ -55046,7 +55046,7 @@ entry:
   call void @plum.h.rel.Slexer$2eLexedSource.0.(ptr %t4213_pre), !dbg !326
   store ptr null, ptr %t4213, !dbg !326
   store ptr %t4215, ptr %t4213, !dbg !326
-  ; plum.off 424756
+  ; plum.off 424754
   %t4218 = load ptr, ptr %t4211, !dbg !327
   store ptr null, ptr %t4211, !dbg !327
   %t4219 = load ptr, ptr %t4213, !dbg !327
@@ -55058,7 +55058,7 @@ entry:
   %t4224 = load ptr, ptr %t4223, !dbg !327
   call void @plum_rc_inc(ptr %t4224), !dbg !327
   %t4225 = call i1 @plum.f.parser.set_source_context.0.(ptr @.str4216, ptr %t4218, ptr %t4221, ptr %t4224), !dbg !327
-  ; plum.off 424831
+  ; plum.off 424829
   %t4227 = load ptr, ptr %t4213, !dbg !328
   %t4228 = getelementptr i8, ptr %t4227, i64 8, !dbg !328
   %t4229 = load ptr, ptr %t4228, !dbg !328
@@ -55074,7 +55074,7 @@ entry:
   call void @plum.h.rel.SArray.1.Sparser$2eItemNode.0.(ptr %t4226_pre), !dbg !328
   store ptr null, ptr %t4226, !dbg !328
   store ptr %t4234, ptr %t4226, !dbg !328
-  ; plum.off 424936
+  ; plum.off 424934
   %t4235 = load ptr, ptr %t4209, !dbg !329
   store ptr null, ptr %t4209, !dbg !329
   %t4240 = call i1 @plum.f.parser.set_source_context.0.(ptr %t4235, ptr @.str4236, ptr @.const4238, ptr @.const4239), !dbg !329
@@ -63756,7 +63756,7 @@ entry:
   ; plum.off 28059
   %t8001 = call ptr @plum.f.parser.std_module_names.0.(i1 0), !dbg !688
   %t8014 = call i64 @plum_array_len(ptr %t8001), !dbg !688
-  %t8014_rc = load atomic i64, ptr %t8001 monotonic, align 8, !dbg !688
+  %t8014_rc = load atomic i64, ptr %t8001 acquire, align 8, !dbg !688
   %t8014_move = icmp eq i64 %t8014_rc, 1, !dbg !688
   store ptr @.str8002, ptr %t8015, !dbg !688
   store i64 0, ptr %t8016, !dbg !688
@@ -71526,9 +71526,9 @@ entry:
   %t12083 = alloca ptr, !dbg !931
   store ptr null, ptr %t12083, !dbg !931
   %t12134 = alloca ptr, !dbg !931
-  ; plum.off 425656
+  ; plum.off 425654
   %t11892 = call i1 @plum.f.codegen.cg_dbg_reset.0.(i1 0), !dbg !932
-  ; plum.off 425678
+  ; plum.off 425676
   %t11893 = load ptr, ptr @g.plum.f.codegen.EQ_TYPES.0., !dbg !933
   call void @plum_rc_inc(ptr %t11893), !dbg !933
   %t11894 = call ptr @plum.f.codegen.cg_empty_type_set.0.(i1 0), !dbg !933
@@ -71537,7 +71537,7 @@ entry:
   call void @plum.h.rel.S$3cprelude$3e$2eMap.2.Etypecheck$2eITy.0.b(ptr %t11896), !dbg !933
   store ptr %t11894, ptr %t11895, !dbg !933
   call void @plum.h.rel.RS$3cprelude$3e$2eMap.2.Etypecheck$2eITy.0.b(ptr %t11893), !dbg !933
-  ; plum.off 425719
+  ; plum.off 425717
   %t11897 = load ptr, ptr @g.plum.f.codegen.HASH_SEEN.0., !dbg !934
   call void @plum_rc_inc(ptr %t11897), !dbg !934
   %t11898 = call ptr @plum.f.codegen.cg_empty_type_set.0.(i1 0), !dbg !934
@@ -71546,7 +71546,7 @@ entry:
   call void @plum.h.rel.S$3cprelude$3e$2eMap.2.Etypecheck$2eITy.0.b(ptr %t11900), !dbg !934
   store ptr %t11898, ptr %t11899, !dbg !934
   call void @plum.h.rel.RS$3cprelude$3e$2eMap.2.Etypecheck$2eITy.0.b(ptr %t11897), !dbg !934
-  ; plum.off 425761
+  ; plum.off 425759
   %t11901 = load ptr, ptr @g.plum.f.codegen.HASH_TYPES.0., !dbg !935
   call void @plum_rc_inc(ptr %t11901), !dbg !935
   %t11903 = getelementptr i8, ptr %t11901, i64 8, !dbg !935
@@ -71554,7 +71554,7 @@ entry:
   call void @plum.h.rel.SArray.1.Etypecheck$2eITy.0.(ptr %t11904), !dbg !935
   store ptr @.const11902, ptr %t11903, !dbg !935
   call void @plum.h.rel.RSArray.1.Etypecheck$2eITy.0.(ptr %t11901), !dbg !935
-  ; plum.off 425785
+  ; plum.off 425783
   %t11905 = load ptr, ptr @g.plum.f.codegen.REL_TYPES.0., !dbg !936
   call void @plum_rc_inc(ptr %t11905), !dbg !936
   %t11906 = call ptr @plum.f.codegen.cg_empty_type_set.0.(i1 0), !dbg !936
@@ -71563,13 +71563,13 @@ entry:
   call void @plum.h.rel.S$3cprelude$3e$2eMap.2.Etypecheck$2eITy.0.b(ptr %t11908), !dbg !936
   store ptr %t11906, ptr %t11907, !dbg !936
   call void @plum.h.rel.RS$3cprelude$3e$2eMap.2.Etypecheck$2eITy.0.b(ptr %t11905), !dbg !936
-  ; plum.off 425827
+  ; plum.off 425825
   %t11910 = call ptr @plum.f.buildcache.start.0.(i1 0), !dbg !937
   %t11909_pre = load ptr, ptr %t11909, !dbg !937
   call void @plum.h.rel.STime$2eInstant.0.(ptr %t11909_pre), !dbg !937
   store ptr null, ptr %t11909, !dbg !937
   store ptr %t11910, ptr %t11909, !dbg !937
-  ; plum.off 425872
+  ; plum.off 425870
   %t11912 = load ptr, ptr %s0, !dbg !938
   call void @plum_rc_inc(ptr %t11912), !dbg !938
   %t11913 = call ptr @plum.f.codegen.cg_with_prelude.0.(ptr %t11912), !dbg !938
@@ -71577,17 +71577,17 @@ entry:
   call void @plum.h.rel.Sparser$2eProgramNode.0.(ptr %t11911_pre), !dbg !938
   store ptr null, ptr %t11911, !dbg !938
   store ptr %t11913, ptr %t11911, !dbg !938
-  ; plum.off 425917
+  ; plum.off 425915
   %t11916 = load ptr, ptr %t11909, !dbg !939
   store ptr null, ptr %t11909, !dbg !939
   %t11917 = call i1 @plum.f.buildcache.finish.0.(ptr @.str11914, ptr %t11916), !dbg !939
-  ; plum.off 425972
+  ; plum.off 425970
   %t11919 = call ptr @plum.f.buildcache.start.0.(i1 0), !dbg !940
   %t11918_pre = load ptr, ptr %t11918, !dbg !940
   call void @plum.h.rel.STime$2eInstant.0.(ptr %t11918_pre), !dbg !940
   store ptr null, ptr %t11918, !dbg !940
   store ptr %t11919, ptr %t11918, !dbg !940
-  ; plum.off 426014
+  ; plum.off 426012
   %t11921 = load ptr, ptr %t11911, !dbg !941
   call void @plum_rc_inc(ptr %t11921), !dbg !941
   %t11922 = call ptr @plum.f.codegen.cg_build_program.0.(ptr %t11921), !dbg !941
@@ -71595,11 +71595,11 @@ entry:
   call void @plum.h.rel.Scodegen$2eCgProgram.0.(ptr %t11920_pre), !dbg !941
   store ptr null, ptr %t11920, !dbg !941
   store ptr %t11922, ptr %t11920, !dbg !941
-  ; plum.off 426053
+  ; plum.off 426051
   %t11925 = load ptr, ptr %t11918, !dbg !942
   store ptr null, ptr %t11918, !dbg !942
   %t11926 = call i1 @plum.f.buildcache.finish.0.(ptr @.str11923, ptr %t11925), !dbg !942
-  ; plum.off 426104
+  ; plum.off 426102
   %t11927 = load ptr, ptr %t11920, !dbg !943
   call void @plum_rc_inc(ptr %t11927), !dbg !943
   %t11928 = load ptr, ptr %s1, !dbg !943
@@ -71622,7 +71622,7 @@ L11933:
   br label %L11934, !dbg !943
 L11934:
   %t11943 = load i1, ptr %t11931, !dbg !943
-  ; plum.off 426192
+  ; plum.off 426190
   %t11944 = load ptr, ptr @g.plum.f.codegen.CORE_RUNTIME.0., !dbg !944
   call void @plum_rc_inc(ptr %t11944), !dbg !944
   %t11945 = getelementptr i8, ptr %t11944, i64 8, !dbg !944
@@ -71642,13 +71642,13 @@ L11949:
   br label %L11950, !dbg !944
 L11950:
   %t11954 = load i1, ptr %t11947, !dbg !944
-  ; plum.off 426354
+  ; plum.off 426352
   %t11956 = call ptr @plum.f.buildcache.start.0.(i1 0), !dbg !945
   %t11955_pre = load ptr, ptr %t11955, !dbg !945
   call void @plum.h.rel.STime$2eInstant.0.(ptr %t11955_pre), !dbg !945
   store ptr null, ptr %t11955, !dbg !945
   store ptr %t11956, ptr %t11955, !dbg !945
-  ; plum.off 426401
+  ; plum.off 426399
   %t11958 = load ptr, ptr %t11920, !dbg !946
   call void @plum_rc_inc(ptr %t11958), !dbg !946
   %t11959 = load ptr, ptr %t11920, !dbg !946
@@ -71671,21 +71671,21 @@ L11950:
   call void @plum.h.rel.SArray.1.Scodegen$2eCgInst.0.(ptr %t11957_pre), !dbg !946
   store ptr null, ptr %t11957, !dbg !946
   store ptr %t11972, ptr %t11957, !dbg !946
-  ; plum.off 426513
+  ; plum.off 426511
   %t11975 = load ptr, ptr %t11955, !dbg !947
   store ptr null, ptr %t11955, !dbg !947
   %t11976 = call i1 @plum.f.buildcache.finish.0.(ptr @.str11973, ptr %t11975), !dbg !947
-  ; plum.off 426568
+  ; plum.off 426566
   %t11979 = load ptr, ptr %t11957, !dbg !948
   %t11980 = call i64 @plum_array_len(ptr %t11979), !dbg !948
   %t11981 = call i1 @plum.f.buildcache.count.0.(ptr @.str11977, i64 %t11980), !dbg !948
-  ; plum.off 426793
+  ; plum.off 426791
   %t11983 = call ptr @plum.f.buildcache.start.0.(i1 0), !dbg !949
   %t11982_pre = load ptr, ptr %t11982, !dbg !949
   call void @plum.h.rel.STime$2eInstant.0.(ptr %t11982_pre), !dbg !949
   store ptr null, ptr %t11982, !dbg !949
   store ptr %t11983, ptr %t11982, !dbg !949
-  ; plum.off 426837
+  ; plum.off 426835
   %t11985 = load ptr, ptr %t11920, !dbg !950
   call void @plum_rc_inc(ptr %t11985), !dbg !950
   %t11986 = load ptr, ptr %t11957, !dbg !950
@@ -71698,7 +71698,7 @@ L11950:
   call void @plum.h.rel.SArray.1.Etypecheck$2eITy.0.(ptr %t11984_pre), !dbg !950
   store ptr null, ptr %t11984, !dbg !950
   store ptr %t11990, ptr %t11984, !dbg !950
-  ; plum.off 427162
+  ; plum.off 427160
   %t11992 = load ptr, ptr %t11920, !dbg !951
   call void @plum_rc_inc(ptr %t11992), !dbg !951
   %t11993 = load ptr, ptr %t11957, !dbg !951
@@ -71723,17 +71723,17 @@ L11950:
   call void @plum.h.rel.SArray.1.Etypecheck$2eITy.0.(ptr %t11991_pre), !dbg !951
   store ptr null, ptr %t11991, !dbg !951
   store ptr %t12004, ptr %t11991, !dbg !951
-  ; plum.off 427298
+  ; plum.off 427296
   %t12007 = load ptr, ptr %t11982, !dbg !952
   store ptr null, ptr %t11982, !dbg !952
   %t12008 = call i1 @plum.f.buildcache.finish.0.(ptr @.str12005, ptr %t12007), !dbg !952
-  ; plum.off 427354
+  ; plum.off 427352
   %t12010 = call ptr @plum.f.buildcache.start.0.(i1 0), !dbg !953
   %t12009_pre = load ptr, ptr %t12009, !dbg !953
   call void @plum.h.rel.STime$2eInstant.0.(ptr %t12009_pre), !dbg !953
   store ptr null, ptr %t12009, !dbg !953
   store ptr %t12010, ptr %t12009, !dbg !953
-  ; plum.off 427398
+  ; plum.off 427396
   %t12012 = load ptr, ptr %t11920, !dbg !954
   call void @plum_rc_inc(ptr %t12012), !dbg !954
   %t12017 = call ptr @plum.f.codegen.cg_emit_globals.0.(ptr %t12012, i64 0, i64 1000000, ptr @.str12013, ptr @.str12015), !dbg !954
@@ -71741,17 +71741,17 @@ L11950:
   call void @plum.h.rel.Scodegen$2eGlobalsEmit.0.(ptr %t12011_pre), !dbg !954
   store ptr null, ptr %t12011, !dbg !954
   store ptr %t12017, ptr %t12011, !dbg !954
-  ; plum.off 427451
+  ; plum.off 427449
   %t12020 = load ptr, ptr %t12009, !dbg !955
   store ptr null, ptr %t12009, !dbg !955
   %t12021 = call i1 @plum.f.buildcache.finish.0.(ptr @.str12018, ptr %t12020), !dbg !955
-  ; plum.off 427506
+  ; plum.off 427504
   %t12023 = call ptr @plum.f.buildcache.start.0.(i1 0), !dbg !956
   %t12022_pre = load ptr, ptr %t12022, !dbg !956
   call void @plum.h.rel.STime$2eInstant.0.(ptr %t12022_pre), !dbg !956
   store ptr null, ptr %t12022, !dbg !956
   store ptr %t12023, ptr %t12022, !dbg !956
-  ; plum.off 427551
+  ; plum.off 427549
   %t12025 = call ptr @plum_array_new(i64 6), !dbg !957
   %t12026 = load ptr, ptr %t11920, !dbg !957
   call void @plum_rc_inc(ptr %t12026), !dbg !957
@@ -71800,17 +71800,17 @@ L11950:
   call void @plum_rel_str(ptr %t12024_pre), !dbg !957
   store ptr null, ptr %t12024, !dbg !957
   store ptr %t12056, ptr %t12024, !dbg !957
-  ; plum.off 427836
+  ; plum.off 427834
   %t12059 = load ptr, ptr %t12022, !dbg !958
   store ptr null, ptr %t12022, !dbg !958
   %t12060 = call i1 @plum.f.buildcache.finish.0.(ptr @.str12057, ptr %t12059), !dbg !958
-  ; plum.off 427892
+  ; plum.off 427890
   %t12062 = call ptr @plum.f.buildcache.start.0.(i1 0), !dbg !959
   %t12061_pre = load ptr, ptr %t12061, !dbg !959
   call void @plum.h.rel.STime$2eInstant.0.(ptr %t12061_pre), !dbg !959
   store ptr null, ptr %t12061, !dbg !959
   store ptr %t12062, ptr %t12061, !dbg !959
-  ; plum.off 427934
+  ; plum.off 427932
   %t12064 = load ptr, ptr %t11920, !dbg !960
   store ptr null, ptr %t11920, !dbg !960
   %t12065 = load ptr, ptr %t11957, !dbg !960
@@ -71820,33 +71820,33 @@ L11950:
   call void @plum_rel_str(ptr %t12063_pre), !dbg !960
   store ptr null, ptr %t12063, !dbg !960
   store ptr %t12068, ptr %t12063, !dbg !960
-  ; plum.off 427989
+  ; plum.off 427987
   %t12071 = load ptr, ptr %t12061, !dbg !961
   store ptr null, ptr %t12061, !dbg !961
   %t12072 = call i1 @plum.f.buildcache.finish.0.(ptr @.str12069, ptr %t12071), !dbg !961
-  ; plum.off 428044
+  ; plum.off 428042
   %t12074 = call ptr @plum.f.buildcache.start.0.(i1 0), !dbg !962
   %t12073_pre = load ptr, ptr %t12073, !dbg !962
   call void @plum.h.rel.STime$2eInstant.0.(ptr %t12073_pre), !dbg !962
   store ptr null, ptr %t12073, !dbg !962
   store ptr %t12074, ptr %t12073, !dbg !962
-  ; plum.off 428090
+  ; plum.off 428088
   %t12076 = call ptr @plum.f.codegen.cg_dbg_module.0.(i1 0), !dbg !963
   %t12075_pre = load ptr, ptr %t12075, !dbg !963
   call void @plum_rel_str(ptr %t12075_pre), !dbg !963
   store ptr null, ptr %t12075, !dbg !963
   store ptr %t12076, ptr %t12075, !dbg !963
-  ; plum.off 428128
+  ; plum.off 428126
   %t12079 = load ptr, ptr %t12073, !dbg !964
   store ptr null, ptr %t12073, !dbg !964
   %t12080 = call i1 @plum.f.buildcache.finish.0.(ptr @.str12077, ptr %t12079), !dbg !964
-  ; plum.off 428184
+  ; plum.off 428182
   %t12082 = call ptr @plum.f.buildcache.start.0.(i1 0), !dbg !965
   %t12081_pre = load ptr, ptr %t12081, !dbg !965
   call void @plum.h.rel.STime$2eInstant.0.(ptr %t12081_pre), !dbg !965
   store ptr null, ptr %t12081, !dbg !965
   store ptr %t12082, ptr %t12081, !dbg !965
-  ; plum.off 428226
+  ; plum.off 428224
   %t12084 = call ptr @plum_array_new(i64 8), !dbg !966
   %t12085 = load ptr, ptr @g.plum.f.codegen.HEAP_STATS.0., !dbg !966
   call void @plum_rc_inc(ptr %t12085), !dbg !966
@@ -71900,11 +71900,11 @@ L11950:
   call void @plum_rel_str(ptr %t12083_pre), !dbg !966
   store ptr null, ptr %t12083, !dbg !966
   store ptr %t12121, ptr %t12083, !dbg !966
-  ; plum.off 428640
+  ; plum.off 428638
   %t12124 = load ptr, ptr %t12081, !dbg !967
   store ptr null, ptr %t12081, !dbg !967
   %t12125 = call i1 @plum.f.buildcache.finish.0.(ptr @.str12122, ptr %t12124), !dbg !967
-  ; plum.off 428685
+  ; plum.off 428683
   %t12128 = load ptr, ptr %t12083, !dbg !968
   %t12129 = call i64 @plum_str_len(ptr %t12128), !dbg !968
   %t12130 = call i1 @plum.f.buildcache.count.0.(ptr @.str12126, i64 %t12129), !dbg !968
@@ -102881,7 +102881,7 @@ L25937:
   store ptr %t25940, ptr %t25936, !dbg !1713
   br label %L25939, !dbg !1713
 L25938:
-  ; plum.off 444162
+  ; plum.off 444160
   %t25942 = load ptr, ptr %s0, !dbg !1714
   %t25943 = getelementptr i8, ptr %t25942, i64 16, !dbg !1714
   %t25944 = load ptr, ptr %t25943, !dbg !1714
@@ -102898,7 +102898,7 @@ L25938:
   call void @plum.h.rel.Stypecheck$2eTFn.0.(ptr %t25941_pre), !dbg !1714
   store ptr null, ptr %t25941, !dbg !1714
   store ptr %t25950, ptr %t25941, !dbg !1714
-  ; plum.off 444192
+  ; plum.off 444190
   %t25952 = load ptr, ptr %s0, !dbg !1715
   %t25953 = getelementptr i8, ptr %t25952, i64 8, !dbg !1715
   %t25954 = load ptr, ptr %t25953, !dbg !1715
@@ -103235,7 +103235,7 @@ L26123:
   %match_owner26097_reset26123 = load ptr, ptr %match_owner26097, !dbg !1719
   call void @plum.h.rel.E$3cprelude$3e$2eOption.1.Stypecheck$2eTFn.0.(ptr %match_owner26097_reset26123), !dbg !1719
   store ptr null, ptr %match_owner26097, !dbg !1719
-  ; plum.off 438614
+  ; plum.off 438612
   %t26125 = load ptr, ptr %s0, !dbg !1720
   %t26126 = getelementptr i8, ptr %t26125, i64 8, !dbg !1720
   %t26127 = load ptr, ptr %t26126, !dbg !1720
@@ -103472,7 +103472,7 @@ L26236:
   store ptr %t26239, ptr %t26235, !dbg !1722
   br label %L26238, !dbg !1722
 L26237:
-  ; plum.off 437924
+  ; plum.off 437922
   %t26241 = load ptr, ptr %s0, !dbg !1723
   %t26242 = getelementptr i8, ptr %t26241, i64 16, !dbg !1723
   %t26243 = load ptr, ptr %t26242, !dbg !1723
@@ -103489,7 +103489,7 @@ L26237:
   call void @plum.h.rel.Stypecheck$2eTFn.0.(ptr %t26240_pre), !dbg !1723
   store ptr null, ptr %t26240, !dbg !1723
   store ptr %t26249, ptr %t26240, !dbg !1723
-  ; plum.off 437954
+  ; plum.off 437952
   %t26251 = load ptr, ptr %s0, !dbg !1724
   %t26252 = getelementptr i8, ptr %t26251, i64 8, !dbg !1724
   %t26253 = load ptr, ptr %t26252, !dbg !1724
@@ -103822,7 +103822,7 @@ L26398:
   %match_owner26372_reset26398 = load ptr, ptr %match_owner26372, !dbg !1726
   call void @plum.h.rel.E$3cprelude$3e$2eOption.1.Stypecheck$2eTFn.0.(ptr %match_owner26372_reset26398), !dbg !1726
   store ptr null, ptr %match_owner26372, !dbg !1726
-  ; plum.off 432468
+  ; plum.off 432466
   %t26400 = load ptr, ptr %s0, !dbg !1727
   %t26401 = getelementptr i8, ptr %t26400, i64 8, !dbg !1727
   %t26402 = load ptr, ptr %t26401, !dbg !1727
@@ -103948,7 +103948,7 @@ L26442:
   call void @plum.h.rel.Scodegen$2eCgProgram.0.(ptr %t26399_pre), !dbg !1727
   store ptr null, ptr %t26399, !dbg !1727
   store ptr %t26444, ptr %t26399, !dbg !1727
-  ; plum.off 432774
+  ; plum.off 432772
   %t26487 = load ptr, ptr %t26399, !dbg !1728
   call void @plum_rc_inc(ptr %t26487), !dbg !1728
   %t26488 = load ptr, ptr %t26396, !dbg !1728
@@ -104004,7 +104004,7 @@ L26523:
   call void @plum.h.rel.SArray.1.Etypecheck$2eITy.0.(ptr %t26486_pre), !dbg !1728
   store ptr null, ptr %t26486, !dbg !1728
   store ptr %t26525, ptr %t26486, !dbg !1728
-  ; plum.off 432894
+  ; plum.off 432892
   %t26527 = load ptr, ptr %t26399, !dbg !1729
   call void @plum_rc_inc(ptr %t26527), !dbg !1729
   %t26528 = load ptr, ptr %t26399, !dbg !1729
@@ -104144,7 +104144,7 @@ L26560:
   store ptr %t26563, ptr %t26559, !dbg !1731
   br label %L26562, !dbg !1731
 L26561:
-  ; plum.off 431588
+  ; plum.off 431586
   %t26565 = load ptr, ptr %s0, !dbg !1732
   %t26566 = getelementptr i8, ptr %t26565, i64 16, !dbg !1732
   %t26567 = load ptr, ptr %t26566, !dbg !1732
@@ -104161,7 +104161,7 @@ L26561:
   call void @plum.h.rel.Stypecheck$2eTFn.0.(ptr %t26564_pre), !dbg !1732
   store ptr null, ptr %t26564, !dbg !1732
   store ptr %t26573, ptr %t26564, !dbg !1732
-  ; plum.off 431618
+  ; plum.off 431616
   %t26575 = load ptr, ptr %s0, !dbg !1733
   %t26576 = getelementptr i8, ptr %t26575, i64 8, !dbg !1733
   %t26577 = load ptr, ptr %t26576, !dbg !1733
@@ -104614,7 +104614,7 @@ Ltail144:
   store ptr %t26792, ptr %t26777, !dbg !1737
   br label %L26780, !dbg !1737
 L26779:
-  ; plum.off 430436
+  ; plum.off 430434
   %t26794 = load ptr, ptr %s0, !dbg !1738
   %t26795 = getelementptr i8, ptr %t26794, i64 16, !dbg !1738
   %t26796 = load ptr, ptr %t26795, !dbg !1738
@@ -104631,7 +104631,7 @@ L26779:
   call void @plum.h.rel.Stypecheck$2eTFn.0.(ptr %t26793_pre), !dbg !1738
   store ptr null, ptr %t26793, !dbg !1738
   store ptr %t26802, ptr %t26793, !dbg !1738
-  ; plum.off 430466
+  ; plum.off 430464
   %t26804 = load ptr, ptr %s0, !dbg !1739
   %t26805 = getelementptr i8, ptr %t26804, i64 8, !dbg !1739
   %t26806 = load ptr, ptr %t26805, !dbg !1739
@@ -104741,7 +104741,7 @@ L26836:
   call void @plum.h.rel.Scodegen$2eCgProgram.0.(ptr %t26803_pre), !dbg !1739
   store ptr null, ptr %t26803, !dbg !1739
   store ptr %t26838, ptr %t26803, !dbg !1739
-  ; plum.off 430737
+  ; plum.off 430735
   %t26881 = load ptr, ptr %t26803, !dbg !1740
   call void @plum_rc_inc(ptr %t26881), !dbg !1740
   %t26882 = load ptr, ptr %t26793, !dbg !1740
@@ -104754,7 +104754,7 @@ L26836:
   call void @plum.h.rel.Ecodegen$2eCgTy.0.(ptr %t26880_pre), !dbg !1740
   store ptr null, ptr %t26880, !dbg !1740
   store ptr %t26886, ptr %t26880, !dbg !1740
-  ; plum.off 430789
+  ; plum.off 430787
   %t26888 = load ptr, ptr %t26803, !dbg !1741
   store ptr null, ptr %t26803, !dbg !1741
   %t26890 = load i64, ptr %s2, !dbg !1741
@@ -104767,7 +104767,7 @@ L26836:
   call void @plum.h.rel.Scodegen$2eEmit.0.(ptr %t26887_pre), !dbg !1741
   store ptr null, ptr %t26887, !dbg !1741
   store ptr %t26894, ptr %t26887, !dbg !1741
-  ; plum.off 430833
+  ; plum.off 430831
   %t26896 = load ptr, ptr %t26793, !dbg !1742
   %t26897 = getelementptr i8, ptr %t26896, i64 16, !dbg !1742
   %t26898 = load ptr, ptr %t26897, !dbg !1742
@@ -104797,7 +104797,7 @@ L26836:
   call void @plum_rel_str(ptr %t26895_pre), !dbg !1742
   store ptr null, ptr %t26895, !dbg !1742
   store ptr %t26917, ptr %t26895, !dbg !1742
-  ; plum.off 430978
+  ; plum.off 430976
   %t26919 = load ptr, ptr %t26887, !dbg !1743
   %t26920 = getelementptr i8, ptr %t26919, i64 16, !dbg !1743
   %t26921 = load ptr, ptr %t26920, !dbg !1743
@@ -105766,7 +105766,7 @@ L27205:
 @.str28210 = private global { i64, i64, [33 x i8] } { i64 -1, i64 32, [33 x i8] c"  %isnull = icmp eq ptr %v, null\00" }
 @.str28213 = private global { i64, i64, [41 x i8] } { i64 -1, i64 40, [41 x i8] c"  br i1 %isnull, label %no, label %check\00" }
 @.str28216 = private global { i64, i64, [7 x i8] } { i64 -1, i64 6, [7 x i8] c"check:\00" }
-@.str28219 = private global { i64, i64, [51 x i8] } { i64 -1, i64 50, [51 x i8] c"  %rc = load atomic i64, ptr %v monotonic, align 8\00" }
+@.str28219 = private global { i64, i64, [49 x i8] } { i64 -1, i64 48, [49 x i8] c"  %rc = load atomic i64, ptr %v acquire, align 8\00" }
 @.str28222 = private global { i64, i64, [29 x i8] } { i64 -1, i64 28, [29 x i8] c"  %sole = icmp eq i64 %rc, 1\00" }
 @.str28225 = private global { i64, i64, [39 x i8] } { i64 -1, i64 38, [39 x i8] c"  br i1 %sole, label %sized, label %no\00" }
 @.str28228 = private global { i64, i64, [7 x i8] } { i64 -1, i64 6, [7 x i8] c"sized:\00" }
@@ -106130,7 +106130,7 @@ L27205:
 @.str29313 = private global { i64, i64, [13 x i8] } { i64 -1, i64 12, [13 x i8] c"  ret ptr %s\00" }
 @.str29316 = private global { i64, i64, [10 x i8] } { i64 -1, i64 9, [10 x i8] c"capacity:\00" }
 @.str29319 = private global { i64, i64, [34 x i8] } { i64 -1, i64 33, [34 x i8] c"  %required = add i64 %length, 17\00" }
-@.str29322 = private global { i64, i64, [51 x i8] } { i64 -1, i64 50, [51 x i8] c"  %rc = load atomic i64, ptr %s monotonic, align 8\00" }
+@.str29322 = private global { i64, i64, [49 x i8] } { i64 -1, i64 48, [49 x i8] c"  %rc = load atomic i64, ptr %s acquire, align 8\00" }
 @.str29325 = private global { i64, i64, [31 x i8] } { i64 -1, i64 30, [31 x i8] c"  %unique = icmp eq i64 %rc, 1\00" }
 @.str29328 = private global { i64, i64, [37 x i8] } { i64 -1, i64 36, [37 x i8] c"  %different = icmp ne ptr %s, %fill\00" }
 @.str29331 = private global { i64, i64, [42 x i8] } { i64 -1, i64 41, [42 x i8] c"  %candidate = and i1 %unique, %different\00" }
@@ -106832,7 +106832,7 @@ L27205:
 @.str31443 = private global { i64, i64, [27 x i8] } { i64 -1, i64 26, [27 x i8] c"  %lb = load i64, ptr %lbp\00" }
 @.str31446 = private global { i64, i64, [61 x i8] } { i64 -1, i64 60, [61 x i8] c"  %need = call i64 @plum_str_concat_length(i64 %la, i64 %lb)\00" }
 @.str31449 = private global { i64, i64, [32 x i8] } { i64 -1, i64 31, [32 x i8] c"  %required = add i64 %need, 17\00" }
-@.str31452 = private global { i64, i64, [51 x i8] } { i64 -1, i64 50, [51 x i8] c"  %rc = load atomic i64, ptr %a monotonic, align 8\00" }
+@.str31452 = private global { i64, i64, [49 x i8] } { i64 -1, i64 48, [49 x i8] c"  %rc = load atomic i64, ptr %a acquire, align 8\00" }
 @.str31455 = private global { i64, i64, [29 x i8] } { i64 -1, i64 28, [29 x i8] c"  %uniq = icmp eq i64 %rc, 1\00" }
 @.str31458 = private global { i64, i64, [41 x i8] } { i64 -1, i64 40, [41 x i8] c"  br i1 %uniq, label %maybe, label %copy\00" }
 @.str31461 = private global { i64, i64, [7 x i8] } { i64 -1, i64 6, [7 x i8] c"maybe:\00" }
@@ -107340,7 +107340,7 @@ L27205:
 @.str32979 = private global { i64, i64, [75 x i8] } { i64 -1, i64 74, [75 x i8] c"; children and releases the consumed input via its typed release function.\00" }
 @.str32982 = private global { i64, i64, [67 x i8] } { i64 -1, i64 66, [67 x i8] c"define ptr @plum_array_ensure_unique(ptr %a, i1 %heap, ptr %rel) {\00" }
 @.str32985 = private global { i64, i64, [7 x i8] } { i64 -1, i64 6, [7 x i8] c"entry:\00" }
-@.str32988 = private global { i64, i64, [51 x i8] } { i64 -1, i64 50, [51 x i8] c"  %rc = load atomic i64, ptr %a monotonic, align 8\00" }
+@.str32988 = private global { i64, i64, [49 x i8] } { i64 -1, i64 48, [49 x i8] c"  %rc = load atomic i64, ptr %a acquire, align 8\00" }
 @.str32991 = private global { i64, i64, [29 x i8] } { i64 -1, i64 28, [29 x i8] c"  %sole = icmp eq i64 %rc, 1\00" }
 @.str32994 = private global { i64, i64, [41 x i8] } { i64 -1, i64 40, [41 x i8] c"  br i1 %sole, label %reuse, label %copy\00" }
 @.str32997 = private global { i64, i64, [7 x i8] } { i64 -1, i64 6, [7 x i8] c"reuse:\00" }
@@ -107480,7 +107480,7 @@ L27205:
 @.str33399 = private global { i64, i64, [9 x i8] } { i64 -1, i64 8, [9 x i8] c"prepare:\00" }
 @.str33402 = private global { i64, i64, [37 x i8] } { i64 -1, i64 36, [37 x i8] c"  %payload_bytes = mul i64 %total, 8\00" }
 @.str33405 = private global { i64, i64, [41 x i8] } { i64 -1, i64 40, [41 x i8] c"  %required = add i64 %payload_bytes, 16\00" }
-@.str33408 = private global { i64, i64, [51 x i8] } { i64 -1, i64 50, [51 x i8] c"  %rc = load atomic i64, ptr %a monotonic, align 8\00" }
+@.str33408 = private global { i64, i64, [49 x i8] } { i64 -1, i64 48, [49 x i8] c"  %rc = load atomic i64, ptr %a acquire, align 8\00" }
 @.str33411 = private global { i64, i64, [31 x i8] } { i64 -1, i64 30, [31 x i8] c"  %unique = icmp eq i64 %rc, 1\00" }
 @.str33414 = private global { i64, i64, [48 x i8] } { i64 -1, i64 47, [48 x i8] c"  br i1 %unique, label %capacity, label %shared\00" }
 @.str33417 = private global { i64, i64, [10 x i8] } { i64 -1, i64 9, [10 x i8] c"capacity:\00" }
@@ -107568,7 +107568,7 @@ L27205:
 @.str33666 = private global { i64, i64, [55 x i8] } { i64 -1, i64 54, [55 x i8] c"  %newlen = call i64 @plum_array_push_length(i64 %len)\00" }
 @.str33669 = private global { i64, i64, [32 x i8] } { i64 -1, i64 31, [32 x i8] c"  %payload = mul i64 %newlen, 8\00" }
 @.str33672 = private global { i64, i64, [35 x i8] } { i64 -1, i64 34, [35 x i8] c"  %required = add i64 %payload, 16\00" }
-@.str33675 = private global { i64, i64, [51 x i8] } { i64 -1, i64 50, [51 x i8] c"  %rc = load atomic i64, ptr %a monotonic, align 8\00" }
+@.str33675 = private global { i64, i64, [49 x i8] } { i64 -1, i64 48, [49 x i8] c"  %rc = load atomic i64, ptr %a acquire, align 8\00" }
 @.str33678 = private global { i64, i64, [31 x i8] } { i64 -1, i64 30, [31 x i8] c"  %unique = icmp eq i64 %rc, 1\00" }
 @.str33681 = private global { i64, i64, [50 x i8] } { i64 -1, i64 49, [50 x i8] c"  br i1 %unique, label %capacity, label %allocate\00" }
 @.str33684 = private global { i64, i64, [10 x i8] } { i64 -1, i64 9, [10 x i8] c"capacity:\00" }
@@ -107693,7 +107693,7 @@ L27205:
 @.str34044 = private global { i64, i64, [33 x i8] } { i64 -1, i64 32, [33 x i8] c"  %isnull = icmp eq ptr %a, null\00" }
 @.str34047 = private global { i64, i64, [44 x i8] } { i64 -1, i64 43, [44 x i8] c"  br i1 %isnull, label %fresh, label %check\00" }
 @.str34050 = private global { i64, i64, [7 x i8] } { i64 -1, i64 6, [7 x i8] c"check:\00" }
-@.str34053 = private global { i64, i64, [51 x i8] } { i64 -1, i64 50, [51 x i8] c"  %rc = load atomic i64, ptr %a monotonic, align 8\00" }
+@.str34053 = private global { i64, i64, [49 x i8] } { i64 -1, i64 48, [49 x i8] c"  %rc = load atomic i64, ptr %a acquire, align 8\00" }
 @.str34056 = private global { i64, i64, [29 x i8] } { i64 -1, i64 28, [29 x i8] c"  %sole = icmp eq i64 %rc, 1\00" }
 @.str34059 = private global { i64, i64, [42 x i8] } { i64 -1, i64 41, [42 x i8] c"  br i1 %sole, label %sized, label %fresh\00" }
 @.str34062 = private global { i64, i64, [7 x i8] } { i64 -1, i64 6, [7 x i8] c"sized:\00" }
@@ -108234,7 +108234,7 @@ L27205:
 @.str35670 = private global { i64, i64, [46 x i8] } { i64 -1, i64 45, [46 x i8] c"  %next = getelementptr i64, ptr %slot, i64 1\00" }
 @.str35673 = private global { i64, i64, [30 x i8] } { i64 -1, i64 29, [30 x i8] c"  %tail = sub i64 %nlen, %idx\00" }
 @.str35676 = private global { i64, i64, [32 x i8] } { i64 -1, i64 31, [32 x i8] c"  %tailbytes = mul i64 %tail, 8\00" }
-@.str35679 = private global { i64, i64, [51 x i8] } { i64 -1, i64 50, [51 x i8] c"  %rc = load atomic i64, ptr %a monotonic, align 8\00" }
+@.str35679 = private global { i64, i64, [49 x i8] } { i64 -1, i64 48, [49 x i8] c"  %rc = load atomic i64, ptr %a acquire, align 8\00" }
 @.str35682 = private global { i64, i64, [31 x i8] } { i64 -1, i64 30, [31 x i8] c"  %unique = icmp eq i64 %rc, 1\00" }
 @.str35685 = private global { i64, i64, [43 x i8] } { i64 -1, i64 42, [43 x i8] c"  br i1 %unique, label %owned, label %copy\00" }
 @.str35688 = private global { i64, i64, [7 x i8] } { i64 -1, i64 6, [7 x i8] c"owned:\00" }
@@ -122066,7 +122066,7 @@ entry:
   %t41709 = load ptr, ptr %s0, !dbg !1891
   store ptr null, ptr %s0, !dbg !1891
   %t41729 = call i64 @plum_array_len(ptr %t41709), !dbg !1891
-  %t41729_rc = load atomic i64, ptr %t41709 monotonic, align 8, !dbg !1891
+  %t41729_rc = load atomic i64, ptr %t41709 acquire, align 8, !dbg !1891
   %t41729_move = icmp eq i64 %t41729_rc, 1, !dbg !1891
   store ptr @.str41710, ptr %t41730, !dbg !1891
   store i64 0, ptr %t41731, !dbg !1891
@@ -124480,7 +124480,7 @@ entry:
   %t42796 = load ptr, ptr %s0, !dbg !1909
   store ptr null, ptr %s0, !dbg !1909
   %t42816 = call i64 @plum_array_len(ptr %t42796), !dbg !1909
-  %t42816_rc = load atomic i64, ptr %t42796 monotonic, align 8, !dbg !1909
+  %t42816_rc = load atomic i64, ptr %t42796 acquire, align 8, !dbg !1909
   %t42816_move = icmp eq i64 %t42816_rc, 1, !dbg !1909
   store ptr @.str42797, ptr %t42817, !dbg !1909
   store i64 0, ptr %t42818, !dbg !1909
@@ -124589,7 +124589,7 @@ entry:
   %t42844 = load ptr, ptr %s0, !dbg !1913
   store ptr null, ptr %s0, !dbg !1913
   %t42864 = call i64 @plum_array_len(ptr %t42844), !dbg !1913
-  %t42864_rc = load atomic i64, ptr %t42844 monotonic, align 8, !dbg !1913
+  %t42864_rc = load atomic i64, ptr %t42844 acquire, align 8, !dbg !1913
   %t42864_move = icmp eq i64 %t42864_rc, 1, !dbg !1913
   store ptr @.str42845, ptr %t42865, !dbg !1913
   store i64 0, ptr %t42866, !dbg !1913
@@ -131521,7 +131521,7 @@ L46124:
   %t46127 = call ptr @plum_chars_of(ptr %t46126), !dbg !2082
   call void @plum_rel_str(ptr %t46126), !dbg !2082
   %t46139 = call i64 @plum_array_len(ptr %t46127), !dbg !2082
-  %t46139_rc = load atomic i64, ptr %t46127 monotonic, align 8, !dbg !2082
+  %t46139_rc = load atomic i64, ptr %t46127 acquire, align 8, !dbg !2082
   %t46139_move = icmp eq i64 %t46139_rc, 1, !dbg !2082
   store i1 1, ptr %t46140, !dbg !2082
   store i64 0, ptr %t46141, !dbg !2082
@@ -168635,7 +168635,7 @@ L60825:
   %match_owner60749_reset60825 = load ptr, ptr %match_owner60749, !dbg !2655
   call void @plum.h.rel.Etypecheck$2eTNode.0.(ptr %match_owner60749_reset60825), !dbg !2655
   store ptr null, ptr %match_owner60749, !dbg !2655
-  ; plum.off 439362
+  ; plum.off 439360
   %t60827 = load ptr, ptr %s0, !dbg !2656
   call void @plum_rc_inc(ptr %t60827), !dbg !2656
   %t60828 = load ptr, ptr %t60823, !dbg !2656
@@ -169166,7 +169166,7 @@ L60919:
   %match_owner60749_reset60919 = load ptr, ptr %match_owner60749, !dbg !2656
   call void @plum.h.rel.Etypecheck$2eTNode.0.(ptr %match_owner60749_reset60919), !dbg !2656
   store ptr null, ptr %match_owner60749, !dbg !2656
-  ; plum.off 439759
+  ; plum.off 439757
   %t60921 = load ptr, ptr %s0, !dbg !2657
   call void @plum_rc_inc(ptr %t60921), !dbg !2657
   %t60922 = load ptr, ptr %t60917, !dbg !2657
@@ -169183,7 +169183,7 @@ L60919:
   call void @plum.h.rel.SArray.1.Etypecheck$2eITy.0.(ptr %t60920_pre), !dbg !2657
   store ptr null, ptr %t60920, !dbg !2657
   store ptr %t60927, ptr %t60920, !dbg !2657
-  ; plum.off 439834
+  ; plum.off 439832
   %t60917_dead60928_0 = load ptr, ptr %t60917, !dbg !2658
   call void @plum.h.rel.SArray.1.Stypecheck$2eTExpr.0.(ptr %t60917_dead60928_0), !dbg !2658
   store ptr null, ptr %t60917, !dbg !2658
@@ -169195,7 +169195,7 @@ L60934:
   %t60907_dead60937_0 = load ptr, ptr %t60907, !dbg !2658
   call void @plum_rel_str(ptr %t60907_dead60937_0), !dbg !2658
   store ptr null, ptr %t60907, !dbg !2658
-  ; plum.off 439872
+  ; plum.off 439870
   %t60938 = load ptr, ptr @g.plum.f.codegen.HASH_TYPES.0., !dbg !2659
   call void @plum_rc_inc(ptr %t60938), !dbg !2659
   %t60939 = load ptr, ptr %s0, !dbg !2659
@@ -176568,7 +176568,7 @@ frontier_done61729:
 L61731:
   br i1 1, label %L61732, label %L61718, !dbg !2663
 L61732:
-  ; plum.off 392981
+  ; plum.off 392979
   %t61734 = load ptr, ptr %s2, !dbg !2664
   store ptr null, ptr %s2, !dbg !2664
   %t61735 = load ptr, ptr %s1, !dbg !2664
@@ -177285,7 +177285,7 @@ entry:
   store ptr null, ptr %t62681, !dbg !2666
   %match_owner61931 = alloca ptr, !dbg !2666
   store ptr null, ptr %match_owner61931, !dbg !2666
-  ; plum.off 433307
+  ; plum.off 433305
   %t61918 = load ptr, ptr %s0, !dbg !2667
   call void @plum_rc_inc(ptr %t61918), !dbg !2667
   %t61919 = load ptr, ptr %s0, !dbg !2667
@@ -201275,7 +201275,7 @@ L65114:
   call void @plum.h.rel.SArray.1.Etypecheck$2eITy.0.(ptr %t65112_pre), !dbg !2696
   store ptr null, ptr %t65112, !dbg !2696
   store ptr %t65110, ptr %t65112, !dbg !2696
-  ; plum.off 410903
+  ; plum.off 410901
   %t65116 = load ptr, ptr %s0, !dbg !2697
   call void @plum_rc_inc(ptr %t65116), !dbg !2697
   %t65117 = load ptr, ptr %t65107, !dbg !2697
@@ -201672,7 +201672,7 @@ L65359:
   %match_owner65332_reset65359 = load ptr, ptr %match_owner65332, !dbg !2701
   call void @plum.h.rel.E$3cprelude$3e$2eOption.1.Stypecheck$2eTFn.0.(ptr %match_owner65332_reset65359), !dbg !2701
   store ptr null, ptr %match_owner65332, !dbg !2701
-  ; plum.off 450870
+  ; plum.off 450868
   %t65361 = load ptr, ptr %s0, !dbg !2702
   call void @plum_rc_inc(ptr %t65361), !dbg !2702
   %t65362 = load ptr, ptr %t65357, !dbg !2702
@@ -202033,7 +202033,7 @@ L65524:
   %match_owner65513_reset65524 = load ptr, ptr %match_owner65513, !dbg !2718
   call void @plum.h.rel.Eparser$2eItemKindNode.0.(ptr %match_owner65513_reset65524), !dbg !2718
   store ptr null, ptr %match_owner65513, !dbg !2718
-  ; plum.off 419373
+  ; plum.off 419371
   %t65526 = load ptr, ptr %t65522, !dbg !2719
   %t65527 = getelementptr i8, ptr %t65526, i64 16, !dbg !2719
   %t65528 = load ptr, ptr %t65527, !dbg !2719
@@ -209957,7 +209957,7 @@ entry:
   %t69692 = load ptr, ptr %s0, !dbg !2914
   store ptr null, ptr %s0, !dbg !2914
   %t69712 = call i64 @plum_array_len(ptr %t69692), !dbg !2914
-  %t69712_rc = load atomic i64, ptr %t69692 monotonic, align 8, !dbg !2914
+  %t69712_rc = load atomic i64, ptr %t69692 acquire, align 8, !dbg !2914
   %t69712_move = icmp eq i64 %t69712_rc, 1, !dbg !2914
   store ptr @.str69693, ptr %t69713, !dbg !2914
   store i64 0, ptr %t69714, !dbg !2914
@@ -211158,7 +211158,7 @@ entry:
   %t70271 = load ptr, ptr %t70270, !dbg !2929
   call void @plum_rc_inc(ptr %t70271), !dbg !2929
   %t70279 = call i64 @plum_array_len(ptr %t70268), !dbg !2929
-  %t70279_rc = load atomic i64, ptr %t70268 monotonic, align 8, !dbg !2929
+  %t70279_rc = load atomic i64, ptr %t70268 acquire, align 8, !dbg !2929
   %t70279_move = icmp eq i64 %t70279_rc, 1, !dbg !2929
   store ptr %t70271, ptr %t70280, !dbg !2929
   store i64 0, ptr %t70281, !dbg !2929
@@ -226035,7 +226035,7 @@ entry:
   %t77466 = load ptr, ptr %s0, !dbg !3314
   store ptr null, ptr %s0, !dbg !3314
   %t77486 = call i64 @plum_array_len(ptr %t77466), !dbg !3314
-  %t77486_rc = load atomic i64, ptr %t77466 monotonic, align 8, !dbg !3314
+  %t77486_rc = load atomic i64, ptr %t77466 acquire, align 8, !dbg !3314
   %t77486_move = icmp eq i64 %t77486_rc, 1, !dbg !3314
   store ptr @.str77467, ptr %t77487, !dbg !3314
   store i64 0, ptr %t77488, !dbg !3314
@@ -238696,7 +238696,7 @@ entry:
   %t81402 = load ptr, ptr %s0, !dbg !3413
   store ptr null, ptr %s0, !dbg !3413
   %t81424 = call i64 @plum_array_len(ptr %t81402), !dbg !3413
-  %t81424_rc = load atomic i64, ptr %t81402 monotonic, align 8, !dbg !3413
+  %t81424_rc = load atomic i64, ptr %t81402 acquire, align 8, !dbg !3413
   %t81424_move = icmp eq i64 %t81424_rc, 1, !dbg !3413
   store ptr @.str81403, ptr %t81425, !dbg !3413
   store i64 0, ptr %t81426, !dbg !3413
@@ -247281,7 +247281,7 @@ entry:
   store ptr null, ptr %t85762, !dbg !3577
   %match_owner85753 = alloca ptr, !dbg !3577
   store ptr null, ptr %match_owner85753, !dbg !3577
-  ; plum.off 448912
+  ; plum.off 448910
   %t85744 = load ptr, ptr %s0, !dbg !3578
   call void @plum_rc_inc(ptr %t85744), !dbg !3578
   %t85745 = load ptr, ptr %s1, !dbg !3578
@@ -247415,7 +247415,7 @@ L85780:
   store ptr %t85783, ptr %t85779, !dbg !3580
   br label %L85782, !dbg !3580
 L85781:
-  ; plum.off 449625
+  ; plum.off 449623
   %t85785 = load ptr, ptr %s1, !dbg !3581
   %t85786 = load i64, ptr %s2, !dbg !3581
   %t85787 = call i64 @plum_array_check_index(ptr %t85785, i64 %t85786), !dbg !3581
@@ -247932,7 +247932,7 @@ L85945:
   store ptr %t85948, ptr %t85944, !dbg !3593
   br label %L85947, !dbg !3593
 L85946:
-  ; plum.off 352758
+  ; plum.off 352756
   %t85950 = load ptr, ptr %s2, !dbg !3594
   store ptr null, ptr %s2, !dbg !3594
   %t85951 = load ptr, ptr %s1, !dbg !3594
@@ -248575,7 +248575,7 @@ entry:
   store ptr null, ptr %t86200, !dbg !3598
   %match_owner86191 = alloca ptr, !dbg !3598
   store ptr null, ptr %match_owner86191, !dbg !3598
-  ; plum.off 442910
+  ; plum.off 442908
   %t86182 = load ptr, ptr %s0, !dbg !3599
   call void @plum_rc_inc(ptr %t86182), !dbg !3599
   %t86183 = load ptr, ptr %s1, !dbg !3599
@@ -248709,7 +248709,7 @@ L86218:
   store ptr %t86221, ptr %t86217, !dbg !3601
   br label %L86220, !dbg !3601
 L86219:
-  ; plum.off 443627
+  ; plum.off 443625
   %t86223 = load ptr, ptr %s1, !dbg !3602
   %t86224 = load i64, ptr %s2, !dbg !3602
   %t86225 = call i64 @plum_array_check_index(ptr %t86223, i64 %t86224), !dbg !3602
@@ -249885,7 +249885,7 @@ entry:
   %t86678 = alloca ptr, !dbg !3612
   store ptr null, ptr %t86678, !dbg !3612
   %t86685 = alloca i1, !dbg !3612
-  ; plum.off 351529
+  ; plum.off 351527
   %t86676 = load ptr, ptr %s1, !dbg !3613
   store ptr null, ptr %s1, !dbg !3613
   %t86677 = call ptr @plum.f.codegen.cg_type_identity.0.(ptr %t86676), !dbg !3613
@@ -249893,7 +249893,7 @@ entry:
   call void @plum.h.rel.Etypecheck$2eITy.0.(ptr %t86675_pre), !dbg !3613
   store ptr null, ptr %t86675, !dbg !3613
   store ptr %t86677, ptr %t86675, !dbg !3613
-  ; plum.off 351564
+  ; plum.off 351562
   %t86679 = load ptr, ptr %s0, !dbg !3614
   %t86680 = getelementptr i8, ptr %t86679, i64 8, !dbg !3614
   %t86681 = load ptr, ptr %t86680, !dbg !3614
@@ -249912,7 +249912,7 @@ L86686:
   store i1 1, ptr %t86685, !dbg !3614
   br label %L86688, !dbg !3614
 L86687:
-  ; plum.off 351640
+  ; plum.off 351638
   %t86689 = load ptr, ptr %s0, !dbg !3615
   store ptr null, ptr %s0, !dbg !3615
   %t86690 = load ptr, ptr %t86678, !dbg !3615
@@ -250328,7 +250328,7 @@ L86817:
   store ptr %t86820, ptr %t86816, !dbg !3627
   br label %L86819, !dbg !3627
 L86818:
-  ; plum.off 395308
+  ; plum.off 395306
   %t86822 = load ptr, ptr %s0, !dbg !3628
   %t86823 = getelementptr i8, ptr %t86822, i64 24, !dbg !3628
   %t86824 = load ptr, ptr %t86823, !dbg !3628
@@ -250862,7 +250862,7 @@ entry:
   store ptr null, ptr %t87078, !dbg !3636
   %match_owner87069 = alloca ptr, !dbg !3636
   store ptr null, ptr %match_owner87069, !dbg !3636
-  ; plum.off 436570
+  ; plum.off 436568
   %t87060 = load ptr, ptr %s0, !dbg !3637
   call void @plum_rc_inc(ptr %t87060), !dbg !3637
   %t87061 = load ptr, ptr %s1, !dbg !3637
@@ -250996,7 +250996,7 @@ L87096:
   store ptr %t87099, ptr %t87095, !dbg !3639
   br label %L87098, !dbg !3639
 L87097:
-  ; plum.off 437295
+  ; plum.off 437293
   %t87101 = load ptr, ptr %s1, !dbg !3640
   %t87102 = load i64, ptr %s2, !dbg !3640
   %t87103 = call i64 @plum_array_check_index(ptr %t87101, i64 %t87102), !dbg !3640
@@ -251451,7 +251451,7 @@ L87244:
   %match_owner87222_reset87244 = load ptr, ptr %match_owner87222, !dbg !3644
   call void @plum.h.rel.E$3cprelude$3e$2eOption.1.Scodegen$2eCgSlot.0.(ptr %match_owner87222_reset87244), !dbg !3644
   store ptr null, ptr %match_owner87222, !dbg !3644
-  ; plum.off 279759
+  ; plum.off 279757
   %t87246 = load ptr, ptr %s1, !dbg !3645
   call void @plum_rc_inc(ptr %t87246), !dbg !3645
   %t87247 = load ptr, ptr %s4, !dbg !3645
@@ -251505,7 +251505,7 @@ L87250:
   call void @plum_rel_str(ptr %t87245_pre), !dbg !3645
   store ptr null, ptr %t87245, !dbg !3645
   store ptr %t87270, ptr %t87245, !dbg !3645
-  ; plum.off 279853
+  ; plum.off 279851
   %t87272 = load ptr, ptr %s0, !dbg !3646
   call void @plum_rc_inc(ptr %t87272), !dbg !3646
   %t87273 = load ptr, ptr %s1, !dbg !3646
@@ -251530,7 +251530,7 @@ L87279:
   call void @plum.h.rel.Scodegen$2eEmit.0.(ptr %t87271_pre), !dbg !3646
   store ptr null, ptr %t87271, !dbg !3646
   store ptr %t87284, ptr %t87271, !dbg !3646
-  ; plum.off 279924
+  ; plum.off 279922
   %t87288 = load i64, ptr %s2, !dbg !3647
   %t87289 = call ptr @plum_int_to_string(i64 %t87288), !dbg !3647
   %t87290 = call ptr @plum_str_concat_reuse(ptr @.str87286, ptr %t87289), !dbg !3647
@@ -251865,7 +251865,7 @@ L87458:
   %match_owner87436_reset87458 = load ptr, ptr %match_owner87436, !dbg !3649
   call void @plum.h.rel.E$3cprelude$3e$2eOption.1.Scodegen$2eCgSlot.0.(ptr %match_owner87436_reset87458), !dbg !3649
   store ptr null, ptr %match_owner87436, !dbg !3649
-  ; plum.off 277580
+  ; plum.off 277578
   %t87460 = load ptr, ptr %s0, !dbg !3650
   store ptr null, ptr %s0, !dbg !3650
   %t87461 = load ptr, ptr %s1, !dbg !3650
@@ -252031,7 +252031,7 @@ entry:
   store ptr null, ptr %t87534, !dbg !3652
   %t87542 = alloca ptr, !dbg !3652
   store ptr null, ptr %t87542, !dbg !3652
-  ; plum.off 278016
+  ; plum.off 278014
   %t87535 = load ptr, ptr %s0, !dbg !3653
   call void @plum_rc_inc(ptr %t87535), !dbg !3653
   %t87536 = load ptr, ptr %s1, !dbg !3653
@@ -252044,7 +252044,7 @@ entry:
   call void @plum_rel_str(ptr %t87534_pre), !dbg !3653
   store ptr null, ptr %t87534, !dbg !3653
   store ptr %t87541, ptr %t87534, !dbg !3653
-  ; plum.off 278077
+  ; plum.off 278075
   %t87543 = load ptr, ptr %s0, !dbg !3654
   store ptr null, ptr %s0, !dbg !3654
   %t87544 = load ptr, ptr %s1, !dbg !3654
@@ -254629,7 +254629,7 @@ entry:
   store ptr null, ptr %t88838, !dbg !3707
   %match_owner88794 = alloca ptr, !dbg !3707
   store ptr null, ptr %match_owner88794, !dbg !3707
-  ; plum.off 292434
+  ; plum.off 292432
   %t88786 = load ptr, ptr %s0, !dbg !3708
   call void @plum_rc_inc(ptr %t88786), !dbg !3708
   %t88787 = load ptr, ptr %s1, !dbg !3708
@@ -254665,7 +254665,7 @@ L88805:
   %match_owner88794_reset88805 = load ptr, ptr %match_owner88794, !dbg !3708
   call void @plum.h.rel.Ecodegen$2eCgTy.0.(ptr %match_owner88794_reset88805), !dbg !3708
   store ptr null, ptr %match_owner88794, !dbg !3708
-  ; plum.off 292528
+  ; plum.off 292526
   %t88807 = load ptr, ptr %s0, !dbg !3709
   call void @plum_rc_inc(ptr %t88807), !dbg !3709
   %t88808 = load ptr, ptr %s0, !dbg !3709
@@ -254680,7 +254680,7 @@ L88805:
   call void @plum.h.rel.Etypecheck$2eITy.0.(ptr %t88806_pre), !dbg !3709
   store ptr null, ptr %t88806, !dbg !3709
   store ptr %t88813, ptr %t88806, !dbg !3709
-  ; plum.off 292606
+  ; plum.off 292604
   %t88815 = load ptr, ptr %s0, !dbg !3710
   %t88816 = getelementptr i8, ptr %t88815, i64 24, !dbg !3710
   %t88817 = load ptr, ptr %t88816, !dbg !3710
@@ -254692,7 +254692,7 @@ L88805:
   store ptr null, ptr %s4, !dbg !3710
   %t88821 = call i64 @plum.f.codegen.cg_field_index.0.(ptr %t88819, ptr %t88820, i64 0), !dbg !3710
   store i64 %t88821, ptr %t88814, !dbg !3710
-  ; plum.off 292694
+  ; plum.off 292692
   %t88823 = load ptr, ptr %t88785, !dbg !3711
   %t88824 = getelementptr i8, ptr %t88823, i64 64, !dbg !3711
   %t88825 = load i64, ptr %t88824, !dbg !3711
@@ -254701,7 +254701,7 @@ L88805:
   call void @plum_rel_str(ptr %t88822_pre), !dbg !3711
   store ptr null, ptr %t88822, !dbg !3711
   store ptr %t88826, ptr %t88822, !dbg !3711
-  ; plum.off 292728
+  ; plum.off 292726
   %t88828 = load ptr, ptr %t88785, !dbg !3712
   %t88829 = getelementptr i8, ptr %t88828, i64 64, !dbg !3712
   %t88830 = load i64, ptr %t88829, !dbg !3712
@@ -254719,7 +254719,7 @@ L88835:
   call void @plum_rel_str(ptr %t88827_pre), !dbg !3712
   store ptr null, ptr %t88827, !dbg !3712
   store ptr %t88837, ptr %t88827, !dbg !3712
-  ; plum.off 292767
+  ; plum.off 292765
   %t88839 = load ptr, ptr %t88785, !dbg !3713
   %t88840 = getelementptr i8, ptr %t88839, i64 8, !dbg !3713
   %t88841 = load ptr, ptr %t88840, !dbg !3713
@@ -254866,7 +254866,7 @@ L88941:
   %match_owner88794_reset88941 = load ptr, ptr %match_owner88794, !dbg !3713
   call void @plum.h.rel.Ecodegen$2eCgTy.0.(ptr %match_owner88794_reset88941), !dbg !3713
   store ptr null, ptr %match_owner88794, !dbg !3713
-  ; plum.off 293298
+  ; plum.off 293296
   %t88944 = load ptr, ptr %s4, !dbg !3714
   store ptr null, ptr %s4, !dbg !3714
   %t88945 = call ptr @plum_str_concat_reuse(ptr @.str88942, ptr %t88944), !dbg !3714
@@ -254951,7 +254951,7 @@ entry:
   store ptr null, ptr %t88963, !dbg !3716
   %t88974 = alloca ptr, !dbg !3716
   store ptr null, ptr %t88974, !dbg !3716
-  ; plum.off 289609
+  ; plum.off 289607
   %t88953 = load ptr, ptr %s0, !dbg !3717
   store ptr null, ptr %s0, !dbg !3717
   %t88954 = load ptr, ptr %s1, !dbg !3717
@@ -254964,7 +254964,7 @@ entry:
   call void @plum.h.rel.Scodegen$2eEmit.0.(ptr %t88952_pre), !dbg !3717
   store ptr null, ptr %t88952, !dbg !3717
   store ptr %t88957, ptr %t88952, !dbg !3717
-  ; plum.off 289648
+  ; plum.off 289646
   %t88959 = load ptr, ptr %t88952, !dbg !3718
   %t88960 = getelementptr i8, ptr %t88959, i64 56, !dbg !3718
   %t88961 = load i64, ptr %t88960, !dbg !3718
@@ -254973,7 +254973,7 @@ entry:
   call void @plum_rel_str(ptr %t88958_pre), !dbg !3718
   store ptr null, ptr %t88958, !dbg !3718
   store ptr %t88962, ptr %t88958, !dbg !3718
-  ; plum.off 289676
+  ; plum.off 289674
   %t88964 = load ptr, ptr %t88952, !dbg !3719
   %t88965 = getelementptr i8, ptr %t88964, i64 56, !dbg !3719
   %t88966 = load i64, ptr %t88965, !dbg !3719
@@ -254991,7 +254991,7 @@ L88971:
   call void @plum_rel_str(ptr %t88963_pre), !dbg !3719
   store ptr null, ptr %t88963, !dbg !3719
   store ptr %t88973, ptr %t88963, !dbg !3719
-  ; plum.off 289706
+  ; plum.off 289704
   %t88975 = load ptr, ptr %t88952, !dbg !3720
   %t88976 = getelementptr i8, ptr %t88975, i64 8, !dbg !3720
   %t88977 = load ptr, ptr %t88976, !dbg !3720
@@ -255331,7 +255331,7 @@ entry:
   %t89507 = alloca ptr, !dbg !3722
   %t89636 = alloca ptr, !dbg !3722
   %t89657 = alloca ptr, !dbg !3722
-  ; plum.off 297238
+  ; plum.off 297236
   %t89114 = load ptr, ptr %s0, !dbg !3723
   call void @plum_rc_inc(ptr %t89114), !dbg !3723
   %t89115 = load ptr, ptr %s0, !dbg !3723
@@ -255346,7 +255346,7 @@ entry:
   call void @plum.h.rel.Etypecheck$2eITy.0.(ptr %t89113_pre), !dbg !3723
   store ptr null, ptr %t89113, !dbg !3723
   store ptr %t89120, ptr %t89113, !dbg !3723
-  ; plum.off 297452
+  ; plum.off 297450
   %t89122 = load ptr, ptr %s0, !dbg !3724
   call void @plum_rc_inc(ptr %t89122), !dbg !3724
   %t89123 = load ptr, ptr %s1, !dbg !3724
@@ -255362,7 +255362,7 @@ entry:
   call void @plum.h.rel.Scodegen$2eBorrowEmit.0.(ptr %t89121_pre), !dbg !3724
   store ptr null, ptr %t89121, !dbg !3724
   store ptr %t89129, ptr %t89121, !dbg !3724
-  ; plum.off 297532
+  ; plum.off 297530
   %t89133 = load ptr, ptr %t89121, !dbg !3725
   %t89134 = getelementptr i8, ptr %t89133, i64 64, !dbg !3725
   %t89135 = load i64, ptr %t89134, !dbg !3725
@@ -255373,7 +255373,7 @@ entry:
   call void @plum_rel_str(ptr %t89130_pre), !dbg !3725
   store ptr null, ptr %t89130, !dbg !3725
   store ptr %t89137, ptr %t89130, !dbg !3725
-  ; plum.off 297571
+  ; plum.off 297569
   %t89141 = load ptr, ptr %t89121, !dbg !3726
   %t89142 = getelementptr i8, ptr %t89141, i64 64, !dbg !3726
   %t89143 = load i64, ptr %t89142, !dbg !3726
@@ -255384,7 +255384,7 @@ entry:
   call void @plum_rel_str(ptr %t89138_pre), !dbg !3726
   store ptr null, ptr %t89138, !dbg !3726
   store ptr %t89145, ptr %t89138, !dbg !3726
-  ; plum.off 297610
+  ; plum.off 297608
   %t89147 = load ptr, ptr %s8, !dbg !3727
   %t89150 = call i1 @plum_str_eq(ptr %t89147, ptr @.str89148), !dbg !3727
   call void @plum_rel_str(ptr @.str89148), !dbg !3727
@@ -255456,7 +255456,7 @@ L89176:
 L89177:
   %t89192 = load i1, ptr %t89175, !dbg !3727
   store i1 %t89192, ptr %t89146, !dbg !3727
-  ; plum.off 297851
+  ; plum.off 297849
   %t89194 = load i1, ptr %t89146, !dbg !3728
   store i1 0, ptr %t89195, !dbg !3728
   br i1 %t89194, label %L89196, label %L89197, !dbg !3728
@@ -255540,7 +255540,7 @@ L89212:
 L89197:
   %t89237 = load i1, ptr %t89195, !dbg !3728
   store i1 %t89237, ptr %t89193, !dbg !3728
-  ; plum.off 298127
+  ; plum.off 298125
   %t89239 = load i1, ptr %t89146, !dbg !3729
   br i1 %t89239, label %L89241, label %L89242, !dbg !3729
 L89241:
@@ -255564,7 +255564,7 @@ L89243:
   call void @plum_rel_str(ptr %t89238_pre), !dbg !3729
   store ptr null, ptr %t89238, !dbg !3729
   store ptr %t89252, ptr %t89238, !dbg !3729
-  ; plum.off 298216
+  ; plum.off 298214
   %t89254 = load i1, ptr %t89146, !dbg !3730
   store i1 0, ptr %t89255, !dbg !3730
   br i1 %t89254, label %L89256, label %L89257, !dbg !3730
@@ -255591,7 +255591,7 @@ L89265:
 L89266:
   %t89271 = load i1, ptr %t89264, !dbg !3730
   store i1 %t89271, ptr %t89253, !dbg !3730
-  ; plum.off 298314
+  ; plum.off 298312
   %t89273 = load i1, ptr %t89193, !dbg !3731
   br i1 %t89273, label %L89275, label %L89276, !dbg !3731
 L89275:
@@ -255635,7 +255635,7 @@ L89277:
   call void @plum.h.rel.SArray.1.Scodegen$2eCgSlot.0.(ptr %t89272_pre), !dbg !3731
   store ptr null, ptr %t89272, !dbg !3731
   store ptr %t89296, ptr %t89272, !dbg !3731
-  ; plum.off 298442
+  ; plum.off 298440
   %t89298 = load i1, ptr %t89253, !dbg !3732
   br i1 %t89298, label %L89300, label %L89301, !dbg !3732
 L89300:
@@ -255806,7 +255806,7 @@ L89302:
   call void @plum.h.rel.SArray.1.Scodegen$2eCgSlot.0.(ptr %t89297_pre), !dbg !3732
   store ptr null, ptr %t89297, !dbg !3732
   store ptr %t89397, ptr %t89297, !dbg !3732
-  ; plum.off 298786
+  ; plum.off 298784
   %t89399 = load i1, ptr %t89193, !dbg !3733
   br i1 %t89399, label %L89401, label %L89402, !dbg !3733
 L89401:
@@ -255824,7 +255824,7 @@ L89403:
   call void @plum_rel_str(ptr %t89398_pre), !dbg !3733
   store ptr null, ptr %t89398, !dbg !3733
   store ptr %t89410, ptr %t89398, !dbg !3733
-  ; plum.off 298867
+  ; plum.off 298865
   %t89412 = load ptr, ptr %t89121, !dbg !3734
   %t89413 = getelementptr i8, ptr %t89412, i64 64, !dbg !3734
   %t89414 = load i64, ptr %t89413, !dbg !3734
@@ -255833,7 +255833,7 @@ L89403:
   call void @plum_rel_str(ptr %t89411_pre), !dbg !3734
   store ptr null, ptr %t89411, !dbg !3734
   store ptr %t89415, ptr %t89411, !dbg !3734
-  ; plum.off 298896
+  ; plum.off 298894
   %t89417 = load ptr, ptr %t89121, !dbg !3735
   %t89418 = getelementptr i8, ptr %t89417, i64 64, !dbg !3735
   %t89419 = load i64, ptr %t89418, !dbg !3735
@@ -255851,7 +255851,7 @@ L89424:
   call void @plum_rel_str(ptr %t89416_pre), !dbg !3735
   store ptr null, ptr %t89416, !dbg !3735
   store ptr %t89426, ptr %t89416, !dbg !3735
-  ; plum.off 298936
+  ; plum.off 298934
   %t89428 = load ptr, ptr %t89121, !dbg !3736
   %t89429 = getelementptr i8, ptr %t89428, i64 64, !dbg !3736
   %t89430 = load i64, ptr %t89429, !dbg !3736
@@ -255869,7 +255869,7 @@ L89435:
   call void @plum_rel_str(ptr %t89427_pre), !dbg !3736
   store ptr null, ptr %t89427, !dbg !3736
   store ptr %t89437, ptr %t89427, !dbg !3736
-  ; plum.off 298977
+  ; plum.off 298975
   %t89439 = load ptr, ptr %s5, !dbg !3737
   call void @plum_rc_inc(ptr %t89439), !dbg !3737
   %t89440 = call ptr @plum.f.codegen.cg_llvm_ty.0.(ptr %t89439), !dbg !3737
@@ -255877,7 +255877,7 @@ L89435:
   call void @plum_rel_str(ptr %t89438_pre), !dbg !3737
   store ptr null, ptr %t89438, !dbg !3737
   store ptr %t89440, ptr %t89438, !dbg !3737
-  ; plum.off 299267
+  ; plum.off 299265
   %t89442 = load ptr, ptr %s0, !dbg !3738
   call void @plum_rc_inc(ptr %t89442), !dbg !3738
   %t89443 = load ptr, ptr %t89297, !dbg !3738
@@ -255955,7 +255955,7 @@ L89489:
   call void @plum.h.rel.Scodegen$2eArmsEmit.0.(ptr %t89441_pre), !dbg !3738
   store ptr null, ptr %t89441, !dbg !3738
   store ptr %t89494, ptr %t89441, !dbg !3738
-  ; plum.off 299494
+  ; plum.off 299492
   %t89496 = load ptr, ptr %t89441, !dbg !3739
   %t89497 = getelementptr i8, ptr %t89496, i64 40, !dbg !3739
   %t89498 = load i64, ptr %t89497, !dbg !3739
@@ -255964,7 +255964,7 @@ L89489:
   call void @plum_rel_str(ptr %t89495_pre), !dbg !3739
   store ptr null, ptr %t89495, !dbg !3739
   store ptr %t89499, ptr %t89495, !dbg !3739
-  ; plum.off 299521
+  ; plum.off 299519
   %t89501 = call ptr @plum_array_new(i64 29), !dbg !3740
   %t89502 = load ptr, ptr %t89121, !dbg !3740
   %t89503 = getelementptr i8, ptr %t89502, i64 8, !dbg !3740
@@ -265125,14 +265125,14 @@ entry:
   store ptr null, ptr %t94248, !dbg !3894
   %t94260 = alloca ptr, !dbg !3894
   store ptr null, ptr %t94260, !dbg !3894
-  ; plum.off 302483
+  ; plum.off 302481
   %t94128 = load i64, ptr %s2, !dbg !3895
   %t94129 = call ptr @plum.f.codegen.cg_reg.0.(i64 %t94128), !dbg !3895
   %t94127_pre = load ptr, ptr %t94127, !dbg !3895
   call void @plum_rel_str(ptr %t94127_pre), !dbg !3895
   store ptr null, ptr %t94127, !dbg !3895
   store ptr %t94129, ptr %t94127, !dbg !3895
-  ; plum.off 302507
+  ; plum.off 302505
   %t94131 = load i64, ptr %s2, !dbg !3896
   %t94132 = call { i64, i1 } @llvm.sadd.with.overflow.i64(i64 %t94131, i64 1), !dbg !3896
   %t94133 = extractvalue { i64, i1 } %t94132, 0, !dbg !3896
@@ -265148,7 +265148,7 @@ L94136:
   call void @plum_rel_str(ptr %t94130_pre), !dbg !3896
   store ptr null, ptr %t94130, !dbg !3896
   store ptr %t94138, ptr %t94130, !dbg !3896
-  ; plum.off 302537
+  ; plum.off 302535
   %t94140 = load i64, ptr %s2, !dbg !3897
   %t94141 = call { i64, i1 } @llvm.sadd.with.overflow.i64(i64 %t94140, i64 2), !dbg !3897
   %t94142 = extractvalue { i64, i1 } %t94141, 0, !dbg !3897
@@ -265164,7 +265164,7 @@ L94145:
   call void @plum_rel_str(ptr %t94139_pre), !dbg !3897
   store ptr null, ptr %t94139, !dbg !3897
   store ptr %t94147, ptr %t94139, !dbg !3897
-  ; plum.off 302567
+  ; plum.off 302565
   %t94149 = load i64, ptr %s2, !dbg !3898
   %t94150 = call { i64, i1 } @llvm.sadd.with.overflow.i64(i64 %t94149, i64 3), !dbg !3898
   %t94151 = extractvalue { i64, i1 } %t94150, 0, !dbg !3898
@@ -265180,7 +265180,7 @@ L94154:
   call void @plum_rel_str(ptr %t94148_pre), !dbg !3898
   store ptr null, ptr %t94148, !dbg !3898
   store ptr %t94156, ptr %t94148, !dbg !3898
-  ; plum.off 302596
+  ; plum.off 302594
   %t94158 = load i64, ptr %s2, !dbg !3899
   %t94159 = call { i64, i1 } @llvm.sadd.with.overflow.i64(i64 %t94158, i64 4), !dbg !3899
   %t94160 = extractvalue { i64, i1 } %t94159, 0, !dbg !3899
@@ -265196,7 +265196,7 @@ L94163:
   call void @plum_rel_str(ptr %t94157_pre), !dbg !3899
   store ptr null, ptr %t94157, !dbg !3899
   store ptr %t94165, ptr %t94157, !dbg !3899
-  ; plum.off 302625
+  ; plum.off 302623
   %t94167 = load i64, ptr %s2, !dbg !3900
   %t94168 = call { i64, i1 } @llvm.sadd.with.overflow.i64(i64 %t94167, i64 5), !dbg !3900
   %t94169 = extractvalue { i64, i1 } %t94168, 0, !dbg !3900
@@ -265212,7 +265212,7 @@ L94172:
   call void @plum_rel_str(ptr %t94166_pre), !dbg !3900
   store ptr null, ptr %t94166, !dbg !3900
   store ptr %t94174, ptr %t94166, !dbg !3900
-  ; plum.off 302662
+  ; plum.off 302660
   %t94176 = load i64, ptr %s2, !dbg !3901
   %t94177 = call { i64, i1 } @llvm.sadd.with.overflow.i64(i64 %t94176, i64 6), !dbg !3901
   %t94178 = extractvalue { i64, i1 } %t94177, 0, !dbg !3901
@@ -265228,7 +265228,7 @@ L94181:
   call void @plum_rel_str(ptr %t94175_pre), !dbg !3901
   store ptr null, ptr %t94175, !dbg !3901
   store ptr %t94183, ptr %t94175, !dbg !3901
-  ; plum.off 302700
+  ; plum.off 302698
   %t94185 = load ptr, ptr %s4, !dbg !3902
   call void @plum_rc_inc(ptr %t94185), !dbg !3902
   %t94186 = call ptr @plum.f.codegen.cg_llvm_ty.0.(ptr %t94185), !dbg !3902
@@ -265236,7 +265236,7 @@ L94181:
   call void @plum_rel_str(ptr %t94184_pre), !dbg !3902
   store ptr null, ptr %t94184, !dbg !3902
   store ptr %t94186, ptr %t94184, !dbg !3902
-  ; plum.off 302735
+  ; plum.off 302733
   %t94188 = load ptr, ptr %s3, !dbg !3903
   call void @plum_rc_inc(ptr %t94188), !dbg !3903
   %t94190 = call ptr @plum.f.codegen.cg_recv_arms.0.(ptr %t94188, i64 0, ptr @.const94189), !dbg !3903
@@ -265244,7 +265244,7 @@ L94181:
   call void @plum.h.rel.SArray.1.Stypecheck$2eTSelectArm.0.(ptr %t94187_pre), !dbg !3903
   store ptr null, ptr %t94187, !dbg !3903
   store ptr %t94190, ptr %t94187, !dbg !3903
-  ; plum.off 302778
+  ; plum.off 302776
   %t94192 = load ptr, ptr %s0, !dbg !3904
   call void @plum_rc_inc(ptr %t94192), !dbg !3904
   %t94193 = load ptr, ptr %s1, !dbg !3904
@@ -265268,7 +265268,7 @@ L94199:
   call void @plum.h.rel.Scodegen$2eFieldsEmit.0.(ptr %t94191_pre), !dbg !3904
   store ptr null, ptr %t94191, !dbg !3904
   store ptr %t94211, ptr %t94191, !dbg !3904
-  ; plum.off 302921
+  ; plum.off 302919
   %t94213 = load ptr, ptr %s0, !dbg !3905
   call void @plum_rc_inc(ptr %t94213), !dbg !3905
   %t94214 = load ptr, ptr %s1, !dbg !3905
@@ -265291,7 +265291,7 @@ L94199:
   call void @plum.h.rel.Scodegen$2eEmit.0.(ptr %t94212_pre), !dbg !3905
   store ptr null, ptr %t94212, !dbg !3905
   store ptr %t94224, ptr %t94212, !dbg !3905
-  ; plum.off 302996
+  ; plum.off 302994
   %t94226 = load ptr, ptr %s0, !dbg !3906
   call void @plum_rc_inc(ptr %t94226), !dbg !3906
   %t94227 = load ptr, ptr %s1, !dbg !3906
@@ -265317,7 +265317,7 @@ L94199:
   call void @plum.h.rel.Scodegen$2eFieldsEmit.0.(ptr %t94225_pre), !dbg !3906
   store ptr null, ptr %t94225, !dbg !3906
   store ptr %t94247, ptr %t94225, !dbg !3906
-  ; plum.off 303095
+  ; plum.off 303093
   %t94249 = load ptr, ptr %s0, !dbg !3907
   call void @plum_rc_inc(ptr %t94249), !dbg !3907
   %t94250 = load ptr, ptr %s1, !dbg !3907
@@ -265340,7 +265340,7 @@ L94199:
   call void @plum.h.rel.Scodegen$2eEmit.0.(ptr %t94248_pre), !dbg !3907
   store ptr null, ptr %t94248, !dbg !3907
   store ptr %t94259, ptr %t94248, !dbg !3907
-  ; plum.off 303178
+  ; plum.off 303176
   %t94261 = load ptr, ptr %t94248, !dbg !3908
   %t94262 = getelementptr i8, ptr %t94261, i64 56, !dbg !3908
   %t94263 = load i64, ptr %t94262, !dbg !3908
@@ -266712,14 +266712,14 @@ entry:
   store ptr null, ptr %t95035, !dbg !3933
   %t95064 = alloca ptr, !dbg !3933
   store ptr null, ptr %t95064, !dbg !3933
-  ; plum.off 264594
+  ; plum.off 264592
   %t95033 = load i64, ptr %s2, !dbg !3934
   %t95034 = call ptr @plum.f.codegen.cg_reg.0.(i64 %t95033), !dbg !3934
   %t95032_pre = load ptr, ptr %t95032, !dbg !3934
   call void @plum_rel_str(ptr %t95032_pre), !dbg !3934
   store ptr null, ptr %t95032, !dbg !3934
   store ptr %t95034, ptr %t95032, !dbg !3934
-  ; plum.off 264620
+  ; plum.off 264618
   %t95038 = load ptr, ptr %t95032, !dbg !3935
   call void @plum_rc_inc(ptr %t95038), !dbg !3935
   %t95039 = call ptr @plum_str_concat_reuse(ptr @.str95036, ptr %t95038), !dbg !3935
@@ -266757,7 +266757,7 @@ L95055:
   call void @plum_rel_str(ptr %t95035_pre), !dbg !3935
   store ptr null, ptr %t95035, !dbg !3935
   store ptr %t95063, ptr %t95035, !dbg !3935
-  ; plum.off 264721
+  ; plum.off 264719
   %t95065 = load ptr, ptr %s0, !dbg !3936
   store ptr null, ptr %s0, !dbg !3936
   %t95066 = load ptr, ptr %s1, !dbg !3936
@@ -268451,7 +268451,7 @@ L95880:
   call void @plum.h.rel.SArray.1.Etypecheck$2eITy.0.(ptr %t95878_pre), !dbg !3961
   store ptr null, ptr %t95878, !dbg !3961
   store ptr %t95876, ptr %t95878, !dbg !3961
-  ; plum.off 397124
+  ; plum.off 397122
   %t95882 = load ptr, ptr %s0, !dbg !3962
   call void @plum_rc_inc(ptr %t95882), !dbg !3962
   %t95883 = load ptr, ptr %t95873, !dbg !3962
@@ -268666,7 +268666,7 @@ L95975:
   store ptr %t95978, ptr %t95974, !dbg !3966
   br label %L95977, !dbg !3966
 L95976:
-  ; plum.off 407168
+  ; plum.off 407166
   %t95980 = load ptr, ptr %s2, !dbg !3967
   store ptr null, ptr %s2, !dbg !3967
   %t95981 = load ptr, ptr %s1, !dbg !3967
@@ -269621,7 +269621,7 @@ L96339:
   store ptr @.str96342, ptr %t96338, !dbg !3989
   br label %L96341, !dbg !3989
 L96340:
-  ; plum.off 409168
+  ; plum.off 409166
   %t96345 = load ptr, ptr %s3, !dbg !3990
   call void @plum_rc_inc(ptr %t96345), !dbg !3990
   %t96346 = load i64, ptr %s2, !dbg !3990
@@ -269632,7 +269632,7 @@ L96340:
   call void @plum_rel_str(ptr %t96344_pre), !dbg !3990
   store ptr null, ptr %t96344, !dbg !3990
   store ptr %t96348, ptr %t96344, !dbg !3990
-  ; plum.off 409214
+  ; plum.off 409212
   %t96350 = load i1, ptr %s4, !dbg !3991
   br i1 %t96350, label %L96352, label %L96353, !dbg !3991
 L96352:
@@ -269648,7 +269648,7 @@ L96353:
 L96354:
   %t96359 = load i64, ptr %t96351, !dbg !3991
   store i64 %t96359, ptr %t96349, !dbg !3991
-  ; plum.off 409297
+  ; plum.off 409295
   %t96361 = load ptr, ptr %s1, !dbg !3992
   %t96362 = load i64, ptr %s2, !dbg !3992
   %t96363 = call i64 @plum_array_check_index(ptr %t96361, i64 %t96362), !dbg !3992
@@ -270138,7 +270138,7 @@ entry:
   %t97011 = alloca ptr, !dbg !3998
   store ptr null, ptr %t97011, !dbg !3998
   %t97018 = alloca ptr, !dbg !3998
-  ; plum.off 340838
+  ; plum.off 340836
   %t96569 = load ptr, ptr %s1, !dbg !3999
   %t96570 = getelementptr i8, ptr %t96569, i64 48, !dbg !3999
   %t96571 = load ptr, ptr %t96570, !dbg !3999
@@ -270152,7 +270152,7 @@ entry:
   call void @plum.h.rel.Stypecheck$2eTExpr.0.(ptr %t96568_pre), !dbg !3999
   store ptr null, ptr %t96568, !dbg !3999
   store ptr %t96575, ptr %t96568, !dbg !3999
-  ; plum.off 340883
+  ; plum.off 340881
   %t96577 = load ptr, ptr %t96568, !dbg !4000
   call void @plum_rc_inc(ptr %t96577), !dbg !4000
   %t96578 = load ptr, ptr %s1, !dbg !4000
@@ -270164,7 +270164,7 @@ entry:
   call void @plum.h.rel.SArray.1.s(ptr %t96576_pre), !dbg !4000
   store ptr null, ptr %t96576, !dbg !4000
   store ptr %t96582, ptr %t96576, !dbg !4000
-  ; plum.off 340942
+  ; plum.off 340940
   %t96584 = load ptr, ptr %s1, !dbg !4001
   %t96585 = getelementptr i8, ptr %t96584, i64 16, !dbg !4001
   %t96586 = load ptr, ptr %t96585, !dbg !4001
@@ -270180,7 +270180,7 @@ entry:
   call void @plum_rel_str(ptr %t96583_pre), !dbg !4001
   store ptr null, ptr %t96583, !dbg !4001
   store ptr %t96591, ptr %t96583, !dbg !4001
-  ; plum.off 340993
+  ; plum.off 340991
   %t96593 = load ptr, ptr %s1, !dbg !4002
   %t96594 = getelementptr i8, ptr %t96593, i64 16, !dbg !4002
   %t96595 = load ptr, ptr %t96594, !dbg !4002
@@ -270194,7 +270194,7 @@ entry:
   call void @plum_rel_str(ptr %t96592_pre), !dbg !4002
   store ptr null, ptr %t96592, !dbg !4002
   store ptr %t96599, ptr %t96592, !dbg !4002
-  ; plum.off 341046
+  ; plum.off 341044
   %t96601 = load ptr, ptr @g.plum.f.codegen.DEBUG_FRAMES.0., !dbg !4003
   call void @plum_rc_inc(ptr %t96601), !dbg !4003
   %t96602 = getelementptr i8, ptr %t96601, i64 8, !dbg !4003
@@ -270211,7 +270211,7 @@ L96605:
 L96606:
   %t96609 = load i1, ptr %t96604, !dbg !4003
   store i1 %t96609, ptr %t96600, !dbg !4003
-  ; plum.off 341110
+  ; plum.off 341108
   %t96611 = call ptr @plum.f.$3cprelude$3e.Map$2enew.2.sb(i1 0), !dbg !4004
   %t96612 = call ptr @plum_alloc(i64 24), !dbg !4004
   %t96613 = getelementptr i8, ptr %t96612, i64 8, !dbg !4004
@@ -270225,7 +270225,7 @@ L96606:
   call void @plum.h.rel.RScodegen$2eTailObservation.0.(ptr %t96610_pre), !dbg !4004
   store ptr null, ptr %t96610, !dbg !4004
   store ptr %t96615, ptr %t96610, !dbg !4004
-  ; plum.off 341191
+  ; plum.off 341189
   %t96618 = load ptr, ptr %s0, !dbg !4005
   %t96619 = getelementptr i8, ptr %t96618, i64 8, !dbg !4005
   %t96620 = load ptr, ptr %t96619, !dbg !4005
@@ -270353,7 +270353,7 @@ L96654:
   call void @plum.h.rel.Scodegen$2eCgProgram.0.(ptr %t96617_pre), !dbg !4005
   store ptr null, ptr %t96617, !dbg !4005
   store ptr %t96656, ptr %t96617, !dbg !4005
-  ; plum.off 341498
+  ; plum.off 341496
   %t96699 = load ptr, ptr %t96617, !dbg !4006
   call void @plum_rc_inc(ptr %t96699), !dbg !4006
   %t96700 = load ptr, ptr %s1, !dbg !4006
@@ -270365,7 +270365,7 @@ L96654:
   call void @plum.h.rel.SArray.1.Scodegen$2eCgParam.0.(ptr %t96698_pre), !dbg !4006
   store ptr null, ptr %t96698, !dbg !4006
   store ptr %t96704, ptr %t96698, !dbg !4006
-  ; plum.off 341551
+  ; plum.off 341549
   %t96706 = load ptr, ptr %t96698, !dbg !4007
   call void @plum_rc_inc(ptr %t96706), !dbg !4007
   %t96707 = load ptr, ptr %s1, !dbg !4007
@@ -270419,7 +270419,7 @@ L96742:
   call void @plum.h.rel.Scodegen$2eParamSlots.0.(ptr %t96705_pre), !dbg !4007
   store ptr null, ptr %t96705, !dbg !4007
   store ptr %t96748, ptr %t96705, !dbg !4007
-  ; plum.off 341655
+  ; plum.off 341653
   %t96750 = load ptr, ptr %t96617, !dbg !4008
   call void @plum_rc_inc(ptr %t96750), !dbg !4008
   %t96751 = load ptr, ptr %s1, !dbg !4008
@@ -270432,7 +270432,7 @@ L96742:
   call void @plum.h.rel.Ecodegen$2eCgTy.0.(ptr %t96749_pre), !dbg !4008
   store ptr null, ptr %t96749, !dbg !4008
   store ptr %t96755, ptr %t96749, !dbg !4008
-  ; plum.off 342169
+  ; plum.off 342167
   %t96757 = load ptr, ptr %t96617, !dbg !4009
   call void @plum_rc_inc(ptr %t96757), !dbg !4009
   %t96758 = load ptr, ptr %t96705, !dbg !4009
@@ -270447,7 +270447,7 @@ L96742:
   call void @plum.h.rel.Scodegen$2eEmit.0.(ptr %t96756_pre), !dbg !4009
   store ptr null, ptr %t96756, !dbg !4009
   store ptr %t96765, ptr %t96756, !dbg !4009
-  ; plum.off 342229
+  ; plum.off 342227
   %t96767 = load ptr, ptr %t96610, !dbg !4010
   %t96768 = getelementptr i8, ptr %t96767, i64 8, !dbg !4010
   %t96769 = load ptr, ptr %t96768, !dbg !4010
@@ -270463,7 +270463,7 @@ L96774:
   store ptr %t96777, ptr %t96773, !dbg !4010
   br label %L96776, !dbg !4010
 L96775:
-  ; plum.off 342288
+  ; plum.off 342286
   %t96779 = load ptr, ptr %t96756, !dbg !4011
   %t96780 = getelementptr i8, ptr %t96779, i64 24, !dbg !4011
   %t96781 = load ptr, ptr %t96780, !dbg !4011
@@ -270596,7 +270596,7 @@ L96823:
   call void @plum.h.rel.Scodegen$2eCgProgram.0.(ptr %t96778_pre), !dbg !4011
   store ptr null, ptr %t96778, !dbg !4011
   store ptr %t96826, ptr %t96778, !dbg !4011
-  ; plum.off 342484
+  ; plum.off 342482
   %t96867 = load ptr, ptr %t96778, !dbg !4012
   store ptr null, ptr %t96778, !dbg !4012
   %t96868 = load ptr, ptr %t96705, !dbg !4012
@@ -270661,7 +270661,7 @@ L96776:
   call void @plum.h.rel.Scodegen$2eEmit.0.(ptr %t96766_pre), !dbg !4012
   store ptr null, ptr %t96766, !dbg !4012
   store ptr %t96901, ptr %t96766, !dbg !4012
-  ; plum.off 343123
+  ; plum.off 343121
   %t96903 = load ptr, ptr %t96592, !dbg !4013
   call void @plum_rc_inc(ptr %t96903), !dbg !4013
   %t96904 = load ptr, ptr %s1, !dbg !4013
@@ -270676,7 +270676,7 @@ L96776:
   call void @plum.h.rel.Scodegen$2eDbgRef.0.(ptr %t96902_pre), !dbg !4013
   store ptr null, ptr %t96902, !dbg !4013
   store ptr %t96910, ptr %t96902, !dbg !4013
-  ; plum.off 343329
+  ; plum.off 343327
   %t96912 = load ptr, ptr %t96902, !dbg !4014
   %t96913 = getelementptr i8, ptr %t96912, i64 8, !dbg !4014
   %t96914 = load i64, ptr %t96913, !dbg !4014
@@ -270699,7 +270699,7 @@ L96919:
   call void @plum.h.rel.Scodegen$2eDbgFile.0.(ptr %t96911_pre), !dbg !4014
   store ptr null, ptr %t96911, !dbg !4014
   store ptr %t96928, ptr %t96911, !dbg !4014
-  ; plum.off 343437
+  ; plum.off 343435
   %t96932 = load ptr, ptr %t96749, !dbg !4015
   call void @plum_rc_inc(ptr %t96932), !dbg !4015
   %t96933 = call ptr @plum.f.codegen.cg_llvm_ty.0.(ptr %t96932), !dbg !4015
@@ -270745,7 +270745,7 @@ L96953:
   call void @plum_rel_str(ptr %t96929_pre), !dbg !4015
   store ptr null, ptr %t96929, !dbg !4015
   store ptr %t96967, ptr %t96929, !dbg !4015
-  ; plum.off 343862
+  ; plum.off 343860
   %t96969 = call ptr @plum_array_new(i64 7), !dbg !4016
   %t96970 = load ptr, ptr %t96583, !dbg !4016
   call void @plum_rc_inc(ptr %t96970), !dbg !4016
@@ -270806,7 +270806,7 @@ L96953:
   call void @plum_rel_str(ptr %t96968_pre), !dbg !4016
   store ptr null, ptr %t96968, !dbg !4016
   store ptr %t97010, ptr %t96968, !dbg !4016
-  ; plum.off 344225
+  ; plum.off 344223
   %t97012 = call ptr @plum_array_new(i64 5), !dbg !4017
   %t97013 = load ptr, ptr %t96766, !dbg !4017
   %t97014 = getelementptr i8, ptr %t97013, i64 32, !dbg !4017
@@ -271050,7 +271050,7 @@ Ltail566:
   store ptr %t97100, ptr %t97086, !dbg !4019
   br label %L97089, !dbg !4019
 L97088:
-  ; plum.off 419966
+  ; plum.off 419964
   %t97102 = load ptr, ptr %s0, !dbg !4020
   %t97103 = load i64, ptr %s1, !dbg !4020
   %t97104 = call i64 @plum_array_check_index(ptr %t97102, i64 %t97103), !dbg !4020
@@ -271111,7 +271111,7 @@ L97112:
   call void @plum_rel_str(ptr %t97101_pre), !dbg !4020
   store ptr null, ptr %t97101, !dbg !4020
   store ptr %t97132, ptr %t97101, !dbg !4020
-  ; plum.off 420058
+  ; plum.off 420056
   %t97134 = load ptr, ptr %s0, !dbg !4021
   %t97135 = load i64, ptr %s1, !dbg !4021
   %t97136 = call i64 @plum_array_check_index(ptr %t97134, i64 %t97135), !dbg !4021
@@ -283321,7 +283321,7 @@ entry:
   %t102941 = call ptr @plum_chars_of(ptr %t102940), !dbg !4287
   call void @plum_rel_str(ptr %t102940), !dbg !4287
   %t102957 = call i64 @plum_array_len(ptr %t102941), !dbg !4287
-  %t102957_rc = load atomic i64, ptr %t102941 monotonic, align 8, !dbg !4287
+  %t102957_rc = load atomic i64, ptr %t102941 acquire, align 8, !dbg !4287
   %t102957_move = icmp eq i64 %t102957_rc, 1, !dbg !4287
   store ptr @.str102942, ptr %t102958, !dbg !4287
   store i64 0, ptr %t102959, !dbg !4287
@@ -306880,7 +306880,7 @@ L111905:
   store ptr %t111908, ptr %t111904, !dbg !4692
   br label %L111907, !dbg !4692
 L111906:
-  ; plum.off 449213
+  ; plum.off 449211
   %t111910 = load ptr, ptr %s1, !dbg !4693
   %t111911 = load i64, ptr %s2, !dbg !4693
   %t111912 = call i64 @plum_array_check_index(ptr %t111910, i64 %t111911), !dbg !4693
@@ -307465,7 +307465,7 @@ L112094:
   store ptr %t112097, ptr %t112093, !dbg !4703
   br label %L112096, !dbg !4703
 L112095:
-  ; plum.off 354548
+  ; plum.off 354546
   %t112099 = load ptr, ptr %s0, !dbg !4704
   %t112100 = getelementptr i8, ptr %t112099, i64 24, !dbg !4704
   %t112101 = load ptr, ptr %t112100, !dbg !4704
@@ -307658,7 +307658,7 @@ L112206:
   store ptr %t112209, ptr %t112205, !dbg !4706
   br label %L112208, !dbg !4706
 L112207:
-  ; plum.off 443216
+  ; plum.off 443214
   %t112211 = load ptr, ptr %s1, !dbg !4707
   %t112212 = load i64, ptr %s2, !dbg !4707
   %t112213 = call i64 @plum_array_check_index(ptr %t112211, i64 %t112212), !dbg !4707
@@ -309253,7 +309253,7 @@ L112834:
   store ptr %t112837, ptr %t112833, !dbg !4734
   br label %L112836, !dbg !4734
 L112835:
-  ; plum.off 436879
+  ; plum.off 436877
   %t112839 = load ptr, ptr %s1, !dbg !4735
   %t112840 = load i64, ptr %s2, !dbg !4735
   %t112841 = call i64 @plum_array_check_index(ptr %t112839, i64 %t112840), !dbg !4735
@@ -310849,7 +310849,7 @@ L113230:
   store ptr %t113240, ptr %t113229, !dbg !4743
   br label %L113232, !dbg !4743
 L113231:
-  ; plum.off 281060
+  ; plum.off 281058
   %t113244 = load ptr, ptr %s2, !dbg !4744
   call void @plum_rc_inc(ptr %t113244), !dbg !4744
   %t113245 = load ptr, ptr %s1, !dbg !4744
@@ -310930,7 +310930,7 @@ L113288:
   %match_owner113271_reset113288 = load ptr, ptr %match_owner113271, !dbg !4744
   call void @plum.h.rel.E$3cprelude$3e$2eOption.1.Scodegen$2eReuseCand.0.(ptr %match_owner113271_reset113288), !dbg !4744
   store ptr null, ptr %match_owner113271, !dbg !4744
-  ; plum.off 281258
+  ; plum.off 281256
   %t113292 = load i64, ptr %s4, !dbg !4745
   %t113293 = call ptr @plum_int_to_string(i64 %t113292), !dbg !4745
   %t113294 = call ptr @plum_str_concat_reuse(ptr @.str113290, ptr %t113293), !dbg !4745
@@ -310939,7 +310939,7 @@ L113288:
   call void @plum_rel_str(ptr %t113289_pre), !dbg !4745
   store ptr null, ptr %t113289, !dbg !4745
   store ptr %t113294, ptr %t113289, !dbg !4745
-  ; plum.off 281303
+  ; plum.off 281301
   %t113296 = load ptr, ptr %t113286, !dbg !4746
   %t113297 = getelementptr i8, ptr %t113296, i64 16, !dbg !4746
   %t113298 = load ptr, ptr %t113297, !dbg !4746
@@ -310952,7 +310952,7 @@ L113288:
   call void @plum.h.rel.Scodegen$2eCopyEmit.0.(ptr %t113295_pre), !dbg !4746
   store ptr null, ptr %t113295, !dbg !4746
   store ptr %t113303, ptr %t113295, !dbg !4746
-  ; plum.off 281533
+  ; plum.off 281531
   %t113305 = load ptr, ptr %t113295, !dbg !4747
   %t113306 = getelementptr i8, ptr %t113305, i64 8, !dbg !4747
   %t113307 = load ptr, ptr %t113306, !dbg !4747
@@ -311191,7 +311191,7 @@ L113454:
   store ptr %t113457, ptr %t113453, !dbg !4749
   br label %L113456, !dbg !4749
 L113455:
-  ; plum.off 278590
+  ; plum.off 278588
   %t113459 = load ptr, ptr %s1, !dbg !4750
   call void @plum_rc_inc(ptr %t113459), !dbg !4750
   %t113460 = load ptr, ptr %s2, !dbg !4750
@@ -314562,7 +314562,7 @@ L115196:
   %match_owner115185_reset115196 = load ptr, ptr %match_owner115185, !dbg !4829
   call void @plum.h.rel.E$3cprelude$3e$2eOption.1.Scodegen$2eCgSlot.0.(ptr %match_owner115185_reset115196), !dbg !4829
   store ptr null, ptr %match_owner115185, !dbg !4829
-  ; plum.off 389220
+  ; plum.off 389218
   %t115198 = load i64, ptr %s2, !dbg !4830
   %t115199 = call ptr @plum.f.codegen.cg_reg.0.(i64 %t115198), !dbg !4830
   %t115197_pre = load ptr, ptr %t115197, !dbg !4830
@@ -315493,7 +315493,7 @@ L115518:
   store ptr @.const115522, ptr %t115517, !dbg !4848
   br label %L115520, !dbg !4848
 L115519:
-  ; plum.off 271993
+  ; plum.off 271991
   %t115524 = load ptr, ptr %s0, !dbg !4849
   %t115525 = getelementptr i8, ptr %t115524, i64 24, !dbg !4849
   %t115526 = load ptr, ptr %t115525, !dbg !4849
@@ -315987,7 +315987,7 @@ L115767:
   store i1 0, ptr %t115766, !dbg !4851
   br label %L115769, !dbg !4851
 L115768:
-  ; plum.off 296494
+  ; plum.off 296492
   %t115771 = load ptr, ptr %s3, !dbg !4852
   %t115772 = load i64, ptr %s4, !dbg !4852
   %t115773 = call i64 @plum_array_check_index(ptr %t115771, i64 %t115772), !dbg !4852
@@ -316540,14 +316540,14 @@ L115971:
   store ptr %t115973, ptr %t115954, !dbg !4858
   br label %L115957, !dbg !4858
 L115956:
-  ; plum.off 315100
+  ; plum.off 315098
   %t116006 = load i64, ptr %s2, !dbg !4859
   %t116007 = call ptr @plum.f.codegen.cg_label.0.(i64 %t116006), !dbg !4859
   %t116005_pre = load ptr, ptr %t116005, !dbg !4859
   call void @plum_rel_str(ptr %t116005_pre), !dbg !4859
   store ptr null, ptr %t116005, !dbg !4859
   store ptr %t116007, ptr %t116005, !dbg !4859
-  ; plum.off 315138
+  ; plum.off 315136
   %t116009 = load ptr, ptr %s0, !dbg !4860
   call void @plum_rc_inc(ptr %t116009), !dbg !4860
   %t116010 = load ptr, ptr %s1, !dbg !4860
@@ -316606,7 +316606,7 @@ L116045:
   %match_owner116039_reset116045 = load ptr, ptr %match_owner116039, !dbg !4860
   call void @plum.h.rel.E$3cprelude$3e$2eOption.1.Stypecheck$2eTExpr.0.(ptr %match_owner116039_reset116045), !dbg !4860
   store ptr null, ptr %match_owner116039, !dbg !4860
-  ; plum.off 315272
+  ; plum.off 315270
   %t116047 = load ptr, ptr %t116008, !dbg !4861
   %t116048 = getelementptr i8, ptr %t116047, i64 64, !dbg !4861
   %t116049 = load i64, ptr %t116048, !dbg !4861
@@ -316615,7 +316615,7 @@ L116045:
   call void @plum_rel_str(ptr %t116046_pre), !dbg !4861
   store ptr null, ptr %t116046, !dbg !4861
   store ptr %t116050, ptr %t116046, !dbg !4861
-  ; plum.off 315322
+  ; plum.off 315320
   %t116052 = load ptr, ptr %s0, !dbg !4862
   call void @plum_rc_inc(ptr %t116052), !dbg !4862
   %t116053 = load ptr, ptr %t116008, !dbg !4862
@@ -316654,7 +316654,7 @@ L116063:
   call void @plum.h.rel.Scodegen$2eEmit.0.(ptr %t116051_pre), !dbg !4862
   store ptr null, ptr %t116051, !dbg !4862
   store ptr %t116076, ptr %t116051, !dbg !4862
-  ; plum.off 315671
+  ; plum.off 315669
   %t116078 = load i64, ptr %s4, !dbg !4863
   %t116079 = call { i64, i1 } @llvm.sadd.with.overflow.i64(i64 %t116078, i64 1), !dbg !4863
   %t116080 = extractvalue { i64, i1 } %t116079, 0, !dbg !4863
@@ -316687,7 +316687,7 @@ L116091:
   call void @plum_rel_str(ptr %t116077_pre), !dbg !4863
   store ptr null, ptr %t116077, !dbg !4863
   store ptr %t116097, ptr %t116077, !dbg !4863
-  ; plum.off 315766
+  ; plum.off 315764
   %t116099 = call ptr @plum_array_new(i64 26), !dbg !4864
   %t116100 = load ptr, ptr %t116005, !dbg !4864
   store ptr null, ptr %t116005, !dbg !4864
@@ -317067,7 +317067,7 @@ L116300:
   %match_owner116039_reset116300 = load ptr, ptr %match_owner116039, !dbg !4864
   call void @plum.h.rel.E$3cprelude$3e$2eOption.1.Stypecheck$2eTExpr.0.(ptr %match_owner116039_reset116300), !dbg !4864
   store ptr null, ptr %match_owner116039, !dbg !4864
-  ; plum.off 318879
+  ; plum.off 318877
   %t116302 = load ptr, ptr %t116008, !dbg !4865
   %t116303 = getelementptr i8, ptr %t116302, i64 64, !dbg !4865
   %t116304 = load i64, ptr %t116303, !dbg !4865
@@ -317076,7 +317076,7 @@ L116300:
   call void @plum_rel_str(ptr %t116301_pre), !dbg !4865
   store ptr null, ptr %t116301, !dbg !4865
   store ptr %t116305, ptr %t116301, !dbg !4865
-  ; plum.off 318930
+  ; plum.off 318928
   %t116307 = load ptr, ptr %s0, !dbg !4866
   call void @plum_rc_inc(ptr %t116307), !dbg !4866
   %t116308 = load ptr, ptr %t116008, !dbg !4866
@@ -317102,7 +317102,7 @@ L116318:
   call void @plum.h.rel.Scodegen$2eEmit.0.(ptr %t116306_pre), !dbg !4866
   store ptr null, ptr %t116306, !dbg !4866
   store ptr %t116321, ptr %t116306, !dbg !4866
-  ; plum.off 319139
+  ; plum.off 319137
   %t116323 = load ptr, ptr %t116008, !dbg !4867
   %t116324 = getelementptr i8, ptr %t116323, i64 32, !dbg !4867
   %t116325 = load ptr, ptr %t116324, !dbg !4867
@@ -317117,7 +317117,7 @@ L116318:
   call void @plum_rel_str(ptr %t116322_pre), !dbg !4867
   store ptr null, ptr %t116322, !dbg !4867
   store ptr %t116329, ptr %t116322, !dbg !4867
-  ; plum.off 319211
+  ; plum.off 319209
   %t116331 = load ptr, ptr %t116306, !dbg !4868
   %t116332 = getelementptr i8, ptr %t116331, i64 56, !dbg !4868
   %t116333 = load i64, ptr %t116332, !dbg !4868
@@ -317126,7 +317126,7 @@ L116318:
   call void @plum_rel_str(ptr %t116330_pre), !dbg !4868
   store ptr null, ptr %t116330, !dbg !4868
   store ptr %t116334, ptr %t116330, !dbg !4868
-  ; plum.off 319391
+  ; plum.off 319389
   %t116336 = load ptr, ptr %s0, !dbg !4869
   call void @plum_rc_inc(ptr %t116336), !dbg !4869
   %t116337 = load ptr, ptr %t116008, !dbg !4869
@@ -317165,7 +317165,7 @@ L116347:
   call void @plum.h.rel.Scodegen$2eEmit.0.(ptr %t116335_pre), !dbg !4869
   store ptr null, ptr %t116335, !dbg !4869
   store ptr %t116360, ptr %t116335, !dbg !4869
-  ; plum.off 319476
+  ; plum.off 319474
   %t116362 = load i64, ptr %s4, !dbg !4870
   %t116363 = call { i64, i1 } @llvm.sadd.with.overflow.i64(i64 %t116362, i64 1), !dbg !4870
   %t116364 = extractvalue { i64, i1 } %t116363, 0, !dbg !4870
@@ -317198,7 +317198,7 @@ L116375:
   call void @plum_rel_str(ptr %t116361_pre), !dbg !4870
   store ptr null, ptr %t116361, !dbg !4870
   store ptr %t116381, ptr %t116361, !dbg !4870
-  ; plum.off 319571
+  ; plum.off 319569
   %t116383 = call ptr @plum_array_new(i64 37), !dbg !4871
   %t116384 = load ptr, ptr %t116005, !dbg !4871
   store ptr null, ptr %t116005, !dbg !4871
@@ -319882,7 +319882,7 @@ entry:
   store ptr null, ptr %t117632, !dbg !4898
   %match_owner117472 = alloca ptr, !dbg !4898
   store ptr null, ptr %match_owner117472, !dbg !4898
-  ; plum.off 265810
+  ; plum.off 265808
   %t117443 = load ptr, ptr %s0, !dbg !4899
   %t117444 = getelementptr i8, ptr %t117443, i64 24, !dbg !4899
   %t117445 = load ptr, ptr %t117444, !dbg !4899
@@ -319894,7 +319894,7 @@ entry:
   call void @plum.h.rel.SArray.1.s(ptr %t117442_pre), !dbg !4899
   store ptr null, ptr %t117442, !dbg !4899
   store ptr %t117447, ptr %t117442, !dbg !4899
-  ; plum.off 265872
+  ; plum.off 265870
   %t117449 = load ptr, ptr %s0, !dbg !4900
   call void @plum_rc_inc(ptr %t117449), !dbg !4900
   %t117450 = load ptr, ptr %s1, !dbg !4900
@@ -319935,7 +319935,7 @@ L117478:
   %match_owner117472_reset117478 = load ptr, ptr %match_owner117472, !dbg !4900
   call void @plum.h.rel.E$3cprelude$3e$2eOption.1.Stypecheck$2eTExpr.0.(ptr %match_owner117472_reset117478), !dbg !4900
   store ptr null, ptr %match_owner117472, !dbg !4900
-  ; plum.off 266067
+  ; plum.off 266065
   %t117480 = load ptr, ptr %t117448, !dbg !4901
   %t117481 = getelementptr i8, ptr %t117480, i64 48, !dbg !4901
   %t117482 = load i64, ptr %t117481, !dbg !4901
@@ -319944,7 +319944,7 @@ L117478:
   call void @plum_rel_str(ptr %t117479_pre), !dbg !4901
   store ptr null, ptr %t117479, !dbg !4901
   store ptr %t117483, ptr %t117479, !dbg !4901
-  ; plum.off 266104
+  ; plum.off 266102
   %t117485 = load ptr, ptr %t117479, !dbg !4902
   call void @plum_rc_inc(ptr %t117485), !dbg !4902
   %t117486 = load ptr, ptr %t117448, !dbg !4902
@@ -320121,7 +320121,7 @@ L117593:
   %match_owner117472_reset117593 = load ptr, ptr %match_owner117472, !dbg !4902
   call void @plum.h.rel.E$3cprelude$3e$2eOption.1.Stypecheck$2eTExpr.0.(ptr %match_owner117472_reset117593), !dbg !4902
   store ptr null, ptr %match_owner117472, !dbg !4902
-  ; plum.off 266767
+  ; plum.off 266765
   %t117595 = load ptr, ptr %s0, !dbg !4903
   call void @plum_rc_inc(ptr %t117595), !dbg !4903
   %t117596 = load ptr, ptr %s1, !dbg !4903
@@ -320136,7 +320136,7 @@ L117593:
   call void @plum.h.rel.Scodegen$2eEmit.0.(ptr %t117594_pre), !dbg !4903
   store ptr null, ptr %t117594, !dbg !4903
   store ptr %t117601, ptr %t117594, !dbg !4903
-  ; plum.off 266816
+  ; plum.off 266814
   %t117603 = load ptr, ptr %s0, !dbg !4904
   call void @plum_rc_inc(ptr %t117603), !dbg !4904
   %t117604 = load ptr, ptr %s0, !dbg !4904
@@ -320151,7 +320151,7 @@ L117593:
   call void @plum.h.rel.Etypecheck$2eITy.0.(ptr %t117602_pre), !dbg !4904
   store ptr null, ptr %t117602, !dbg !4904
   store ptr %t117609, ptr %t117602, !dbg !4904
-  ; plum.off 266889
+  ; plum.off 266887
   %t117611 = load ptr, ptr %t117594, !dbg !4905
   %t117612 = getelementptr i8, ptr %t117611, i64 56, !dbg !4905
   %t117613 = load i64, ptr %t117612, !dbg !4905
@@ -320160,7 +320160,7 @@ L117593:
   call void @plum_rel_str(ptr %t117610_pre), !dbg !4905
   store ptr null, ptr %t117610, !dbg !4905
   store ptr %t117614, ptr %t117610, !dbg !4905
-  ; plum.off 266925
+  ; plum.off 266923
   %t117616 = load ptr, ptr %t117610, !dbg !4906
   call void @plum_rc_inc(ptr %t117616), !dbg !4906
   %t117617 = load ptr, ptr %t117448, !dbg !4906
@@ -320184,7 +320184,7 @@ L117627:
   call void @plum.h.rel.Scodegen$2eCopyEmit.0.(ptr %t117615_pre), !dbg !4906
   store ptr null, ptr %t117615, !dbg !4906
   store ptr %t117631, ptr %t117615, !dbg !4906
-  ; plum.off 266993
+  ; plum.off 266991
   %t117633 = load ptr, ptr %s0, !dbg !4907
   call void @plum_rc_inc(ptr %t117633), !dbg !4907
   %t117634 = load ptr, ptr %t117442, !dbg !4907
@@ -320443,7 +320443,7 @@ entry:
   store ptr null, ptr %t117818, !dbg !4909
   %match_owner117763 = alloca ptr, !dbg !4909
   store ptr null, ptr %match_owner117763, !dbg !4909
-  ; plum.off 268224
+  ; plum.off 268222
   %t117738 = load ptr, ptr %s0, !dbg !4910
   %t117739 = getelementptr i8, ptr %t117738, i64 24, !dbg !4910
   %t117740 = load ptr, ptr %t117739, !dbg !4910
@@ -320455,7 +320455,7 @@ entry:
   call void @plum.h.rel.SArray.1.s(ptr %t117737_pre), !dbg !4910
   store ptr null, ptr %t117737, !dbg !4910
   store ptr %t117742, ptr %t117737, !dbg !4910
-  ; plum.off 268286
+  ; plum.off 268284
   %t117744 = load ptr, ptr %t117737, !dbg !4911
   %t117745 = call i64 @plum_array_len(ptr %t117744), !dbg !4911
   %t117746 = call { i64, i1 } @llvm.smul.with.overflow.i64(i64 8, i64 %t117745), !dbg !4911
@@ -320560,7 +320560,7 @@ L117785:
   %match_owner117763_reset117785 = load ptr, ptr %match_owner117763, !dbg !4911
   call void @plum.h.rel.E$3cprelude$3e$2eOption.1.Scodegen$2eReuseCand.0.(ptr %match_owner117763_reset117785), !dbg !4911
   store ptr null, ptr %match_owner117763, !dbg !4911
-  ; plum.off 268475
+  ; plum.off 268473
   %t117787 = load ptr, ptr %s0, !dbg !4912
   call void @plum_rc_inc(ptr %t117787), !dbg !4912
   %t117788 = load ptr, ptr %s1, !dbg !4912
@@ -320588,7 +320588,7 @@ L117785:
   call void @plum.h.rel.Scodegen$2eEvalFields.0.(ptr %t117786_pre), !dbg !4912
   store ptr null, ptr %t117786, !dbg !4912
   store ptr %t117808, ptr %t117786, !dbg !4912
-  ; plum.off 268641
+  ; plum.off 268639
   %t117810 = load ptr, ptr %s0, !dbg !4913
   store ptr null, ptr %s0, !dbg !4913
   %t117811 = load ptr, ptr %t117783, !dbg !4913
@@ -320603,7 +320603,7 @@ L117785:
   call void @plum.h.rel.Scodegen$2eReuseEmit.0.(ptr %t117809_pre), !dbg !4913
   store ptr null, ptr %t117809, !dbg !4913
   store ptr %t117817, ptr %t117809, !dbg !4913
-  ; plum.off 268716
+  ; plum.off 268714
   %t117819 = load ptr, ptr %t117809, !dbg !4914
   %t117820 = getelementptr i8, ptr %t117819, i64 16, !dbg !4914
   %t117821 = load ptr, ptr %t117820, !dbg !4914
@@ -320835,7 +320835,7 @@ L117921:
   %match_owner117915_reset117921 = load ptr, ptr %match_owner117915, !dbg !4916
   call void @plum.h.rel.E$3cprelude$3e$2eOption.1.Scodegen$2eCgVariant.0.(ptr %match_owner117915_reset117921), !dbg !4916
   store ptr null, ptr %match_owner117915, !dbg !4916
-  ; plum.off 284226
+  ; plum.off 284224
   %t117924 = load ptr, ptr %s4, !dbg !4917
   store ptr null, ptr %s4, !dbg !4917
   %t117925 = call ptr @plum_str_concat_reuse(ptr @.str117922, ptr %t117924), !dbg !4917
@@ -320862,7 +320862,7 @@ L117937:
   %match_owner117915_reset117937 = load ptr, ptr %match_owner117915, !dbg !4917
   call void @plum.h.rel.E$3cprelude$3e$2eOption.1.Scodegen$2eCgVariant.0.(ptr %match_owner117915_reset117937), !dbg !4917
   store ptr null, ptr %match_owner117915, !dbg !4917
-  ; plum.off 284346
+  ; plum.off 284344
   %t117939 = load ptr, ptr %s0, !dbg !4918
   call void @plum_rc_inc(ptr %t117939), !dbg !4918
   %t117940 = load ptr, ptr %s1, !dbg !4918
@@ -320875,7 +320875,7 @@ L117937:
   call void @plum.h.rel.Scodegen$2eArgVals.0.(ptr %t117938_pre), !dbg !4918
   store ptr null, ptr %t117938, !dbg !4918
   store ptr %t117943, ptr %t117938, !dbg !4918
-  ; plum.off 284392
+  ; plum.off 284390
   %t117945 = load ptr, ptr %s0, !dbg !4919
   call void @plum_rc_inc(ptr %t117945), !dbg !4919
   %t117946 = load ptr, ptr %t117935, !dbg !4919
@@ -321059,7 +321059,7 @@ L118010:
   %match_owner117987_reset118010 = load ptr, ptr %match_owner117987, !dbg !4921
   call void @plum.h.rel.E$3cprelude$3e$2eOption.1.Scodegen$2eCgVariant.0.(ptr %match_owner117987_reset118010), !dbg !4921
   store ptr null, ptr %match_owner117987, !dbg !4921
-  ; plum.off 293789
+  ; plum.off 293787
   %t118013 = load ptr, ptr %s4, !dbg !4922
   store ptr null, ptr %s4, !dbg !4922
   %t118014 = call ptr @plum_str_concat_reuse(ptr @.str118011, ptr %t118013), !dbg !4922
@@ -327390,7 +327390,7 @@ entry:
   store ptr null, ptr %t121381, !dbg !5071
   %t121392 = alloca ptr, !dbg !5071
   store ptr null, ptr %t121392, !dbg !5071
-  ; plum.off 291472
+  ; plum.off 291470
   %t121360 = load ptr, ptr %s0, !dbg !5072
   call void @plum_rc_inc(ptr %t121360), !dbg !5072
   %t121361 = load ptr, ptr %s1, !dbg !5072
@@ -327408,7 +327408,7 @@ entry:
   call void @plum.h.rel.Scodegen$2eBorrowEmit.0.(ptr %t121359_pre), !dbg !5072
   store ptr null, ptr %t121359, !dbg !5072
   store ptr %t121367, ptr %t121359, !dbg !5072
-  ; plum.off 291528
+  ; plum.off 291526
   %t121369 = load ptr, ptr %s0, !dbg !5073
   call void @plum_rc_inc(ptr %t121369), !dbg !5073
   %t121370 = load ptr, ptr %s1, !dbg !5073
@@ -327423,7 +327423,7 @@ entry:
   call void @plum.h.rel.Scodegen$2eEmit.0.(ptr %t121368_pre), !dbg !5073
   store ptr null, ptr %t121368, !dbg !5073
   store ptr %t121375, ptr %t121368, !dbg !5073
-  ; plum.off 291569
+  ; plum.off 291567
   %t121377 = load ptr, ptr %t121368, !dbg !5074
   %t121378 = getelementptr i8, ptr %t121377, i64 56, !dbg !5074
   %t121379 = load i64, ptr %t121378, !dbg !5074
@@ -327432,7 +327432,7 @@ entry:
   call void @plum_rel_str(ptr %t121376_pre), !dbg !5074
   store ptr null, ptr %t121376, !dbg !5074
   store ptr %t121380, ptr %t121376, !dbg !5074
-  ; plum.off 291595
+  ; plum.off 291593
   %t121382 = load ptr, ptr %t121368, !dbg !5075
   %t121383 = getelementptr i8, ptr %t121382, i64 56, !dbg !5075
   %t121384 = load i64, ptr %t121383, !dbg !5075
@@ -327450,7 +327450,7 @@ L121389:
   call void @plum_rel_str(ptr %t121381_pre), !dbg !5075
   store ptr null, ptr %t121381, !dbg !5075
   store ptr %t121391, ptr %t121381, !dbg !5075
-  ; plum.off 291626
+  ; plum.off 291624
   %t121393 = load ptr, ptr %t121359, !dbg !5076
   %t121394 = getelementptr i8, ptr %t121393, i64 8, !dbg !5076
   %t121395 = load ptr, ptr %t121394, !dbg !5076
@@ -327693,7 +327693,7 @@ entry:
   store ptr null, ptr %t121570, !dbg !5078
   %match_owner121542 = alloca ptr, !dbg !5078
   store ptr null, ptr %match_owner121542, !dbg !5078
-  ; plum.off 290474
+  ; plum.off 290472
   %t121534 = load ptr, ptr %s0, !dbg !5079
   store ptr null, ptr %s0, !dbg !5079
   %t121535 = load ptr, ptr %s1, !dbg !5079
@@ -327729,7 +327729,7 @@ L121553:
   %match_owner121542_reset121553 = load ptr, ptr %match_owner121542, !dbg !5079
   call void @plum.h.rel.Ecodegen$2eCgTy.0.(ptr %match_owner121542_reset121553), !dbg !5079
   store ptr null, ptr %match_owner121542, !dbg !5079
-  ; plum.off 290565
+  ; plum.off 290563
   %t121555 = load ptr, ptr %t121533, !dbg !5080
   %t121556 = getelementptr i8, ptr %t121555, i64 64, !dbg !5080
   %t121557 = load i64, ptr %t121556, !dbg !5080
@@ -327738,7 +327738,7 @@ L121553:
   call void @plum_rel_str(ptr %t121554_pre), !dbg !5080
   store ptr null, ptr %t121554, !dbg !5080
   store ptr %t121558, ptr %t121554, !dbg !5080
-  ; plum.off 290599
+  ; plum.off 290597
   %t121560 = load ptr, ptr %t121533, !dbg !5081
   %t121561 = getelementptr i8, ptr %t121560, i64 64, !dbg !5081
   %t121562 = load i64, ptr %t121561, !dbg !5081
@@ -327756,7 +327756,7 @@ L121567:
   call void @plum_rel_str(ptr %t121559_pre), !dbg !5081
   store ptr null, ptr %t121559, !dbg !5081
   store ptr %t121569, ptr %t121559, !dbg !5081
-  ; plum.off 290638
+  ; plum.off 290636
   %t121571 = load ptr, ptr %t121533, !dbg !5082
   %t121572 = getelementptr i8, ptr %t121571, i64 8, !dbg !5082
   %t121573 = load ptr, ptr %t121572, !dbg !5082
@@ -327896,7 +327896,7 @@ L121666:
   %match_owner121542_reset121666 = load ptr, ptr %match_owner121542, !dbg !5082
   call void @plum.h.rel.Ecodegen$2eCgTy.0.(ptr %match_owner121542_reset121666), !dbg !5082
   store ptr null, ptr %match_owner121542, !dbg !5082
-  ; plum.off 291125
+  ; plum.off 291123
   %t121669 = call i1 @plum.f.codegen.cg_fail.0.(ptr @.str121667), !dbg !5083
   %t121670 = load ptr, ptr %t121533, !dbg !5083
   %t121671 = getelementptr i8, ptr %t121670, i64 64, !dbg !5083
@@ -329247,7 +329247,7 @@ entry:
 @.str122600 = private global { i64, i64, [3 x i8] } { i64 -1, i64 2, [3 x i8] c")\0A\00" }
 @.str122608 = private global { i64, i64, [3 x i8] } { i64 -1, i64 2, [3 x i8] c"  \00" }
 @.str122612 = private global { i64, i64, [28 x i8] } { i64 -1, i64 27, [28 x i8] c"_rc = load atomic i64, ptr \00" }
-@.str122619 = private global { i64, i64, [23 x i8] } { i64 -1, i64 22, [23 x i8] c" monotonic, align 8\0A  \00" }
+@.str122619 = private global { i64, i64, [21 x i8] } { i64 -1, i64 20, [21 x i8] c" acquire, align 8\0A  \00" }
 @.str122624 = private global { i64, i64, [16 x i8] } { i64 -1, i64 15, [16 x i8] c" = icmp eq i64 \00" }
 @.str122629 = private global { i64, i64, [8 x i8] } { i64 -1, i64 7, [8 x i8] c"_rc, 1\0A\00" }
 @.str122632 = private global { i64, i64, [1 x i8] } { i64 -1, i64 0, [1 x i8] c"\00" }
@@ -332610,7 +332610,7 @@ L124001:
   store ptr %t124003, ptr %t123988, !dbg !5193
   br label %L123991, !dbg !5193
 L123990:
-  ; plum.off 309106
+  ; plum.off 309104
   %t124036 = load ptr, ptr %s3, !dbg !5194
   %t124037 = load i64, ptr %s4, !dbg !5194
   %t124038 = call i64 @plum_array_check_index(ptr %t124036, i64 %t124037), !dbg !5194
@@ -332681,7 +332681,7 @@ L124046:
   call void @plum.h.rel.Stypecheck$2eTExpr.0.(ptr %t124035_pre), !dbg !5194
   store ptr null, ptr %t124035, !dbg !5194
   store ptr %t124073, ptr %t124035, !dbg !5194
-  ; plum.off 309187
+  ; plum.off 309185
   %t124075 = load ptr, ptr %s0, !dbg !5195
   call void @plum_rc_inc(ptr %t124075), !dbg !5195
   %t124076 = load ptr, ptr %s1, !dbg !5195
@@ -332694,7 +332694,7 @@ L124046:
   call void @plum.h.rel.Scodegen$2eEmit.0.(ptr %t124074_pre), !dbg !5195
   store ptr null, ptr %t124074, !dbg !5195
   store ptr %t124079, ptr %t124074, !dbg !5195
-  ; plum.off 309229
+  ; plum.off 309227
   %t124081 = load ptr, ptr %s5, !dbg !5196
   call void @plum_rc_inc(ptr %t124081), !dbg !5196
   %t124084 = call ptr @plum_str_concat_reuse(ptr %t124081, ptr @.str124082), !dbg !5196
@@ -332707,7 +332707,7 @@ L124046:
   call void @plum_rel_str(ptr %t124080_pre), !dbg !5196
   store ptr null, ptr %t124080, !dbg !5196
   store ptr %t124087, ptr %t124080, !dbg !5196
-  ; plum.off 309285
+  ; plum.off 309283
   %t124089 = load ptr, ptr %t124074, !dbg !5197
   %t124090 = getelementptr i8, ptr %t124089, i64 56, !dbg !5197
   %t124091 = load i64, ptr %t124090, !dbg !5197
@@ -333184,7 +333184,7 @@ L124334:
   %match_owner124323_reset124334 = load ptr, ptr %match_owner124323, !dbg !5199
   call void @plum.h.rel.Etypecheck$2eTSelectArmKind.0.(ptr %match_owner124323_reset124334), !dbg !5199
   store ptr null, ptr %match_owner124323, !dbg !5199
-  ; plum.off 306360
+  ; plum.off 306358
   %t124336 = load ptr, ptr %s0, !dbg !5200
   call void @plum_rc_inc(ptr %t124336), !dbg !5200
   %t124337 = load ptr, ptr %s1, !dbg !5200
@@ -333197,7 +333197,7 @@ L124334:
   call void @plum.h.rel.Scodegen$2eEmit.0.(ptr %t124335_pre), !dbg !5200
   store ptr null, ptr %t124335, !dbg !5200
   store ptr %t124340, ptr %t124335, !dbg !5200
-  ; plum.off 306408
+  ; plum.off 306406
   %t124342 = load ptr, ptr %t124335, !dbg !5201
   %t124343 = getelementptr i8, ptr %t124342, i64 56, !dbg !5201
   %t124344 = load i64, ptr %t124343, !dbg !5201
@@ -333206,7 +333206,7 @@ L124334:
   call void @plum_rel_str(ptr %t124341_pre), !dbg !5201
   store ptr null, ptr %t124341, !dbg !5201
   store ptr %t124345, ptr %t124341, !dbg !5201
-  ; plum.off 306447
+  ; plum.off 306445
   %t124347 = load ptr, ptr %t124335, !dbg !5202
   %t124348 = getelementptr i8, ptr %t124347, i64 56, !dbg !5202
   %t124349 = load i64, ptr %t124348, !dbg !5202
@@ -333678,7 +333678,7 @@ L124574:
   store ptr %t124576, ptr %t124561, !dbg !5204
   br label %L124564, !dbg !5204
 L124563:
-  ; plum.off 311709
+  ; plum.off 311707
   %t124609 = load ptr, ptr %s3, !dbg !5205
   %t124610 = load i64, ptr %s4, !dbg !5205
   %t124611 = call i64 @plum_array_check_index(ptr %t124609, i64 %t124610), !dbg !5205
@@ -333749,7 +333749,7 @@ L124619:
   call void @plum.h.rel.Stypecheck$2eTExpr.0.(ptr %t124608_pre), !dbg !5205
   store ptr null, ptr %t124608, !dbg !5205
   store ptr %t124646, ptr %t124608, !dbg !5205
-  ; plum.off 311790
+  ; plum.off 311788
   %t124648 = load ptr, ptr %s0, !dbg !5206
   call void @plum_rc_inc(ptr %t124648), !dbg !5206
   %t124649 = load ptr, ptr %s0, !dbg !5206
@@ -333764,7 +333764,7 @@ L124619:
   call void @plum.h.rel.Etypecheck$2eITy.0.(ptr %t124647_pre), !dbg !5206
   store ptr null, ptr %t124647, !dbg !5206
   store ptr %t124654, ptr %t124647, !dbg !5206
-  ; plum.off 311869
+  ; plum.off 311867
   %t124656 = call ptr @plum.f.parser.PRELUDE_MODULE.0.(i1 0), !dbg !5207
   %t124659 = call ptr @plum.f.parser.qualify_type.0.(ptr %t124656, ptr @.str124657), !dbg !5207
   %t124660 = call ptr @plum_array_new(i64 1), !dbg !5207
@@ -333795,7 +333795,7 @@ L124667:
   call void @plum.h.rel.Etypecheck$2eITy.0.(ptr %t124655_pre), !dbg !5207
   store ptr null, ptr %t124655, !dbg !5207
   store ptr %t124669, ptr %t124655, !dbg !5207
-  ; plum.off 311963
+  ; plum.off 311961
   %t124673 = load ptr, ptr %s0, !dbg !5208
   call void @plum_rc_inc(ptr %t124673), !dbg !5208
   %t124674 = load i64, ptr %s2, !dbg !5208
@@ -333808,7 +333808,7 @@ L124667:
   call void @plum.h.rel.Scodegen$2eEmit.0.(ptr %t124672_pre), !dbg !5208
   store ptr null, ptr %t124672, !dbg !5208
   store ptr %t124677, ptr %t124672, !dbg !5208
-  ; plum.off 312024
+  ; plum.off 312022
   %t124679 = load ptr, ptr %t124672, !dbg !5209
   %t124680 = getelementptr i8, ptr %t124679, i64 40, !dbg !5209
   %t124681 = load ptr, ptr %t124680, !dbg !5209
@@ -333817,7 +333817,7 @@ L124667:
   call void @plum_rel_str(ptr %t124678_pre), !dbg !5209
   store ptr null, ptr %t124678, !dbg !5209
   store ptr %t124681, ptr %t124678, !dbg !5209
-  ; plum.off 312053
+  ; plum.off 312051
   %t124683 = load ptr, ptr %s0, !dbg !5210
   call void @plum_rc_inc(ptr %t124683), !dbg !5210
   %t124684 = load ptr, ptr %s1, !dbg !5210
@@ -333888,7 +333888,7 @@ L124698:
   call void @plum.h.rel.Scodegen$2ePatEmit.0.(ptr %t124682_pre), !dbg !5210
   store ptr null, ptr %t124682, !dbg !5210
   store ptr %t124720, ptr %t124682, !dbg !5210
-  ; plum.off 312173
+  ; plum.off 312171
   %t124722 = load ptr, ptr %s0, !dbg !5211
   call void @plum_rc_inc(ptr %t124722), !dbg !5211
   %t124723 = load ptr, ptr %t124682, !dbg !5211
@@ -333915,7 +333915,7 @@ L124698:
   call void @plum.h.rel.Scodegen$2eEmit.0.(ptr %t124721_pre), !dbg !5211
   store ptr null, ptr %t124721, !dbg !5211
   store ptr %t124738, ptr %t124721, !dbg !5211
-  ; plum.off 312231
+  ; plum.off 312229
   %t124740 = load i64, ptr %s5, !dbg !5212
   %t124741 = load i64, ptr %s4, !dbg !5212
   %t124742 = call ptr @plum.f.codegen.cg_select_label.0.(i64 %t124740, i64 %t124741), !dbg !5212
@@ -334349,7 +334349,7 @@ L124929:
   %match_owner124846_reset124929 = load ptr, ptr %match_owner124846, !dbg !5214
   call void @plum.h.rel.E$3cprelude$3e$2eOption.1.Stypecheck$2eTSelectArm.0.(ptr %match_owner124846_reset124929), !dbg !5214
   store ptr null, ptr %match_owner124846, !dbg !5214
-  ; plum.off 308356
+  ; plum.off 308354
   %t124931 = load ptr, ptr %s0, !dbg !5215
   store ptr null, ptr %s0, !dbg !5215
   %t124932 = load ptr, ptr %s1, !dbg !5215
@@ -334533,7 +334533,7 @@ L125009:
   store ptr @.str125012, ptr %t125008, !dbg !5217
   br label %L125011, !dbg !5217
 L125010:
-  ; plum.off 310151
+  ; plum.off 310149
   %t125015 = load ptr, ptr %s1, !dbg !5218
   %t125016 = load i64, ptr %s2, !dbg !5218
   %t125017 = call i64 @plum_array_check_index(ptr %t125015, i64 %t125016), !dbg !5218
@@ -334604,7 +334604,7 @@ L125025:
   call void @plum.h.rel.Stypecheck$2eTExpr.0.(ptr %t125014_pre), !dbg !5218
   store ptr null, ptr %t125014, !dbg !5218
   store ptr %t125052, ptr %t125014, !dbg !5218
-  ; plum.off 310232
+  ; plum.off 310230
   %t125054 = load ptr, ptr %s3, !dbg !5219
   call void @plum_rc_inc(ptr %t125054), !dbg !5219
   %t125057 = call ptr @plum_str_concat_reuse(ptr %t125054, ptr @.str125055), !dbg !5219
@@ -335538,7 +335538,7 @@ entry:
   store ptr null, ptr %t125520, !dbg !5246
   %t125524 = alloca ptr, !dbg !5246
   store ptr null, ptr %t125524, !dbg !5246
-  ; plum.off 377913
+  ; plum.off 377911
   %t125521 = load ptr, ptr %s1, !dbg !5247
   call void @plum_rc_inc(ptr %t125521), !dbg !5247
   %t125522 = call ptr @plum.f.codegen.cg_of_ity.0.(ptr %t125521), !dbg !5247
@@ -335547,7 +335547,7 @@ entry:
   call void @plum_rel_str(ptr %t125520_pre), !dbg !5247
   store ptr null, ptr %t125520, !dbg !5247
   store ptr %t125523, ptr %t125520, !dbg !5247
-  ; plum.off 377956
+  ; plum.off 377954
   %t125525 = load ptr, ptr %s1, !dbg !5248
   store ptr null, ptr %s1, !dbg !5248
   %t125530 = call ptr @plum.f.codegen.cg_eq_code.0.(ptr %t125525, ptr @.str125526, ptr @.str125528, i64 0), !dbg !5248
@@ -335681,7 +335681,7 @@ entry:
   store ptr %p1, ptr %s1, !dbg !5250
   %t125650 = alloca ptr, !dbg !5250
   store ptr null, ptr %t125650, !dbg !5250
-  ; plum.off 373154
+  ; plum.off 373152
   %t125651 = load ptr, ptr %s1, !dbg !5251
   store ptr null, ptr %s1, !dbg !5251
   %t125660 = call ptr @plum.f.codegen.cg_eq_fields.0.(ptr %t125651, i64 0, ptr @.str125652, ptr @.str125654, i64 0, ptr @.str125656, ptr @.str125658), !dbg !5251
@@ -335752,7 +335752,7 @@ entry:
   store ptr %p3, ptr %s3, !dbg !5253
   %t125683 = alloca ptr, !dbg !5253
   store ptr null, ptr %t125683, !dbg !5253
-  ; plum.off 374905
+  ; plum.off 374903
   %t125686 = load ptr, ptr %s1, !dbg !5254
   store ptr null, ptr %s1, !dbg !5254
   %t125687 = call ptr @plum.f.codegen.cg_eq_sym.0.(ptr %t125686), !dbg !5254
@@ -336785,7 +336785,7 @@ entry:
   %t126208 = alloca ptr, !dbg !5276
   store ptr null, ptr %t126208, !dbg !5276
   %t126214 = alloca ptr, !dbg !5276
-  ; plum.off 403321
+  ; plum.off 403319
   %t126209 = load ptr, ptr %s0, !dbg !5277
   call void @plum_rc_inc(ptr %t126209), !dbg !5277
   %t126210 = load ptr, ptr %s3, !dbg !5277
@@ -337149,7 +337149,7 @@ entry:
   store ptr %p3, ptr %s3, !dbg !5285
   %t126469 = alloca ptr, !dbg !5285
   store ptr null, ptr %t126469, !dbg !5285
-  ; plum.off 414131
+  ; plum.off 414129
   %t126470 = load ptr, ptr %s1, !dbg !5286
   store ptr null, ptr %s1, !dbg !5286
   %t126471 = call ptr @plum.f.codegen.cg_rel_head.0.(ptr %t126470), !dbg !5286
@@ -337574,7 +337574,7 @@ Ltail725:
   store ptr %t126666, ptr %t126650, !dbg !5294
   br label %L126653, !dbg !5294
 L126652:
-  ; plum.off 415768
+  ; plum.off 415766
   %t126670 = load ptr, ptr %s1, !dbg !5295
   %t126671 = load i64, ptr %s3, !dbg !5295
   %t126672 = call i64 @plum_array_check_index(ptr %t126670, i64 %t126671), !dbg !5295
@@ -339023,7 +339023,7 @@ L127287:
   store ptr %t127293, ptr %t127286, !dbg !5329
   br label %L127289, !dbg !5329
 L127288:
-  ; plum.off 346006
+  ; plum.off 346004
   %t127298 = load ptr, ptr %s0, !dbg !5330
   %t127299 = load i64, ptr %s2, !dbg !5330
   %t127300 = call i64 @plum_array_check_index(ptr %t127298, i64 %t127299), !dbg !5330
@@ -339041,7 +339041,7 @@ L127288:
   call void @plum_rel_str(ptr %t127297_pre), !dbg !5330
   store ptr null, ptr %t127297, !dbg !5330
   store ptr %t127307, ptr %t127297, !dbg !5330
-  ; plum.off 346050
+  ; plum.off 346048
   %t127311 = load i64, ptr %s2, !dbg !5331
   %t127312 = call ptr @plum_int_to_string(i64 %t127311), !dbg !5331
   %t127313 = call ptr @plum_str_concat_reuse(ptr @.str127309, ptr %t127312), !dbg !5331
@@ -339050,7 +339050,7 @@ L127288:
   call void @plum_rel_str(ptr %t127308_pre), !dbg !5331
   store ptr null, ptr %t127308, !dbg !5331
   store ptr %t127313, ptr %t127308, !dbg !5331
-  ; plum.off 346097
+  ; plum.off 346095
   %t127317 = load ptr, ptr %t127308, !dbg !5332
   call void @plum_rc_inc(ptr %t127317), !dbg !5332
   %t127318 = call ptr @plum_str_concat_reuse(ptr @.str127315, ptr %t127317), !dbg !5332
@@ -340104,7 +340104,7 @@ L127811:
   %match_owner127800_reset127811 = load ptr, ptr %match_owner127800, !dbg !5365
   call void @plum.h.rel.Eparser$2eTy.0.(ptr %match_owner127800_reset127811), !dbg !5365
   store ptr null, ptr %match_owner127800, !dbg !5365
-  ; plum.off 423089
+  ; plum.off 423087
   %t127813 = load ptr, ptr %t127809, !dbg !5366
   call void @plum_rc_inc(ptr %t127813), !dbg !5366
   %t127814 = call ptr @plum.f.parser.join_dot.0.(ptr %t127813), !dbg !5366
@@ -340166,7 +340166,7 @@ L127867:
   store ptr @.const127870, ptr %t127866, !dbg !5366
   br label %L127869, !dbg !5366
 L127868:
-  ; plum.off 423461
+  ; plum.off 423459
   %t127873 = load ptr, ptr %t127812, !dbg !5367
   store ptr null, ptr %t127812, !dbg !5367
   %t127874 = call ptr @plum_str_concat_reuse(ptr @.str127871, ptr %t127873), !dbg !5367
@@ -340204,7 +340204,7 @@ L127884:
   %match_owner127800_reset127884 = load ptr, ptr %match_owner127800, !dbg !5367
   call void @plum.h.rel.Eparser$2eTy.0.(ptr %match_owner127800_reset127884), !dbg !5367
   store ptr null, ptr %match_owner127800, !dbg !5367
-  ; plum.off 423596
+  ; plum.off 423594
   %t127887 = call i1 @plum.f.codegen.cg_fail.0.(ptr @.str127885), !dbg !5368
   store ptr @.const127888, ptr %t127800, !dbg !5368
   br label %L127801, !dbg !5368
@@ -340253,7 +340253,7 @@ L127895:
   store ptr %t127898, ptr %t127894, !dbg !5370
   br label %L127897, !dbg !5370
 L127896:
-  ; plum.off 421844
+  ; plum.off 421842
   %t127900 = load ptr, ptr %s0, !dbg !5371
   %t127901 = load i64, ptr %s1, !dbg !5371
   %t127902 = call i64 @plum_array_check_index(ptr %t127900, i64 %t127901), !dbg !5371
@@ -340421,7 +340421,7 @@ reset_no127959:
   call void @plum.h.rel.E$3cprelude$3e$2eOption.1.i(ptr %reset_old127959), !dbg !5375
   br label %reset_done127959, !dbg !5375
 reset_done127959:
-  ; plum.off 421467
+  ; plum.off 421465
   %t127961 = load ptr, ptr %s0, !dbg !5376
   call void @plum_rc_inc(ptr %t127961), !dbg !5376
   %t127962 = load i64, ptr %t127957, !dbg !5376
@@ -363176,7 +363176,7 @@ entry:
   %t138304 = load ptr, ptr %s0, !dbg !5767
   call void @plum_rc_inc(ptr %t138304), !dbg !5767
   %t138321 = call i64 @plum_array_len(ptr %t138304), !dbg !5767
-  %t138321_rc = load atomic i64, ptr %t138304 monotonic, align 8, !dbg !5767
+  %t138321_rc = load atomic i64, ptr %t138304 acquire, align 8, !dbg !5767
   %t138321_move = icmp eq i64 %t138321_rc, 1, !dbg !5767
   store i64 0, ptr %t138322, !dbg !5767
   store i64 0, ptr %t138323, !dbg !5767
@@ -377616,14 +377616,14 @@ Ltail825:
   store ptr %t143848, ptr %t143833, !dbg !5995
   br label %L143836, !dbg !5995
 L143835:
-  ; plum.off 283057
+  ; plum.off 283055
   %t143850 = load i64, ptr %s3, !dbg !5996
   %t143851 = call ptr @plum.f.codegen.cg_reg.0.(i64 %t143850), !dbg !5996
   %t143849_pre = load ptr, ptr %t143849, !dbg !5996
   call void @plum_rel_str(ptr %t143849_pre), !dbg !5996
   store ptr null, ptr %t143849, !dbg !5996
   store ptr %t143851, ptr %t143849, !dbg !5996
-  ; plum.off 283085
+  ; plum.off 283083
   %t143853 = load i64, ptr %s3, !dbg !5997
   %t143854 = call { i64, i1 } @llvm.sadd.with.overflow.i64(i64 %t143853, i64 1), !dbg !5997
   %t143855 = extractvalue { i64, i1 } %t143854, 0, !dbg !5997
@@ -378596,14 +378596,14 @@ entry:
   %t144333 = alloca ptr, !dbg !6012
   %match_owner144333 = alloca ptr, !dbg !6012
   store ptr null, ptr %match_owner144333, !dbg !6012
-  ; plum.off 349782
+  ; plum.off 349780
   %t144325 = load i64, ptr %s3, !dbg !6013
   %t144326 = call ptr @plum.f.codegen.cg_reg.0.(i64 %t144325), !dbg !6013
   %t144324_pre = load ptr, ptr %t144324, !dbg !6013
   call void @plum_rel_str(ptr %t144324_pre), !dbg !6013
   store ptr null, ptr %t144324, !dbg !6013
   store ptr %t144326, ptr %t144324, !dbg !6013
-  ; plum.off 349807
+  ; plum.off 349805
   %t144328 = load ptr, ptr %s0, !dbg !6014
   call void @plum_rc_inc(ptr %t144328), !dbg !6014
   %t144329 = call ptr @plum.f.codegen.cg_of_ity.0.(ptr %t144328), !dbg !6014
@@ -378612,7 +378612,7 @@ entry:
   call void @plum_rel_str(ptr %t144327_pre), !dbg !6014
   store ptr null, ptr %t144327, !dbg !6014
   store ptr %t144330, ptr %t144327, !dbg !6014
-  ; plum.off 349847
+  ; plum.off 349845
   %t144332 = load ptr, ptr %s0, !dbg !6015
   call void @plum_rc_inc(ptr %t144332), !dbg !6015
   store ptr %t144332, ptr %match_owner144333, !dbg !6015
@@ -381589,7 +381589,7 @@ entry:
   store ptr %p3, ptr %s3, !dbg !6070
   %t145846 = alloca ptr, !dbg !6070
   store ptr null, ptr %t145846, !dbg !6070
-  ; plum.off 391103
+  ; plum.off 391101
   %t145847 = load ptr, ptr %s0, !dbg !6071
   call void @plum_rc_inc(ptr %t145847), !dbg !6071
   %t145848 = load ptr, ptr %s1, !dbg !6071
@@ -381769,7 +381769,7 @@ L145930:
   store i1 0, ptr %t145929, !dbg !6073
   br label %L145932, !dbg !6073
 L145931:
-  ; plum.off 390273
+  ; plum.off 390271
   %t145934 = load ptr, ptr %s0, !dbg !6074
   %t145935 = load i64, ptr %s2, !dbg !6074
   %t145936 = call i64 @plum_array_check_index(ptr %t145934, i64 %t145935), !dbg !6074
@@ -382479,14 +382479,14 @@ reset_no146265:
   call void @plum.h.rel.Etypecheck$2eTPattern.0.(ptr %reset_old146265), !dbg !6080
   br label %reset_done146265, !dbg !6080
 reset_done146265:
-  ; plum.off 324457
+  ; plum.off 324455
   %t146267 = load i64, ptr %s2, !dbg !6081
   %t146268 = call ptr @plum.f.codegen.cg_reg.0.(i64 %t146267), !dbg !6081
   %t146266_pre = load ptr, ptr %t146266, !dbg !6081
   call void @plum_rel_str(ptr %t146266_pre), !dbg !6081
   store ptr null, ptr %t146266, !dbg !6081
   store ptr %t146268, ptr %t146266, !dbg !6081
-  ; plum.off 324491
+  ; plum.off 324489
   %t146270 = load ptr, ptr %s5, !dbg !6082
   call void @plum_rc_inc(ptr %t146270), !dbg !6082
   %t146271 = call ptr @plum.f.codegen.cg_of_ity.0.(ptr %t146270), !dbg !6082
@@ -382494,7 +382494,7 @@ reset_done146265:
   call void @plum.h.rel.Ecodegen$2eCgTy.0.(ptr %t146269_pre), !dbg !6082
   store ptr null, ptr %t146269, !dbg !6082
   store ptr %t146271, ptr %t146269, !dbg !6082
-  ; plum.off 324530
+  ; plum.off 324528
   %t146273 = load ptr, ptr %t146269, !dbg !6083
   call void @plum_rc_inc(ptr %t146273), !dbg !6083
   %t146274 = call ptr @plum.f.codegen.cg_llvm_ty.0.(ptr %t146273), !dbg !6083
@@ -384492,7 +384492,7 @@ L146969:
   store ptr %t146972, ptr %t146968, !dbg !6106
   br label %L146971, !dbg !6106
 L146970:
-  ; plum.off 288067
+  ; plum.off 288065
   %t146974 = load ptr, ptr %s0, !dbg !6107
   call void @plum_rc_inc(ptr %t146974), !dbg !6107
   %t146975 = load ptr, ptr %s1, !dbg !6107
@@ -384776,14 +384776,14 @@ L147110:
   store ptr %t147115, ptr %t147109, !dbg !6109
   br label %L147112, !dbg !6109
 L147111:
-  ; plum.off 288722
+  ; plum.off 288720
   %t147119 = load i64, ptr %s3, !dbg !6110
   %t147120 = call ptr @plum.f.codegen.cg_reg.0.(i64 %t147119), !dbg !6110
   %t147118_pre = load ptr, ptr %t147118, !dbg !6110
   call void @plum_rel_str(ptr %t147118_pre), !dbg !6110
   store ptr null, ptr %t147118, !dbg !6110
   store ptr %t147120, ptr %t147118, !dbg !6110
-  ; plum.off 288750
+  ; plum.off 288748
   %t147124 = load ptr, ptr %t147118, !dbg !6111
   call void @plum_rc_inc(ptr %t147124), !dbg !6111
   %t147125 = call ptr @plum_str_concat_reuse(ptr @.str147122, ptr %t147124), !dbg !6111
@@ -385126,7 +385126,7 @@ Ltail840:
   store ptr %t147272, ptr %t147253, !dbg !6115
   br label %L147256, !dbg !6115
 L147255:
-  ; plum.off 286012
+  ; plum.off 286010
   %t147274 = load i64, ptr %s6, !dbg !6116
   %t147275 = load ptr, ptr %s2, !dbg !6116
   %t147276 = call i64 @plum_array_len(ptr %t147275), !dbg !6116
@@ -385152,7 +385152,7 @@ L147281:
   call void @plum.h.rel.Etypecheck$2eITy.0.(ptr %t147273_pre), !dbg !6116
   store ptr null, ptr %t147273, !dbg !6116
   store ptr %t147290, ptr %t147273, !dbg !6116
-  ; plum.off 286089
+  ; plum.off 286087
   %t147292 = load ptr, ptr %t147273, !dbg !6117
   call void @plum_rc_inc(ptr %t147292), !dbg !6117
   %t147293 = call ptr @plum.f.codegen.cg_of_ity.0.(ptr %t147292), !dbg !6117
@@ -385161,14 +385161,14 @@ L147281:
   call void @plum_rel_str(ptr %t147291_pre), !dbg !6117
   store ptr null, ptr %t147291, !dbg !6117
   store ptr %t147294, ptr %t147291, !dbg !6117
-  ; plum.off 286135
+  ; plum.off 286133
   %t147296 = load i64, ptr %s7, !dbg !6118
   %t147297 = call ptr @plum.f.codegen.cg_reg.0.(i64 %t147296), !dbg !6118
   %t147295_pre = load ptr, ptr %t147295, !dbg !6118
   call void @plum_rel_str(ptr %t147295_pre), !dbg !6118
   store ptr null, ptr %t147295, !dbg !6118
   store ptr %t147297, ptr %t147295, !dbg !6118
-  ; plum.off 286163
+  ; plum.off 286161
   %t147299 = load i64, ptr %s7, !dbg !6119
   %t147300 = call { i64, i1 } @llvm.sadd.with.overflow.i64(i64 %t147299, i64 1), !dbg !6119
   %t147301 = extractvalue { i64, i1 } %t147300, 0, !dbg !6119
@@ -385184,7 +385184,7 @@ L147304:
   call void @plum_rel_str(ptr %t147298_pre), !dbg !6119
   store ptr null, ptr %t147298, !dbg !6119
   store ptr %t147306, ptr %t147298, !dbg !6119
-  ; plum.off 286194
+  ; plum.off 286192
   %t147308 = load i64, ptr %s7, !dbg !6120
   %t147309 = call { i64, i1 } @llvm.sadd.with.overflow.i64(i64 %t147308, i64 2), !dbg !6120
   %t147310 = extractvalue { i64, i1 } %t147309, 0, !dbg !6120
@@ -385200,7 +385200,7 @@ L147313:
   call void @plum_rel_str(ptr %t147307_pre), !dbg !6120
   store ptr null, ptr %t147307, !dbg !6120
   store ptr %t147315, ptr %t147307, !dbg !6120
-  ; plum.off 286226
+  ; plum.off 286224
   %t147319 = load ptr, ptr %t147295, !dbg !6121
   call void @plum_rc_inc(ptr %t147319), !dbg !6121
   %t147320 = call ptr @plum_str_concat_reuse(ptr @.str147317, ptr %t147319), !dbg !6121
@@ -385673,14 +385673,14 @@ L147485:
   store ptr %t147492, ptr %t147484, !dbg !6125
   br label %L147487, !dbg !6125
 L147486:
-  ; plum.off 274804
+  ; plum.off 274802
   %t147494 = load i64, ptr %s4, !dbg !6126
   %t147495 = call ptr @plum.f.codegen.cg_reg.0.(i64 %t147494), !dbg !6126
   %t147493_pre = load ptr, ptr %t147493, !dbg !6126
   call void @plum_rel_str(ptr %t147493_pre), !dbg !6126
   store ptr null, ptr %t147493, !dbg !6126
   store ptr %t147495, ptr %t147493, !dbg !6126
-  ; plum.off 274833
+  ; plum.off 274831
   %t147497 = load i64, ptr %s4, !dbg !6127
   %t147498 = call { i64, i1 } @llvm.sadd.with.overflow.i64(i64 %t147497, i64 1), !dbg !6127
   %t147499 = extractvalue { i64, i1 } %t147498, 0, !dbg !6127
@@ -385696,7 +385696,7 @@ L147502:
   call void @plum_rel_str(ptr %t147496_pre), !dbg !6127
   store ptr null, ptr %t147496, !dbg !6127
   store ptr %t147504, ptr %t147496, !dbg !6127
-  ; plum.off 274865
+  ; plum.off 274863
   %t147506 = load i64, ptr %s4, !dbg !6128
   %t147507 = call { i64, i1 } @llvm.sadd.with.overflow.i64(i64 %t147506, i64 2), !dbg !6128
   %t147508 = extractvalue { i64, i1 } %t147507, 0, !dbg !6128
@@ -385712,7 +385712,7 @@ L147511:
   call void @plum_rel_str(ptr %t147505_pre), !dbg !6128
   store ptr null, ptr %t147505, !dbg !6128
   store ptr %t147513, ptr %t147505, !dbg !6128
-  ; plum.off 274899
+  ; plum.off 274897
   %t147515 = load i64, ptr %s4, !dbg !6129
   %t147516 = call { i64, i1 } @llvm.sadd.with.overflow.i64(i64 %t147515, i64 3), !dbg !6129
   %t147517 = extractvalue { i64, i1 } %t147516, 0, !dbg !6129
@@ -385728,7 +385728,7 @@ L147520:
   call void @plum_rel_str(ptr %t147514_pre), !dbg !6129
   store ptr null, ptr %t147514, !dbg !6129
   store ptr %t147522, ptr %t147514, !dbg !6129
-  ; plum.off 274933
+  ; plum.off 274931
   %t147524 = load i64, ptr %s4, !dbg !6130
   %t147525 = call { i64, i1 } @llvm.sadd.with.overflow.i64(i64 %t147524, i64 4), !dbg !6130
   %t147526 = extractvalue { i64, i1 } %t147525, 0, !dbg !6130
@@ -385744,7 +385744,7 @@ L147529:
   call void @plum_rel_str(ptr %t147523_pre), !dbg !6130
   store ptr null, ptr %t147523, !dbg !6130
   store ptr %t147531, ptr %t147523, !dbg !6130
-  ; plum.off 274967
+  ; plum.off 274965
   %t147533 = load i64, ptr %s4, !dbg !6131
   %t147534 = call { i64, i1 } @llvm.sadd.with.overflow.i64(i64 %t147533, i64 5), !dbg !6131
   %t147535 = extractvalue { i64, i1 } %t147534, 0, !dbg !6131
@@ -385760,7 +385760,7 @@ L147538:
   call void @plum_rel_str(ptr %t147532_pre), !dbg !6131
   store ptr null, ptr %t147532, !dbg !6131
   store ptr %t147540, ptr %t147532, !dbg !6131
-  ; plum.off 275002
+  ; plum.off 275000
   %t147542 = load i64, ptr %s4, !dbg !6132
   %t147543 = call { i64, i1 } @llvm.sadd.with.overflow.i64(i64 %t147542, i64 6), !dbg !6132
   %t147544 = extractvalue { i64, i1 } %t147543, 0, !dbg !6132
@@ -385776,7 +385776,7 @@ L147547:
   call void @plum_rel_str(ptr %t147541_pre), !dbg !6132
   store ptr null, ptr %t147541, !dbg !6132
   store ptr %t147549, ptr %t147541, !dbg !6132
-  ; plum.off 275036
+  ; plum.off 275034
   %t147551 = load ptr, ptr %s1, !dbg !6133
   %t147552 = getelementptr i8, ptr %t147551, i64 16, !dbg !6133
   %t147553 = load ptr, ptr %t147552, !dbg !6133
@@ -386055,7 +386055,7 @@ entry:
   store ptr null, ptr %t147752, !dbg !6135
   %t147805 = alloca ptr, !dbg !6135
   store ptr null, ptr %t147805, !dbg !6135
-  ; plum.off 293961
+  ; plum.off 293959
   %t147744 = load ptr, ptr %s1, !dbg !6136
   %t147745 = getelementptr i8, ptr %t147744, i64 16, !dbg !6136
   %t147746 = load ptr, ptr %t147745, !dbg !6136
@@ -386064,7 +386064,7 @@ entry:
   call void @plum_rel_str(ptr %t147743_pre), !dbg !6136
   store ptr null, ptr %t147743, !dbg !6136
   store ptr %t147746, ptr %t147743, !dbg !6136
-  ; plum.off 293994
+  ; plum.off 293992
   %t147748 = load ptr, ptr %s2, !dbg !6137
   %t147749 = getelementptr i8, ptr %t147748, i64 48, !dbg !6137
   %t147750 = load i64, ptr %t147749, !dbg !6137
@@ -386073,7 +386073,7 @@ entry:
   call void @plum_rel_str(ptr %t147747_pre), !dbg !6137
   store ptr null, ptr %t147747, !dbg !6137
   store ptr %t147751, ptr %t147747, !dbg !6137
-  ; plum.off 294022
+  ; plum.off 294020
   %t147755 = load ptr, ptr %t147747, !dbg !6138
   call void @plum_rc_inc(ptr %t147755), !dbg !6138
   %t147756 = call ptr @plum_str_concat_reuse(ptr @.str147753, ptr %t147755), !dbg !6138
@@ -386126,7 +386126,7 @@ entry:
   call void @plum_rel_str(ptr %t147752_pre), !dbg !6138
   store ptr null, ptr %t147752, !dbg !6138
   store ptr %t147804, ptr %t147752, !dbg !6138
-  ; plum.off 294391
+  ; plum.off 294389
   %t147806 = load ptr, ptr %t147747, !dbg !6139
   call void @plum_rc_inc(ptr %t147806), !dbg !6139
   %t147807 = load ptr, ptr %s2, !dbg !6139
@@ -386331,7 +386331,7 @@ entry:
   store ptr null, ptr %t147916, !dbg !6141
   %t147957 = alloca ptr, !dbg !6141
   store ptr null, ptr %t147957, !dbg !6141
-  ; plum.off 284765
+  ; plum.off 284763
   %t147904 = load ptr, ptr %s1, !dbg !6142
   %t147905 = getelementptr i8, ptr %t147904, i64 16, !dbg !6142
   %t147906 = load ptr, ptr %t147905, !dbg !6142
@@ -386340,7 +386340,7 @@ entry:
   call void @plum_rel_str(ptr %t147903_pre), !dbg !6142
   store ptr null, ptr %t147903, !dbg !6142
   store ptr %t147906, ptr %t147903, !dbg !6142
-  ; plum.off 284798
+  ; plum.off 284796
   %t147908 = load ptr, ptr %s0, !dbg !6143
   store ptr null, ptr %s0, !dbg !6143
   %t147909 = load ptr, ptr %s3, !dbg !6143
@@ -386355,7 +386355,7 @@ entry:
   call void @plum.h.rel.Scodegen$2eReuseEmit.0.(ptr %t147907_pre), !dbg !6143
   store ptr null, ptr %t147907, !dbg !6143
   store ptr %t147915, ptr %t147907, !dbg !6143
-  ; plum.off 284865
+  ; plum.off 284863
   %t147919 = load ptr, ptr %t147907, !dbg !6144
   %t147920 = getelementptr i8, ptr %t147919, i64 16, !dbg !6144
   %t147921 = load ptr, ptr %t147920, !dbg !6144
@@ -386400,7 +386400,7 @@ entry:
   call void @plum_rel_str(ptr %t147916_pre), !dbg !6144
   store ptr null, ptr %t147916, !dbg !6144
   store ptr %t147956, ptr %t147916, !dbg !6144
-  ; plum.off 285066
+  ; plum.off 285064
   %t147958 = load ptr, ptr %t147907, !dbg !6145
   %t147959 = getelementptr i8, ptr %t147958, i64 16, !dbg !6145
   %t147960 = load ptr, ptr %t147959, !dbg !6145
@@ -398123,7 +398123,7 @@ L151790:
   store ptr %t151796, ptr %t151789, !dbg !6261
   br label %L151792, !dbg !6261
 L151791:
-  ; plum.off 373585
+  ; plum.off 373583
   %t151801 = load ptr, ptr %s0, !dbg !6262
   %t151802 = load i64, ptr %s1, !dbg !6262
   %t151803 = call i64 @plum_array_check_index(ptr %t151801, i64 %t151802), !dbg !6262
@@ -398138,7 +398138,7 @@ L151791:
   call void @plum_rel_str(ptr %t151800_pre), !dbg !6262
   store ptr null, ptr %t151800, !dbg !6262
   store ptr %t151809, ptr %t151800, !dbg !6262
-  ; plum.off 373640
+  ; plum.off 373638
   %t151811 = load i64, ptr %s1, !dbg !6263
   %t151812 = call i64 @plum.f.codegen.cg_field_offset.0.(i64 %t151811), !dbg !6263
   %t151813 = call ptr @plum_int_to_string(i64 %t151812), !dbg !6263
@@ -398146,14 +398146,14 @@ L151791:
   call void @plum_rel_str(ptr %t151810_pre), !dbg !6263
   store ptr null, ptr %t151810, !dbg !6263
   store ptr %t151813, ptr %t151810, !dbg !6263
-  ; plum.off 373690
+  ; plum.off 373688
   %t151815 = load i64, ptr %s4, !dbg !6264
   %t151816 = call ptr @plum.f.codegen.cg_reg.0.(i64 %t151815), !dbg !6264
   %t151814_pre = load ptr, ptr %t151814, !dbg !6264
   call void @plum_rel_str(ptr %t151814_pre), !dbg !6264
   store ptr null, ptr %t151814, !dbg !6264
   store ptr %t151816, ptr %t151814, !dbg !6264
-  ; plum.off 373718
+  ; plum.off 373716
   %t151818 = load i64, ptr %s4, !dbg !6265
   %t151819 = call { i64, i1 } @llvm.sadd.with.overflow.i64(i64 %t151818, i64 1), !dbg !6265
   %t151820 = extractvalue { i64, i1 } %t151819, 0, !dbg !6265
@@ -398169,7 +398169,7 @@ L151823:
   call void @plum_rel_str(ptr %t151817_pre), !dbg !6265
   store ptr null, ptr %t151817, !dbg !6265
   store ptr %t151825, ptr %t151817, !dbg !6265
-  ; plum.off 373750
+  ; plum.off 373748
   %t151827 = load i64, ptr %s4, !dbg !6266
   %t151828 = call { i64, i1 } @llvm.sadd.with.overflow.i64(i64 %t151827, i64 2), !dbg !6266
   %t151829 = extractvalue { i64, i1 } %t151828, 0, !dbg !6266
@@ -398185,7 +398185,7 @@ L151832:
   call void @plum_rel_str(ptr %t151826_pre), !dbg !6266
   store ptr null, ptr %t151826, !dbg !6266
   store ptr %t151834, ptr %t151826, !dbg !6266
-  ; plum.off 373783
+  ; plum.off 373781
   %t151836 = load i64, ptr %s4, !dbg !6267
   %t151837 = call { i64, i1 } @llvm.sadd.with.overflow.i64(i64 %t151836, i64 3), !dbg !6267
   %t151838 = extractvalue { i64, i1 } %t151837, 0, !dbg !6267
@@ -398201,7 +398201,7 @@ L151841:
   call void @plum_rel_str(ptr %t151835_pre), !dbg !6267
   store ptr null, ptr %t151835, !dbg !6267
   store ptr %t151843, ptr %t151835, !dbg !6267
-  ; plum.off 373816
+  ; plum.off 373814
   %t151847 = load ptr, ptr %t151814, !dbg !6268
   call void @plum_rc_inc(ptr %t151847), !dbg !6268
   %t151848 = call ptr @plum_str_concat_reuse(ptr @.str151845, ptr %t151847), !dbg !6268
@@ -398274,7 +398274,7 @@ L151841:
   call void @plum_rel_str(ptr %t151844_pre), !dbg !6268
   store ptr null, ptr %t151844, !dbg !6268
   store ptr %t151915, ptr %t151844, !dbg !6268
-  ; plum.off 374237
+  ; plum.off 374235
   %t151917 = load ptr, ptr %s0, !dbg !6269
   %t151918 = load i64, ptr %s1, !dbg !6269
   %t151919 = call i64 @plum_array_check_index(ptr %t151917, i64 %t151918), !dbg !6269
@@ -398302,7 +398302,7 @@ L151931:
   call void @plum.h.rel.Scodegen$2eEqEmit.0.(ptr %t151916_pre), !dbg !6269
   store ptr null, ptr %t151916, !dbg !6269
   store ptr %t151933, ptr %t151916, !dbg !6269
-  ; plum.off 374298
+  ; plum.off 374296
   %t151935 = load ptr, ptr %t151916, !dbg !6270
   %t151936 = getelementptr i8, ptr %t151935, i64 24, !dbg !6270
   %t151937 = load i64, ptr %t151936, !dbg !6270
@@ -398311,7 +398311,7 @@ L151931:
   call void @plum_rel_str(ptr %t151934_pre), !dbg !6270
   store ptr null, ptr %t151934, !dbg !6270
   store ptr %t151938, ptr %t151934, !dbg !6270
-  ; plum.off 374334
+  ; plum.off 374332
   %t151942 = load ptr, ptr %t151934, !dbg !6271
   call void @plum_rc_inc(ptr %t151942), !dbg !6271
   %t151943 = call ptr @plum_str_concat_reuse(ptr @.str151940, ptr %t151942), !dbg !6271
@@ -398656,7 +398656,7 @@ Ltail870:
   store ptr %t152025, ptr %t152009, !dbg !6273
   br label %L152012, !dbg !6273
 L152011:
-  ; plum.off 376248
+  ; plum.off 376246
   %t152027 = load ptr, ptr %s0, !dbg !6274
   %t152028 = getelementptr i8, ptr %t152027, i64 24, !dbg !6274
   %t152029 = load ptr, ptr %t152028, !dbg !6274
@@ -398743,7 +398743,7 @@ L152110:
   call void @plum.h.rel.SArray.1.Etypecheck$2eITy.0.(ptr %t152026_pre), !dbg !6274
   store ptr null, ptr %t152026, !dbg !6274
   store ptr %t152089, ptr %t152026, !dbg !6274
-  ; plum.off 376461
+  ; plum.off 376459
   %t152112 = load ptr, ptr %t152026, !dbg !6275
   store ptr null, ptr %t152026, !dbg !6275
   %t152113 = load i64, ptr %s4, !dbg !6275
@@ -398752,7 +398752,7 @@ L152110:
   call void @plum.h.rel.Scodegen$2eEqEmit.0.(ptr %t152111_pre), !dbg !6275
   store ptr null, ptr %t152111, !dbg !6275
   store ptr %t152118, ptr %t152111, !dbg !6275
-  ; plum.off 376520
+  ; plum.off 376518
   %t152122 = load ptr, ptr %s1, !dbg !6276
   %t152123 = load i64, ptr %s3, !dbg !6276
   %t152124 = call i64 @plum_array_check_index(ptr %t152122, i64 %t152123), !dbg !6276
@@ -399071,7 +399071,7 @@ Ltail872:
   store ptr %t152271, ptr %t152256, !dbg !6284
   br label %L152259, !dbg !6284
 L152258:
-  ; plum.off 413494
+  ; plum.off 413492
   %t152273 = load i1, ptr %s4, !dbg !6285
   br i1 %t152273, label %L152275, label %L152276, !dbg !6285
 L152275:
@@ -399087,7 +399087,7 @@ L152276:
 L152277:
   %t152282 = load i64, ptr %t152274, !dbg !6285
   store i64 %t152282, ptr %t152272, !dbg !6285
-  ; plum.off 413580
+  ; plum.off 413578
   %t152286 = load i64, ptr %s2, !dbg !6286
   %t152287 = call ptr @plum_int_to_string(i64 %t152286), !dbg !6286
   %t152288 = call ptr @plum_str_concat_reuse(ptr @.str152284, ptr %t152287), !dbg !6286
@@ -399096,7 +399096,7 @@ L152277:
   call void @plum_rel_str(ptr %t152283_pre), !dbg !6286
   store ptr null, ptr %t152283, !dbg !6286
   store ptr %t152288, ptr %t152283, !dbg !6286
-  ; plum.off 413626
+  ; plum.off 413624
   %t152292 = load i64, ptr %s2, !dbg !6287
   %t152293 = call ptr @plum_int_to_string(i64 %t152292), !dbg !6287
   %t152294 = call ptr @plum_str_concat_reuse(ptr @.str152290, ptr %t152293), !dbg !6287
@@ -399105,7 +399105,7 @@ L152277:
   call void @plum_rel_str(ptr %t152289_pre), !dbg !6287
   store ptr null, ptr %t152289, !dbg !6287
   store ptr %t152294, ptr %t152289, !dbg !6287
-  ; plum.off 413672
+  ; plum.off 413670
   %t152298 = load ptr, ptr %t152283, !dbg !6288
   call void @plum_rc_inc(ptr %t152298), !dbg !6288
   %t152299 = call ptr @plum_str_concat_reuse(ptr @.str152296, ptr %t152298), !dbg !6288
@@ -399402,7 +399402,7 @@ entry:
   store ptr null, ptr %t152411, !dbg !6294
   %t152417 = alloca ptr, !dbg !6294
   store ptr null, ptr %t152417, !dbg !6294
-  ; plum.off 365725
+  ; plum.off 365723
   %t152408 = load ptr, ptr %s1, !dbg !6295
   call void @plum_rc_inc(ptr %t152408), !dbg !6295
   %t152409 = call ptr @plum.f.codegen.cg_of_ity.0.(ptr %t152408), !dbg !6295
@@ -399411,7 +399411,7 @@ entry:
   call void @plum_rel_str(ptr %t152407_pre), !dbg !6295
   store ptr null, ptr %t152407, !dbg !6295
   store ptr %t152410, ptr %t152407, !dbg !6295
-  ; plum.off 365768
+  ; plum.off 365766
   %t152412 = load ptr, ptr %s0, !dbg !6296
   call void @plum_rc_inc(ptr %t152412), !dbg !6296
   %t152413 = load ptr, ptr %s1, !dbg !6296
@@ -399421,7 +399421,7 @@ entry:
   call void @plum.h.rel.Scodegen$2eStrEmit.0.(ptr %t152411_pre), !dbg !6296
   store ptr null, ptr %t152411, !dbg !6296
   store ptr %t152416, ptr %t152411, !dbg !6296
-  ; plum.off 365815
+  ; plum.off 365813
   %t152418 = load ptr, ptr %s0, !dbg !6297
   call void @plum_rc_inc(ptr %t152418), !dbg !6297
   %t152419 = call ptr @plum.f.codegen.cg_sfmt_sym.0.(ptr %t152418, i64 1), !dbg !6297
@@ -399601,7 +399601,7 @@ entry:
   store ptr null, ptr %t152578, !dbg !6299
   %t152595 = alloca ptr, !dbg !6299
   store ptr null, ptr %t152595, !dbg !6299
-  ; plum.off 364080
+  ; plum.off 364078
   %t152566 = load ptr, ptr %s0, !dbg !6300
   %t152567 = getelementptr i8, ptr %t152566, i64 24, !dbg !6300
   %t152568 = load ptr, ptr %t152567, !dbg !6300
@@ -399613,7 +399613,7 @@ entry:
   call void @plum.h.rel.SArray.1.s(ptr %t152565_pre), !dbg !6300
   store ptr null, ptr %t152565, !dbg !6300
   store ptr %t152570, ptr %t152565, !dbg !6300
-  ; plum.off 364136
+  ; plum.off 364134
   %t152572 = load ptr, ptr %s1, !dbg !6301
   call void @plum_rc_inc(ptr %t152572), !dbg !6301
   %t152573 = load ptr, ptr %s2, !dbg !6301
@@ -399625,7 +399625,7 @@ entry:
   call void @plum.h.rel.Scodegen$2eStrEmit.0.(ptr %t152571_pre), !dbg !6301
   store ptr null, ptr %t152571, !dbg !6301
   store ptr %t152577, ptr %t152571, !dbg !6301
-  ; plum.off 364195
+  ; plum.off 364193
   %t152579 = load ptr, ptr %s1, !dbg !6302
   call void @plum_rc_inc(ptr %t152579), !dbg !6302
   %t152580 = load ptr, ptr %t152565, !dbg !6302
@@ -399652,7 +399652,7 @@ entry:
   call void @plum.h.rel.Scodegen$2eStrEmit.0.(ptr %t152578_pre), !dbg !6302
   store ptr null, ptr %t152578, !dbg !6302
   store ptr %t152594, ptr %t152578, !dbg !6302
-  ; plum.off 364297
+  ; plum.off 364295
   %t152596 = load ptr, ptr %s1, !dbg !6303
   call void @plum_rc_inc(ptr %t152596), !dbg !6303
   %t152597 = load ptr, ptr %t152578, !dbg !6303
@@ -399762,7 +399762,7 @@ entry:
   store ptr null, ptr %t152640, !dbg !6305
   %t152646 = alloca ptr, !dbg !6305
   store ptr null, ptr %t152646, !dbg !6305
-  ; plum.off 368275
+  ; plum.off 368273
   %t152641 = load ptr, ptr %s0, !dbg !6306
   call void @plum_rc_inc(ptr %t152641), !dbg !6306
   %t152642 = load ptr, ptr %s2, !dbg !6306
@@ -399776,7 +399776,7 @@ entry:
   call void @plum.h.rel.SArray.1.Scodegen$2eCgVariant.0.(ptr %t152640_pre), !dbg !6306
   store ptr null, ptr %t152640, !dbg !6306
   store ptr %t152645, ptr %t152640, !dbg !6306
-  ; plum.off 368320
+  ; plum.off 368318
   %t152647 = load ptr, ptr %s0, !dbg !6307
   store ptr null, ptr %s0, !dbg !6307
   %t152648 = load ptr, ptr %s1, !dbg !6307
@@ -433278,7 +433278,7 @@ entry:
   store ptr %p4, ptr %s4, !dbg !6916
   %t167448 = alloca ptr, !dbg !6916
   store ptr null, ptr %t167448, !dbg !6916
-  ; plum.off 329616
+  ; plum.off 329614
   %t167449 = load i64, ptr %s1, !dbg !6917
   %t167450 = call ptr @plum.f.codegen.cg_reg.0.(i64 %t167449), !dbg !6917
   %t167448_pre = load ptr, ptr %t167448, !dbg !6917
@@ -433380,7 +433380,7 @@ entry:
   store ptr null, ptr %t167502, !dbg !6919
   %t167511 = alloca ptr, !dbg !6919
   store ptr null, ptr %t167511, !dbg !6919
-  ; plum.off 330160
+  ; plum.off 330158
   %t167499 = load i64, ptr %s1, !dbg !6920
   %t167500 = call ptr @plum_int_to_string(i64 %t167499), !dbg !6920
   %t167501 = call ptr @plum_str_concat_reuse(ptr @.str167497, ptr %t167500), !dbg !6920
@@ -433389,7 +433389,7 @@ entry:
   call void @plum_rel_str(ptr %t167496_pre), !dbg !6920
   store ptr null, ptr %t167496, !dbg !6920
   store ptr %t167501, ptr %t167496, !dbg !6920
-  ; plum.off 330207
+  ; plum.off 330205
   %t167503 = load i64, ptr %s1, !dbg !6921
   %t167504 = call { i64, i1 } @llvm.sadd.with.overflow.i64(i64 %t167503, i64 2), !dbg !6921
   %t167505 = extractvalue { i64, i1 } %t167504, 0, !dbg !6921
@@ -433405,7 +433405,7 @@ L167508:
   call void @plum_rel_str(ptr %t167502_pre), !dbg !6921
   store ptr null, ptr %t167502, !dbg !6921
   store ptr %t167510, ptr %t167502, !dbg !6921
-  ; plum.off 330237
+  ; plum.off 330235
   %t167514 = load ptr, ptr %t167502, !dbg !6922
   call void @plum_rc_inc(ptr %t167514), !dbg !6922
   %t167515 = call ptr @plum_str_concat_reuse(ptr @.str167512, ptr %t167514), !dbg !6922
@@ -433657,7 +433657,7 @@ L167577:
   %match_owner167571_reset167577 = load ptr, ptr %match_owner167571, !dbg !6924
   call void @plum.h.rel.E$3cprelude$3e$2eOption.1.Scodegen$2eCgVariant.0.(ptr %match_owner167571_reset167577), !dbg !6924
   store ptr null, ptr %match_owner167571, !dbg !6924
-  ; plum.off 330958
+  ; plum.off 330956
   %t167580 = load ptr, ptr %s3, !dbg !6925
   store ptr null, ptr %s3, !dbg !6925
   %t167581 = call ptr @plum_str_concat_reuse(ptr @.str167578, ptr %t167580), !dbg !6925
@@ -433758,14 +433758,14 @@ L167651:
   %match_owner167571_reset167651 = load ptr, ptr %match_owner167571, !dbg !6925
   call void @plum.h.rel.E$3cprelude$3e$2eOption.1.Scodegen$2eCgVariant.0.(ptr %match_owner167571_reset167651), !dbg !6925
   store ptr null, ptr %match_owner167571, !dbg !6925
-  ; plum.off 331187
+  ; plum.off 331185
   %t167653 = load i64, ptr %s2, !dbg !6926
   %t167654 = call ptr @plum.f.codegen.cg_reg.0.(i64 %t167653), !dbg !6926
   %t167652_pre = load ptr, ptr %t167652, !dbg !6926
   call void @plum_rel_str(ptr %t167652_pre), !dbg !6926
   store ptr null, ptr %t167652, !dbg !6926
   store ptr %t167654, ptr %t167652, !dbg !6926
-  ; plum.off 331220
+  ; plum.off 331218
   %t167656 = load i64, ptr %s2, !dbg !6927
   %t167657 = call { i64, i1 } @llvm.sadd.with.overflow.i64(i64 %t167656, i64 1), !dbg !6927
   %t167658 = extractvalue { i64, i1 } %t167657, 0, !dbg !6927
@@ -433781,7 +433781,7 @@ L167661:
   call void @plum_rel_str(ptr %t167655_pre), !dbg !6927
   store ptr null, ptr %t167655, !dbg !6927
   store ptr %t167663, ptr %t167655, !dbg !6927
-  ; plum.off 331260
+  ; plum.off 331258
   %t167667 = load ptr, ptr %t167652, !dbg !6928
   call void @plum_rc_inc(ptr %t167667), !dbg !6928
   %t167668 = call ptr @plum_str_concat_reuse(ptr @.str167665, ptr %t167667), !dbg !6928
@@ -433834,7 +433834,7 @@ L167661:
   call void @plum_rel_str(ptr %t167664_pre), !dbg !6928
   store ptr null, ptr %t167664, !dbg !6928
   store ptr %t167716, ptr %t167664, !dbg !6928
-  ; plum.off 331861
+  ; plum.off 331859
   %t167718 = load ptr, ptr %s0, !dbg !6929
   %t167719 = getelementptr i8, ptr %t167718, i64 24, !dbg !6929
   %t167720 = load ptr, ptr %t167719, !dbg !6929
@@ -433902,7 +433902,7 @@ L167770:
   call void @plum.h.rel.SArray.1.Etypecheck$2eITy.0.(ptr %t167717_pre), !dbg !6929
   store ptr null, ptr %t167717, !dbg !6929
   store ptr %t167749, ptr %t167717, !dbg !6929
-  ; plum.off 332067
+  ; plum.off 332065
   %t167772 = load ptr, ptr %s0, !dbg !6930
   store ptr null, ptr %s0, !dbg !6930
   %t167773 = load ptr, ptr %s1, !dbg !6930
@@ -434402,7 +434402,7 @@ L167943:
   store ptr %t167945, ptr %t167927, !dbg !6934
   br label %L167930, !dbg !6934
 L167929:
-  ; plum.off 338237
+  ; plum.off 338235
   %t167981 = load ptr, ptr %s3, !dbg !6935
   call void @plum_rc_inc(ptr %t167981), !dbg !6935
   %t167982 = load ptr, ptr %s5, !dbg !6935
@@ -434419,7 +434419,7 @@ L167929:
   call void @plum.h.rel.Stypecheck$2eTFieldPattern.0.(ptr %t167988), !dbg !6935
   %t167991 = call i64 @plum.f.codegen.cg_field_index.0.(ptr %t167981, ptr %t167990, i64 0), !dbg !6935
   store i64 %t167991, ptr %t167980, !dbg !6935
-  ; plum.off 338301
+  ; plum.off 338299
   %t167993 = load ptr, ptr %s0, !dbg !6936
   call void @plum_rc_inc(ptr %t167993), !dbg !6936
   %t167994 = load ptr, ptr %s4, !dbg !6936
@@ -434435,14 +434435,14 @@ L167929:
   call void @plum.h.rel.Etypecheck$2eITy.0.(ptr %t167992_pre), !dbg !6936
   store ptr null, ptr %t167992, !dbg !6936
   store ptr %t168001, ptr %t167992, !dbg !6936
-  ; plum.off 338351
+  ; plum.off 338349
   %t168003 = load i64, ptr %s2, !dbg !6937
   %t168004 = call ptr @plum.f.codegen.cg_reg.0.(i64 %t168003), !dbg !6937
   %t168002_pre = load ptr, ptr %t168002, !dbg !6937
   call void @plum_rel_str(ptr %t168002_pre), !dbg !6937
   store ptr null, ptr %t168002, !dbg !6937
   store ptr %t168004, ptr %t168002, !dbg !6937
-  ; plum.off 338379
+  ; plum.off 338377
   %t168006 = load i64, ptr %s2, !dbg !6938
   %t168007 = call { i64, i1 } @llvm.sadd.with.overflow.i64(i64 %t168006, i64 1), !dbg !6938
   %t168008 = extractvalue { i64, i1 } %t168007, 0, !dbg !6938
@@ -434458,7 +434458,7 @@ L168011:
   call void @plum_rel_str(ptr %t168005_pre), !dbg !6938
   store ptr null, ptr %t168005, !dbg !6938
   store ptr %t168013, ptr %t168005, !dbg !6938
-  ; plum.off 338411
+  ; plum.off 338409
   %t168017 = load ptr, ptr %t168002, !dbg !6939
   call void @plum_rc_inc(ptr %t168017), !dbg !6939
   %t168018 = call ptr @plum_str_concat_reuse(ptr @.str168015, ptr %t168017), !dbg !6939
@@ -434502,7 +434502,7 @@ L168011:
   call void @plum_rel_str(ptr %t168014_pre), !dbg !6939
   store ptr null, ptr %t168014, !dbg !6939
   store ptr %t168053, ptr %t168014, !dbg !6939
-  ; plum.off 338636
+  ; plum.off 338634
   %t168055 = load ptr, ptr %s0, !dbg !6940
   call void @plum_rc_inc(ptr %t168055), !dbg !6940
   %t168056 = load ptr, ptr %s1, !dbg !6940
@@ -434538,7 +434538,7 @@ L168062:
   call void @plum.h.rel.Scodegen$2ePatEmit.0.(ptr %t168054_pre), !dbg !6940
   store ptr null, ptr %t168054, !dbg !6940
   store ptr %t168075, ptr %t168054, !dbg !6940
-  ; plum.off 338707
+  ; plum.off 338705
   %t168077 = load ptr, ptr %t168054, !dbg !6941
   %t168078 = getelementptr i8, ptr %t168077, i64 64, !dbg !6941
   %t168079 = load i64, ptr %t168078, !dbg !6941
@@ -434547,7 +434547,7 @@ L168062:
   call void @plum_rel_str(ptr %t168076_pre), !dbg !6941
   store ptr null, ptr %t168076, !dbg !6941
   store ptr %t168080, ptr %t168076, !dbg !6941
-  ; plum.off 338745
+  ; plum.off 338743
   %t168084 = load ptr, ptr %t168076, !dbg !6942
   call void @plum_rc_inc(ptr %t168084), !dbg !6942
   %t168085 = call ptr @plum_str_concat_reuse(ptr @.str168082, ptr %t168084), !dbg !6942
@@ -434889,7 +434889,7 @@ L168200:
   %match_owner168186_reset168200 = load ptr, ptr %match_owner168186, !dbg !6946
   call void @plum.h.rel.Etypecheck$2eITy.0.(ptr %match_owner168186_reset168200), !dbg !6946
   store ptr null, ptr %match_owner168186, !dbg !6946
-  ; plum.off 337433
+  ; plum.off 337431
   %t168203 = call i1 @plum.f.codegen.cg_fail.0.(ptr @.str168201), !dbg !6947
   store ptr @.const168204, ptr %t168186, !dbg !6947
   br label %L168187, !dbg !6947
@@ -435022,7 +435022,7 @@ entry:
   store ptr null, ptr %t168273, !dbg !6951
   %t168284 = alloca ptr, !dbg !6951
   store ptr null, ptr %t168284, !dbg !6951
-  ; plum.off 327314
+  ; plum.off 327312
   %t168245 = load ptr, ptr %s0, !dbg !6952
   call void @plum_rc_inc(ptr %t168245), !dbg !6952
   %t168246 = load ptr, ptr %s1, !dbg !6952
@@ -435044,7 +435044,7 @@ entry:
   call void @plum.h.rel.Scodegen$2ePatEmit.0.(ptr %t168244_pre), !dbg !6952
   store ptr null, ptr %t168244, !dbg !6952
   store ptr %t168256, ptr %t168244, !dbg !6952
-  ; plum.off 327378
+  ; plum.off 327376
   %t168258 = load ptr, ptr %t168244, !dbg !6953
   %t168259 = getelementptr i8, ptr %t168258, i64 64, !dbg !6953
   %t168260 = load i64, ptr %t168259, !dbg !6953
@@ -435053,7 +435053,7 @@ entry:
   call void @plum_rel_str(ptr %t168257_pre), !dbg !6953
   store ptr null, ptr %t168257, !dbg !6953
   store ptr %t168261, ptr %t168257, !dbg !6953
-  ; plum.off 327411
+  ; plum.off 327409
   %t168263 = load ptr, ptr %t168244, !dbg !6954
   %t168264 = getelementptr i8, ptr %t168263, i64 64, !dbg !6954
   %t168265 = load i64, ptr %t168264, !dbg !6954
@@ -435071,7 +435071,7 @@ L168270:
   call void @plum_rel_str(ptr %t168262_pre), !dbg !6954
   store ptr null, ptr %t168262, !dbg !6954
   store ptr %t168272, ptr %t168262, !dbg !6954
-  ; plum.off 327451
+  ; plum.off 327449
   %t168274 = load ptr, ptr %t168244, !dbg !6955
   %t168275 = getelementptr i8, ptr %t168274, i64 64, !dbg !6955
   %t168276 = load i64, ptr %t168275, !dbg !6955
@@ -435089,7 +435089,7 @@ L168281:
   call void @plum_rel_str(ptr %t168273_pre), !dbg !6955
   store ptr null, ptr %t168273, !dbg !6955
   store ptr %t168283, ptr %t168273, !dbg !6955
-  ; plum.off 327489
+  ; plum.off 327487
   %t168287 = load ptr, ptr %t168244, !dbg !6956
   %t168288 = getelementptr i8, ptr %t168287, i64 48, !dbg !6956
   %t168289 = load ptr, ptr %t168288, !dbg !6956
@@ -436040,14 +436040,14 @@ entry:
   store ptr null, ptr %t168743, !dbg !6976
   %t168752 = alloca ptr, !dbg !6976
   store ptr null, ptr %t168752, !dbg !6976
-  ; plum.off 276421
+  ; plum.off 276419
   %t168714 = load i64, ptr %s3, !dbg !6977
   %t168715 = call ptr @plum.f.codegen.cg_reg.0.(i64 %t168714), !dbg !6977
   %t168713_pre = load ptr, ptr %t168713, !dbg !6977
   call void @plum_rel_str(ptr %t168713_pre), !dbg !6977
   store ptr null, ptr %t168713, !dbg !6977
   store ptr %t168715, ptr %t168713, !dbg !6977
-  ; plum.off 276446
+  ; plum.off 276444
   %t168717 = load i64, ptr %s3, !dbg !6978
   %t168718 = call { i64, i1 } @llvm.sadd.with.overflow.i64(i64 %t168717, i64 1), !dbg !6978
   %t168719 = extractvalue { i64, i1 } %t168718, 0, !dbg !6978
@@ -436063,7 +436063,7 @@ L168722:
   call void @plum_rel_str(ptr %t168716_pre), !dbg !6978
   store ptr null, ptr %t168716, !dbg !6978
   store ptr %t168724, ptr %t168716, !dbg !6978
-  ; plum.off 276477
+  ; plum.off 276475
   %t168726 = load i64, ptr %s3, !dbg !6979
   %t168727 = call { i64, i1 } @llvm.sadd.with.overflow.i64(i64 %t168726, i64 2), !dbg !6979
   %t168728 = extractvalue { i64, i1 } %t168727, 0, !dbg !6979
@@ -436079,7 +436079,7 @@ L168731:
   call void @plum_rel_str(ptr %t168725_pre), !dbg !6979
   store ptr null, ptr %t168725, !dbg !6979
   store ptr %t168733, ptr %t168725, !dbg !6979
-  ; plum.off 276507
+  ; plum.off 276505
   %t168735 = load i64, ptr %s3, !dbg !6980
   %t168736 = call { i64, i1 } @llvm.sadd.with.overflow.i64(i64 %t168735, i64 3), !dbg !6980
   %t168737 = extractvalue { i64, i1 } %t168736, 0, !dbg !6980
@@ -436095,7 +436095,7 @@ L168740:
   call void @plum_rel_str(ptr %t168734_pre), !dbg !6980
   store ptr null, ptr %t168734, !dbg !6980
   store ptr %t168742, ptr %t168734, !dbg !6980
-  ; plum.off 276540
+  ; plum.off 276538
   %t168744 = load i64, ptr %s3, !dbg !6981
   %t168745 = call { i64, i1 } @llvm.sadd.with.overflow.i64(i64 %t168744, i64 4), !dbg !6981
   %t168746 = extractvalue { i64, i1 } %t168745, 0, !dbg !6981
@@ -436111,7 +436111,7 @@ L168749:
   call void @plum_rel_str(ptr %t168743_pre), !dbg !6981
   store ptr null, ptr %t168743, !dbg !6981
   store ptr %t168751, ptr %t168743, !dbg !6981
-  ; plum.off 276573
+  ; plum.off 276571
   %t168753 = load i64, ptr %s3, !dbg !6982
   %t168754 = call { i64, i1 } @llvm.sadd.with.overflow.i64(i64 %t168753, i64 5), !dbg !6982
   %t168755 = extractvalue { i64, i1 } %t168754, 0, !dbg !6982
@@ -436367,14 +436367,14 @@ L168906:
   store ptr %t168911, ptr %t168905, !dbg !6984
   br label %L168908, !dbg !6984
 L168907:
-  ; plum.off 294950
+  ; plum.off 294948
   %t168915 = load i64, ptr %s3, !dbg !6985
   %t168916 = call ptr @plum.f.codegen.cg_reg.0.(i64 %t168915), !dbg !6985
   %t168914_pre = load ptr, ptr %t168914, !dbg !6985
   call void @plum_rel_str(ptr %t168914_pre), !dbg !6985
   store ptr null, ptr %t168914, !dbg !6985
   store ptr %t168916, ptr %t168914, !dbg !6985
-  ; plum.off 294978
+  ; plum.off 294976
   %t168920 = load ptr, ptr %t168914, !dbg !6986
   call void @plum_rc_inc(ptr %t168920), !dbg !6986
   %t168921 = call ptr @plum_str_concat_reuse(ptr @.str168918, ptr %t168920), !dbg !6986
@@ -437473,7 +437473,7 @@ L169350:
   store ptr %t169356, ptr %t169349, !dbg !7029
   br label %L169352, !dbg !7029
 L169351:
-  ; plum.off 376867
+  ; plum.off 376865
   %t169361 = load ptr, ptr %s0, !dbg !7030
   %t169362 = load i64, ptr %s1, !dbg !7030
   %t169363 = call i64 @plum_array_check_index(ptr %t169361, i64 %t169362), !dbg !7030
@@ -437488,7 +437488,7 @@ L169351:
   call void @plum_rel_str(ptr %t169360_pre), !dbg !7030
   store ptr null, ptr %t169360, !dbg !7030
   store ptr %t169369, ptr %t169360, !dbg !7030
-  ; plum.off 376920
+  ; plum.off 376918
   %t169371 = load i64, ptr %s1, !dbg !7031
   %t169372 = call i64 @plum.f.codegen.cg_payload_offset.0.(i64 %t169371), !dbg !7031
   %t169373 = call ptr @plum_int_to_string(i64 %t169372), !dbg !7031
@@ -437496,14 +437496,14 @@ L169351:
   call void @plum_rel_str(ptr %t169370_pre), !dbg !7031
   store ptr null, ptr %t169370, !dbg !7031
   store ptr %t169373, ptr %t169370, !dbg !7031
-  ; plum.off 376972
+  ; plum.off 376970
   %t169375 = load i64, ptr %s2, !dbg !7032
   %t169376 = call ptr @plum.f.codegen.cg_reg.0.(i64 %t169375), !dbg !7032
   %t169374_pre = load ptr, ptr %t169374, !dbg !7032
   call void @plum_rel_str(ptr %t169374_pre), !dbg !7032
   store ptr null, ptr %t169374, !dbg !7032
   store ptr %t169376, ptr %t169374, !dbg !7032
-  ; plum.off 377000
+  ; plum.off 376998
   %t169378 = load i64, ptr %s2, !dbg !7033
   %t169379 = call { i64, i1 } @llvm.sadd.with.overflow.i64(i64 %t169378, i64 1), !dbg !7033
   %t169380 = extractvalue { i64, i1 } %t169379, 0, !dbg !7033
@@ -437519,7 +437519,7 @@ L169383:
   call void @plum_rel_str(ptr %t169377_pre), !dbg !7033
   store ptr null, ptr %t169377, !dbg !7033
   store ptr %t169385, ptr %t169377, !dbg !7033
-  ; plum.off 377032
+  ; plum.off 377030
   %t169387 = load i64, ptr %s2, !dbg !7034
   %t169388 = call { i64, i1 } @llvm.sadd.with.overflow.i64(i64 %t169387, i64 2), !dbg !7034
   %t169389 = extractvalue { i64, i1 } %t169388, 0, !dbg !7034
@@ -437535,7 +437535,7 @@ L169392:
   call void @plum_rel_str(ptr %t169386_pre), !dbg !7034
   store ptr null, ptr %t169386, !dbg !7034
   store ptr %t169394, ptr %t169386, !dbg !7034
-  ; plum.off 377065
+  ; plum.off 377063
   %t169396 = load i64, ptr %s2, !dbg !7035
   %t169397 = call { i64, i1 } @llvm.sadd.with.overflow.i64(i64 %t169396, i64 3), !dbg !7035
   %t169398 = extractvalue { i64, i1 } %t169397, 0, !dbg !7035
@@ -437551,7 +437551,7 @@ L169401:
   call void @plum_rel_str(ptr %t169395_pre), !dbg !7035
   store ptr null, ptr %t169395, !dbg !7035
   store ptr %t169403, ptr %t169395, !dbg !7035
-  ; plum.off 377098
+  ; plum.off 377096
   %t169407 = load ptr, ptr %t169374, !dbg !7036
   call void @plum_rc_inc(ptr %t169407), !dbg !7036
   %t169408 = call ptr @plum_str_concat_reuse(ptr @.str169405, ptr %t169407), !dbg !7036
@@ -437614,7 +437614,7 @@ L169401:
   call void @plum_rel_str(ptr %t169404_pre), !dbg !7036
   store ptr null, ptr %t169404, !dbg !7036
   store ptr %t169465, ptr %t169404, !dbg !7036
-  ; plum.off 377496
+  ; plum.off 377494
   %t169467 = load ptr, ptr %s0, !dbg !7037
   %t169468 = load i64, ptr %s1, !dbg !7037
   %t169469 = call i64 @plum_array_check_index(ptr %t169467, i64 %t169468), !dbg !7037
@@ -437642,7 +437642,7 @@ L169481:
   call void @plum.h.rel.Scodegen$2eEqEmit.0.(ptr %t169466_pre), !dbg !7037
   store ptr null, ptr %t169466, !dbg !7037
   store ptr %t169483, ptr %t169466, !dbg !7037
-  ; plum.off 377555
+  ; plum.off 377553
   %t169485 = load ptr, ptr %t169466, !dbg !7038
   %t169486 = getelementptr i8, ptr %t169485, i64 24, !dbg !7038
   %t169487 = load i64, ptr %t169486, !dbg !7038
@@ -437651,7 +437651,7 @@ L169481:
   call void @plum_rel_str(ptr %t169484_pre), !dbg !7038
   store ptr null, ptr %t169484, !dbg !7038
   store ptr %t169488, ptr %t169484, !dbg !7038
-  ; plum.off 377591
+  ; plum.off 377589
   %t169492 = load ptr, ptr %t169484, !dbg !7039
   call void @plum_rc_inc(ptr %t169492), !dbg !7039
   %t169493 = call ptr @plum_str_concat_reuse(ptr @.str169490, ptr %t169492), !dbg !7039
@@ -438273,7 +438273,7 @@ frontier_reset169774:
   store ptr null, ptr %match_owner169539, !dbg !7041
   br label %frontier_done169774, !dbg !7041
 frontier_done169774:
-  ; plum.off 358112
+  ; plum.off 358110
   %t169776 = load ptr, ptr %s0, !dbg !7042
   call void @plum_rc_inc(ptr %t169776), !dbg !7042
   %t169777 = load i64, ptr %s3, !dbg !7042
@@ -438282,7 +438282,7 @@ frontier_done169774:
   call void @plum_rel_str(ptr %t169775_pre), !dbg !7042
   store ptr null, ptr %t169775, !dbg !7042
   store ptr %t169778, ptr %t169775, !dbg !7042
-  ; plum.off 358155
+  ; plum.off 358153
   %t169780 = load i64, ptr %s3, !dbg !7043
   %t169781 = call { i64, i1 } @llvm.sadd.with.overflow.i64(i64 %t169780, i64 1), !dbg !7043
   %t169782 = extractvalue { i64, i1 } %t169781, 0, !dbg !7043
@@ -438298,7 +438298,7 @@ L169785:
   call void @plum_rel_str(ptr %t169779_pre), !dbg !7043
   store ptr null, ptr %t169779, !dbg !7043
   store ptr %t169787, ptr %t169779, !dbg !7043
-  ; plum.off 358191
+  ; plum.off 358189
   %t169789 = load i64, ptr %s3, !dbg !7044
   %t169790 = call { i64, i1 } @llvm.sadd.with.overflow.i64(i64 %t169789, i64 2), !dbg !7044
   %t169791 = extractvalue { i64, i1 } %t169790, 0, !dbg !7044
@@ -438869,11 +438869,11 @@ entry:
   store ptr %p2, ptr %s2, !dbg !7048
   %t170152 = alloca i64, !dbg !7048
   %t170155 = alloca i64, !dbg !7048
-  ; plum.off 355928
+  ; plum.off 355926
   %t170153 = load ptr, ptr %s2, !dbg !7049
   %t170154 = call i64 @plum_str_len(ptr %t170153), !dbg !7049
   store i64 %t170154, ptr %t170152, !dbg !7049
-  ; plum.off 355953
+  ; plum.off 355951
   %t170156 = load i64, ptr %t170152, !dbg !7050
   %t170157 = call { i64, i1 } @llvm.sadd.with.overflow.i64(i64 %t170156, i64 1), !dbg !7050
   %t170158 = extractvalue { i64, i1 } %t170157, 0, !dbg !7050
@@ -439041,7 +439041,7 @@ L170219:
   store ptr %t170226, ptr %t170218, !dbg !7054
   br label %L170221, !dbg !7054
 L170220:
-  ; plum.off 364838
+  ; plum.off 364836
   %t170232 = load i64, ptr %s3, !dbg !7055
   %t170233 = icmp eq i64 %t170232, 0, !dbg !7055
   br i1 %t170233, label %L170235, label %L170236, !dbg !7055
@@ -439057,7 +439057,7 @@ L170237:
   call void @plum_rel_str(ptr %t170231_pre), !dbg !7055
   store ptr null, ptr %t170231, !dbg !7055
   store ptr %t170242, ptr %t170231, !dbg !7055
-  ; plum.off 364888
+  ; plum.off 364886
   %t170244 = load ptr, ptr %s0, !dbg !7056
   call void @plum_rc_inc(ptr %t170244), !dbg !7056
   %t170245 = load ptr, ptr %s4, !dbg !7056
@@ -439082,7 +439082,7 @@ L170237:
   call void @plum.h.rel.Scodegen$2eStrEmit.0.(ptr %t170243_pre), !dbg !7056
   store ptr null, ptr %t170243, !dbg !7056
   store ptr %t170259, ptr %t170243, !dbg !7056
-  ; plum.off 364971
+  ; plum.off 364969
   %t170261 = load ptr, ptr %t170243, !dbg !7057
   %t170262 = getelementptr i8, ptr %t170261, i64 32, !dbg !7057
   %t170263 = load i64, ptr %t170262, !dbg !7057
@@ -439091,7 +439091,7 @@ L170237:
   call void @plum_rel_str(ptr %t170260_pre), !dbg !7057
   store ptr null, ptr %t170260, !dbg !7057
   store ptr %t170264, ptr %t170260, !dbg !7057
-  ; plum.off 365003
+  ; plum.off 365001
   %t170266 = load ptr, ptr %t170243, !dbg !7058
   %t170267 = getelementptr i8, ptr %t170266, i64 32, !dbg !7058
   %t170268 = load i64, ptr %t170267, !dbg !7058
@@ -439109,7 +439109,7 @@ L170273:
   call void @plum_rel_str(ptr %t170265_pre), !dbg !7058
   store ptr null, ptr %t170265, !dbg !7058
   store ptr %t170275, ptr %t170265, !dbg !7058
-  ; plum.off 365039
+  ; plum.off 365037
   %t170279 = load ptr, ptr %t170260, !dbg !7059
   call void @plum_rc_inc(ptr %t170279), !dbg !7059
   %t170280 = call ptr @plum_str_concat_reuse(ptr @.str170277, ptr %t170279), !dbg !7059
@@ -439153,7 +439153,7 @@ L170273:
   call void @plum_rel_str(ptr %t170276_pre), !dbg !7059
   store ptr null, ptr %t170276, !dbg !7059
   store ptr %t170316, ptr %t170276, !dbg !7059
-  ; plum.off 365261
+  ; plum.off 365259
   %t170318 = load ptr, ptr %s0, !dbg !7060
   call void @plum_rc_inc(ptr %t170318), !dbg !7060
   %t170319 = load ptr, ptr %s2, !dbg !7060
@@ -439183,7 +439183,7 @@ L170334:
   call void @plum.h.rel.Scodegen$2eStrEmit.0.(ptr %t170317_pre), !dbg !7060
   store ptr null, ptr %t170317, !dbg !7060
   store ptr %t170336, ptr %t170317, !dbg !7060
-  ; plum.off 365319
+  ; plum.off 365317
   %t170338 = load ptr, ptr %t170243, !dbg !7061
   %t170339 = getelementptr i8, ptr %t170338, i64 24, !dbg !7061
   %t170340 = load ptr, ptr %t170339, !dbg !7061
@@ -439369,7 +439369,7 @@ entry:
   store ptr null, ptr %t170390, !dbg !7063
   %t170394 = alloca ptr, !dbg !7063
   store ptr null, ptr %t170394, !dbg !7063
-  ; plum.off 361785
+  ; plum.off 361783
   %t170391 = load ptr, ptr %s0, !dbg !7064
   call void @plum_rc_inc(ptr %t170391), !dbg !7064
   %t170392 = load i64, ptr %s3, !dbg !7064
@@ -439378,7 +439378,7 @@ entry:
   call void @plum_rel_str(ptr %t170390_pre), !dbg !7064
   store ptr null, ptr %t170390, !dbg !7064
   store ptr %t170393, ptr %t170390, !dbg !7064
-  ; plum.off 361822
+  ; plum.off 361820
   %t170395 = load i64, ptr %s3, !dbg !7065
   %t170396 = call { i64, i1 } @llvm.sadd.with.overflow.i64(i64 %t170395, i64 1), !dbg !7065
   %t170397 = extractvalue { i64, i1 } %t170396, 0, !dbg !7065
@@ -439577,7 +439577,7 @@ L170462:
   store ptr %t170464, ptr %t170449, !dbg !7067
   br label %L170452, !dbg !7067
 L170451:
-  ; plum.off 369432
+  ; plum.off 369430
   %t170496 = load ptr, ptr %s0, !dbg !7068
   call void @plum_rc_inc(ptr %t170496), !dbg !7068
   %t170497 = load ptr, ptr %s2, !dbg !7068
@@ -439595,7 +439595,7 @@ L170451:
   call void @plum.h.rel.SArray.1.Etypecheck$2eITy.0.(ptr %t170495_pre), !dbg !7068
   store ptr null, ptr %t170495, !dbg !7068
   store ptr %t170505, ptr %t170495, !dbg !7068
-  ; plum.off 369491
+  ; plum.off 369489
   %t170509 = load ptr, ptr %s2, !dbg !7069
   %t170510 = load i64, ptr %s4, !dbg !7069
   %t170511 = call i64 @plum_array_check_index(ptr %t170509, i64 %t170510), !dbg !7069
@@ -439724,7 +439724,7 @@ Ltail968:
   store ptr %t170574, ptr %t170525, !dbg !7069
   br label %L170528, !dbg !7069
 L170527:
-  ; plum.off 369861
+  ; plum.off 369859
   %t170576 = load ptr, ptr %s1, !dbg !7070
   call void @plum_rc_inc(ptr %t170576), !dbg !7070
   %t170577 = load ptr, ptr %s2, !dbg !7070
@@ -439747,7 +439747,7 @@ L170527:
   call void @plum.h.rel.Scodegen$2eStrEmit.0.(ptr %t170575_pre), !dbg !7070
   store ptr null, ptr %t170575, !dbg !7070
   store ptr %t170590, ptr %t170575, !dbg !7070
-  ; plum.off 369932
+  ; plum.off 369930
   %t170592 = load ptr, ptr %s1, !dbg !7071
   call void @plum_rc_inc(ptr %t170592), !dbg !7071
   %t170593 = load ptr, ptr %t170495, !dbg !7071
@@ -439772,7 +439772,7 @@ L170527:
   call void @plum.h.rel.Scodegen$2eStrEmit.0.(ptr %t170591_pre), !dbg !7071
   store ptr null, ptr %t170591, !dbg !7071
   store ptr %t170606, ptr %t170591, !dbg !7071
-  ; plum.off 370035
+  ; plum.off 370033
   %t170608 = load ptr, ptr %s1, !dbg !7072
   call void @plum_rc_inc(ptr %t170608), !dbg !7072
   %t170609 = load ptr, ptr %t170591, !dbg !7072
@@ -462396,7 +462396,7 @@ entry:
   %t179736 = getelementptr i8, ptr %t179730, i64 32, !dbg !7408
   store ptr %t179734, ptr %t179736, !dbg !7408
   %t179737 = call i64 @plum_array_len(ptr %t179680), !dbg !7408
-  %t179737_rc = load atomic i64, ptr %t179680 monotonic, align 8, !dbg !7408
+  %t179737_rc = load atomic i64, ptr %t179680 acquire, align 8, !dbg !7408
   %t179737_move = icmp eq i64 %t179737_rc, 1, !dbg !7408
   store ptr @.const179681, ptr %t179738, !dbg !7408
   store i64 0, ptr %t179739, !dbg !7408
@@ -462447,7 +462447,7 @@ L179742:
   %t179819 = getelementptr i8, ptr %t179813, i64 32, !dbg !7409
   store ptr %t179817, ptr %t179819, !dbg !7409
   %t179820 = call i64 @plum_array_len(ptr %t179757), !dbg !7409
-  %t179820_rc = load atomic i64, ptr %t179757 monotonic, align 8, !dbg !7409
+  %t179820_rc = load atomic i64, ptr %t179757 acquire, align 8, !dbg !7409
   %t179820_move = icmp eq i64 %t179820_rc, 1, !dbg !7409
   store ptr %t179758, ptr %t179821, !dbg !7409
   store i64 0, ptr %t179822, !dbg !7409
@@ -467147,14 +467147,14 @@ L181797:
   store ptr %t181799, ptr %t181781, !dbg !7482
   br label %L181784, !dbg !7482
 L181783:
-  ; plum.off 334372
+  ; plum.off 334370
   %t181835 = load i64, ptr %s2, !dbg !7483
   %t181836 = call ptr @plum.f.codegen.cg_reg.0.(i64 %t181835), !dbg !7483
   %t181834_pre = load ptr, ptr %t181834, !dbg !7483
   call void @plum_rel_str(ptr %t181834_pre), !dbg !7483
   store ptr null, ptr %t181834, !dbg !7483
   store ptr %t181836, ptr %t181834, !dbg !7483
-  ; plum.off 334400
+  ; plum.off 334398
   %t181838 = load i64, ptr %s2, !dbg !7484
   %t181839 = call { i64, i1 } @llvm.sadd.with.overflow.i64(i64 %t181838, i64 1), !dbg !7484
   %t181840 = extractvalue { i64, i1 } %t181839, 0, !dbg !7484
@@ -467170,7 +467170,7 @@ L181843:
   call void @plum_rel_str(ptr %t181837_pre), !dbg !7484
   store ptr null, ptr %t181837, !dbg !7484
   store ptr %t181845, ptr %t181837, !dbg !7484
-  ; plum.off 334432
+  ; plum.off 334430
   %t181847 = load ptr, ptr %s0, !dbg !7485
   call void @plum_rc_inc(ptr %t181847), !dbg !7485
   %t181848 = load ptr, ptr %s3, !dbg !7485
@@ -467186,7 +467186,7 @@ L181843:
   call void @plum.h.rel.Etypecheck$2eITy.0.(ptr %t181846_pre), !dbg !7485
   store ptr null, ptr %t181846, !dbg !7485
   store ptr %t181855, ptr %t181846, !dbg !7485
-  ; plum.off 334478
+  ; plum.off 334476
   %t181857 = load ptr, ptr %t181846, !dbg !7486
   call void @plum_rc_inc(ptr %t181857), !dbg !7486
   %t181858 = call ptr @plum.f.codegen.cg_of_ity.0.(ptr %t181857), !dbg !7486
@@ -467195,7 +467195,7 @@ L181843:
   call void @plum_rel_str(ptr %t181856_pre), !dbg !7486
   store ptr null, ptr %t181856, !dbg !7486
   store ptr %t181859, ptr %t181856, !dbg !7486
-  ; plum.off 334526
+  ; plum.off 334524
   %t181863 = load ptr, ptr %t181834, !dbg !7487
   call void @plum_rc_inc(ptr %t181863), !dbg !7487
   %t181864 = call ptr @plum_str_concat_reuse(ptr @.str181861, ptr %t181863), !dbg !7487
@@ -467235,7 +467235,7 @@ L181843:
   call void @plum_rel_str(ptr %t181860_pre), !dbg !7487
   store ptr null, ptr %t181860, !dbg !7487
   store ptr %t181897, ptr %t181860, !dbg !7487
-  ; plum.off 334730
+  ; plum.off 334728
   %t181899 = load ptr, ptr %t181856, !dbg !7488
   store ptr null, ptr %t181856, !dbg !7488
   %t181902 = call i1 @plum_str_eq(ptr %t181899, ptr @.str181900), !dbg !7488
@@ -467258,7 +467258,7 @@ L181904:
 L181905:
   %t181914 = load i1, ptr %t181903, !dbg !7488
   store i1 %t181914, ptr %t181898, !dbg !7488
-  ; plum.off 334797
+  ; plum.off 334795
   %t181916 = load i1, ptr %t181898, !dbg !7489
   br i1 %t181916, label %L181918, label %L181919, !dbg !7489
 L181918:
@@ -467286,7 +467286,7 @@ L181920:
   call void @plum_rel_str(ptr %t181915_pre), !dbg !7489
   store ptr null, ptr %t181915, !dbg !7489
   store ptr %t181930, ptr %t181915, !dbg !7489
-  ; plum.off 334861
+  ; plum.off 334859
   %t181932 = load i1, ptr %t181898, !dbg !7490
   br i1 %t181932, label %L181934, label %L181935, !dbg !7490
 L181934:
@@ -467319,7 +467319,7 @@ L181936:
   call void @plum_rel_str(ptr %t181931_pre), !dbg !7490
   store ptr null, ptr %t181931, !dbg !7490
   store ptr %t181956, ptr %t181931, !dbg !7490
-  ; plum.off 334997
+  ; plum.off 334995
   %t181958 = load ptr, ptr %s0, !dbg !7491
   call void @plum_rc_inc(ptr %t181958), !dbg !7491
   %t181959 = load ptr, ptr %s1, !dbg !7491
@@ -467351,7 +467351,7 @@ L181965:
   call void @plum.h.rel.Scodegen$2ePatEmit.0.(ptr %t181957_pre), !dbg !7491
   store ptr null, ptr %t181957, !dbg !7491
   store ptr %t181976, ptr %t181957, !dbg !7491
-  ; plum.off 335062
+  ; plum.off 335060
   %t181978 = load ptr, ptr %t181957, !dbg !7492
   %t181979 = getelementptr i8, ptr %t181978, i64 64, !dbg !7492
   %t181980 = load i64, ptr %t181979, !dbg !7492
@@ -467360,7 +467360,7 @@ L181965:
   call void @plum_rel_str(ptr %t181977_pre), !dbg !7492
   store ptr null, ptr %t181977, !dbg !7492
   store ptr %t181981, ptr %t181977, !dbg !7492
-  ; plum.off 335100
+  ; plum.off 335098
   %t181985 = load ptr, ptr %t181977, !dbg !7493
   call void @plum_rc_inc(ptr %t181985), !dbg !7493
   %t181986 = call ptr @plum_str_concat_reuse(ptr @.str181983, ptr %t181985), !dbg !7493
@@ -467761,7 +467761,7 @@ L182104:
   store ptr %t182106, ptr %t182063, !dbg !7495
   br label %L182066, !dbg !7495
 L182065:
-  ; plum.off 328213
+  ; plum.off 328211
   %t182130 = load ptr, ptr %s0, !dbg !7496
   call void @plum_rc_inc(ptr %t182130), !dbg !7496
   %t182131 = load ptr, ptr %s1, !dbg !7496
@@ -467784,7 +467784,7 @@ L182065:
   call void @plum.h.rel.Scodegen$2ePatEmit.0.(ptr %t182129_pre), !dbg !7496
   store ptr null, ptr %t182129, !dbg !7496
   store ptr %t182142, ptr %t182129, !dbg !7496
-  ; plum.off 328281
+  ; plum.off 328279
   %t182144 = load ptr, ptr %t182129, !dbg !7497
   %t182145 = getelementptr i8, ptr %t182144, i64 64, !dbg !7497
   %t182146 = load i64, ptr %t182145, !dbg !7497
@@ -467793,7 +467793,7 @@ L182065:
   call void @plum_rel_str(ptr %t182143_pre), !dbg !7497
   store ptr null, ptr %t182143, !dbg !7497
   store ptr %t182147, ptr %t182143, !dbg !7497
-  ; plum.off 328315
+  ; plum.off 328313
   %t182149 = load ptr, ptr %t182129, !dbg !7498
   %t182150 = getelementptr i8, ptr %t182149, i64 64, !dbg !7498
   %t182151 = load i64, ptr %t182150, !dbg !7498
@@ -467811,7 +467811,7 @@ L182156:
   call void @plum_rel_str(ptr %t182148_pre), !dbg !7498
   store ptr null, ptr %t182148, !dbg !7498
   store ptr %t182158, ptr %t182148, !dbg !7498
-  ; plum.off 328357
+  ; plum.off 328355
   %t182160 = load ptr, ptr %t182129, !dbg !7499
   %t182161 = getelementptr i8, ptr %t182160, i64 64, !dbg !7499
   %t182162 = load i64, ptr %t182161, !dbg !7499
@@ -467829,7 +467829,7 @@ L182167:
   call void @plum_rel_str(ptr %t182159_pre), !dbg !7499
   store ptr null, ptr %t182159, !dbg !7499
   store ptr %t182169, ptr %t182159, !dbg !7499
-  ; plum.off 328397
+  ; plum.off 328395
   %t182171 = load ptr, ptr %s7, !dbg !7500
   %t182172 = getelementptr i8, ptr %t182171, i64 56, !dbg !7500
   %t182173 = load ptr, ptr %t182172, !dbg !7500
@@ -467849,7 +467849,7 @@ L182167:
   call void @plum_rel_str(ptr %t182170_pre), !dbg !7500
   store ptr null, ptr %t182170, !dbg !7500
   store ptr %t182182, ptr %t182170, !dbg !7500
-  ; plum.off 328477
+  ; plum.off 328475
   %t182186 = load ptr, ptr %t182129, !dbg !7501
   %t182187 = getelementptr i8, ptr %t182186, i64 48, !dbg !7501
   %t182188 = load ptr, ptr %t182187, !dbg !7501
@@ -467898,7 +467898,7 @@ L182167:
   call void @plum_rel_str(ptr %t182183_pre), !dbg !7501
   store ptr null, ptr %t182183, !dbg !7501
   store ptr %t182222, ptr %t182183, !dbg !7501
-  ; plum.off 328640
+  ; plum.off 328638
   %t182224 = load ptr, ptr %s7, !dbg !7502
   %t182225 = getelementptr i8, ptr %t182224, i64 8, !dbg !7502
   %t182226 = load ptr, ptr %t182225, !dbg !7502
@@ -470798,7 +470798,7 @@ entry:
   store i64 %p2, ptr %s2, !dbg !7535
   %t183418 = alloca ptr, !dbg !7535
   store ptr null, ptr %t183418, !dbg !7535
-  ; plum.off 360864
+  ; plum.off 360862
   %t183419 = load i64, ptr %s2, !dbg !7536
   %t183420 = call ptr @plum.f.codegen.cg_reg.0.(i64 %t183419), !dbg !7536
   %t183418_pre = load ptr, ptr %t183418, !dbg !7536
@@ -470937,7 +470937,7 @@ L183474:
   store ptr %t183481, ptr %t183473, !dbg !7538
   br label %L183476, !dbg !7538
 L183475:
-  ; plum.off 370600
+  ; plum.off 370598
   %t183487 = load i64, ptr %s2, !dbg !7539
   %t183488 = icmp eq i64 %t183487, 0, !dbg !7539
   br i1 %t183488, label %L183490, label %L183491, !dbg !7539
@@ -470971,7 +470971,7 @@ L183492:
   call void @plum.h.rel.Scodegen$2eStrEmit.0.(ptr %t183486_pre), !dbg !7539
   store ptr null, ptr %t183486, !dbg !7539
   store ptr %t183510, ptr %t183486, !dbg !7539
-  ; plum.off 370726
+  ; plum.off 370724
   %t183512 = load ptr, ptr %t183486, !dbg !7540
   %t183513 = getelementptr i8, ptr %t183512, i64 32, !dbg !7540
   %t183514 = load i64, ptr %t183513, !dbg !7540
@@ -470980,7 +470980,7 @@ L183492:
   call void @plum_rel_str(ptr %t183511_pre), !dbg !7540
   store ptr null, ptr %t183511, !dbg !7540
   store ptr %t183515, ptr %t183511, !dbg !7540
-  ; plum.off 370758
+  ; plum.off 370756
   %t183517 = load ptr, ptr %t183486, !dbg !7541
   %t183518 = getelementptr i8, ptr %t183517, i64 32, !dbg !7541
   %t183519 = load i64, ptr %t183518, !dbg !7541
@@ -470998,7 +470998,7 @@ L183524:
   call void @plum_rel_str(ptr %t183516_pre), !dbg !7541
   store ptr null, ptr %t183516, !dbg !7541
   store ptr %t183526, ptr %t183516, !dbg !7541
-  ; plum.off 370794
+  ; plum.off 370792
   %t183530 = load ptr, ptr %t183511, !dbg !7542
   call void @plum_rc_inc(ptr %t183530), !dbg !7542
   %t183531 = call ptr @plum_str_concat_reuse(ptr @.str183528, ptr %t183530), !dbg !7542
@@ -471042,7 +471042,7 @@ L183524:
   call void @plum_rel_str(ptr %t183527_pre), !dbg !7542
   store ptr null, ptr %t183527, !dbg !7542
   store ptr %t183567, ptr %t183527, !dbg !7542
-  ; plum.off 371018
+  ; plum.off 371016
   %t183569 = load ptr, ptr %s0, !dbg !7543
   call void @plum_rc_inc(ptr %t183569), !dbg !7543
   %t183570 = load ptr, ptr %s1, !dbg !7543
@@ -471072,7 +471072,7 @@ L183585:
   call void @plum.h.rel.Scodegen$2eStrEmit.0.(ptr %t183568_pre), !dbg !7543
   store ptr null, ptr %t183568, !dbg !7543
   store ptr %t183587, ptr %t183568, !dbg !7543
-  ; plum.off 371076
+  ; plum.off 371074
   %t183589 = load ptr, ptr %t183486, !dbg !7544
   %t183590 = getelementptr i8, ptr %t183589, i64 24, !dbg !7544
   %t183591 = load ptr, ptr %t183590, !dbg !7544
@@ -485889,7 +485889,7 @@ L190190:
   store ptr %t190193, ptr %t190189, !dbg !7788
   br label %L190192, !dbg !7788
 L190191:
-  ; plum.off 329203
+  ; plum.off 329201
   %t190195 = load ptr, ptr %s0, !dbg !7789
   call void @plum_rc_inc(ptr %t190195), !dbg !7789
   %t190196 = load ptr, ptr %s1, !dbg !7789
@@ -485962,7 +485962,7 @@ L190247:
   %match_owner190206_reset190247 = load ptr, ptr %match_owner190206, !dbg !7789
   call void @plum.h.rel.E$3cprelude$3e$2eOption.1.Scodegen$2eCgSlot.0.(ptr %match_owner190206_reset190247), !dbg !7789
   store ptr null, ptr %match_owner190206, !dbg !7789
-  ; plum.off 329382
+  ; plum.off 329380
   %t190250 = call i1 @plum.f.codegen.cg_fail.0.(ptr @.str190248), !dbg !7790
   %t190251 = load ptr, ptr %s3, !dbg !7790
   store ptr null, ptr %s3, !dbg !7790
