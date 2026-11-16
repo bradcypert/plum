@@ -2816,7 +2816,7 @@ pub let test_array_map_owned_sources (): Unit = {
 
 pub let test_array_filter_owned_sources (): Unit = {
     for count in [0, 1, 2, 7, 16, 31] {
-        for divisor in [1, 2, 3, 5] {
+        for divisor in [1, 2, 3, 5, 16] {
             let calls = ref(0);
             let out = map_words(count).filter(|s| { calls.set(calls.get() + 1); s.len() % divisor == 0 }).filter(|s| s != "");
             let mut model: Array[String] = [];
