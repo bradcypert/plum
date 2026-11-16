@@ -37,5 +37,17 @@ let main (): Unit = {
         _ => s.concat("z"),
     };
     assert_eq(multiple("ab"), "ab!"); assert_eq(multiple("cd"), "cdz");
+    // General owned reads must respect the same binding and guard proofs.
+    let shadow_forward = |s: String| {
+        let s = "a".repeat(32).concat("b"); let out = String.reverse(s);
+        assert_eq(s, "a".repeat(32).concat("b")); out
+    };
+    assert_eq(shadow_forward("unused"), "b".concat("a".repeat(32)));
+    let guarded_forward = |s: String| match 0 {
+        0 if String.reverse(s) == "never" => "unreachable",
+        0 if String.reverse(s) == "ba" => s,
+        _ => String.reverse(s),
+    };
+    assert_eq(guarded_forward("ab"), "ab"); assert_eq(guarded_forward("cd"), "dc");
     println("Parameter moves preserve shadowed locals and failed guard continuations")
 }

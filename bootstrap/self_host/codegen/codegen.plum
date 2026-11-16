@@ -1234,7 +1234,11 @@ let cg_expr (p: CgProgram) (env: Array[CgSlot]) (n: Int) (e: typecheck.TExpr): E
             code: "", allocas: "", releases: "", globals: cg_str_constant(n, v),
             val: "@.str".concat(n.to_string()), ty: CgStr, n: n + 2,
         },
-        TIdent(name) => cg_ident(p, env, n, name, cg_ty(p, e)),
+        // A frame-owned parameter with at most one read on every path may
+        // transfer that owner at any owned use. The move emitter preserves
+        // scoped lifetimes; borrowing reads still go through cg_borrow.
+        TIdent(name) => if cg_is_movable(p, name) { cg_move_ident(p, env, n, name, cg_ty(p, e), false) }
+            else { cg_ident(p, env, n, name, cg_ty(p, e)) },
         TMove(name) => cg_move_ident(p, env, n, name, cg_ty(p, e), false),
         TMovePreserving(name) => cg_move_ident(p, env, n, name, cg_ty(p, e), true),
         // A global's slot owns its value for the whole program, so a
@@ -1519,8 +1523,8 @@ let cg_early_release_variants (p: CgProgram) (name: String) (tags: Array[String]
             && cg_early_release_variants(p, name, tags, args, seen, i + 1)
     }
 
-// A consuming read transfers the slot's reference. Captures are excluded
-// by lv_dead; observable handle lifetimes keep their original scope cleanup.
+// A consuming read transfers the slot's reference. Last-use and movable-
+// parameter proofs exclude captures; scoped values keep their scope cleanup.
 let cg_move_ident (p: CgProgram) (env: Array[CgSlot]) (n: Int) (name: String) (ty: CgTy) (preserving: Bool): Emit =
     match cg_lookup(env, name) {
         Some(slot) => if cg_rc_enabled(()) && cg_is_heap(slot.ty)

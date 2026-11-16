@@ -2862,3 +2862,22 @@ pub let test_array_fold_owned_arguments (): Unit = {
         assert_eq(size, total); assert_eq(published.get(), saved);
     };
 }
+
+pub let test_parameter_owned_forwarding (): Unit = {
+    let reverse = String.reverse;
+    let forward = |s: String| reverse(s);
+    let identity = |s: String| s;
+    let nest = |s: Option[String]| Some(s);
+    let array = |s: String| [s];
+    let twice = |s: String| String.reverse(s).concat(s);
+    let capture = |s: String| { || s };
+    for count in [0, 1, 2, 7, 32, 127] {
+        let source = "aé中🙂\x00é".repeat(count);
+        let model = Array.concat_all(Array.reverse(chars_of(source)));
+        assert_eq(forward("aé中🙂\x00é".repeat(count)), model);
+        assert_eq(forward(source), model); assert_eq(identity(source), source);
+        assert_eq(nest(Some(source)), Some(Some(source))); assert_eq(array(source), [source]);
+        assert_eq(twice(source), model.concat(source));
+        let saved = capture(source); assert_eq(saved(), source); assert_eq(saved(), source);
+    };
+}
