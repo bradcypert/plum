@@ -1,0 +1,9 @@
+// Both stages keep every element; the owned temporary between stages
+// should transfer its storage instead of allocating a fresh result.
+let values (): Array[Int] = { let mut xs: Array[Int] = []; for i in 0..4096 { xs = xs.push(i); }; xs }
+let again (xs: Array[Int]) (n: Int): Array[Int] =
+    if n <= 0 { xs } else { again(xs.filter(|x| x >= 0).filter(|x| x < 4096), n - 1) }
+let main (): Unit = {
+    let out = again(values(), 256); assert_eq(out.len(), 4096);
+    for i in 0..4096 { assert_eq(out[i], i); };
+}
