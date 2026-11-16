@@ -2830,3 +2830,21 @@ pub let test_array_filter_owned_sources (): Unit = {
         };
     };
 }
+
+pub let test_array_fold_owned_arguments (): Unit = {
+    for count in [0, 1, 2, 7, 16, 31] {
+        let out = Array.fold(map_words(count), [], |acc: Array[String], s: String| acc.push(s.concat("!")));
+        assert_eq(out.len(), count);
+        let mut total = 0;
+        for i in 0..count {
+            let original = i.to_string().repeat(8); total = total + original.len();
+            assert_eq(out[i], original.concat("!"));
+        };
+        let xs = map_words(count); let saved = xs;
+        assert_eq(Array.fold(xs, 0, |n, s| n + s.len()), total); assert_eq(xs, saved);
+        let out = Array.fold(xs, xs, |acc, s| acc); assert_eq(out, saved);
+        let published = ref(map_words(0));
+        let size = Array.fold(xs, { published.set(xs); 0 }, |n, s| n + s.len());
+        assert_eq(size, total); assert_eq(published.get(), saved);
+    };
+}

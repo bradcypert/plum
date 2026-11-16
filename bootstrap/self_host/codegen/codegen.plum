@@ -4388,7 +4388,7 @@ let cg_array_map_owned (p: CgProgram) (env: Array[CgSlot]) (a: BorrowEmit) (arr_
     let slot_ptr = cg_elem_ptr_reg(b);
     let body = cg_elem_ptr_lines(old, lp.idx_reg, b)
         .concat(if move_elem {
-            "  ${ev} = call ptr @plum_array_map_arg(ptr ${slot_ptr}, i1 ${same})\n"
+            "  ${ev} = call ptr @plum_array_owned_arg(ptr ${slot_ptr}, i1 ${same})\n"
         } else {
             "  ${ev} = load ${cg_llvm_ty(elem)}, ptr ${slot_ptr}\n".concat(cg_inc(elem, ev))
         })
@@ -4589,28 +4589,36 @@ let cg_array_filter (p: CgProgram) (env: Array[CgSlot]) (n: Int) (arr_e: typeche
 let cg_array_fold (p: CgProgram) (env: Array[CgSlot]) (n: Int) (arr_e: typecheck.TExpr) (init_e: typecheck.TExpr) (f_e: typecheck.TExpr): Emit = {
     let a = cg_expr(p, env, n, arr_e);
     let elem = cg_elem_ty(a.ty);
+    let arr_ity = cg_concrete(p, typecheck.texpr_ty(p.subst, arr_e));
+    let move_elem = cg_is_heap(elem) && cg_can_release_early(p, cg_array_elem_ity(p, arr_ity));
     let init = cg_expr(p, env, a.n, init_e);
     let f = cg_expr(p, env, init.n, f_e);
     let acc_ty = cg_llvm_ty(init.ty);
     let len = cg_reg(f.n);
+    let move = len.concat("_move");
     let acc = cg_reg(f.n + 1);
     let iv = cg_reg(f.n + 2);
     let lp = cg_array_loop(iv, len, f.n + 3);
     let b = lp.body_n;
     let ev = cg_reg(b + 3);
     let cur_acc = cg_reg(b + 4);
+    let slot_ptr = cg_elem_ptr_reg(b);
     let body = cg_elem_ptr_lines(a.val, lp.idx_reg, b)
-        .concat("  ").concat(ev).concat(" = load ").concat(cg_llvm_ty(elem)).concat(", ptr ").concat(cg_elem_ptr_reg(b)).concat("\n")
+        .concat(if move_elem { "  ${ev} = call ptr @plum_array_owned_arg(ptr ${slot_ptr}, i1 ${move})\n" }
+        else { "  ${ev} = load ${cg_llvm_ty(elem)}, ptr ${slot_ptr}\n".concat(cg_inc(elem, ev)) })
         .concat("  ").concat(cur_acc).concat(" = load ").concat(acc_ty).concat(", ptr ").concat(acc).concat("\n")
         // Both operands are consumed by the closure. The accumulator
         // slot's own reference is replaced by the result immediately
         // below, so it is released rather than incremented.
-        .concat(cg_inc(elem, ev))
         .concat(cg_invoke(f.val, init.ty, ", ${acc_ty} ${cur_acc}, ${cg_llvm_ty(elem)} ${ev}", b + 5))
         .concat("  store ").concat(acc_ty).concat(" ").concat(cg_reg(b + 6)).concat(", ptr ").concat(acc).concat("\n");
     let out = cg_reg(b + 7);
     let code = a.code.concat(init.code).concat(f.code)
         .concat("  ").concat(len).concat(" = call i64 @plum_array_len(ptr ").concat(a.val).concat(")\n")
+        // Later operands may publish or capture the source. Observe their
+        // aliases before transferring any ordinary child references. Scoped
+        // children keep the original source lifetime through every callback.
+        .concat(if move_elem { "  ${len}_rc = load atomic i64, ptr ${a.val} monotonic, align 8\n  ${move} = icmp eq i64 ${len}_rc, 1\n" } else { "" })
         .concat("  store ").concat(acc_ty).concat(" ").concat(init.val).concat(", ptr ").concat(acc).concat("\n")
         .concat(lp.pre).concat(body).concat(lp.post)
         .concat("  ").concat(out).concat(" = load ").concat(acc_ty).concat(", ptr ").concat(acc).concat("\n")
@@ -4619,7 +4627,7 @@ let cg_array_fold (p: CgProgram) (env: Array[CgSlot]) (n: Int) (arr_e: typecheck
         // the source array and the closure cell on every
         // `Array.map`/`filter`/`fold` -- invisible when an array is
         // used once, real the moment one is folded over twice.
-        .concat(cg_dec(cg_concrete(p, typecheck.texpr_ty(p.subst, arr_e)), a.val))
+        .concat(cg_dec(arr_ity, a.val))
         .concat(cg_dec_cg(f.ty, f.val));
     Emit {
         code: code,

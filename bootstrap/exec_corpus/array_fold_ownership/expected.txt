@@ -1,0 +1,1 @@
+Array.fold: owned arguments, prompt reclamation, operand aliases and scoped cleanup
