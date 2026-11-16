@@ -2359,7 +2359,7 @@ entry:
   %lp = getelementptr i8, ptr %s, i64 8
   %raw = load i64, ptr %lp
   %n = call i64 @plum_str_scaled_length(i64 %raw, i64 1, ptr @.plum_reverse_size_error, i64 35)
-  %rc = load atomic i64, ptr %s monotonic, align 8
+  %rc = load atomic i64, ptr %s acquire, align 8
   %unique = icmp eq i64 %rc, 1
   %nonempty = icmp ne i64 %n, 0
   %reuse = and i1 %unique, %nonempty
@@ -107838,7 +107838,7 @@ L27205:
 @.str34482 = private global { i64, i64, [40 x i8] } { i64 -1, i64 39, [40 x i8] c"  %lp = getelementptr i8, ptr %s, i64 8\00" }
 @.str34485 = private global { i64, i64, [27 x i8] } { i64 -1, i64 26, [27 x i8] c"  %raw = load i64, ptr %lp\00" }
 @.str34488 = private global { i64, i64, [96 x i8] } { i64 -1, i64 95, [96 x i8] c"  %n = call i64 @plum_str_scaled_length(i64 %raw, i64 1, ptr @.plum_reverse_size_error, i64 35)\00" }
-@.str34491 = private global { i64, i64, [51 x i8] } { i64 -1, i64 50, [51 x i8] c"  %rc = load atomic i64, ptr %s monotonic, align 8\00" }
+@.str34491 = private global { i64, i64, [49 x i8] } { i64 -1, i64 48, [49 x i8] c"  %rc = load atomic i64, ptr %s acquire, align 8\00" }
 @.str34494 = private global { i64, i64, [31 x i8] } { i64 -1, i64 30, [31 x i8] c"  %unique = icmp eq i64 %rc, 1\00" }
 @.str34497 = private global { i64, i64, [32 x i8] } { i64 -1, i64 31, [32 x i8] c"  %nonempty = icmp ne i64 %n, 0\00" }
 @.str34500 = private global { i64, i64, [37 x i8] } { i64 -1, i64 36, [37 x i8] c"  %reuse = and i1 %unique, %nonempty\00" }
