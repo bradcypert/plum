@@ -4488,67 +4488,76 @@ let cg_array_ns_reuse (p: CgProgram) (env: Array[CgSlot]) (n: Int) (nm: String) 
 let cg_array_filter_reuse (p: CgProgram) (env: Array[CgSlot]) (n: Int) (nm: String) (args: Array[typecheck.TExpr]) (cand: String): Emit =
     match cg_array_reuse_slot(p, env, cand, args) {
         None => cg_array_ns_call(p, env, n, nm, args),
-        Some(slot) => {
-            let elem = cg_elem_ty(slot.ty);
-            let elem_ity = cg_array_elem_ity(p, slot.ity);
-            let a = cg_move_or_own(p, env, n, args[0]);
-            let old = a.val;
-            let f = cg_expr(p, env, a.n, args[1]);
-            let len = cg_reg(f.n);
-            let out = cg_reg(f.n + 1);
-            let iv = cg_reg(f.n + 2);
-            let cnt = cg_reg(f.n + 3);
-            let same = cg_reg(f.n + 4);
-            let lp = cg_array_loop(iv, len, f.n + 5);
-            let b = lp.body_n;
-            let ev = cg_reg(b + 3);
-            let keep_label = cg_label(b + 6);
-            let skip_label = cg_label(b + 7);
-            let cur_cnt = cg_reg(b + 8);
-            let next_cnt = cg_reg(b + 9);
-            let body = cg_elem_ptr_lines(old, lp.idx_reg, b)
-                .concat("  ").concat(ev).concat(" = load ").concat(cg_llvm_ty(elem)).concat(", ptr ").concat(cg_elem_ptr_reg(b)).concat("\n")
-                .concat(cg_inc(elem, ev))
-                .concat(cg_invoke(f.val, CgBool, ", ${cg_llvm_ty(elem)} ${ev}", b + 4))
-                .concat("  br i1 ").concat(cg_reg(b + 5)).concat(", label %").concat(keep_label).concat(", label %").concat(skip_label).concat("\n")
-                .concat(keep_label).concat(":\n")
-                .concat("  ").concat(cur_cnt).concat(" = load i64, ptr ").concat(cnt).concat("\n")
-                .concat(cg_elem_ptr_lines(out, cur_cnt, b + 10))
-                .concat(cg_inc(elem, ev))
-                .concat("  store ").concat(cg_llvm_ty(elem)).concat(" ").concat(ev).concat(", ptr ").concat(cg_elem_ptr_reg(b + 10)).concat("\n")
-                .concat("  ").concat(next_cnt).concat(" = add i64 ").concat(cur_cnt).concat(", 1\n")
-                .concat("  store i64 ").concat(next_cnt).concat(", ptr ").concat(cnt).concat("\n")
-                .concat("  br label %").concat(skip_label).concat("\n")
-                .concat(skip_label).concat(":\n")
-                // After the join, so it runs once per element whether
-                // it was kept or dropped. A kept element already holds
-                // the second reference stored into its new slot.
-                .concat(cg_reuse_elem_drop(elem_ity, same, ev, b + 13));
-            let final_cnt = cg_reg(b + 15);
-            let ldrop = cg_label(b + 16);
-            let lskip = cg_label(b + 17);
-            Emit {
-                code: a.code.concat(f.code)
-                    .concat("  ").concat(len).concat(" = call i64 @plum_array_len(ptr ").concat(old).concat(")\n")
-                    .concat("  ").concat(out).concat(" = call ptr @plum_array_reuse(ptr ").concat(old).concat(", i64 ").concat(len).concat(")\n")
-                    .concat("  ").concat(same).concat(" = icmp eq ptr ").concat(out).concat(", ").concat(old).concat("\n")
-                    .concat("  store i64 0, ptr ").concat(cnt).concat("\n")
-                    .concat(lp.pre).concat(body).concat(lp.post)
-                    .concat("  ").concat(final_cnt).concat(" = load i64, ptr ").concat(cnt).concat("\n")
-                    .concat("  call void @plum_array_filter_finish(ptr ").concat(out).concat(", i64 ").concat(final_cnt).concat(")\n")
-                    // Released only when the cell was NOT reused. When
-                    // it was, the cell IS the result.
-                    .concat("  br i1 ").concat(same).concat(", label %").concat(lskip).concat(", label %").concat(ldrop).concat("\n")
-                    .concat(ldrop).concat(":\n")
-                    .concat(cg_dec(cg_concrete(p, slot.ity), old))
-                    .concat("  br label %").concat(lskip).concat("\n")
-                    .concat(lskip).concat(":\n")
-                    .concat(cg_dec_cg(f.ty, f.val)),
-                allocas: "  ${iv} = alloca i64\n  ${cnt} = alloca i64\n${a.allocas}${f.allocas}",
-                releases: a.releases.concat(f.releases), globals: a.globals.concat(f.globals), val: out, ty: CgArray(elem), n: b + 18,
-            }
-        },
+        Some(slot) => cg_array_filter_owned(p, env, cg_move_or_own(p, env, n, args[0]), cg_concrete(p, slot.ity), true, args[1]),
     }
+
+// Named candidates and ordinary expressions both supply an owned source.
+// Evaluate the predicate before checking uniqueness. Scoped children keep
+// the allocating path so they remain alive through every predicate call.
+// General empty inputs stay pooled; named empty builders keep their capacity.
+let cg_array_filter_owned (p: CgProgram) (env: Array[CgSlot]) (a: BorrowEmit) (arr_ity: typecheck.ITy) (keep_empty: Bool) (f_e: typecheck.TExpr): Emit = {
+    let elem = cg_elem_ty(a.ty);
+    let elem_ity = cg_array_elem_ity(p, arr_ity);
+    let reuse = cg_rc_enabled(()) && cg_can_release_early(p, elem_ity);
+    let old = a.val;
+    let f = cg_expr(p, env, a.n, f_e);
+    let len = cg_reg(f.n);
+    let out = cg_reg(f.n + 1);
+    let candidate = if keep_empty { old } else { out.concat("_candidate") };
+    let iv = cg_reg(f.n + 2);
+    let cnt = cg_reg(f.n + 3);
+    let same = cg_reg(f.n + 4);
+    let lp = cg_array_loop(iv, len, f.n + 5);
+    let b = lp.body_n;
+    let ev = cg_reg(b + 3);
+    let keep_label = cg_label(b + 6);
+    let skip_label = cg_label(b + 7);
+    let cur_cnt = cg_reg(b + 8);
+    let next_cnt = cg_reg(b + 9);
+    let body = cg_elem_ptr_lines(old, lp.idx_reg, b)
+        .concat("  ").concat(ev).concat(" = load ").concat(cg_llvm_ty(elem)).concat(", ptr ").concat(cg_elem_ptr_reg(b)).concat("\n")
+        .concat(cg_inc(elem, ev))
+        .concat(cg_invoke(f.val, CgBool, ", ${cg_llvm_ty(elem)} ${ev}", b + 4))
+        .concat("  br i1 ").concat(cg_reg(b + 5)).concat(", label %").concat(keep_label).concat(", label %").concat(skip_label).concat("\n")
+        .concat(keep_label).concat(":\n")
+        .concat("  ").concat(cur_cnt).concat(" = load i64, ptr ").concat(cnt).concat("\n")
+        .concat(cg_elem_ptr_lines(out, cur_cnt, b + 10))
+        .concat(cg_inc(elem, ev))
+        .concat("  store ").concat(cg_llvm_ty(elem)).concat(" ").concat(ev).concat(", ptr ").concat(cg_elem_ptr_reg(b + 10)).concat("\n")
+        .concat("  ").concat(next_cnt).concat(" = add i64 ").concat(cur_cnt).concat(", 1\n")
+        .concat("  store i64 ").concat(next_cnt).concat(", ptr ").concat(cnt).concat("\n")
+        .concat("  br label %").concat(skip_label).concat("\n")
+        .concat(skip_label).concat(":\n")
+        // After the join, so it runs once per element whether
+        // it was kept or dropped. A kept element already holds
+        // the second reference stored into its new slot.
+        .concat(if reuse { cg_reuse_elem_drop(elem_ity, same, ev, b + 13) } else { "" });
+    let final_cnt = cg_reg(b + 15);
+    let ldrop = cg_label(b + 16);
+    let lskip = cg_label(b + 17);
+    Emit {
+        code: a.code.concat(f.code)
+            .concat("  ").concat(len).concat(" = call i64 @plum_array_len(ptr ").concat(old).concat(")\n")
+            .concat(if reuse && !keep_empty {
+                "  ${out}_empty = icmp eq i64 ${len}, 0\n  ${candidate} = select i1 ${out}_empty, ptr null, ptr ${old}\n"
+            } else { "" })
+            .concat(if reuse { "  ${out} = call ptr @plum_array_reuse(ptr ${candidate}, i64 ${len})\n" }
+            else { "  ${out} = call ptr @plum_array_new_result(i64 ${len})\n" })
+            .concat(if reuse { "  ${same} = icmp eq ptr ${out}, ${old}\n" } else { "" })
+            .concat("  store i64 0, ptr ").concat(cnt).concat("\n")
+            .concat(lp.pre).concat(body).concat(lp.post)
+            .concat("  ").concat(final_cnt).concat(" = load i64, ptr ").concat(cnt).concat("\n")
+            .concat("  call void @plum_array_filter_finish(ptr ").concat(out).concat(", i64 ").concat(final_cnt).concat(")\n")
+            .concat(if reuse {
+                "  br i1 ${same}, label %${lskip}, label %${ldrop}\n${ldrop}:\n"
+                    .concat(cg_dec(arr_ity, old))
+                    .concat("  br label %${lskip}\n${lskip}:\n")
+            } else { cg_dec(arr_ity, old) })
+            .concat(cg_dec_cg(f.ty, f.val)),
+        allocas: "  ${iv} = alloca i64\n  ${cnt} = alloca i64\n${a.allocas}${f.allocas}",
+        releases: a.releases.concat(f.releases), globals: a.globals.concat(f.globals), val: out, ty: CgArray(elem), n: b + 18,
+    }
+}
 
 // No `cg_is_movable` interlock here, unlike `cg_reuse_cand`, and the
 // asymmetry is deliberate. That set means "read at most once on any
@@ -4572,62 +4581,10 @@ let cg_array_reuse_slot (p: CgProgram) (env: Array[CgSlot]) (cand: String) (args
 let cg_array_map (p: CgProgram) (env: Array[CgSlot]) (n: Int) (arr_e: typecheck.TExpr) (f_e: typecheck.TExpr): Emit =
     cg_array_map_owned(p, env, cg_borrow_owned(p, env, n, arr_e), cg_concrete(p, typecheck.texpr_ty(p.subst, arr_e)), false, f_e)
 
-// The output array is allocated at the INPUT's length and its length
-// header is patched down afterwards to however many elements were kept.
-// One pass; counting first would call the predicate twice per element,
-// which is observably different for a predicate with effects.
-let cg_array_filter (p: CgProgram) (env: Array[CgSlot]) (n: Int) (arr_e: typecheck.TExpr) (f_e: typecheck.TExpr): Emit = {
-    let a = cg_expr(p, env, n, arr_e);
-    let elem = cg_elem_ty(a.ty);
-    let f = cg_expr(p, env, a.n, f_e);
-    let len = cg_reg(f.n);
-    let out = cg_reg(f.n + 1);
-    let iv = cg_reg(f.n + 2);
-    let cnt = cg_reg(f.n + 3);
-    let lp = cg_array_loop(iv, len, f.n + 4);
-    let b = lp.body_n;
-    let ev = cg_reg(b + 3);
-    let keep_label = cg_label(b + 6);
-    let skip_label = cg_label(b + 7);
-    let cur_cnt = cg_reg(b + 8);
-    let next_cnt = cg_reg(b + 9);
-    let body = cg_elem_ptr_lines(a.val, lp.idx_reg, b)
-        .concat("  ").concat(ev).concat(" = load ").concat(cg_llvm_ty(elem)).concat(", ptr ").concat(cg_elem_ptr_reg(b)).concat("\n")
-        // One reference for the predicate to consume, and -- if the
-        // element is kept -- one more for the output array below.
-        .concat(cg_inc(elem, ev))
-        .concat(cg_invoke(f.val, CgBool, ", ${cg_llvm_ty(elem)} ${ev}", b + 4))
-        .concat("  br i1 ").concat(cg_reg(b + 5)).concat(", label %").concat(keep_label).concat(", label %").concat(skip_label).concat("\n")
-        .concat(keep_label).concat(":\n")
-        .concat("  ").concat(cur_cnt).concat(" = load i64, ptr ").concat(cnt).concat("\n")
-        .concat(cg_elem_ptr_lines(out, cur_cnt, b + 10))
-        .concat(cg_inc(elem, ev))
-        .concat("  store ").concat(cg_llvm_ty(elem)).concat(" ").concat(ev).concat(", ptr ").concat(cg_elem_ptr_reg(b + 10)).concat("\n")
-        .concat("  ").concat(next_cnt).concat(" = add i64 ").concat(cur_cnt).concat(", 1\n")
-        .concat("  store i64 ").concat(next_cnt).concat(", ptr ").concat(cnt).concat("\n")
-        .concat("  br label %").concat(skip_label).concat("\n")
-        .concat(skip_label).concat(":\n");
-    let final_cnt = cg_reg(b + 13);
-    let code = a.code.concat(f.code)
-        .concat("  ").concat(len).concat(" = call i64 @plum_array_len(ptr ").concat(a.val).concat(")\n")
-        .concat("  ").concat(out).concat(" = call ptr @plum_array_new_result(i64 ").concat(len).concat(")\n")
-        .concat("  store i64 0, ptr ").concat(cnt).concat("\n")
-        .concat(lp.pre).concat(body).concat(lp.post)
-        .concat("  ").concat(final_cnt).concat(" = load i64, ptr ").concat(cnt).concat("\n")
-        .concat("  call void @plum_array_filter_finish(ptr ").concat(out).concat(", i64 ").concat(final_cnt).concat(")\n")
-        // Both operands arrived OWNED (`cg_expr`, not `cg_borrow`), so
-        // both are this call's to release. Neither was, which leaked
-        // the source array and the closure cell on every
-        // `Array.map`/`filter`/`fold` -- invisible when an array is
-        // used once, real the moment one is folded over twice.
-        .concat(cg_dec(cg_concrete(p, typecheck.texpr_ty(p.subst, arr_e)), a.val))
-        .concat(cg_dec_cg(f.ty, f.val));
-    Emit {
-        code: code,
-        allocas: "  ${iv} = alloca i64\n  ${cnt} = alloca i64\n${a.allocas}${f.allocas}", releases: a.releases.concat(f.releases),
-        globals: a.globals.concat(f.globals), val: out, ty: CgArray(elem), n: b + 14,
-    }
-}
+// Filtering visits each element once: counting first would evaluate an
+// effectful predicate twice. The shared loop compacts or fills its result.
+let cg_array_filter (p: CgProgram) (env: Array[CgSlot]) (n: Int) (arr_e: typecheck.TExpr) (f_e: typecheck.TExpr): Emit =
+    cg_array_filter_owned(p, env, cg_borrow_owned(p, env, n, arr_e), cg_concrete(p, typecheck.texpr_ty(p.subst, arr_e)), false, f_e)
 
 let cg_array_fold (p: CgProgram) (env: Array[CgSlot]) (n: Int) (arr_e: typecheck.TExpr) (init_e: typecheck.TExpr) (f_e: typecheck.TExpr): Emit = {
     let a = cg_expr(p, env, n, arr_e);

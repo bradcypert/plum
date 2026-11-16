@@ -2813,3 +2813,20 @@ pub let test_array_map_owned_sources (): Unit = {
         };
     };
 }
+
+pub let test_array_filter_owned_sources (): Unit = {
+    for count in [0, 1, 2, 7, 16, 31] {
+        for divisor in [1, 2, 3, 5] {
+            let calls = ref(0);
+            let out = map_words(count).filter(|s| { calls.set(calls.get() + 1); s.len() % divisor == 0 }).filter(|s| s != "");
+            let mut model: Array[String] = [];
+            for i in 0..count {
+                let s = i.to_string().repeat(8); if s.len() % divisor == 0 { model = model.push(s); };
+            };
+            assert_eq(calls.get(), count); assert_eq(out, model);
+            let source = map_words(count); let saved = source;
+            let out = { source }.filter(|s| s.concat("!").len() > 0).filter(|s| s != "");
+            assert_eq(out, saved); assert_eq(source, saved);
+        };
+    };
+}
