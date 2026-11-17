@@ -27,6 +27,9 @@ let lifetime (): Unit = {
     let borrowing = |s: String| {
         assert(s.starts_with("x"));
         let bytes = live(); if bytes >= 0 { assert(bytes >= 65536); };
+        // A later read keeps this borrow live across the observation.
+        // At a last borrowed read, ordinary values may now release early.
+        assert(s.starts_with("x"));
     };
     borrowing("x".repeat(65536));
 }

@@ -1,0 +1,1 @@
+Constructor reuse preserves scoped closure parameter lifetimes

@@ -774,7 +774,8 @@ jobs:
     name: Windows platform smoke (${{ matrix.shard }}/2)
     needs: windows-build
     runs-on: windows-latest
-    timeout-minutes: 30
+    # Leave setup/cleanup margin around the ~28-minute smoke execution.
+    timeout-minutes: 40
     strategy:
       fail-fast: false
       matrix:
