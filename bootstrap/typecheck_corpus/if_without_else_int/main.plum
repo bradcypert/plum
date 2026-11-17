@@ -1,2 +1,3 @@
 let f (b: Bool): Int = if b { 7 }
+
 let main (): Unit = println(f(false))

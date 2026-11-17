@@ -1,2 +1,3 @@
 let double (n: Int): Int = n * 2
+
 let main (): Unit = println(double(true).to_string())

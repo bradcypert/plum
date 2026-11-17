@@ -3,7 +3,9 @@
 struct Key { name: String, point: Float }
 
 let lookups (m: Map[Key, Int]) (key: Key): Unit = {
-    for i in 0..1000 { assert(Map.contains(m, key)); };
+    for i in 0..1000 {
+        assert(Map.contains(m, key));
+    };
 }
 
 let main (): Unit = {

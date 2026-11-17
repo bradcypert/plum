@@ -17,7 +17,9 @@
 // either compiler -- a real, separate gap).
 
 let z (): Float = 0.0
+
 let ten (): Float = 10.0
+
 let up (b: Float) (n: Int): Float = if n <= 0 { 1.0 } else { b * up(b, n - 1) }
 
 let main (): Unit = {

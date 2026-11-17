@@ -22,7 +22,10 @@ let through (n: Int) (s: String): Int =
 
 // A heap LET, freshly allocated every iteration and dead after it.
 let via_let (n: Int) (s: String): Int =
-    if n == 0 { s.len() } else { let t = s.concat(""); via_let(n - 1, t) }
+    if n == 0 { s.len() } else {
+        let t = s.concat("");
+        via_let(n - 1, t)
+    }
 
 // The shape that leaked: the self-call sits in a MATCH ARM, and the
 // scrutinee is an owned temporary whose drop the ordinary path emits
@@ -50,23 +53,37 @@ let nested (n: Int) (s: String): Int =
 // calls inside a recursion CYCLE return early -- an acyclic one keeps
 // its frame, so ordinary delegations still appear in stack traces.
 let ping (n: Int) (s: String): Int =
-    match Some(s.concat("a")) { Some(t) => if n == 0 { t.len() } else { pong(n - 1, t) }, None => 0 }
+    match Some(s.concat("a")) {
+        Some(t) => if n == 0 { t.len() } else { pong(n - 1, t) },
+        None => 0
+    }
+
 let pong (n: Int) (s: String): Int =
-    match Some(s.concat("b")) { Some(t) => if n == 0 { t.len() } else { ping(n - 1, t) }, None => 0 }
+    match Some(s.concat("b")) {
+        Some(t) => if n == 0 { t.len() } else { ping(n - 1, t) },
+        None => 0
+    }
 
 // The two sides have DIFFERENT prototypes, so `musttail` is not legal
 // and the call is an ordinary one followed by `ret`. It still has to
 // release correctly, which is what this checks.
 let odd_a (n: Int) (s: String): Int = if n == 0 { s.len() } else { odd_b(n - 1, [s.concat("c")]) }
+
 let odd_b (n: Int) (xs: Array[String]): Int = if n == 0 { xs.len() } else { odd_a(n - 1, xs[0]) }
 
 // Repeated cyclic and acyclic tail sites in the same generic function.
 // Each specialization must keep its own cycle verdicts and release policy.
 let finish[T] (value: T): T = value
+
 let mixed[T] (n: Int) (value: T): T =
     if n == 0 { finish(value) }
     else if n % 2 == 0 { mixed(n - 1, value) }
-    else { match Some(value) { Some(v) => mixed(n - 1, v), None => finish(value) } }
+    else {
+        match Some(value) {
+            Some(v) => mixed(n - 1, v),
+            None => finish(value)
+        }
+    }
 
 // A call to the same source name with different type arguments is not a
 // self-call. Only the Int specialization can call back to itself.

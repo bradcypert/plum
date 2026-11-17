@@ -17,6 +17,7 @@
 // guard is most likely to disturb.
 
 let by (n: Int) (d: Int): Int = n / d
+
 let rem (n: Int) (d: Int): Int = n % d
 
 let main (): Unit = {

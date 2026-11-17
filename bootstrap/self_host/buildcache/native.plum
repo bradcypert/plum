@@ -8,33 +8,52 @@ extern "C" {
 }
 
 pub let safe_ast (ast: String): Bool = unsafe { plum_cache_safe_ast(ast.as_cstr()) == 1 }
+
 pub let safe_ir (ir: String): Bool = unsafe { plum_cache_safe_ir(ir.as_cstr()) == 1 }
+
 pub let c_snapshot_safe (program: String) (flags: Array[String]) (input: String): Bool = {
     let windows = Os.platform(()) == "windows";
     let args = if windows { ["-S", "-emit-llvm", "-o", "-", input] }
-        else { ["-Xclang", "-ast-dump=json", "-fsyntax-only", input] };
-    match Process.run(Process.Options { program: program, args: Array.concat(flags, args), env: [], stdin: None }) {
+    else { ["-Xclang", "-ast-dump=json", "-fsyntax-only", input] };
+    match Process.run(
+        Process.Options {
+            program: program,
+            args: Array.concat(flags, args),
+            env: [],
+            stdin: None
+        }
+    ) {
         Err(_) => false,
-        Ok(r) => r.exit_code == 0 && (if windows {
-            unsafe { plum_cache_safe_c_ir(r.stdout.as_cstr()) == 1 }
-        } else { safe_ast(r.stdout) }),
+        Ok(r) => r.exit_code == 0
+            && (
+                if windows {
+                    unsafe { plum_cache_safe_c_ir(r.stdout.as_cstr()) == 1 }
+                } else { safe_ast(r.stdout) }
+            ),
     }
 }
 
 let OBJECT_PROGRAM: Ref[String] = ref("")
+
 pub let object_program (fallback: String): String = {
     let pinned = OBJECT_PROGRAM.get();
     if pinned == "" { fallback } else { pinned }
 }
 
 let SIGNATURES: Ref[Map[String, String]] = ref(empty_signatures(()))
+
 let empty_signatures (): Map[String, String] = Map.new(())
 
 // Clang's default configuration is selected by driver/triple, not input
 // contents. Certify the effective in-process command once per input language
 // and flags in this invocation, then restore each input's path/name in the
 // identity. This avoids two extra Clang startups for every generated shim.
-pub let compile_signature (program: String) (flags: Array[String]) (input: String) (out: String): String = {
+pub let compile_signature
+    (program: String)
+    (flags: Array[String])
+    (input: String)
+    (out: String): String
+= {
     let language = if input.ends_with(".ll") { ".ll" } else { ".i" };
     let memo_key = frame(program).concat(frame(Array.join(flags, "\n"))).concat(language);
     let existing = SIGNATURES.get().get(memo_key);
@@ -42,15 +61,30 @@ pub let compile_signature (program: String) (flags: Array[String]) (input: Strin
         Some(s) => s,
         None => {
             let args = Array.concat(flags, ["-c", input, "-o", out]);
-            let a = Process.run(Process.Options { program: program, args: Array.concat(["-###"], args), env: [], stdin: None });
-            let b = Process.run(Process.Options { program: program, args: Array.concat(["--no-default-config", "-###"], args), env: [], stdin: None });
+            let a = Process.run(
+                Process.Options {
+                    program: program,
+                    args: Array.concat(["-###"], args),
+                    env: [],
+                    stdin: None
+                }
+            );
+            let b = Process.run(
+                Process.Options {
+                    program: program,
+                    args: Array.concat(["--no-default-config", "-###"], args),
+                    env: [],
+                    stdin: None
+                }
+            );
             let result = match a {
                 Err(_) => "",
                 Ok(r) => match b {
                     Err(_) => "",
-                    Ok(plain) => if r.exit_code != 0 || plain.exit_code != 0 || r.stderr != plain.stderr
+                    Ok(plain) => if r.exit_code != 0 || plain.exit_code != 0 || r.stderr
+                        != plain.stderr
                         || !single_integrated_command(r.stderr) { "" }
-                        else { normalize_compile_signature(r.stderr, input, out) },
+                    else { normalize_compile_signature(r.stderr, input, out) },
                 },
             };
             SIGNATURES.set(SIGNATURES.get().insert(memo_key, result));
@@ -94,7 +128,9 @@ let normalize_compile_signature (command: String) (input: String) (out: String):
 // version strings or timestamps. Windows object commands pin the probed EXE.
 pub let native_fingerprint (): String = {
     OBJECT_PROGRAM.set("");
-    if env("PLUM_CC") != "" || env("CCC_OVERRIDE_OPTIONS") != "" || env("CLANG_SPAWN_CC1") != "" { "" }
+    if env("PLUM_CC") != "" || env("CCC_OVERRIDE_OPTIONS") != "" || env("CLANG_SPAWN_CC1") != "" {
+        ""
+    }
     else if Os.platform(()) == "windows" { windows_fingerprint(()) }
     else if Os.platform(()) != "linux"
         || env("LD_PRELOAD") != "" || env("LD_LIBRARY_PATH") != "" || env("LD_AUDIT") != ""
@@ -103,11 +139,20 @@ pub let native_fingerprint (): String = {
         let tool = tool_path("clang");
         let digest = file_hash(tool);
         if tool == "" || digest == "" { "" }
-        else { match Process.run(Process.Options { program: "ldd", args: [tool], env: [], stdin: None }) {
-            Err(_) => "",
-            Ok(r) => if r.exit_code != 0 { "" }
+        else {
+            match Process.run(
+                Process.Options {
+                    program: "ldd",
+                    args: [tool],
+                    env: [],
+                    stdin: None
+                }
+            ) {
+                Err(_) => "",
+                Ok(r) => if r.exit_code != 0 { "" }
                 else { loader_fingerprint(r.stdout.split("\n"), 0, [frame(tool), digest]) },
-        } }
+            }
+        }
     }
 }
 
@@ -116,15 +161,32 @@ let windows_fingerprint (): String = {
     else {
         let tool = tool_path("clang");
         if tool == "" { "" }
-        else { match Process.run(Process.Options { program: tool, args: ["-dumpmachine"], env: [], stdin: None }) {
-            Err(_) => "",
-            Ok(r) => if r.exit_code != 0 || r.stdout.trim() != "x86_64-w64-windows-gnu" { "" }
-            else {
-                let identity = unsafe { plum_cache_windows_fingerprint(tool.as_cstr()).as_string() };
-                if identity.starts_with("!") || identity.len() != 64 { diagnostic("objects bypass: ${identity}"); "" }
-                else { OBJECT_PROGRAM.set(tool); identity }
-            },
-        } }
+        else {
+            match Process.run(
+                Process.Options {
+                    program: tool,
+                    args: ["-dumpmachine"],
+                    env: [],
+                    stdin: None
+                }
+            ) {
+                Err(_) => "",
+                Ok(r) => if r.exit_code != 0 || r.stdout.trim() != "x86_64-w64-windows-gnu" { "" }
+                else {
+                    let identity = unsafe {
+                        plum_cache_windows_fingerprint(tool.as_cstr()).as_string()
+                    };
+                    if identity.starts_with("!") || identity.len() != 64 {
+                        diagnostic("objects bypass: ${identity}");
+                        ""
+                    }
+                    else {
+                        OBJECT_PROGRAM.set(tool);
+                        identity
+                    }
+                },
+            }
+        }
     }
 }
 
@@ -161,9 +223,19 @@ pub let test_loader_fingerprint_rejects_unresolved (): Unit = {
 }
 
 pub let test_assembly_ast_classification (): Unit = {
-    assert(safe_ast("{\"kind\": \"TranslationUnitDecl\", \"inner\": [{\"kind\": \"AsmLabelAttr\"}, {\"mangledName\": \"__xpg_symbol\"}]}"));
-    assert(!safe_ast("{\"kind\": \"TranslationUnitDecl\", \"inner\": [{\"kind\": \"GCCAsmStmt\"}]}"));
-    assert(!safe_ast("{\"kind\": \"TranslationUnitDecl\", \"inner\": [{\"kind\": \"FileScopeAsmDecl\"}]}"));
+    assert(
+        safe_ast(
+            "{\"kind\": \"TranslationUnitDecl\", \"inner\": [{\"kind\": \"AsmLabelAttr\"}, {\"mangledName\": \"__xpg_symbol\"}]}"
+        )
+    );
+    assert(
+        !safe_ast("{\"kind\": \"TranslationUnitDecl\", \"inner\": [{\"kind\": \"GCCAsmStmt\"}]}")
+    );
+    assert(
+        !safe_ast(
+            "{\"kind\": \"TranslationUnitDecl\", \"inner\": [{\"kind\": \"FileScopeAsmDecl\"}]}"
+        )
+    );
     assert(!safe_ast("{\"kind\": \"TranslationUnitDecl\", \"mangledName\": \"unsafe\\nname\"}"));
     assert(!safe_ast("unexpected output"))
 }
@@ -176,8 +248,16 @@ pub let test_assembly_ir_classification (): Unit = {
 }
 
 pub let test_c_ir_assembly_and_labels (): Unit = {
-    assert(unsafe { plum_cache_safe_c_ir("@.str = constant [3 x i8] c\"@x\\00\"\n".as_cstr()) == 1 });
+    assert(
+        unsafe { plum_cache_safe_c_ir("@.str = constant [3 x i8] c\"@x\\00\"\n".as_cstr()) == 1 }
+    );
     assert(unsafe { plum_cache_safe_c_ir("module asm \"encoded contents\"\n".as_cstr()) == 0 });
     assert(unsafe { plum_cache_safe_c_ir("declare void @\"\\01bad\\0Aname\"()\n".as_cstr()) == 0 });
-    assert(unsafe { plum_cache_safe_c_ir("define void @f() { call void asm sideeffect \"\\2eincbin file\", \"\"() ret void }\n".as_cstr()) == 0 });
+    assert(
+        unsafe {
+            plum_cache_safe_c_ir(
+                "define void @f() { call void asm sideeffect \"\\2eincbin file\", \"\"() ret void }\n".as_cstr()
+            ) == 0
+        }
+    );
 }

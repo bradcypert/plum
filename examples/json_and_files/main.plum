@@ -9,15 +9,17 @@ use Os;
 // Build: `plum build examples/json_and_files -o out && ./out`
 
 let build_config (): JsonValue =
-    JsonObject([
-        JsonEntry { key: "name", value: JsonString("plum-demo") },
-        JsonEntry { key: "version", value: JsonNumber(1.0) },
-        JsonEntry {
-            key: "tags",
-            value: JsonArray([JsonString("json"), JsonString("files")]),
-        },
-        JsonEntry { key: "stable", value: JsonBool(true) },
-    ])
+    JsonObject(
+        [
+            JsonEntry { key: "name", value: JsonString("plum-demo") },
+            JsonEntry { key: "version", value: JsonNumber(1.0) },
+            JsonEntry {
+                key: "tags",
+                value: JsonArray([JsonString("json"), JsonString("files")]),
+            },
+            JsonEntry { key: "stable", value: JsonBool(true) },
+        ]
+    )
 
 // `JsonValue` is a plain enum — no accessor helpers, `match` directly.
 let describe (v: JsonValue): String = match v {

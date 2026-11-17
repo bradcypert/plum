@@ -1,5 +1,6 @@
 let main (): Unit = {
-    let text = "é".repeat(8192); let bytes = text.as_bytes();
+    let text = "é".repeat(8192);
+    let bytes = text.as_bytes();
     for i in 0..512 {
         assert(Bytes.slice(bytes, 0, 9223372036854775807) == bytes);
         assert_eq(String.slice(text, 0, 9223372036854775807), text);

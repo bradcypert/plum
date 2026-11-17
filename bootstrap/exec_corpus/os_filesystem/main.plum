@@ -80,7 +80,9 @@ let main (): Unit =
             // harness chose to call it.
             match Os.self_exe() {
                 Err(e) => println("self_exe: ".concat(e)),
-                Ok(p) => println(if String.is_empty(p) { "self_exe: empty" } else { "self_exe: found" }),
+                Ok(p) => println(
+                    if String.is_empty(p) { "self_exe: empty" } else { "self_exe: found" }
+                ),
             }
         },
     }

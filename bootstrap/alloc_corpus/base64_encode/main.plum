@@ -1,4 +1,5 @@
 use Encoding;
+
 let main (): Unit = {
     for i in 0..1000 {
         assert_eq(Encoding.base64_encode("a".as_bytes()), "YQ==");

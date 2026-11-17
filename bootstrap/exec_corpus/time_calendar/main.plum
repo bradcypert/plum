@@ -32,5 +32,8 @@ let main (): Unit = {
     println("${t.year}-${t.month}-${t.day} ${t.hour}:${t.minute}:${t.second} wd=${t.weekday}");
     // Names are bounds-safe on any Int, which is what keeps them from
     // being a panic waiting in a formatting path.
-    println(Time.weekday_name(0).concat(Time.weekday_name(6)).concat(Time.month_name(1)).concat(Time.month_name(12)))
+    println(
+        Time.weekday_name(0).concat(Time.weekday_name(6)).concat(Time.month_name(1))
+            .concat(Time.month_name(12))
+    )
 }

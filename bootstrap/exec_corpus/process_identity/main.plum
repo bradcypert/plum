@@ -13,8 +13,19 @@ use Path;
 // Nothing prints a path: the working directory and `$HOME` differ per
 // machine. What is printed is what was OBSERVED about them.
 
-let run_self (self: String) (argv: Array[String]) (stdin: Option[String]): Result[Process.ProcessResult, String] =
-    Process.run(Process.Options { program: self, args: argv, env: [], stdin: stdin })
+let run_self
+    (self: String)
+    (argv: Array[String])
+    (stdin: Option[String]): Result[Process.ProcessResult, String]
+=
+    Process.run(
+        Process.Options {
+            program: self,
+            args: argv,
+            env: [],
+            stdin: stdin
+        }
+    )
 
 // --- The child ---
 
@@ -25,7 +36,10 @@ let run_self (self: String) (argv: Array[String]) (stdin: Option[String]): Resul
 let drain (n: Int): Unit = match Os.read_stdin_line() {
     Err(e) => println("err ".concat(e)),
     Ok(None) => println("eof after ".concat(n.to_string())),
-    Ok(Some(line)) => { println("[".concat(line).concat("]")); drain(n + 1) },
+    Ok(Some(line)) => {
+        println("[".concat(line).concat("]"));
+        drain(n + 1)
+    },
 }
 
 let child (argv: Array[String]): Unit =
@@ -47,8 +61,10 @@ let child (argv: Array[String]): Unit =
 let show (label: String) (r: Result[Process.ProcessResult, String]): Unit =
     match r {
         Err(_) => println(label.concat(": err")),
-        Ok(res) => println(label.concat(": [").concat(String.trim_end(res.stdout))
-            .concat("] err=[").concat(String.trim_end(res.stderr)).concat("]")),
+        Ok(res) => println(
+            label.concat(": [").concat(String.trim_end(res.stdout))
+                .concat("] err=[").concat(String.trim_end(res.stderr)).concat("]")
+        ),
     }
 
 let parent (): Unit = match Os.self_exe() {
@@ -76,8 +92,10 @@ let parent (): Unit = match Os.self_exe() {
         // `cwd` is a real directory: it exists and is one.
         match Os.cwd() {
             Err(e) => println("cwd: ".concat(e)),
-            Ok(d) => println("cwd is a directory: "
-                .concat(Result.unwrap_or(Os.is_directory(d), false).to_string())),
+            Ok(d) => println(
+                "cwd is a directory: "
+                    .concat(Result.unwrap_or(Os.is_directory(d), false).to_string())
+            ),
         };
 
         // `chdir` moves, and moving back restores what `cwd` reported.
@@ -89,11 +107,18 @@ let parent (): Unit = match Os.self_exe() {
                     Err(e) => println("cwd: ".concat(e)),
                     Ok(up) => {
                         println("chdir moved: ".concat((up != before).to_string()));
-                        println("chdir went to the parent: ".concat((up == Path.dirname(before)).to_string()));
+                        println(
+                            "chdir went to the parent: ".concat(
+                                (up == Path.dirname(before)).to_string()
+                            )
+                        );
                         match Os.chdir(before) {
                             Err(e) => println("chdir back: ".concat(e)),
-                            Ok(_) => println("chdir back: ".concat(
-                                (Result.unwrap_or(Os.cwd(), "") == before).to_string())),
+                            Ok(_) => println(
+                                "chdir back: ".concat(
+                                    (Result.unwrap_or(Os.cwd(), "") == before).to_string()
+                                )
+                            ),
                         }
                     },
                 },
@@ -101,16 +126,25 @@ let parent (): Unit = match Os.self_exe() {
         };
 
         // A directory that is not there is an `Err`, not a silent no-op.
-        println("chdir to nowhere: ".concat(match Os.chdir("/no/such/dir/here") {
-            Ok(_) => "UNEXPECTEDLY OK", Err(_) => "err",
-        }));
+        println(
+            "chdir to nowhere: ".concat(
+                match Os.chdir("/no/such/dir/here") {
+                    Ok(_) => "UNEXPECTEDLY OK",
+                    Err(_) => "err",
+                }
+            )
+        );
 
         // `$HOME` is set in every environment this runs in; the point is
         // that it is read rather than guessed from a username.
-        println("home is absolute: ".concat(match Os.home_dir() {
-            Some(h) => Path.is_absolute(h).to_string(),
-            None => "unset",
-        }))
+        println(
+            "home is absolute: ".concat(
+                match Os.home_dir() {
+                    Some(h) => Path.is_absolute(h).to_string(),
+                    None => "unset",
+                }
+            )
+        )
     },
 }
 

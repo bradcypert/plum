@@ -63,11 +63,15 @@ let verdict (installed: String) (r: Release): String =
 // `semver.compare` returns the library's own `Order`, and sorting by it
 // is the ordinary `Array.sort_by`. A dependency's types are types.
 let sorted_versions (): Array[String] = {
-    let parsed = Array.fold(["1.6.0", "1.4.2", "2.0.0", "1.4.7"], [], |acc, s|
-        match semver.parse(s) {
-            Err(_) => acc,
-            Ok(v) => acc.push(v),
-        });
+    let parsed = Array.fold(
+        ["1.6.0", "1.4.2", "2.0.0", "1.4.7"],
+        [],
+        |acc, s|
+            match semver.parse(s) {
+                Err(_) => acc,
+                Ok(v) => acc.push(v),
+            }
+    );
     Array.map(Array.sort_by(parsed, |a, b| not_after(a, b)), |v| semver.render(v))
 }
 

@@ -1,13 +1,15 @@
 use Json;
 
-let text (bytes: Array[Int]): String = Result.unwrap_or(Bytes.as_string(Bytes.from_array(bytes)), "invalid UTF-8")
+let text (bytes: Array[Int]): String =
+    Result.unwrap_or(Bytes.as_string(Bytes.from_array(bytes)), "invalid UTF-8")
 
 let show [T] (result: Result[T, String]): Unit = match result {
     Ok(_) => println("OK"),
     Err(e) => println(e),
 }
 
-let object (key: String) (value: JsonValue): JsonValue = JsonObject([JsonEntry { key: key, value: value }])
+let object (key: String) (value: JsonValue): JsonValue =
+    JsonObject([JsonEntry { key: key, value: value }])
 
 let wrong_key (key: String): Unit =
     show(Json.decode(Json.at([key], Json.string()), object(key, JsonNull)))
@@ -39,7 +41,12 @@ let main (): Unit = {
     let bad: Json.Decoder[String] = Json.fail("bad");
     show(Json.decode(Json.field("a.b", bad), dotted));
     show(Json.decode(Json.field("a.b", Json.one_of([Json.string()])), dotted));
-    show(Json.decode(Json.field("outer", Json.field("a.b", Json.index(0, Json.field("", Json.string())))), object("outer", object("a.b", JsonArray([object("", JsonNull)])))));
+    show(
+        Json.decode(
+            Json.field("outer", Json.field("a.b", Json.index(0, Json.field("", Json.string())))),
+            object("outer", object("a.b", JsonArray([object("", JsonNull)])))
+        )
+    );
     show(Json.decode(Json.list(Json.field("a.b", Json.string())), JsonArray([dotted])));
     show(Json.decode(Json.field("a.b", Json.index(3, Json.string())), object("a.b", JsonArray([]))));
     show(Json.decode(Json.at(["a.b", "child"], Json.string()), dotted));

@@ -1,2 +1,2 @@
 error: '&&': Bool != Int
-main.plum:1:23
+main.plum:2:5

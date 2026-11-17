@@ -33,13 +33,19 @@ let main (): Unit = match Os.temp_dir() {
                     Ok(n) => println("new file wrote ".concat(n.to_string())),
                     Err(e) => println(e),
                 };
-                match b.close() { Ok(_) => (), Err(e) => println(e) }
+                match b.close() {
+                    Ok(_) => (),
+                    Err(e) => println(e)
+                }
             },
         };
         match Os.read_bytes(path) {
             Ok(data) => println(data.to_hex()),
             Err(e) => println(e),
         };
-        match Os.remove_tree(root) { Ok(_) => println("cleanup ok"), Err(e) => println(e) }
+        match Os.remove_tree(root) {
+            Ok(_) => println("cleanup ok"),
+            Err(e) => println(e)
+        }
     },
 }

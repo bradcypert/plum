@@ -8,7 +8,15 @@ let nested_text (n: Int) (kind: Int) (leaf: String): String =
     if n == 0 { leaf }
     else if kind == 0 { nested_text(n - 1, kind, "[".concat(leaf).concat("]")) }
     else if kind == 1 { nested_text(n - 1, kind, "{\"k\":".concat(leaf).concat("}")) }
-    else { nested_text(n - 1, kind, if n % 2 == 0 { "[".concat(leaf).concat("]") } else { "{\"k\":".concat(leaf).concat("}") }) }
+    else {
+        nested_text(
+            n - 1,
+            kind,
+            if n % 2 == 0 { "[".concat(leaf).concat("]") } else {
+                "{\"k\":".concat(leaf).concat("}")
+            }
+        )
+    }
 
 let main (): Unit = {
     println(status(""));
@@ -59,11 +67,20 @@ let main (): Unit = {
     println("raw controls: ok");
     let long = String.repeat("é λ 😀\n\t\\\"", 10000);
     let encoded = stringify_valid(JsonString(long));
-    let decoded = match json_parse(encoded) { Ok(JsonString(v)) => v, _ => "bad" };
-    println(if long == decoded && encoded == stringify_valid(JsonString(long)) { "long UTF-8 string: ok" } else { "long UTF-8 string: FAIL" });
+    let decoded = match json_parse(encoded) {
+        Ok(JsonString(v)) => v,
+        _ => "bad"
+    };
+    println(
+        if long == decoded && encoded == stringify_valid(JsonString(long)) {
+            "long UTF-8 string: ok"
+        } else { "long UTF-8 string: FAIL" }
+    );
     let wide = "[".concat(String.repeat("null,", 20000)).concat("null]");
     match json_parse(wide) {
-        Ok(JsonArray(xs)) => println(if xs.len() == 20001 { "wide array: ok" } else { "wide array: FAIL" }),
+        Ok(JsonArray(xs)) => println(
+            if xs.len() == 20001 { "wide array: ok" } else { "wide array: FAIL" }
+        ),
         _ => println("wide array: FAIL"),
     };
     println(status(String.repeat("[", 10000)));
@@ -72,11 +89,16 @@ let main (): Unit = {
     println(Result.unwrap_or(String.parse_float("0001.0"), 0.0).to_string());
     let sibling = "[".concat(nested_text(127, 2, "null"));
     let siblings = sibling.concat(",").concat(nested_text(127, 2, "null")).concat("]");
-    println(if status(siblings) == siblings { "sibling depths: ok" } else { "sibling depths: FAIL" });
+    println(
+        if status(siblings) == siblings { "sibling depths: ok" } else { "sibling depths: FAIL" }
+    );
 }
 
 // These fixtures construct finite JSON. Fail loudly if that invariant changes.
 let stringify_valid (value: JsonValue): String = match json_stringify(value) {
     Ok(text) => text,
-    Err(e) => { panic_raw(e); "" },
+    Err(e) => {
+        panic_raw(e);
+        ""
+    },
 }

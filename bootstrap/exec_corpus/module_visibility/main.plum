@@ -11,5 +11,10 @@ let main (): Unit = {
     println(geom.diameter(c).to_string());
     // A pub enum's variants, referenced bare and matched.
     println(geom.kind_name(Round).concat("/").concat(geom.kind_name(Pointy)));
-    println(match Round { Round => "matched", Pointy => "no" })
+    println(
+        match Round {
+            Round => "matched",
+            Pointy => "no"
+        }
+    )
 }

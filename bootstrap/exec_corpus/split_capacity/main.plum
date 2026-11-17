@@ -16,7 +16,9 @@ let main (): Unit = {
         let dense = String.repeat(":", n);
         let pieces = String.split(dense, ":");
         assert_eq(pieces.len(), n + 1);
-        for piece in pieces { assert_eq(piece, ""); };
+        for piece in pieces {
+            assert_eq(piece, "");
+        };
         let appended = pieces.push("tail");
         assert_eq(appended.len(), n + 2);
         assert_eq(appended[n + 1], "tail");
@@ -25,7 +27,9 @@ let main (): Unit = {
     };
     assert_eq(escaped_piece(), "é");
     let mut long = "x";
-    for i in 0..16 { long = long.concat(long); };
+    for i in 0..16 {
+        long = long.concat(long);
+    };
     let source = long.concat("::").concat(long);
     let parts = String.split(source, "::");
     let retained = parts;

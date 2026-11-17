@@ -1,3 +1,4 @@
 // Reject even when the parameter is unused.
 let unused (value: Receiver): Unit = ()
+
 let main (): Unit = ()

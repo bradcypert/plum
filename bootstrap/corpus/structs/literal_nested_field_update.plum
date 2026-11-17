@@ -1,1 +1,5 @@
-let case (g: Game) (nx: Int) (ny: Int): Game = Game { ship.position.x: nx, ship.position.y: ny, ..g }
+let case (g: Game) (nx: Int) (ny: Int): Game = Game {
+    ship.position.x: nx,
+    ship.position.y: ny,
+    ..g
+}

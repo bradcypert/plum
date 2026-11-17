@@ -1,1 +1,5 @@
-let main (): Unit = { for i in 0..1000 { assert_eq(Bytes.empty().to_array(), []); }; }
+let main (): Unit = {
+    for i in 0..1000 {
+        assert_eq(Bytes.empty().to_array(), []);
+    };
+}

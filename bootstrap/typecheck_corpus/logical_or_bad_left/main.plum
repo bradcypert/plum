@@ -1,1 +1,3 @@
-let main (): Unit = { println((1 || false).to_string()); }
+let main (): Unit = {
+    println((1 || false).to_string());
+}

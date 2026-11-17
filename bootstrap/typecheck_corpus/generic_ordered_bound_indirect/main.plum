@@ -7,6 +7,7 @@
 struct P { x: Int }
 
 let biggest [T] (a: T) (b: T): T = if a > b { a } else { b }
+
 let pick [T] (a: T) (b: T): T = biggest(a, b)
 
 let main (): Unit = println(pick(P { x: 5 }, P { x: 2 }).x.to_string())

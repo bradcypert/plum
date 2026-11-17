@@ -20,8 +20,11 @@
 enum Shape { Circle(Int), Square }
 
 let double (n: Int): Int = n * 2
+
 let add (a: Int) (b: Int): Int = a + b
+
 let id[T] (x: T): T = x
+
 let pick (): (Int) -> Int = double
 
 let main (): Unit = {
@@ -44,7 +47,12 @@ let main (): Unit = {
     // call nobody wrote.
     println(Array.map([1, 2], Circle).len().to_string());
     // A payload-less variant stays a plain VALUE, not a closure.
-    println(match Square { Circle(n) => n.to_string(), Square => "square" });
+    println(
+        match Square {
+            Circle(n) => n.to_string(),
+            Square => "square"
+        }
+    );
     // The inline form still works, and still means the same thing.
     println(Array.map([1, 2, 3], |n| double(n)).to_string())
 }

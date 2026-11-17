@@ -1,4 +1,5 @@
 use Encoding;
+
 let main (): Unit = {
     assert_eq(Encoding.base64_encode(Bytes.empty()), "");
     assert_eq(Encoding.base64_url_encode(Bytes.empty()), "");

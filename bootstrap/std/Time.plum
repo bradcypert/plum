@@ -56,21 +56,27 @@ pub struct Instant { nanos: Int }
 /// `Time.seconds(10000000000)` is a crash and not a silently wrong
 /// duration.
 pub let nanos (n: Int): Duration = Duration { nanos: n }
+
 /// A duration of `n` microseconds. Negative durations are allowed and mean
 /// what they say.
 pub let micros (n: Int): Duration = Duration { nanos: n * 1000 }
+
 /// A duration of `n` milliseconds. Negative durations are allowed and mean
 /// what they say.
 pub let millis (n: Int): Duration = Duration { nanos: n * 1000000 }
+
 /// A duration of `n` seconds. Negative durations are allowed and mean
 /// what they say.
 pub let seconds (n: Int): Duration = Duration { nanos: n * 1000000000 }
+
 /// A duration of `n` minutes. Negative durations are allowed and mean
 /// what they say.
 pub let minutes (n: Int): Duration = seconds(n * 60)
+
 /// A duration of `n` hours. Negative durations are allowed and mean
 /// what they say.
 pub let hours (n: Int): Duration = minutes(n * 60)
+
 /// A duration of no time at all.
 pub let zero (): Duration = Duration { nanos: 0 }
 
@@ -78,24 +84,30 @@ pub let zero (): Duration = Duration { nanos: 0 }
 /// 1500 microseconds is 1 millisecond, not 2. Ask in the unit you
 /// care about rather than rounding one answer into another.
 pub let Duration.as_nanos (d: Duration): Int = d.nanos
+
 /// The duration in microseconds, TRUNCATED toward zero. Use
 /// `Duration.as_nanos` when the remainder matters.
 pub let Duration.as_micros (d: Duration): Int = d.nanos / 1000
+
 /// The duration in milliseconds, TRUNCATED toward zero. Use
 /// `Duration.as_nanos` when the remainder matters.
 pub let Duration.as_millis (d: Duration): Int = d.nanos / 1000000
+
 /// The duration in whole seconds, TRUNCATED toward zero. Use
 /// `Duration.as_nanos` when the remainder matters.
 pub let Duration.as_seconds (d: Duration): Int = d.nanos / 1000000000
+
 /// Whether this is exactly no time. A negative duration is not zero.
 pub let Duration.is_zero (d: Duration): Bool = d.nanos == 0
 
 /// Adds two durations.
 pub let Duration.add (a: Duration) (b: Duration): Duration = Duration { nanos: a.nanos + b.nanos }
+
 /// Subtracts `b` from `a`. The result may be negative, which is a
 /// legal duration and is what `Time.between` returns for two instants
 /// given the other way round.
 pub let Duration.sub (a: Duration) (b: Duration): Duration = Duration { nanos: a.nanos - b.nanos }
+
 /// Multiplies a duration by a whole number.
 pub let Duration.scale (d: Duration) (n: Int): Duration = Duration { nanos: d.nanos * n }
 
@@ -115,32 +127,38 @@ pub let Duration.negate (d: Duration): Duration = Duration { nanos: 0 - d.nanos 
 /// spelling that always worked.
 pub let Duration.compare (a: Duration) (b: Duration): Int =
     if a.nanos < b.nanos { 0 - 1 } else if a.nanos > b.nanos { 1 } else { 0 }
+
 /// Whether `a` is shorter than `b`.
 ///
 /// Spelled out rather than `<`, because ordered comparison in this
 /// language works on `Int`, `Float` and `String` and not on structs.
 /// `==` does work, since that one is structural.
 pub let Duration.lt (a: Duration) (b: Duration): Bool = a.nanos < b.nanos
+
 /// Whether `a` is no longer than `b`.
 ///
 /// Spelled out rather than `<`, because ordered comparison in this
 /// language works on `Int`, `Float` and `String` and not on structs.
 /// `==` does work, since that one is structural.
 pub let Duration.le (a: Duration) (b: Duration): Bool = a.nanos <= b.nanos
+
 /// Whether `a` is longer than `b`.
 ///
 /// Spelled out rather than `<`, because ordered comparison in this
 /// language works on `Int`, `Float` and `String` and not on structs.
 /// `==` does work, since that one is structural.
 pub let Duration.gt (a: Duration) (b: Duration): Bool = a.nanos > b.nanos
+
 /// Whether `a` is at least as long as `b`.
 ///
 /// Spelled out rather than `<`, because ordered comparison in this
 /// language works on `Int`, `Float` and `String` and not on structs.
 /// `==` does work, since that one is structural.
 pub let Duration.ge (a: Duration) (b: Duration): Bool = a.nanos >= b.nanos
+
 /// The shorter of two durations.
 pub let Duration.min (a: Duration) (b: Duration): Duration = if a.nanos <= b.nanos { a } else { b }
+
 /// The longer of two durations.
 pub let Duration.max (a: Duration) (b: Duration): Duration = if a.nanos >= b.nanos { a } else { b }
 
@@ -166,12 +184,14 @@ pub let instant (): Instant = unsafe { Instant { nanos: time_monotonic_nanos() }
 
 /// How long since `t0`. Never negative, because the clock it reads
 /// cannot go backwards.
-pub let since (t0: Instant): Duration = unsafe { Duration { nanos: time_monotonic_nanos() - t0.nanos } }
+pub let since (t0: Instant): Duration =
+    unsafe { Duration { nanos: time_monotonic_nanos() - t0.nanos } }
 
 /// The time between two instants, `later - earlier`. Negative if they
 /// are given the wrong way round, which is information rather than an
 /// error.
-pub let between (earlier: Instant) (later: Instant): Duration = Duration { nanos: later.nanos - earlier.nanos }
+pub let between (earlier: Instant) (later: Instant): Duration =
+    Duration { nanos: later.nanos - earlier.nanos }
 
 /// Sleeps for AT LEAST `d`, never at most: a sleep overshoots by
 /// whatever the scheduler decides, and no caller can be promised
@@ -179,7 +199,10 @@ pub let between (earlier: Instant) (later: Instant): Duration = Duration { nanos
 ///
 /// Windows sleeps in whole milliseconds, so a sub-millisecond request
 /// rounds UP to one there rather than down to nothing.
-pub let sleep (d: Duration): Unit = unsafe { time_sleep_nanos(d.nanos); () }
+pub let sleep (d: Duration): Unit = unsafe {
+    time_sleep_nanos(d.nanos);
+    ()
+}
 
 // --- Calendars ---
 //
@@ -211,8 +234,12 @@ let plum__floor_mod (a: Int) (b: Int): Int = {
 
 /// A civil date and time, as UTC. `weekday` is 0 for Sunday.
 pub struct DateTime {
-    pub year: Int, pub month: Int, pub day: Int,
-    pub hour: Int, pub minute: Int, pub second: Int,
+    pub year: Int,
+    pub month: Int,
+    pub day: Int,
+    pub hour: Int,
+    pub minute: Int,
+    pub second: Int,
     pub weekday: Int,
 }
 
@@ -250,16 +277,32 @@ pub let utc (epoch: Int): DateTime = {
 /// The English name of a weekday, 0 being Sunday, as `Time.utc`
 /// reports it. Out-of-range numbers give an empty string.
 pub let weekday_name (weekday: Int): String = match weekday {
-    0 => "Sun", 1 => "Mon", 2 => "Tue", 3 => "Wed",
-    4 => "Thu", 5 => "Fri", 6 => "Sat", _ => "",
+    0 => "Sun",
+    1 => "Mon",
+    2 => "Tue",
+    3 => "Wed",
+    4 => "Thu",
+    5 => "Fri",
+    6 => "Sat",
+    _ => "",
 }
 
 /// The English name of a month, 1 being January, as `Time.utc` reports
 /// it. Out-of-range numbers give an empty string.
 pub let month_name (month: Int): String = match month {
-    1 => "Jan", 2 => "Feb", 3 => "Mar", 4 => "Apr",
-    5 => "May", 6 => "Jun", 7 => "Jul", 8 => "Aug",
-    9 => "Sep", 10 => "Oct", 11 => "Nov", 12 => "Dec", _ => "",
+    1 => "Jan",
+    2 => "Feb",
+    3 => "Mar",
+    4 => "Apr",
+    5 => "May",
+    6 => "Jun",
+    7 => "Jul",
+    8 => "Aug",
+    9 => "Sep",
+    10 => "Oct",
+    11 => "Nov",
+    12 => "Dec",
+    _ => "",
 }
 
 let plum__two (n: Int): String = String.pad_left(n.to_string(), 2, "0")
@@ -289,8 +332,10 @@ let plum__iso_year (year: Int): String =
 /// only within the unsigned four-digit range.
 pub let iso8601 (epoch: Int): String = {
     let t = utc(epoch);
-    let date = plum__iso_year(t.year).concat("-").concat(plum__two(t.month)).concat("-").concat(plum__two(t.day));
-    date.concat("T").concat(plum__two(t.hour)).concat(":").concat(plum__two(t.minute)).concat(":").concat(plum__two(t.second)).concat("Z")
+    let date = plum__iso_year(t.year).concat("-").concat(plum__two(t.month)).concat("-")
+        .concat(plum__two(t.day));
+    date.concat("T").concat(plum__two(t.hour)).concat(":").concat(plum__two(t.minute)).concat(":")
+        .concat(plum__two(t.second)).concat("Z")
 }
 
 /// `Thu, 27 Aug 2026 01:40:28 GMT`, the HTTP date format (RFC 7231),
@@ -301,8 +346,10 @@ pub let iso8601 (epoch: Int): String = {
 pub let rfc7231 (epoch: Int): String = {
     let t = utc(epoch);
     if t.year < 0 || t.year > 9999 { "" } else {
-        let head = weekday_name(t.weekday).concat(", ").concat(plum__two(t.day)).concat(" ").concat(month_name(t.month));
-        let time = plum__two(t.hour).concat(":").concat(plum__two(t.minute)).concat(":").concat(plum__two(t.second));
+        let head = weekday_name(t.weekday).concat(", ").concat(plum__two(t.day)).concat(" ")
+            .concat(month_name(t.month));
+        let time = plum__two(t.hour).concat(":").concat(plum__two(t.minute)).concat(":")
+            .concat(plum__two(t.second));
         head.concat(" ").concat(plum__four_year(t.year)).concat(" ").concat(time).concat(" GMT")
     }
 }

@@ -1,13 +1,23 @@
 use parser;
 use typecheck;
 
-let cg_integer_convert (p: CgProgram) (env: Array[CgSlot]) (n: Int) (destination: typecheck.IntegerKind) (mode: typecheck.IntegerConversionMode) (source: typecheck.TExpr): Emit = {
+let cg_integer_convert
+    (p: CgProgram)
+    (env: Array[CgSlot])
+    (n: Int)
+    (destination: typecheck.IntegerKind)
+    (mode: typecheck.IntegerConversionMode)
+    (source: typecheck.TExpr): Emit
+= {
     // Evaluate the source once, before any bounds check or Result allocation.
     let value = cg_expr(p, env, n, source);
     let source_kind = match cg_concrete(p, typecheck.texpr_ty(p.subst, source)) {
         ITInt => IntegerI64,
         ITInteger(k) => k,
-        _ => { cg_fail("internal: non-integer conversion source"); IntegerI64 },
+        _ => {
+            cg_fail("internal: non-integer conversion source");
+            IntegerI64
+        },
     };
     if mode == IntegerConvertTruncating {
         let spec = typecheck.integer_spec(destination);
@@ -20,10 +30,15 @@ let cg_integer_convert (p: CgProgram) (env: Array[CgSlot]) (n: Int) (destination
             let narrow = cg_reg(value.n);
             let out = cg_reg(value.n + 1);
             let extension = if spec.signed { "sext" } else { "zext" };
-            Emit { code: value.code
-                .concat("  ${narrow} = trunc i64 ${value.val} to i${spec.bits}\n")
-                .concat("  ${out} = ${extension} i${spec.bits} ${narrow} to i64\n"),
-                val: out, ty: dest_ty, n: value.n + 2, ..value }
+            Emit {
+                code: value.code
+                    .concat("  ${narrow} = trunc i64 ${value.val} to i${spec.bits}\n")
+                    .concat("  ${out} = ${extension} i${spec.bits} ${narrow} to i64\n"),
+                val: out,
+                ty: dest_ty,
+                n: value.n + 2,
+                ..value
+            }
         }
     } else if mode == IntegerConvertPreserving {
         let dest_ty = if destination == IntegerI64 { CgInt } else { CgInteger(destination) };
@@ -32,14 +47,27 @@ let cg_integer_convert (p: CgProgram) (env: Array[CgSlot]) (n: Int) (destination
         let result_name = parser.qualify_type(parser.PRELUDE_MODULE(), "Result");
         if typecheck.integer_range_fits(source_kind, destination) {
             let ok = cg_conversion_variant(p, result_name, "Ok", ["i64 ${value.val}"], value.n);
-            Emit { code: value.code.concat(ok.code), allocas: value.allocas, releases: value.releases,
-                globals: value.globals.concat(ok.globals), val: ok.val, ty: ok.ty, n: ok.n }
+            Emit {
+                code: value.code.concat(ok.code),
+                allocas: value.allocas,
+                releases: value.releases,
+                globals: value.globals.concat(ok.globals),
+                val: ok.val,
+                ty: ok.ty,
+                n: ok.n
+            }
         } else {
             let fits = cg_conversion_fits(source_kind, destination, value.val, value.n);
             let yes = cg_label(fits.next);
             let no = cg_label(fits.next + 1);
             let done = cg_label(fits.next + 2);
-            let ok = cg_conversion_variant(p, result_name, "Ok", ["i64 ${value.val}"], fits.next + 3);
+            let ok = cg_conversion_variant(
+                p,
+                result_name,
+                "Ok",
+                ["i64 ${value.val}"],
+                fits.next + 3
+            );
             let error = cg_expr(p, [], ok.n, cg_conversion_error(source_kind, destination));
             let bad = cg_conversion_variant(p, result_name, "Err", ["ptr ${error.val}"], error.n);
             let out = cg_reg(bad.n);
@@ -49,20 +77,49 @@ let cg_integer_convert (p: CgProgram) (env: Array[CgSlot]) (n: Int) (destination
                     .concat(ok.code).concat("  br label %${done}\n${no}:\n")
                     .concat(error.code).concat(bad.code).concat("  br label %${done}\n${done}:\n")
                     .concat("  ${out} = phi ptr [ ${ok.val}, %${yes} ], [ ${bad.val}, %${no} ]\n"),
-                allocas: value.allocas, releases: value.releases, globals: value.globals.concat(ok.globals).concat(error.globals).concat(bad.globals),
-                val: out, ty: CgEnum(result_name), n: bad.n + 1,
+                allocas: value.allocas,
+                releases: value.releases,
+                globals: value.globals.concat(ok.globals).concat(error.globals).concat(bad.globals),
+                val: out,
+                ty: CgEnum(result_name),
+                n: bad.n + 1,
             }
         }
     }
 }
 
-let cg_conversion_variant (p: CgProgram) (name: String) (tag: String) (values: Array[String]) (n: Int): Emit =
+let cg_conversion_variant
+    (p: CgProgram)
+    (name: String)
+    (tag: String)
+    (values: Array[String])
+    (n: Int): Emit
+=
     match cg_variant_of(p, name, tag) {
-        Some(v) => cg_variant_build(p, v, ArgVals { code: "", allocas: "", releases: "", globals: "", vals: values, n: n }),
-        None => { cg_fail("internal: missing conversion Result variant ${tag}"); cg_unit_emit(n) },
+        Some(v) => cg_variant_build(
+            p,
+            v,
+            ArgVals {
+                code: "",
+                allocas: "",
+                releases: "",
+                globals: "",
+                vals: values,
+                n: n
+            }
+        ),
+        None => {
+            cg_fail("internal: missing conversion Result variant ${tag}");
+            cg_unit_emit(n)
+        },
     }
 
-let cg_conversion_fits (source: typecheck.IntegerKind) (destination: typecheck.IntegerKind) (value: String) (n: Int): DivGuard = {
+let cg_conversion_fits
+    (source: typecheck.IntegerKind)
+    (destination: typecheck.IntegerKind)
+    (value: String)
+    (n: Int): DivGuard
+= {
     let src = typecheck.integer_spec(source);
     let dst = typecheck.integer_spec(destination);
     let lo = cg_reg(n);
@@ -75,7 +132,11 @@ let cg_conversion_fits (source: typecheck.IntegerKind) (destination: typecheck.I
             .concat("  ${hi} = icmp ${predicate} i64 ${value}, ${dst.max}\n")
             .concat("  ${fits} = and i1 ${lo}, ${hi}\n")
     } else { "  ${fits} = icmp ule i64 ${value}, ${dst.max}\n" };
-    DivGuard { code: code, reg: fits, next: n + 3 }
+    DivGuard {
+        code: code,
+        reg: fits,
+        next: n + 3
+    }
 }
 
 let cg_conversion_kind (kind: typecheck.IntegerKind): typecheck.TExpr = {
@@ -85,10 +146,20 @@ let cg_conversion_kind (kind: typecheck.IntegerKind): typecheck.TExpr = {
     typecheck.TExpr { ty: ITEnum(name, []), node: TVariantNew(name, tag, []) }
 }
 
-let cg_conversion_error (source: typecheck.IntegerKind) (destination: typecheck.IntegerKind): typecheck.TExpr = {
+let cg_conversion_error
+    (source: typecheck.IntegerKind)
+    (destination: typecheck.IntegerKind): typecheck.TExpr
+= {
     let name = parser.qualify_type(parser.PRELUDE_MODULE(), "IntegerConversionError");
-    typecheck.TExpr { ty: ITStruct(name, []), node: TStructLit(name, [
-        typecheck.TFieldInit { name: "source", value: cg_conversion_kind(source) },
-        typecheck.TFieldInit { name: "destination", value: cg_conversion_kind(destination) },
-    ], None) }
+    typecheck.TExpr {
+        ty: ITStruct(name, []),
+        node: TStructLit(
+            name,
+            [
+                typecheck.TFieldInit { name: "source", value: cg_conversion_kind(source) },
+                typecheck.TFieldInit { name: "destination", value: cg_conversion_kind(destination) },
+            ],
+            None
+        )
+    }
 }

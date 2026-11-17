@@ -14,7 +14,10 @@ struct Account {
 // optional message. `ensure` clauses run last, with `result` bound to
 // the function's own return value — here, guaranteeing the account
 // never goes negative no matter what the body above computes.
-let withdraw (account: Account) (amount: Int): Account
+let withdraw
+    (account: Account)
+    (amount: Int)
+    : Account
     require amount > 0 : "withdrawal amount must be positive"
     require amount <= account.balance : "insufficient funds"
     ensure result.balance >= 0
@@ -27,7 +30,9 @@ let withdraw (account: Account) (amount: Int): Account
 // place (a programming mistake, not routine control flow) — `Result`
 // is still the right choice for genuinely expected failure, like a
 // malformed string or a missing key.
-let average (total: Int) (count: Int): Int
+let average
+    (total: Int)
+    (count: Int): Int
     require count > 0 : "average of zero items is undefined"
 = total / count
 

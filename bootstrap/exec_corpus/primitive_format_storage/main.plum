@@ -10,13 +10,20 @@ let preserve (text: String): Unit = {
 }
 
 let bool_text (value: Bool): String = value.to_string()
+
 let worker (n: Int): String = {
     let first = n.to_string();
     for i in 0..100 {
         assert_eq(i.to_string(), Int.to_radix(i, 10));
         assert_eq((0.1 + 0.2).to_string(), "0.30000000000000004");
-        assert_eq(Float.to_fixed(if n < 0 { 1.25 } else { 17.125 }, 3), if n < 0 { "1.250" } else { "17.125" });
-        assert_eq(bool_text(i - (i / 2) * 2 == 0), if i - (i / 2) * 2 == 0 { "true" } else { "false" });
+        assert_eq(
+            Float.to_fixed(if n < 0 { 1.25 } else { 17.125 }, 3),
+            if n < 0 { "1.250" } else { "17.125" }
+        );
+        assert_eq(
+            bool_text(i - (i / 2) * 2 == 0),
+            if i - (i / 2) * 2 == 0 { "true" } else { "false" }
+        );
     };
     first
 }
@@ -25,7 +32,8 @@ let main (): Unit = {
     let min = 0 - 9223372036854775807 - 1;
     for n in [min, min + 1, 0 - 1, 0, 1, 9223372036854775807] {
         let text = n.to_string();
-        assert_eq(text, Int.to_radix(n, 10)); preserve(text);
+        assert_eq(text, Int.to_radix(n, 10));
+        preserve(text);
     };
     for b in [true, false] {
         let text = bool_text(b);
@@ -46,8 +54,11 @@ let main (): Unit = {
     assert_eq(Float.to_fixed(-0.001, 2), "-0.00");
     assert_eq(Float.to_fixed(1.25, 0 - 1), "1");
     assert_eq(Float.to_fixed(1.25, 18), "1.25000000000000000");
-    let a = spawn { worker(min) }; let b = spawn { worker(9223372036854775807) };
+    let a = spawn { worker(min) };
+    let b = spawn { worker(9223372036854775807) };
     assert_eq(a.join(), "-9223372036854775808");
     assert_eq(b.join(), "9223372036854775807");
-    println("Primitive formatting: compact results, static booleans, immutable aliases and concurrent local scratch")
+    println(
+        "Primitive formatting: compact results, static booleans, immutable aliases and concurrent local scratch"
+    )
 }

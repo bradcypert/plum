@@ -8,37 +8,64 @@ extern "C" {
     fn native_literal() -> RawCStr;
     fn inspect_raw(value: RawCStr) -> Int;
 }
+
 struct Box { pointer: CStr }
+
 enum Choice { Empty, Value(CStr) }
+
 let made (n: Int): CStr = unsafe { "x".repeat(n).as_cstr() }
+
 let relay (pointer: CStr): Int = unsafe { inspect(pointer) }
+
 let forward (pointer: CStr): CStr = pointer
+
 let tail (n: Int) (pointer: CStr): Int =
     if n == 0 { relay(pointer) } else { tail(n - 1, pointer) }
+
 let copied (pointer: CStr): String = unsafe { pointer.as_string() }
+
 let selected (left: Bool): CStr = unsafe {
     if left { "x".repeat(32).as_cstr() } else { "y".repeat(64).as_cstr() }
 }
+
 let from_match (left: Bool): CStr = match if left { Some(made(32)) } else { None } {
     Some(pointer) => pointer,
     None => made(64),
 }
-let capture (): () -> CStr = { let pointer = made(32); || pointer }
+
+let capture (): () -> CStr = {
+    let pointer = made(32);
+    || pointer
+}
+
 let memory_field (field: Int): Int = unsafe {
     let token = plum_heap_snapshot();
     if token == 0 { -1 } else { plum_heap_snapshot_field(token, field) }
 }
+
 let live (): Int = memory_field(3)
+
 let allocated (): Int = memory_field(0)
+
 let source_is_shared (): Unit = unsafe {
     let mut text = "x".repeat(32);
     let pointer = text.as_cstr();
     text = text.concat("changed");
     assert_eq(inspect(pointer), 32);
     assert_eq(text.len(), 39);
-    assert_eq(inspect_pair(text.as_cstr(), { text = "y".repeat(128); 0 }), 39);
+    assert_eq(
+        inspect_pair(
+            text.as_cstr(),
+            {
+                text = "y".repeat(128);
+                0
+            }
+        ),
+        39
+    );
     assert_eq(text.len(), 128)
 }
+
 let stored (): Unit = {
     let pointer = made(32);
     let same = pointer;
@@ -52,12 +79,21 @@ let stored (): Unit = {
     holder.set(made(64));
     assert_eq(relay(holder.get()), 64);
     let tuple = (made(32), made(64));
-    match tuple { (a, b) => { assert_eq(relay(a), 32); assert_eq(relay(b), 64) } };
-    match Value(made(32)) { Value(p) => assert_eq(relay(p), 32), Empty => assert(false) };
+    match tuple {
+        (a, b) => {
+            assert_eq(relay(a), 32);
+            assert_eq(relay(b), 64)
+        }
+    };
+    match Value(made(32)) {
+        Value(p) => assert_eq(relay(p), 32),
+        Empty => assert(false)
+    };
     let closure = capture();
     assert_eq(relay(closure()), 32);
     assert_eq(relay(closure()), 32)
 }
+
 // Loop continuations conservatively account for later reads with the same
 // name. This can retain a local until overwrite/exit, but must stay bounded
 // and release it when the function returns.
@@ -72,6 +108,7 @@ let bounded_locals (): Unit = {
     let pointer = made(32);
     assert_eq(relay(pointer), 32)
 }
+
 let main (): Unit = {
     assert_eq(unsafe { inspect("x".repeat(32).as_cstr()) }, 32);
     assert_eq(unsafe { inspect_bytes(Bytes.from_array([65, 0, 66]).as_cstr(), 3) }, 1);

@@ -7,7 +7,10 @@ let repeated (n: Int) (text: String) (parts: Array[String]): String =
 
 let parsed_len (text: String): Int = match json_parse(text) {
     Ok(JsonString(s)) => s.len(),
-    _ => { panic_raw("string did not parse"); 0 },
+    _ => {
+        panic_raw("string did not parse");
+        0
+    },
 }
 
 let main (): Unit = {

@@ -8,7 +8,9 @@ use Path;
 // prefixes, which would obscure the cost of the path operations.
 let repeated (text: String) (n: Int): String = {
     let mut parts: Array[String] = [];
-    for i in 0..n { parts = parts.push(text); };
+    for i in 0..n {
+        parts = parts.push(text);
+    };
     Array.concat_all(parts)
 }
 

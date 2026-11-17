@@ -4,6 +4,7 @@
 // `corpus-check`, which is the only reason the fixture is worth having.
 
 struct P { x: Int, name: String }
+
 enum Step { Idle, Moving(String) }
 
 // Reads a field out of the very cell being recycled. Safe because the
@@ -42,7 +43,10 @@ let steps (n: Int): String = {
     for i in 0..n {
         s = Moving(i.to_string());
     };
-    match s { Idle => "idle", Moving(k) => k }
+    match s {
+        Idle => "idle",
+        Moving(k) => k
+    }
 }
 
 // Shadowing: the inner `let` reads the OUTER binding, which lives in a

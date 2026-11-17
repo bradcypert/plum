@@ -13,6 +13,7 @@ let build_arr (acc: Array[Int]) (n: Int): Array[Int] =
 // Read TWICE on one path, so neither may be moved: the second read would
 // find a nulled slot.
 let twice_str (acc: String): Int = acc.len() + acc.concat("!").len()
+
 let twice_arr (acc: Array[Int]): Int = acc.len() + acc.push(9).len()
 
 // Read once per branch, but the branches are alternatives — still movable.

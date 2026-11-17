@@ -13,17 +13,30 @@ use Encoding;
 // call and stays honest about what it is doing.
 
 let show (label: String) (r: Result[Bytes, String]): Unit =
-    println(label.concat(": ").concat(match r {
-        Ok(b) => b.to_hex(),
-        Err(e) => e,
-    }))
+    println(
+        label.concat(": ")
+            .concat(
+                match r {
+                    Ok(b) => b.to_hex(),
+                    Err(e) => e,
+                }
+            )
+    )
 
 // A decoded buffer read back as text, for the cases that really are text.
 let show_text (label: String) (r: Result[Bytes, String]): Unit =
-    println(label.concat(": ").concat(match r {
-        Ok(b) => match b.as_string() { Ok(s) => s, Err(e) => e },
-        Err(e) => e,
-    }))
+    println(
+        label.concat(": ")
+            .concat(
+                match r {
+                    Ok(b) => match b.as_string() {
+                        Ok(s) => s,
+                        Err(e) => e
+                    },
+                    Err(e) => e,
+                }
+            )
+    )
 
 let main (): Unit = {
     // --- Hex ---
@@ -43,10 +56,14 @@ let main (): Unit = {
     show("hex invalid", Encoding.hex_decode("68zz"));
     // Bracketed so the empty result is visible, and so no expected file
     // has to carry a trailing space.
-    println("hex empty: [".concat(match Encoding.hex_decode("") {
-        Ok(b) => b.to_hex(),
-        Err(e) => e,
-    }).concat("]"));
+    println(
+        "hex empty: [".concat(
+            match Encoding.hex_decode("") {
+                Ok(b) => b.to_hex(),
+                Err(e) => e,
+            }
+        ).concat("]")
+    );
 
     // --- Base64 ---
     //

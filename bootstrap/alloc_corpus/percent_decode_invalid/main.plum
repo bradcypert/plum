@@ -1,4 +1,7 @@
 use Encoding;
+
 let main (): Unit = {
-    for i in 0..1000 { assert(Result.is_err(Encoding.percent_decode("abc%GG"))); };
+    for i in 0..1000 {
+        assert(Result.is_err(Encoding.percent_decode("abc%GG")));
+    };
 }

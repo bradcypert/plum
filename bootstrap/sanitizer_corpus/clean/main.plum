@@ -1,7 +1,10 @@
 extern "C" { fn native_instrumented() -> Int; }
+
 let main (): Unit = {
     let mut values: Array[String] = [];
-    for i in 0..128 { values = values.push("cell".concat(i.to_string())); };
+    for i in 0..128 {
+        values = values.push("cell".concat(i.to_string()));
+    };
     let alias = values;
     let worker = spawn { alias[0].concat("!") };
     assert_eq(worker.join(), "cell0!");
@@ -10,4 +13,5 @@ let main (): Unit = {
     println("native=${native}");
     println(Array.join(args(), "|"))
 }
+
 let test_ownership (): Unit = main()

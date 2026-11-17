@@ -4,8 +4,14 @@ use lsp;
 // Keep only its latest result, never a snapshot, source text, or edit history.
 // Separate projects may report on the same dependency URI: their publications
 // must be combined before replacing that URI's editor diagnostics.
-struct LspDiagnostics { roots: Array[String], target: String, items: Array[JsonValue] }
+struct LspDiagnostics {
+    roots: Array[String],
+    target: String,
+    items: Array[JsonValue]
+}
+
 let LSP_DIAGNOSTICS: Ref[Map[String, LspDiagnostics]] = ref(empty_lsp_diagnostics(()))
+
 let empty_lsp_diagnostics (): Map[String, LspDiagnostics] = Map.new(())
 
 let lsp_publish_target (uri: String): Unit = {
@@ -15,7 +21,10 @@ let lsp_publish_target (uri: String): Unit = {
         match Map.get(results, project) {
             Some(result) => if result.target == uri {
                 for item in result.items {
-                    if !Array.contains(items, item) { items = items.push(item); () };
+                    if !Array.contains(items, item) {
+                        items = items.push(item);
+                        ()
+                    };
                 };
             },
             None => (),
@@ -39,7 +48,10 @@ let lsp_remove_diagnostics (project: String): Unit = {
     let remaining = Map.remove(LSP_DIAGNOSTICS.get(), project);
     // Map.remove keeps bucket capacity; release it after the final project.
     LSP_DIAGNOSTICS.set(if Map.len(remaining) == 0 { empty_lsp_diagnostics(()) } else { remaining });
-    match previous { Some(old) => lsp_publish_target(old.target), None => () }
+    match previous {
+        Some(old) => lsp_publish_target(old.target),
+        None => ()
+    }
 }
 
 // Called after removing the closed buffer. Its disk contents replace the
@@ -52,11 +64,21 @@ let lsp_close_diagnostics (uri: String): Unit = {
         match Map.get(results, project) {
             None => (),
             Some(result) => {
-                let affected = Array.any(result.roots, |root| Option.is_some(source_relative_option(root, path)));
+                let affected = Array.any(
+                    result.roots,
+                    |root| Option.is_some(source_relative_option(root, path))
+                );
                 if affected {
-                    let candidates = Array.filter(Map.keys(BUFFERS.get()), |open_uri| Option.is_some(source_relative_option(project, lsp.uri_to_path(open_uri))));
+                    let candidates = Array.filter(
+                        Map.keys(BUFFERS.get()),
+                        |open_uri| Option.is_some(
+                            source_relative_option(project, lsp.uri_to_path(open_uri))
+                        )
+                    );
                     lsp_remove_diagnostics(project);
-                    if candidates.len() > 0 { lsp_diagnose_document(Array.sort_string(candidates)[0]) };
+                    if candidates.len() > 0 {
+                        lsp_diagnose_document(Array.sort_string(candidates)[0])
+                    };
                 };
             },
         };

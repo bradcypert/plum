@@ -11,13 +11,19 @@ let round_trip (text: String): String = match json_parse(text) {
 }
 
 let main (): Unit = {
-    println(stringify_valid(JsonObject([
-        JsonEntry { key: "name", value: JsonString("plum") },
-        JsonEntry { key: "version", value: JsonNumber(1.5) },
-        JsonEntry { key: "tags", value: JsonArray([JsonString("a"), JsonString("b")]) },
-        JsonEntry { key: "stable", value: JsonBool(true) },
-        JsonEntry { key: "extra", value: JsonNull },
-    ])));
+    println(
+        stringify_valid(
+            JsonObject(
+                [
+                    JsonEntry { key: "name", value: JsonString("plum") },
+                    JsonEntry { key: "version", value: JsonNumber(1.5) },
+                    JsonEntry { key: "tags", value: JsonArray([JsonString("a"), JsonString("b")]) },
+                    JsonEntry { key: "stable", value: JsonBool(true) },
+                    JsonEntry { key: "extra", value: JsonNull },
+                ]
+            )
+        )
+    );
     println(round_trip("{\"b\": [true, null, \"x\"]}"));
     println(round_trip("[1, 2.5, -3, 1e2]"));
     println(round_trip("\"escaped: \\\"quoted\\\"\""));
@@ -27,5 +33,8 @@ let main (): Unit = {
 // These fixtures construct finite JSON. Fail loudly if that invariant changes.
 let stringify_valid (value: JsonValue): String = match json_stringify(value) {
     Ok(text) => text,
-    Err(e) => { panic_raw(e); "" },
+    Err(e) => {
+        panic_raw(e);
+        ""
+    },
 }

@@ -20,9 +20,12 @@ let legacy_vectors (): Unit = {
 let oracle_hash (s: String): Int = {
     let bytes = s.as_bytes();
     let mut h = 0 - 3750763034362895579;
-    for i in 0..bytes.len() { h = Int.wrapping_mul(h ^ bytes.at(i).unwrap_or(0), 1099511628211); };
+    for i in 0..bytes.len() {
+        h = Int.wrapping_mul(h ^ bytes.at(i).unwrap_or(0), 1099511628211);
+    };
     h & 9223372036854775807
 }
+
 let check (s: String) (expected: Int): Unit = {
     let hash = String.hash;
     assert_eq(String.hash(s), expected);
@@ -30,6 +33,7 @@ let check (s: String) (expected: Int): Unit = {
     assert_eq(hash(s), expected);
     assert_eq(oracle_hash(s), expected);
 }
+
 let main (): Unit = {
     legacy_vectors();
     check("", 5472609002491880229);
@@ -67,7 +71,10 @@ let main (): Unit = {
     let keys = ["key\x00tail", "keyé", "key🙂", ""];
     let mut map = Map.new(());
     let mut set = Set.new(());
-    for i in 0..keys.len() { map = Map.insert(map, keys[i], i); set = Set.insert(set, keys[i]); };
+    for i in 0..keys.len() {
+        map = Map.insert(map, keys[i], i);
+        set = Set.insert(set, keys[i]);
+    };
     for i in 0..keys.len() {
         assert_eq(String.hash(keys[i]), keys[i].hash());
         assert_eq(Map.get(map, keys[i]), Some(i));
@@ -75,5 +82,7 @@ let main (): Unit = {
     };
     let large = "aé\x00🙂".repeat(32768);
     check(large, oracle_hash(large));
-    println("String hashing: named, method and function forms preserve FNV bytes, NULs, aliases and collection behavior")
+    println(
+        "String hashing: named, method and function forms preserve FNV bytes, NULs, aliases and collection behavior"
+    )
 }

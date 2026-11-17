@@ -12,6 +12,16 @@ let main (): Unit = {
     println(describe(P { x: 42 }));
     println(inner.make().y);
     // The enums are distinct too, variants and all.
-    println(match Warm { Warm => "root Warm", Cool => "root Cool" });
-    println(match inner.shade() { Light => "inner Light", Dark => "inner Dark" })
+    println(
+        match Warm {
+            Warm => "root Warm",
+            Cool => "root Cool"
+        }
+    );
+    println(
+        match inner.shade() {
+            Light => "inner Light",
+            Dark => "inner Dark"
+        }
+    )
 }

@@ -27,9 +27,11 @@ handle Res { on_drop: fake_close }
 // wrong is a double close. `raw` is unsafe for the mirror reason -- it
 // hands the number to C while Plum still owns the cell.
 let acquire (): Res = unsafe { Res.from_raw(fake_open()) }
+
 let use_it (r: Res): Int = unsafe { Res.raw(r) }
 
 let live (): String = unsafe { fake_live() }.to_string()
+
 let closed (): String = unsafe { fake_closes() }.to_string()
 
 let scoped (): Unit = {
@@ -72,7 +74,10 @@ let main (): Unit = {
     {
         let x = acquire();
         let y = acquire();
-        println("  two alive: ".concat(use_it(x).to_string()).concat(" and ").concat(use_it(y).to_string()))
+        println(
+            "  two alive: ".concat(use_it(x).to_string()).concat(" and ")
+                .concat(use_it(y).to_string())
+        )
     };
     println("after block: live=".concat(live()).concat(" closes=").concat(closed()));
 

@@ -8,6 +8,7 @@ struct Item { name: String, n: Int }
 
 // The plain cases: the source is dead, the elements are heap.
 let shout (xs: Array[String]): Array[String] = Array.map(xs, |s| s.concat("!"))
+
 let longs (xs: Array[String]): Array[String] = Array.filter(xs, |s| s.len() > 2)
 
 // The closure hands back the very element it was given. The reference
@@ -38,7 +39,13 @@ let main (): Unit = {
     println(Array.fold(same_again(["p", "q"]), "", |a, s| a.concat(s)));
     println(Array.fold(lengths(["ann", "bo"]), 0, |a, n| a + n).to_string());
     println(Array.fold(labels([1, 2, 3]), "", |a, s| a.concat(s)));
-    println(Array.fold(names([Item { name: "x", n: 1 }, Item { name: "y", n: 2 }]), "", |a, s| a.concat(s)));
+    println(
+        Array.fold(
+            names([Item { name: "x", n: 1 }, Item { name: "y", n: 2 }]),
+            "",
+            |a, s| a.concat(s)
+        )
+    );
     // Nothing kept: every element is dropped by the loop and none is
     // carried forward.
     println(Array.filter(["a", "b"], |s| s.len() > 5).len().to_string());

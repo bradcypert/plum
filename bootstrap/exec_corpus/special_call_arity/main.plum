@@ -1,5 +1,9 @@
 // Valid special calls preserve once-only evaluation and borrowing.
-let value (label: String) (n: Int): Int = { println(label); n }
+let value (label: String) (n: Int): Int = {
+    println(label);
+    n
+}
+
 let main (): Unit = {
     println(value("println argument", 7));
     println(value("to_string receiver", 8).to_string());

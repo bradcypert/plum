@@ -138,12 +138,17 @@ pub enum InterpPiece {
 // `PLUM_ALLOC_STATS`. Hoisting the split to a global makes it 52
 // allocations total, once, for the whole program.
 let PLUM_ALPHA: String = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ"
+
 let PLUM_DIGITS: String = "0123456789"
+
 let PLUM_ALPHA_CHARS: Array[String] = chars_of(PLUM_ALPHA)
+
 let PLUM_DIGIT_CHARS: Array[String] = chars_of(PLUM_DIGITS)
 
 let is_digit_char (c: String): Bool = Array.contains(PLUM_DIGIT_CHARS, c)
+
 let is_ident_start_char (c: String): Bool = Array.contains(PLUM_ALPHA_CHARS, c) || c == "_"
+
 let is_ident_continue_char (c: String): Bool = is_ident_start_char(c) || is_digit_char(c)
 
 // --- Whitespace/comment skipping ---
@@ -163,7 +168,11 @@ let skip_ws_and_comments (chars: Array[String]) (pos: Int): Int =
 
 // Source context is shared for a scan, including raw interpolation fragments.
 // Offsets in a fragment are local; diagnostics add its original source base.
-struct LexContext { source: String, path: String, base: Int }
+struct LexContext {
+    source: String,
+    path: String,
+    base: Int
+}
 
 let fail_lex (ctx: LexContext) (offset: Int) (msg: String): Unit =
     panic_raw(render_at(ctx.source, ctx.path, ctx.base + offset, msg))
@@ -187,9 +196,15 @@ let canonical_integer_text (text: String): String = {
         let mut first = 0;
         let mut leading = true;
         for c in chars {
-            if leading && c == "0" { first = first + 1; } else { leading = false; };
+            if leading && c == "0" {
+                first = first + 1;
+            } else {
+                leading = false;
+            };
         };
-        Array.concat_all(Array.slice(chars, if first == chars.len() { first - 1 } else { first }, chars.len()))
+        Array.concat_all(
+            Array.slice(chars, if first == chars.len() { first - 1 } else { first }, chars.len())
+        )
     }
 }
 
@@ -211,13 +226,16 @@ let scan_exponent (chars: Array[String]) (pos: Int): Int = {
     else {
         let signed = char_at(chars, pos + 1) == "+" || char_at(chars, pos + 1) == "-";
         let digit_start = if signed { pos + 2 } else { pos + 1 };
-        if is_digit_char(char_at(chars, digit_start)) { scan_digit_run(chars, digit_start) } else { pos }
+        if is_digit_char(char_at(chars, digit_start)) { scan_digit_run(chars, digit_start) } else {
+            pos
+        }
     }
 }
 
 let lex_number (ctx: LexContext) (chars: Array[String]) (pos: Int): NumResult = {
     let int_end = scan_digit_run(chars, pos);
-    let has_point = int_end < chars.len() && chars[int_end] == "." && int_end + 1 < chars.len() && is_digit_char(chars[int_end + 1]);
+    let has_point = int_end < chars.len() && chars[int_end] == "." && int_end + 1 < chars.len()
+        && is_digit_char(chars[int_end + 1]);
     let mantissa_end = if has_point { scan_digit_run(chars, int_end + 1) } else { int_end };
     // An exponent makes the literal a FLOAT even with no decimal point,
     // which is why this is checked independently of `has_point`.
@@ -228,13 +246,20 @@ let lex_number (ctx: LexContext) (chars: Array[String]) (pos: Int): NumResult = 
         let text = Array.concat_all(Array.filter(Array.slice(chars, pos, frac_end), |c| c != "_"));
         match String.parse_float(text) {
             Ok(f) => NumResult { token: TokFloat(f), next_pos: frac_end },
-            Err(_) => { fail_lex(ctx, pos, "float literal out of range: ".concat(text)); NumResult { token: TokFloat(0.0), next_pos: frac_end } },
+            Err(_) => {
+                fail_lex(ctx, pos, "float literal out of range: ".concat(text));
+                NumResult { token: TokFloat(0.0), next_pos: frac_end }
+            },
         }
     } else {
         let text = Array.concat_all(Array.filter(Array.slice(chars, pos, int_end), |c| c != "_"));
         let magnitude = canonical_integer_text(text);
         if magnitude.len() > 20 || (magnitude.len() == 20 && magnitude > "18446744073709551615") {
-            fail_lex(ctx, pos, "integer literal out of range: ${text} (maximum magnitude is 18446744073709551615)");
+            fail_lex(
+                ctx,
+                pos,
+                "integer literal out of range: ${text} (maximum magnitude is 18446744073709551615)"
+            );
         };
         NumResult { token: TokInt(magnitude), next_pos: int_end }
     }
@@ -245,10 +270,28 @@ let lex_number (ctx: LexContext) (chars: Array[String]) (pos: Int): NumResult = 
 struct EscResult { ch: String, next_pos: Int }
 
 let hex_digit (c: String): Int = match c {
-    "0" => 0, "1" => 1, "2" => 2, "3" => 3, "4" => 4,
-    "5" => 5, "6" => 6, "7" => 7, "8" => 8, "9" => 9,
-    "a" => 10, "b" => 11, "c" => 12, "d" => 13, "e" => 14, "f" => 15,
-    "A" => 10, "B" => 11, "C" => 12, "D" => 13, "E" => 14, "F" => 15,
+    "0" => 0,
+    "1" => 1,
+    "2" => 2,
+    "3" => 3,
+    "4" => 4,
+    "5" => 5,
+    "6" => 6,
+    "7" => 7,
+    "8" => 8,
+    "9" => 9,
+    "a" => 10,
+    "b" => 11,
+    "c" => 12,
+    "d" => 13,
+    "e" => 14,
+    "f" => 15,
+    "A" => 10,
+    "B" => 11,
+    "C" => 12,
+    "D" => 13,
+    "E" => 14,
+    "F" => 15,
     _ => -1,
 }
 
@@ -259,9 +302,9 @@ let escape_error (ctx: LexContext) (offset: Int) (msg: String) (next_pos: Int): 
 
 let scalar_string (n: Int): String = {
     let bs = if n <= 127 { [n] }
-        else if n <= 2047 { [192 + n / 64, 128 + n % 64] }
-        else if n <= 65535 { [224 + n / 4096, 128 + (n / 64) % 64, 128 + n % 64] }
-        else { [240 + n / 262144, 128 + (n / 4096) % 64, 128 + (n / 64) % 64, 128 + n % 64] };
+    else if n <= 2047 { [192 + n / 64, 128 + n % 64] }
+    else if n <= 65535 { [224 + n / 4096, 128 + (n / 64) % 64, 128 + n % 64] }
+    else { [240 + n / 262144, 128 + (n / 4096) % 64, 128 + (n / 64) % 64, 128 + n % 64] };
     match Bytes.as_string(Bytes.from_array(bs)) {
         Ok(s) => s,
         Err(_) => "",
@@ -286,7 +329,12 @@ let escape_char (ctx: LexContext) (chars: Array[String]) (pos: Int) (slash: Int)
     else if chars[pos] == "$" { EscResult { ch: "$", next_pos: pos + 1 } }
     else if chars[pos] == "x" {
         if pos + 2 >= chars.len() || hex_digit(chars[pos + 1]) < 0 || hex_digit(chars[pos + 2]) < 0 {
-            escape_error(ctx, slash, "\\x escape requires exactly two hexadecimal digits", if pos + 1 < chars.len() { pos + 2 } else { chars.len() })
+            escape_error(
+                ctx,
+                slash,
+                "\\x escape requires exactly two hexadecimal digits",
+                if pos + 1 < chars.len() { pos + 2 } else { chars.len() }
+            )
         } else {
             let code = hex_digit(chars[pos + 1]) * 16 + hex_digit(chars[pos + 2]);
             EscResult { ch: scalar_string(code), next_pos: pos + 3 }
@@ -298,19 +346,40 @@ let escape_char (ctx: LexContext) (chars: Array[String]) (pos: Int) (slash: Int)
         } else {
             let hex_end = unicode_escape_end(chars, pos + 2, pos + 9);
             let count = hex_end - (pos + 2);
-            let digits_ok = count > 0 && count <= 6 && hex_end < chars.len() && chars[hex_end] == "}" &&
+            let digits_ok = count > 0 && count <= 6 && hex_end < chars.len() && chars[hex_end]
+                == "}" &&
                 Array.all(Array.slice(chars, pos + 2, hex_end), |c| hex_digit(c) >= 0);
             if !digits_ok {
-                escape_error(ctx, slash, "\\u escape requires 1 to 6 hexadecimal digits in braces", if hex_end < chars.len() && chars[hex_end] == "}" { hex_end + 1 } else { hex_end })
+                escape_error(
+                    ctx,
+                    slash,
+                    "\\u escape requires 1 to 6 hexadecimal digits in braces",
+                    if hex_end < chars.len() && chars[hex_end] == "}" { hex_end + 1 } else {
+                        hex_end
+                    }
+                )
             } else {
                 let code = scan_hex(chars, pos + 2, hex_end, 0);
                 if code > 1114111 || (code >= 55296 && code <= 57343) {
-                    escape_error(ctx, slash, "\\u escape is not a Unicode scalar value", hex_end + 1)
+                    escape_error(
+                        ctx,
+                        slash,
+                        "\\u escape is not a Unicode scalar value",
+                        hex_end + 1
+                    )
                 } else { EscResult { ch: scalar_string(code), next_pos: hex_end + 1 } }
             }
         }
     }
-    else { escape_error(ctx, slash, "unknown escape ".concat("\\").concat(chars[pos]).concat("; supported escapes: n, t, r, backslash, quote, dollar, xNN, u{...}"), pos + 1) }
+    else {
+        escape_error(
+            ctx,
+            slash,
+            "unknown escape ".concat("\\").concat(chars[pos])
+                .concat("; supported escapes: n, t, r, backslash, quote, dollar, xNN, u{...}"),
+            pos + 1
+        )
+    }
 
 struct InterpExprResult { text: String, next_pos: Int }
 
@@ -318,11 +387,28 @@ struct InterpExprResult { text: String, next_pos: Int }
 // (opening quote through closing quote/EOF, escapes un-interpreted) —
 // mirrors `lex_interp_expr_source`'s own `Some('"')` arm exactly, same
 // "never re-interpreted as its own interpolation" rule.
-let scan_nested_string_body (ctx: LexContext) (open: Int) (chars: Array[String]) (pos: Int) (acc: String): InterpExprResult =
-    if pos >= chars.len() { fail_lex(ctx, open, "unterminated string literal"); InterpExprResult { text: acc, next_pos: pos } }
-    else if chars[pos] == "\"" { InterpExprResult { text: acc.concat(chars[pos]), next_pos: pos + 1 } }
+let scan_nested_string_body
+    (ctx: LexContext)
+    (open: Int)
+    (chars: Array[String])
+    (pos: Int)
+    (acc: String): InterpExprResult
+=
+    if pos >= chars.len() {
+        fail_lex(ctx, open, "unterminated string literal");
+        InterpExprResult { text: acc, next_pos: pos }
+    }
+    else if chars[pos] == "\"" {
+        InterpExprResult { text: acc.concat(chars[pos]), next_pos: pos + 1 }
+    }
     else if chars[pos] == "\\" && pos + 1 < chars.len() {
-        scan_nested_string_body(ctx, open, chars, pos + 2, acc.concat(chars[pos]).concat(chars[pos + 1]))
+        scan_nested_string_body(
+            ctx,
+            open,
+            chars,
+            pos + 2,
+            acc.concat(chars[pos]).concat(chars[pos + 1])
+        )
     }
     else { scan_nested_string_body(ctx, open, chars, pos + 1, acc.concat(chars[pos])) }
 
@@ -333,11 +419,25 @@ let scan_nested_string (ctx: LexContext) (chars: Array[String]) (pos: Int): Inte
 // right after its opening `${` has already been consumed — mirrors
 // `lex_interp_expr_source`'s `(`/`[`-depth tracking exactly (see that
 // function's own doc comment in the Rust lexer for the full "why").
-let scan_interp_expr (ctx: LexContext) (open: Int) (chars: Array[String]) (pos: Int) (acc: String) (depth: Int): InterpExprResult =
-    if pos >= chars.len() { fail_lex(ctx, open, "unterminated string interpolation"); InterpExprResult { text: acc, next_pos: pos } }
+let scan_interp_expr
+    (ctx: LexContext)
+    (open: Int)
+    (chars: Array[String])
+    (pos: Int)
+    (acc: String)
+    (depth: Int): InterpExprResult
+=
+    if pos >= chars.len() {
+        fail_lex(ctx, open, "unterminated string interpolation");
+        InterpExprResult { text: acc, next_pos: pos }
+    }
     else if chars[pos] == "}" && depth == 0 { InterpExprResult { text: acc, next_pos: pos + 1 } }
-    else if chars[pos] == "(" || chars[pos] == "[" { scan_interp_expr(ctx, open, chars, pos + 1, acc.concat(chars[pos]), depth + 1) }
-    else if chars[pos] == ")" || chars[pos] == "]" { scan_interp_expr(ctx, open, chars, pos + 1, acc.concat(chars[pos]), depth - 1) }
+    else if chars[pos] == "(" || chars[pos] == "[" {
+        scan_interp_expr(ctx, open, chars, pos + 1, acc.concat(chars[pos]), depth + 1)
+    }
+    else if chars[pos] == ")" || chars[pos] == "]" {
+        scan_interp_expr(ctx, open, chars, pos + 1, acc.concat(chars[pos]), depth - 1)
+    }
     else if chars[pos] == "\"" {
         let nested = scan_nested_string(ctx, chars, pos);
         scan_interp_expr(ctx, open, chars, nested.next_pos, acc.concat(nested.text), depth)
@@ -346,8 +446,15 @@ let scan_interp_expr (ctx: LexContext) (open: Int) (chars: Array[String]) (pos: 
 
 struct StrResult { token: Token, next_pos: Int }
 
-let finish_string (pieces: Array[InterpPiece]) (acc: String) (has_interp: Bool) (next_pos: Int): StrResult =
-    if has_interp { StrResult { token: TokInterpStr(pieces.push(PieceLiteral(acc))), next_pos: next_pos } }
+let finish_string
+    (pieces: Array[InterpPiece])
+    (acc: String)
+    (has_interp: Bool)
+    (next_pos: Int): StrResult
+=
+    if has_interp {
+        StrResult { token: TokInterpStr(pieces.push(PieceLiteral(acc))), next_pos: next_pos }
+    }
     else { StrResult { token: TokStr(acc), next_pos: next_pos } }
 
 // `pos` is right after the opening `"`. `acc` is the literal text
@@ -355,7 +462,15 @@ let finish_string (pieces: Array[InterpPiece]) (acc: String) (has_interp: Bool) 
 // if none yet); `has_interp` mirrors the Rust lexer's own `parts.is_
 // empty()` check — a plain `Str`, unless at least one `${...}` was
 // seen, in which case the whole thing becomes an `InterpStr`.
-let scan_string_body (ctx: LexContext) (open: Int) (chars: Array[String]) (pos: Int) (acc: String) (pieces: Array[InterpPiece]) (has_interp: Bool): StrResult =
+let scan_string_body
+    (ctx: LexContext)
+    (open: Int)
+    (chars: Array[String])
+    (pos: Int)
+    (acc: String)
+    (pieces: Array[InterpPiece])
+    (has_interp: Bool): StrResult
+=
     if pos >= chars.len() {
         fail_lex(ctx, open, "unterminated string literal");
         finish_string(pieces, acc, has_interp, pos)
@@ -370,7 +485,15 @@ let scan_string_body (ctx: LexContext) (open: Int) (chars: Array[String]) (pos: 
     else if chars[pos] == "$" && pos + 1 < chars.len() && chars[pos + 1] == "{" {
         let with_literal = pieces.push(PieceLiteral(acc));
         let expr = scan_interp_expr(ctx, pos, chars, pos + 2, "", 0);
-        scan_string_body(ctx, open, chars, expr.next_pos, "", with_literal.push(PieceExpr(expr.text, ctx.base + pos + 2)), true)
+        scan_string_body(
+            ctx,
+            open,
+            chars,
+            expr.next_pos,
+            "",
+            with_literal.push(PieceExpr(expr.text, ctx.base + pos + 2)),
+            true
+        )
     }
     else {
         scan_string_body(ctx, open, chars, pos + 1, acc.concat(chars[pos]), pieces, has_interp)
@@ -389,10 +512,26 @@ let scan_ident_chars (chars: Array[String]) (pos: Int): Int =
     else { pos }
 
 let keyword_or_ident (text: String): Token = match text {
-    "let" => TokLet, "mut" => TokMut, "fn" => TokFn, "struct" => TokStruct, "enum" => TokEnum,
-    "match" => TokMatch, "if" => TokIf, "else" => TokElse, "for" => TokFor, "in" => TokIn,
-    "pub" => TokPub, "use" => TokUse, "mod" => TokMod, "extern" => TokExtern, "unsafe" => TokUnsafe,
-    "spawn" => TokSpawn, "select" => TokSelect, "true" => TokTrue, "false" => TokFalse, "_" => TokUnderscore,
+    "let" => TokLet,
+    "mut" => TokMut,
+    "fn" => TokFn,
+    "struct" => TokStruct,
+    "enum" => TokEnum,
+    "match" => TokMatch,
+    "if" => TokIf,
+    "else" => TokElse,
+    "for" => TokFor,
+    "in" => TokIn,
+    "pub" => TokPub,
+    "use" => TokUse,
+    "mod" => TokMod,
+    "extern" => TokExtern,
+    "unsafe" => TokUnsafe,
+    "spawn" => TokSpawn,
+    "select" => TokSelect,
+    "true" => TokTrue,
+    "false" => TokFalse,
+    "_" => TokUnderscore,
     _ => TokIdent(text),
 }
 
@@ -414,7 +553,10 @@ let lex_builtin (ctx: LexContext) (chars: Array[String]) (pos: Int): IdentResult
         fail_lex(ctx, pos, "expected a builtin name after `@`");
         IdentResult { token: TokEof, next_pos: pos + 1 }
     } else {
-        IdentResult { token: TokBuiltin(Array.concat_all(Array.slice(chars, pos + 1, end))), next_pos: end }
+        IdentResult {
+            token: TokBuiltin(Array.concat_all(Array.slice(chars, pos + 1, end))),
+            next_pos: end
+        }
     }
 }
 
@@ -461,35 +603,53 @@ let lex_operator (ctx: LexContext) (chars: Array[String]) (pos: Int): OpResult =
     else if chars[pos] == ";" { OpResult { token: TokSemicolon, next_pos: pos + 1 } }
     else if chars[pos] == ":" { OpResult { token: TokColon, next_pos: pos + 1 } }
     else if chars[pos] == "." {
-        if pos + 1 < chars.len() && chars[pos + 1] == "." { OpResult { token: TokDotDot, next_pos: pos + 2 } }
+        if pos + 1 < chars.len() && chars[pos + 1] == "." {
+            OpResult { token: TokDotDot, next_pos: pos + 2 }
+        }
         else { OpResult { token: TokDot, next_pos: pos + 1 } }
     }
     else if chars[pos] == "=" {
-        if pos + 1 < chars.len() && chars[pos + 1] == "=" { OpResult { token: TokEqEq, next_pos: pos + 2 } }
-        else if pos + 1 < chars.len() && chars[pos + 1] == ">" { OpResult { token: TokFatArrow, next_pos: pos + 2 } }
+        if pos + 1 < chars.len() && chars[pos + 1] == "=" {
+            OpResult { token: TokEqEq, next_pos: pos + 2 }
+        }
+        else if pos + 1 < chars.len() && chars[pos + 1] == ">" {
+            OpResult { token: TokFatArrow, next_pos: pos + 2 }
+        }
         else { OpResult { token: TokEq, next_pos: pos + 1 } }
     }
     else if chars[pos] == "!" {
-        if pos + 1 < chars.len() && chars[pos + 1] == "=" { OpResult { token: TokNotEq, next_pos: pos + 2 } }
+        if pos + 1 < chars.len() && chars[pos + 1] == "=" {
+            OpResult { token: TokNotEq, next_pos: pos + 2 }
+        }
         else { OpResult { token: TokBang, next_pos: pos + 1 } }
     }
     else if chars[pos] == "<" {
-        if pos + 1 < chars.len() && chars[pos + 1] == "=" { OpResult { token: TokLtEq, next_pos: pos + 2 } }
+        if pos + 1 < chars.len() && chars[pos + 1] == "=" {
+            OpResult { token: TokLtEq, next_pos: pos + 2 }
+        }
         // Longest match first, the same rule `&&` and `||` follow. No
         // generic syntax uses angle brackets here -- Plum spells them
         // `[T]` -- so `>>` never has to be split back apart the way it
         // does in C++ and Rust.
-        else if pos + 1 < chars.len() && chars[pos + 1] == "<" { OpResult { token: TokShl, next_pos: pos + 2 } }
+        else if pos + 1 < chars.len() && chars[pos + 1] == "<" {
+            OpResult { token: TokShl, next_pos: pos + 2 }
+        }
         else { OpResult { token: TokLt, next_pos: pos + 1 } }
     }
     else if chars[pos] == ">" {
-        if pos + 1 < chars.len() && chars[pos + 1] == "=" { OpResult { token: TokGtEq, next_pos: pos + 2 } }
-        else if pos + 1 < chars.len() && chars[pos + 1] == ">" { OpResult { token: TokShr, next_pos: pos + 2 } }
+        if pos + 1 < chars.len() && chars[pos + 1] == "=" {
+            OpResult { token: TokGtEq, next_pos: pos + 2 }
+        }
+        else if pos + 1 < chars.len() && chars[pos + 1] == ">" {
+            OpResult { token: TokShr, next_pos: pos + 2 }
+        }
         else { OpResult { token: TokGt, next_pos: pos + 1 } }
     }
     else if chars[pos] == "+" { OpResult { token: TokPlus, next_pos: pos + 1 } }
     else if chars[pos] == "-" {
-        if pos + 1 < chars.len() && chars[pos + 1] == ">" { OpResult { token: TokArrow, next_pos: pos + 2 } }
+        if pos + 1 < chars.len() && chars[pos + 1] == ">" {
+            OpResult { token: TokArrow, next_pos: pos + 2 }
+        }
         else { OpResult { token: TokMinus, next_pos: pos + 1 } }
     }
     else if chars[pos] == "*" { OpResult { token: TokStar, next_pos: pos + 1 } }
@@ -498,12 +658,18 @@ let lex_operator (ctx: LexContext) (chars: Array[String]) (pos: Int): OpResult =
     else if chars[pos] == "^" { OpResult { token: TokCaret, next_pos: pos + 1 } }
     else if chars[pos] == "~" { OpResult { token: TokTilde, next_pos: pos + 1 } }
     else if chars[pos] == "&" {
-        if pos + 1 < chars.len() && chars[pos + 1] == "&" { OpResult { token: TokAndAnd, next_pos: pos + 2 } }
+        if pos + 1 < chars.len() && chars[pos + 1] == "&" {
+            OpResult { token: TokAndAnd, next_pos: pos + 2 }
+        }
         else { OpResult { token: TokAmp, next_pos: pos + 1 } }
     }
     else if chars[pos] == "|" {
-        if pos + 1 < chars.len() && chars[pos + 1] == ">" { OpResult { token: TokPipeGt, next_pos: pos + 2 } }
-        else if pos + 1 < chars.len() && chars[pos + 1] == "|" { OpResult { token: TokOrOr, next_pos: pos + 2 } }
+        if pos + 1 < chars.len() && chars[pos + 1] == ">" {
+            OpResult { token: TokPipeGt, next_pos: pos + 2 }
+        }
+        else if pos + 1 < chars.len() && chars[pos + 1] == "|" {
+            OpResult { token: TokOrOr, next_pos: pos + 2 }
+        }
         else { OpResult { token: TokPipe, next_pos: pos + 1 } }
     }
     else { unexpected_char(ctx, pos, chars[pos]) }
@@ -514,11 +680,26 @@ struct FullTokResult { token: Token, next_pos: Int }
 
 let lex_one (ctx: LexContext) (chars: Array[String]) (pos: Int): FullTokResult =
     if pos >= chars.len() { FullTokResult { token: TokEof, next_pos: pos } }
-    else if is_digit_char(chars[pos]) { let r = lex_number(ctx, chars, pos); FullTokResult { token: r.token, next_pos: r.next_pos } }
-    else if chars[pos] == "\"" { let r = lex_string(ctx, chars, pos); FullTokResult { token: r.token, next_pos: r.next_pos } }
-    else if chars[pos] == "@" { let r = lex_builtin(ctx, chars, pos); FullTokResult { token: r.token, next_pos: r.next_pos } }
-    else if is_ident_start_char(chars[pos]) { let r = lex_ident_or_keyword(chars, pos); FullTokResult { token: r.token, next_pos: r.next_pos } }
-    else { let r = lex_operator(ctx, chars, pos); FullTokResult { token: r.token, next_pos: r.next_pos } }
+    else if is_digit_char(chars[pos]) {
+        let r = lex_number(ctx, chars, pos);
+        FullTokResult { token: r.token, next_pos: r.next_pos }
+    }
+    else if chars[pos] == "\"" {
+        let r = lex_string(ctx, chars, pos);
+        FullTokResult { token: r.token, next_pos: r.next_pos }
+    }
+    else if chars[pos] == "@" {
+        let r = lex_builtin(ctx, chars, pos);
+        FullTokResult { token: r.token, next_pos: r.next_pos }
+    }
+    else if is_ident_start_char(chars[pos]) {
+        let r = lex_ident_or_keyword(chars, pos);
+        FullTokResult { token: r.token, next_pos: r.next_pos }
+    }
+    else {
+        let r = lex_operator(ctx, chars, pos);
+        FullTokResult { token: r.token, next_pos: r.next_pos }
+    }
 
 // `let mut`/`for` (a bounded loop, NOT the original's unbounded
 // self-recursion) — a real, deliberate workaround, not just a style
@@ -579,7 +760,11 @@ pub let tokenize (source: String): Array[Token] = tokenize_spanned(source).token
 // to, and `TokStr` holds the decoded text, not the escapes. A
 // formatter that reprinted from the token would silently rewrite both.
 // `slice_of` reads the source instead.
-pub struct LexedSource { pub tokens: Array[Token], pub starts: Array[Int], pub ends: Array[Int] }
+pub struct LexedSource {
+    pub tokens: Array[Token],
+    pub starts: Array[Int],
+    pub ends: Array[Int]
+}
 
 pub let tokenize_spanned (source: String): LexedSource = tokenize_spanned_at(source, "<source>")
 
@@ -589,8 +774,17 @@ pub let tokenize_spanned_at (source: String) (path: String): LexedSource =
 
 // Fragment spans stay local to the fragment; only diagnostics use `base`.
 // The parser maps these spans back to the original file when re-parsing.
-pub let tokenize_fragment_at (fragment: String) (source: String) (path: String) (base: Int): LexedSource = {
-    let ctx = LexContext { source: source, path: path, base: base };
+pub let tokenize_fragment_at
+    (fragment: String)
+    (source: String)
+    (path: String)
+    (base: Int): LexedSource
+= {
+    let ctx = LexContext {
+        source: source,
+        path: path,
+        base: base
+    };
     let chars = chars_of(fragment);
     let mut pos = 0;
     let mut acc = [];
@@ -605,12 +799,26 @@ pub let tokenize_fragment_at (fragment: String) (source: String) (path: String) 
                 // EOF is empty and sits at the very end, so the final
                 // gap -- a trailing comment, a trailing newline -- is
                 // the span before it like any other.
-                TokEof => { acc = acc.push(TokEof); starts = starts.push(start); ends = ends.push(start); done = true; },
-                _ => { acc = acc.push(r.token); starts = starts.push(start); ends = ends.push(r.next_pos); pos = r.next_pos; },
+                TokEof => {
+                    acc = acc.push(TokEof);
+                    starts = starts.push(start);
+                    ends = ends.push(start);
+                    done = true;
+                },
+                _ => {
+                    acc = acc.push(r.token);
+                    starts = starts.push(start);
+                    ends = ends.push(r.next_pos);
+                    pos = r.next_pos;
+                },
             }
         };
     };
-    LexedSource { tokens: acc, starts: starts, ends: ends }
+    LexedSource {
+        tokens: acc,
+        starts: starts,
+        ends: ends
+    }
 }
 
 // The source text a token covers, and the trivia before it. Together
@@ -692,7 +900,14 @@ pub let token_texts_at (source: String) (path: String): String = {
 
 let token_texts_acc (chars: Array[String]) (lexed: LexedSource) (i: Int) (acc: String): String =
     if i >= lexed.tokens.len() { acc }
-    else { token_texts_acc(chars, lexed, i + 1, acc.concat(slice_chars(chars, lexed.starts[i], lexed.ends[i])).concat("\n")) }
+    else {
+        token_texts_acc(
+            chars,
+            lexed,
+            i + 1,
+            acc.concat(slice_chars(chars, lexed.starts[i], lexed.ends[i])).concat("\n")
+        )
+    }
 
 pub let relex (source: String): String = relex_at(source, "<source>")
 
@@ -710,7 +925,12 @@ let relex_acc (chars: Array[String]) (lexed: LexedSource) (i: Int) (acc: String)
             panic_raw("token ${i} has non-trivia before it: a token boundary is wrong")
         } else { () };
         let gap = slice_chars(chars, from, lexed.starts[i]);
-        relex_acc(chars, lexed, i + 1, acc.concat(gap).concat(slice_chars(chars, lexed.starts[i], lexed.ends[i])))
+        relex_acc(
+            chars,
+            lexed,
+            i + 1,
+            acc.concat(gap).concat(slice_chars(chars, lexed.starts[i], lexed.ends[i]))
+        )
     }
 
 // --- Source positions ---
@@ -731,7 +951,8 @@ pub let source_newline_width (chars: Array[String]) (i: Int): Int =
 // 1-based lines and character columns. EOF clamps to the document end.
 // Both characters of CRLF map to the preceding line's end; there is no
 // source position between them. `offset_of` returns the CR for that end.
-pub let line_col (source: String) (offset: Int): LineCol = line_col_acc(chars_of(source), offset, 0, 1, 1)
+pub let line_col (source: String) (offset: Int): LineCol =
+    line_col_acc(chars_of(source), offset, 0, 1, 1)
 
 let line_col_acc (chars: Array[String]) (offset: Int) (i: Int) (line: Int) (col: Int): LineCol =
     if i >= offset || i >= chars.len() { LineCol { line: line, col: col } }
@@ -787,16 +1008,21 @@ pub let line_text (source: String) (offset: Int): String = {
     let chars = chars_of(source);
     let clamped = Int.max(0, Int.min(offset, chars.len()));
     // The LF in CRLF belongs to the same line end as the CR.
-    let at = if clamped > 0 && clamped < chars.len() && chars[clamped] == "\n" && chars[clamped - 1] == "\r" { clamped - 1 } else { clamped };
+    let at = if clamped > 0 && clamped < chars.len() && chars[clamped] == "\n" && chars[clamped - 1]
+        == "\r" { clamped - 1 } else { clamped };
     let start = line_start_at(chars, at);
     Array.concat_all(Array.slice(chars, start, line_end_at(chars, start)))
 }
 
 let line_start_at (chars: Array[String]) (i: Int): Int =
-    if i <= 0 { 0 } else if source_newline_width(chars, i - 1) > 0 { i } else { line_start_at(chars, i - 1) }
+    if i <= 0 { 0 } else if source_newline_width(chars, i - 1) > 0 { i } else {
+        line_start_at(chars, i - 1)
+    }
 
 let line_end_at (chars: Array[String]) (i: Int): Int =
-    if i >= chars.len() { chars.len() } else if source_newline_width(chars, i) > 0 { i } else { line_end_at(chars, i + 1) }
+    if i >= chars.len() { chars.len() } else if source_newline_width(chars, i) > 0 { i } else {
+        line_end_at(chars, i + 1)
+    }
 
 // The `--> file:line:col` + source line + caret block every real
 // compiler error carries, and which no self-hosted diagnostic has ever
@@ -807,17 +1033,23 @@ pub let render_at (source: String) (path: String) (offset: Int) (msg: String): S
     let lc = line_col(source, offset);
     // Replace control characters with a single visible scalar so a NUL
     // cannot truncate the diagnostic and the caret keeps its column.
-    let text = Array.concat_all(Array.map(chars_of(line_text(source, offset)), |c| {
-        let n = char_code(c);
-        if (n < 32 && c != "\t") || (n >= 127 && n <= 159) { "�" } else { c }
-    }));
+    let text = Array.concat_all(
+        Array.map(
+            chars_of(line_text(source, offset)),
+            |c| {
+                let n = char_code(c);
+                if (n < 32 && c != "\t") || (n >= 127 && n <= 159) { "�" } else { c }
+            }
+        )
+    );
     let gutter = lc.line.to_string();
     // The bar lines align under the line NUMBER, so their width follows
     // it -- byte-identical to `plum_syntax::error::CompileError`'s own
     // layout, so output from the two compilers can be diffed directly.
     let pad = spaces(gutter.len());
     "error: ${msg}\n"
-        .concat("  --> ").concat(path).concat(":").concat(gutter).concat(":").concat(lc.col.to_string()).concat("\n")
+        .concat("  --> ").concat(path).concat(":").concat(gutter).concat(":")
+        .concat(lc.col.to_string()).concat("\n")
         .concat(pad).concat(" |\n")
         .concat(gutter).concat(" | ").concat(text).concat("\n")
         .concat(pad).concat(" | ").concat(spaces(lc.col - 1)).concat("^\n")
@@ -870,7 +1102,9 @@ let quote (s: String): String = "\"".concat(escape_str_chars(chars_of(s), 0, "")
 let string_join_with_space (strs: Array[String]): String = {
     let mut acc = "";
     for i in 0..strs.len() {
-        if i > 0 { acc = acc.concat(" "); };
+        if i > 0 {
+            acc = acc.concat(" ");
+        };
         acc = acc.concat(strs[i]);
     };
     acc
@@ -888,19 +1122,61 @@ pub let render_token (t: Token): String = match t {
     TokFloat(f) => "Float(${f})",
     TokStr(s) => "Str(${quote(s)})",
     TokInterpStr(pieces) => "InterpStr(${string_join_with_space(Array.map(pieces, |p| render_interp_piece(p)))})",
-    TokTrue => "True", TokFalse => "False", TokUnderscore => "Underscore",
-    TokLet => "Let", TokMut => "Mut", TokFn => "Fn", TokStruct => "Struct", TokEnum => "Enum",
-    TokMatch => "Match", TokIf => "If", TokElse => "Else", TokFor => "For", TokIn => "In",
-    TokPub => "Pub", TokUse => "Use", TokMod => "Mod", TokExtern => "Extern", TokUnsafe => "Unsafe",
-    TokSpawn => "Spawn", TokSelect => "Select",
-    TokLParen => "LParen", TokRParen => "RParen", TokLBrace => "LBrace", TokRBrace => "RBrace",
-    TokLBracket => "LBracket", TokRBracket => "RBracket",
-    TokComma => "Comma", TokSemicolon => "Semicolon", TokColon => "Colon", TokDot => "Dot", TokDotDot => "DotDot",
-    TokEq => "Eq", TokEqEq => "EqEq", TokNotEq => "NotEq", TokLt => "Lt", TokGt => "Gt", TokLtEq => "LtEq", TokGtEq => "GtEq",
-    TokPlus => "Plus", TokMinus => "Minus", TokStar => "Star", TokSlash => "Slash", TokPercent => "Percent",
-    TokAndAnd => "AndAnd", TokOrOr => "OrOr", TokBang => "Bang", TokPipe => "Pipe", TokPipeGt => "PipeGt",
-    TokAmp => "Amp", TokCaret => "Caret", TokShl => "Shl", TokShr => "Shr", TokTilde => "Tilde",
-    TokArrow => "Arrow", TokFatArrow => "FatArrow",
+    TokTrue => "True",
+    TokFalse => "False",
+    TokUnderscore => "Underscore",
+    TokLet => "Let",
+    TokMut => "Mut",
+    TokFn => "Fn",
+    TokStruct => "Struct",
+    TokEnum => "Enum",
+    TokMatch => "Match",
+    TokIf => "If",
+    TokElse => "Else",
+    TokFor => "For",
+    TokIn => "In",
+    TokPub => "Pub",
+    TokUse => "Use",
+    TokMod => "Mod",
+    TokExtern => "Extern",
+    TokUnsafe => "Unsafe",
+    TokSpawn => "Spawn",
+    TokSelect => "Select",
+    TokLParen => "LParen",
+    TokRParen => "RParen",
+    TokLBrace => "LBrace",
+    TokRBrace => "RBrace",
+    TokLBracket => "LBracket",
+    TokRBracket => "RBracket",
+    TokComma => "Comma",
+    TokSemicolon => "Semicolon",
+    TokColon => "Colon",
+    TokDot => "Dot",
+    TokDotDot => "DotDot",
+    TokEq => "Eq",
+    TokEqEq => "EqEq",
+    TokNotEq => "NotEq",
+    TokLt => "Lt",
+    TokGt => "Gt",
+    TokLtEq => "LtEq",
+    TokGtEq => "GtEq",
+    TokPlus => "Plus",
+    TokMinus => "Minus",
+    TokStar => "Star",
+    TokSlash => "Slash",
+    TokPercent => "Percent",
+    TokAndAnd => "AndAnd",
+    TokOrOr => "OrOr",
+    TokBang => "Bang",
+    TokPipe => "Pipe",
+    TokPipeGt => "PipeGt",
+    TokAmp => "Amp",
+    TokCaret => "Caret",
+    TokShl => "Shl",
+    TokShr => "Shr",
+    TokTilde => "Tilde",
+    TokArrow => "Arrow",
+    TokFatArrow => "FatArrow",
     TokEof => "Eof",
 }
 
@@ -908,7 +1184,18 @@ pub let render_token (t: Token): String = match t {
 // render::render_tokens`'s own doc comment: constant, uninteresting
 // boilerplate every single token stream would otherwise end with.
 pub let render_tokens (tokens: Array[Token]): String =
-    string_join_with_space(Array.map(Array.filter(tokens, |t| match t { TokEof => false, _ => true }), |t| render_token(t)))
+    string_join_with_space(
+        Array.map(
+            Array.filter(
+                tokens,
+                |t| match t {
+                    TokEof => false,
+                    _ => true
+                }
+            ),
+            |t| render_token(t)
+        )
+    )
 
 pub let test_source_positions_newlines (): Unit = {
     for newline in ["\n", "\r", "\r\n"] {
@@ -929,9 +1216,13 @@ pub let test_source_positions_newlines (): Unit = {
         assert_eq(line_col(source, end + 99).col, 1);
         for i in 0..(end + 1) {
             let lc = line_col(source, i);
-            let canonical = if i > 0 && i < end && String.slice(source, i - 1, i + 1) == "\r\n" { i - 1 } else { i };
+            let canonical = if i > 0 && i < end && String.slice(source, i - 1, i + 1) == "\r\n" {
+                i - 1
+            } else { i };
             assert_eq(offset_of(source, lc.line, lc.col), canonical);
-            if i == 3 && newline == "\r\n" { assert_eq(line_text(source, i), "é😀"); };
+            if i == 3 && newline == "\r\n" {
+                assert_eq(line_text(source, i), "é😀");
+            };
         };
         assert_eq(line_col(source, third).line, 3);
         assert_eq(line_col(source, third).col, 1);
@@ -960,7 +1251,9 @@ pub let test_source_newlines_comments_and_diagnostics (): Unit = {
         assert_eq(token_texts(source), "let\nvalue\n=\n1\n\n");
         assert_eq(relex(source), source);
         let error_source = "let a = 1".concat(newline).concat("  bad");
-        assert_eq(render_at(error_source, "main.plum", 11 + newline.len(), "example"),
-            "error: example\n  --> main.plum:2:3\n  |\n2 |   bad\n  |   ^\n");
+        assert_eq(
+            render_at(error_source, "main.plum", 11 + newline.len(), "example"),
+            "error: example\n  --> main.plum:2:3\n  |\n2 |   bad\n  |   ^\n"
+        );
     }
 }

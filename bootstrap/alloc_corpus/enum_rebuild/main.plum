@@ -8,7 +8,20 @@ enum Counter { Empty, Count(Int) }
 
 let bump (c: Counter) (n: Int): Counter =
     if n <= 0 { c }
-    else { bump(match c { Empty => Count(1), Count(k) => Count(k + 1) }, n - 1) }
+    else {
+        bump(
+            match c {
+                Empty => Count(1),
+                Count(k) => Count(k + 1)
+            },
+            n - 1
+        )
+    }
 
 let main (): Unit =
-    println(match bump(Empty, 1000) { Empty => 0, Count(k) => k }.to_string())
+    println(
+        match bump(Empty, 1000) {
+            Empty => 0,
+            Count(k) => k
+        }.to_string()
+    )

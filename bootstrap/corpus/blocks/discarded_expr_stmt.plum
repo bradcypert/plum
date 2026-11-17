@@ -1,1 +1,3 @@
-let case (): Unit = { println("hi"); }
+let case (): Unit = {
+    println("hi");
+}

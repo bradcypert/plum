@@ -3,7 +3,10 @@ use treefs;
 
 // Shared logical path handling for source selection and editor snapshots.
 let source_absolute (path: String): String =
-    if source_has_nul(path.as_bytes()) { panic_raw("NUL in filesystem path"); "" }
+    if source_has_nul(path.as_bytes()) {
+        panic_raw("NUL in filesystem path");
+        ""
+    }
     else if Path.is_absolute(path) { Path.clean(path) }
     else { Path.clean(Path.join(Result.unwrap_or(Os.cwd(()), "."), path)) }
 
@@ -19,29 +22,45 @@ let source_relative_option (root: String) (path: String): Option[String] = {
         let parents = base.replace("\\", "/").split("/");
         let children = name.replace("\\", "/").split("/");
         if source_prefix_matches(parents, children, 0) {
-            Some(if parents.len() == children.len() { "." } else { Array.join(Array.slice(children, parents.len(), children.len()), "/") })
+            Some(
+                if parents.len() == children.len() { "." } else {
+                    Array.join(Array.slice(children, parents.len(), children.len()), "/")
+                }
+            )
         } else { None }
     } else { None }
 }
 
 let source_prefix_matches (parents: Array[String]) (children: Array[String]) (i: Int): Bool =
     if i >= parents.len() { true }
-    else if i >= children.len() || String.to_lower(parents[i]) != String.to_lower(children[i]) { false }
+    else if i >= children.len() || String.to_lower(parents[i]) != String.to_lower(children[i]) {
+        false
+    }
     else { source_prefix_matches(parents, children, i + 1) }
 
 let source_is_directory (path: String): Bool = match treefs.open_root(path) {
-    Ok(_) => true, Err(_) => Result.unwrap_or(Os.is_directory(path), false),
+    Ok(_) => true,
+    Err(_) => Result.unwrap_or(Os.is_directory(path), false),
 }
 
 let source_has_manifest (path: String): Bool = match treefs.open_root(path) {
     Err(_) => false,
     Ok(root) => match treefs.child_present(root, "plum.pkg") {
-        Err(e) => { panic_raw(e); false }, Ok(present) => present,
+        Err(e) => {
+            panic_raw(e);
+            false
+        },
+        Ok(present) => present,
     },
 }
 
 let source_has_nul (bytes: Bytes): Bool = {
     let mut found = false;
-    for i in 0..bytes.len() { if bytes.at(i) == Some(0) { found = true; () }; };
+    for i in 0..bytes.len() {
+        if bytes.at(i) == Some(0) {
+            found = true;
+            ()
+        };
+    };
     found
 }

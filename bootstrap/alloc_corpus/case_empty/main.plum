@@ -1,1 +1,6 @@
-let main (): Unit = { for i in 0..1000 { assert_eq("".to_upper(), ""); assert_eq("".to_lower(), ""); }; }
+let main (): Unit = {
+    for i in 0..1000 {
+        assert_eq("".to_upper(), "");
+        assert_eq("".to_lower(), "");
+    };
+}

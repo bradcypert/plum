@@ -1,8 +1,21 @@
-let mapped (xs: Array[Int]): Array[String] = { let out = xs.map(|x| x.to_string()); assert_eq(xs.len(), 0); out }
-let filtered (xs: Array[Int]): Array[Int] = { let out = xs.filter(|x| x > 0); assert_eq(xs.len(), 0); out }
+let mapped (xs: Array[Int]): Array[String] = {
+    let out = xs.map(|x| x.to_string());
+    assert_eq(xs.len(), 0);
+    out
+}
+
+let filtered (xs: Array[Int]): Array[Int] = {
+    let out = xs.filter(|x| x > 0);
+    assert_eq(xs.len(), 0);
+    out
+}
+
 let main (): Unit = {
     let empty: Array[Int] = [];
     for i in 0..1000 {
-        assert_eq(mapped(empty), []); assert_eq(filtered(empty), []); assert_eq(chars_of(""), []); assert_eq(args(), []);
+        assert_eq(mapped(empty), []);
+        assert_eq(filtered(empty), []);
+        assert_eq(chars_of(""), []);
+        assert_eq(args(), []);
     };
 }

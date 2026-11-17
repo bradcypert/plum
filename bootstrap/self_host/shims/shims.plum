@@ -20,7 +20,11 @@
 // beside the point: a compiled PROGRAM calls `tcp_*`, and without the
 // shim embedded here it cannot be linked.
 
-pub struct ShimFile { pub name: String, pub source: String, pub compile: Bool }
+pub struct ShimFile {
+    pub name: String,
+    pub source: String,
+    pub compile: Bool
+}
 
 pub let shim_files (): Array[ShimFile] = [
     ShimFile {
@@ -140,17 +144,23 @@ pub let shim_files (): Array[ShimFile] = [
     },
     ShimFile {
         name: "mbedtls/include/mbedtls/config_adjust_legacy_from_psa.h",
-        source: @embed_file("../../../vendor/mbedtls/include/mbedtls/config_adjust_legacy_from_psa.h"),
+        source: @embed_file(
+            "../../../vendor/mbedtls/include/mbedtls/config_adjust_legacy_from_psa.h"
+        ),
         compile: false,
     },
     ShimFile {
         name: "mbedtls/include/mbedtls/config_adjust_psa_from_legacy.h",
-        source: @embed_file("../../../vendor/mbedtls/include/mbedtls/config_adjust_psa_from_legacy.h"),
+        source: @embed_file(
+            "../../../vendor/mbedtls/include/mbedtls/config_adjust_psa_from_legacy.h"
+        ),
         compile: false,
     },
     ShimFile {
         name: "mbedtls/include/mbedtls/config_adjust_psa_superset_legacy.h",
-        source: @embed_file("../../../vendor/mbedtls/include/mbedtls/config_adjust_psa_superset_legacy.h"),
+        source: @embed_file(
+            "../../../vendor/mbedtls/include/mbedtls/config_adjust_psa_superset_legacy.h"
+        ),
         compile: false,
     },
     ShimFile {
@@ -440,12 +450,16 @@ pub let shim_files (): Array[ShimFile] = [
     },
     ShimFile {
         name: "mbedtls/include/psa/crypto_adjust_config_dependencies.h",
-        source: @embed_file("../../../vendor/mbedtls/include/psa/crypto_adjust_config_dependencies.h"),
+        source: @embed_file(
+            "../../../vendor/mbedtls/include/psa/crypto_adjust_config_dependencies.h"
+        ),
         compile: false,
     },
     ShimFile {
         name: "mbedtls/include/psa/crypto_adjust_config_key_pair_types.h",
-        source: @embed_file("../../../vendor/mbedtls/include/psa/crypto_adjust_config_key_pair_types.h"),
+        source: @embed_file(
+            "../../../vendor/mbedtls/include/psa/crypto_adjust_config_key_pair_types.h"
+        ),
         compile: false,
     },
     ShimFile {
@@ -485,17 +499,23 @@ pub let shim_files (): Array[ShimFile] = [
     },
     ShimFile {
         name: "mbedtls/include/psa/crypto_driver_contexts_composites.h",
-        source: @embed_file("../../../vendor/mbedtls/include/psa/crypto_driver_contexts_composites.h"),
+        source: @embed_file(
+            "../../../vendor/mbedtls/include/psa/crypto_driver_contexts_composites.h"
+        ),
         compile: false,
     },
     ShimFile {
         name: "mbedtls/include/psa/crypto_driver_contexts_key_derivation.h",
-        source: @embed_file("../../../vendor/mbedtls/include/psa/crypto_driver_contexts_key_derivation.h"),
+        source: @embed_file(
+            "../../../vendor/mbedtls/include/psa/crypto_driver_contexts_key_derivation.h"
+        ),
         compile: false,
     },
     ShimFile {
         name: "mbedtls/include/psa/crypto_driver_contexts_primitives.h",
-        source: @embed_file("../../../vendor/mbedtls/include/psa/crypto_driver_contexts_primitives.h"),
+        source: @embed_file(
+            "../../../vendor/mbedtls/include/psa/crypto_driver_contexts_primitives.h"
+        ),
         compile: false,
     },
     ShimFile {
@@ -1045,12 +1065,16 @@ pub let shim_files (): Array[ShimFile] = [
     },
     ShimFile {
         name: "mbedtls/library/psa_crypto_driver_wrappers_no_static.c",
-        source: @embed_file("../../../vendor/mbedtls/library/psa_crypto_driver_wrappers_no_static.c"),
+        source: @embed_file(
+            "../../../vendor/mbedtls/library/psa_crypto_driver_wrappers_no_static.c"
+        ),
         compile: true,
     },
     ShimFile {
         name: "mbedtls/library/psa_crypto_driver_wrappers_no_static.h",
-        source: @embed_file("../../../vendor/mbedtls/library/psa_crypto_driver_wrappers_no_static.h"),
+        source: @embed_file(
+            "../../../vendor/mbedtls/library/psa_crypto_driver_wrappers_no_static.h"
+        ),
         compile: false,
     },
     ShimFile {

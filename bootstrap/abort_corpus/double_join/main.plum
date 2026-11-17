@@ -6,6 +6,7 @@
 // and it is a defined abort rather than the undefined `pthread_join`
 // that would otherwise happen on an already-joined thread.
 let work (): Int = 6 * 7
+
 let main (): Unit = {
     let t = spawn { work() };
     println("before");

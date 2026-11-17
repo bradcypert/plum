@@ -17,13 +17,17 @@
 // Order is LIFO, matching an ordinary scope exit: a handle opened later
 // may depend on one opened earlier.
 extern "C" { fn cleanup_probe(h: Int); }
+
 handle Probe { on_drop: cleanup_probe }
 
 let main (): Unit = {
     // Released the ordinary way, well before the panic. It must NOT be
     // cleaned up a second time on the way out -- which is why a handle
     // is unregistered before its cleanup runs, not after.
-    { let done = unsafe { Probe.from_raw(1) }; println("opened and closed 1") };
+    {
+        let done = unsafe { Probe.from_raw(1) };
+        println("opened and closed 1")
+    };
 
     let a = unsafe { Probe.from_raw(2) };
     let b = unsafe { Probe.from_raw(3) };

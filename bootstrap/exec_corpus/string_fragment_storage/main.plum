@@ -1,49 +1,98 @@
 use Memory;
-let live (): Int = match Memory.snapshot() { Some(s) => s.live_bytes, None => -1 }
-let no_match (s: String): Array[String] = s.split("never")
-let escaped (n: Int): String = ("piece,".repeat(n)).split(",")[n - 1]
-let escaped_view (n: Int): CStr = ("piece,".repeat(n)).split(",")[n - 1].as_cstr()
-let empty_trim (): String = " \t\u{2003}\n".repeat(10000).trim()
-let compact_trim (): String = " ".repeat(1048576).concat("é").trim()
-let memory_round (): Unit = {
-    let source = "x".repeat(65536); let blank = " \t\u{2003}".repeat(64); let before = live();
-    let parts = no_match(source);
-    if before >= 0 { assert_eq(live() - before, 24); };
-    let empty = blank.trim(); let left = blank.trim_start(); let right = blank.trim_end();
-    if before >= 0 { assert_eq(live() - before, 24); };
-    assert_eq(parts, [source]); assert_eq(source.len(), 65536); assert_eq(blank.char_len(), 192);
-    assert_eq(empty, ""); assert_eq(left, ""); assert_eq(right, "");
-    let small = "alpha::beta".split("::");
-    let a = small[0]; let b = small[1]; assert_eq(a, "alpha"); assert_eq(b, "beta");
+
+let live (): Int = match Memory.snapshot() {
+    Some(s) => s.live_bytes,
+    None => -1
 }
+
+let no_match (s: String): Array[String] = s.split("never")
+
+let escaped (n: Int): String = ("piece,".repeat(n)).split(",")[n - 1]
+
+let escaped_view (n: Int): CStr = ("piece,".repeat(n)).split(",")[n - 1].as_cstr()
+
+let empty_trim (): String = " \t\u{2003}\n".repeat(10000).trim()
+
+let compact_trim (): String = " ".repeat(1048576).concat("é").trim()
+
+let memory_round (): Unit = {
+    let source = "x".repeat(65536);
+    let blank = " \t\u{2003}".repeat(64);
+    let before = live();
+    let parts = no_match(source);
+    if before >= 0 {
+        assert_eq(live() - before, 24);
+    };
+    let empty = blank.trim();
+    let left = blank.trim_start();
+    let right = blank.trim_end();
+    if before >= 0 {
+        assert_eq(live() - before, 24);
+    };
+    assert_eq(parts, [source]);
+    assert_eq(source.len(), 65536);
+    assert_eq(blank.char_len(), 192);
+    assert_eq(empty, "");
+    assert_eq(left, "");
+    assert_eq(right, "");
+    let small = "alpha::beta".split("::");
+    let a = small[0];
+    let b = small[1];
+    assert_eq(a, "alpha");
+    assert_eq(b, "beta");
+}
+
 let main (): Unit = {
-    let baseline = live(); memory_round();
-    if baseline >= 0 { assert_eq(live(), baseline); };
-    let before = live(); let tiny = compact_trim(); let empty = empty_trim();
-    if before >= 0 { assert_eq(live() - before, 19); };
-    assert_eq(tiny, "é"); assert_eq(empty, "");
+    let baseline = live();
+    memory_round();
+    if baseline >= 0 {
+        assert_eq(live(), baseline);
+    };
+    let before = live();
+    let tiny = compact_trim();
+    let empty = empty_trim();
+    if before >= 0 {
+        assert_eq(live() - before, 19);
+    };
+    assert_eq(tiny, "é");
+    assert_eq(empty, "");
     for count in [1, 2, 6, 7, 8, 9, 14, 15, 16, 17, 31, 32, 33, 128] {
         let text = "aé中🙂\x00,".repeat(count);
         let parts = text.split(",");
-        assert_eq(parts.len(), count + 1); assert_eq(parts[count], "");
-        for i in 0..count { assert_eq(parts[i], "aé中🙂\x00"); };
+        assert_eq(parts.len(), count + 1);
+        assert_eq(parts[count], "");
+        for i in 0..count {
+            assert_eq(parts[i], "aé中🙂\x00");
+        };
         assert_eq(Array.join(parts, ","), text);
-        let saved = parts; let changed = parts.set(0, "changed");
-        assert_eq(saved[0], "aé中🙂\x00"); assert_eq(changed[0], "changed");
-        assert_eq(escaped(count), "piece"); assert_eq(unsafe { escaped_view(count).as_string() }, "piece");
+        let saved = parts;
+        let changed = parts.set(0, "changed");
+        assert_eq(saved[0], "aé中🙂\x00");
+        assert_eq(changed[0], "changed");
+        assert_eq(escaped(count), "piece");
+        assert_eq(unsafe { escaped_view(count).as_string() }, "piece");
     };
-    let original = "aé中🙂\x00".repeat(32); let view = original.as_cstr();
-    let mut pieces = original.split("absent"); let saved = pieces;
+    let original = "aé中🙂\x00".repeat(32);
+    let view = original.as_cstr();
+    let mut pieces = original.split("absent");
+    let saved = pieces;
     pieces = pieces.set(0, pieces[0].concat("changed"));
-    assert_eq(saved[0], original); assert_eq(pieces[0], original.concat("changed"));
+    assert_eq(saved[0], original);
+    assert_eq(pieces[0], original.concat("changed"));
     assert_eq(unsafe { view.as_string() }, "aé中🙂");
-    assert_eq("".split(","), [""]); assert_eq("x".split("x"), ["", ""]);
+    assert_eq("".split(","), [""]);
+    assert_eq("x".split("x"), ["", ""]);
     assert_eq(",,a,,".split(","), ["", "", "a", "", ""]);
     assert_eq("aaaaa".split("aa"), ["", "", "a"]);
     assert_eq("a\x00b\x00".split("\x00"), ["a", "b", ""]);
     assert_eq("aé中".split(""), ["", "a", "é", "中", ""]);
-    let source = "x".repeat(1000); let left = spawn { source.split("absent") };
+    let source = "x".repeat(1000);
+    let left = spawn { source.split("absent") };
     let right = spawn { source.split("x") };
-    assert_eq(left.join(), [source]); assert_eq(right.join().len(), 1001); assert_eq(source.len(), 1000);
-    println("String fragments: shared identities, static empties, bounded stack builder and compact parts")
+    assert_eq(left.join(), [source]);
+    assert_eq(right.join().len(), 1001);
+    assert_eq(source.len(), 1000);
+    println(
+        "String fragments: shared identities, static empties, bounded stack builder and compact parts"
+    )
 }

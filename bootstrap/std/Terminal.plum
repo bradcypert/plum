@@ -28,7 +28,11 @@ extern "C" {
 /// anything at all.
 pub enum Stream { Stdin, Stdout, Stderr }
 
-let stream_code (s: Stream): Int = match s { Stdin => 0, Stdout => 1, Stderr => 2 }
+let stream_code (s: Stream): Int = match s {
+    Stdin => 0,
+    Stdout => 1,
+    Stderr => 2
+}
 
 /// Whether that stream is attached to a terminal.
 ///
@@ -150,9 +154,11 @@ extern "C" {
 /// While it lives, Ctrl+C arrives as a BYTE (0x03) rather than a
 /// signal — see `Terminal.enter_raw`.
 pub handle RawMode { on_drop: term_leave_raw }
+
 /// The alternate screen, held. The previous screen and the user's
 /// scrollback come back when this value dies.
 pub handle AltScreen { on_drop: term_leave_alt }
+
 /// A hidden cursor, held. The cursor is shown again when this value
 /// dies, including on a panic — which is what stops a crash leaving a
 /// terminal with no cursor.

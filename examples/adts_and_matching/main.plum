@@ -23,6 +23,7 @@ let area (s: Shape): Float = match s {
         Float.abs(cross) / 2.0
     },
 }
+
 // `match` is exhaustive over `Shape`'s variants, checked at compile
 // time — no wildcard needed above, and adding a fourth `Shape` variant
 // without updating this `match` would be a compile error.

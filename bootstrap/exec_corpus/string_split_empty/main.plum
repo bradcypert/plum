@@ -1,6 +1,7 @@
 // Empty separators preserve both edge strings and split codepoints, not
 // grapheme clusters. ASan/LSan must also reclaim every temporary array.
 let split_temporary (): Array[String] = String.concat("aé", "中😀").split("")
+
 let escaped_piece (): String = split_temporary()[3]
 
 let main (): Unit = {
