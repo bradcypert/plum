@@ -46,9 +46,21 @@ extern int64_t plum_heap_snapshot(void);
 extern int64_t plum_heap_snapshot_field(int64_t, int64_t);
 extern int64_t plum_heap_origin_snapshot(void);
 extern int64_t plum_heap_origin_field(int64_t, int64_t, int64_t);
+/* Borrowed-path controls retain an owner across the consuming private ABI. */
+static void *replace_borrowed(void *s, void *from, void *to) {
+    plum_rc_inc(s); return plum_str_replace(s, from, to);
+}
+static void *case_borrowed(void *s, int64_t upper) {
+    plum_rc_inc(s); return plum_str_case(s, upper);
+}
 static int failures, attempts, case_fault, case_calls;
 int growth_test_toupper_cp(int cp) {
     if (case_fault) {
+        if (case_fault == 3) {
+            int call = case_calls++;
+            if (call >= 3) { fputs("mapped unread input after width changed\n", stderr); exit(3); }
+            return call < 2 ? 'A' : 0x23F;
+        }
         int first = case_calls++ == 0;
         return (case_fault == 1 ? !first : first) ? 0x23F : 'A';
     }
@@ -619,7 +631,7 @@ static void replacement(void) {
         int changed = !identity && length;
         int64_t allocs = plum_n_alloc, bytes = plum_b_alloc, live = field(3), origin = origin_field(3);
         attempts = 0;
-        void *out = plum_str_replace(source, pattern, target);
+        void *out = replace_borrowed(source, pattern, target);
         int64_t request = changed ? length + 17 : 0;
         CHECK(attempts == changed && plum_n_alloc == allocs + changed && plum_b_alloc == bytes + request);
         if (changed) CHECK(requests[0] == request && *(int64_t *)out == 1);
@@ -635,19 +647,19 @@ static void replacement(void) {
         plum_rel_str(source); plum_rel_str(pattern); plum_rel_str(target);
     }
     void *source = text("abcabc", 6, 4096), *pattern = text("abc", 3, 3);
-    void *out = plum_str_replace(source, pattern, source);
+    void *out = replace_borrowed(source, pattern, source);
     value(out, "abcabcabcabc", 12); value(source, "abcabc", 6); CHECK(*(int64_t *)source == 1);
     plum_rel_str(out); plum_rel_str(pattern);
     failures = 1; attempts = 0;
-    out = plum_str_replace(source, source, source);
+    out = replace_borrowed(source, source, source);
     CHECK(out == source && attempts == 0 && *(int64_t *)source == 2);
     failures = 0; plum_rel_str(out); plum_rel_str(source);
     source = text("abc", 3, 4096); void *target = text("XY", 2, 2);
-    out = plum_str_replace(source, source, target); value(out, "XY", 2); value(source, "abc", 3);
+    out = replace_borrowed(source, source, target); value(out, "XY", 2); value(source, "abc", 3);
     plum_rel_str(out); plum_rel_str(target); plum_rel_str(source);
     /* Identity owns the original capacity after the caller drops its reference. */
     source = text("abc", 3, 4096); pattern = text("z", 1, 1); target = text("q", 1, 1);
-    out = plum_str_replace(source, pattern, target);
+    out = replace_borrowed(source, pattern, target);
     CHECK(out == source && *(int64_t *)out == 2);
     plum_rel_str(source); plum_rel_str(pattern); plum_rel_str(target);
     value(out, "abc", 3); CHECK(*(int64_t *)out == 1);
@@ -693,7 +705,7 @@ static void case_conversion(void) {
             void *src=text((char *)input,n,4096);
             int64_t allocations=plum_n_alloc, traffic=plum_b_alloc;
             attempts=0;
-            void *out=plum_str_case(src,upper);
+            void *out=case_borrowed(src,upper);
             value(out,(char *)expected,m);value(src,(char *)input,n);
             if(mapped==cp) {
                 CHECK(out==src && *(int64_t *)src==2 && attempts==0);
@@ -706,19 +718,19 @@ static void case_conversion(void) {
         }
     }
     void *src=text("A",1,4096); failures=1;attempts=0;
-    void *out=plum_str_case(src,1);CHECK(out==src && attempts==0);failures=0;
+    void *out=case_borrowed(src,1);CHECK(out==src && attempts==0);failures=0;
     plum_rel_str(src);
 #ifdef PLUM_HEAP_STATS
     CHECK(field(3)==4113 && origin_field(3)==4113);
 #endif
     plum_rel_str(out);
-    src=text("",0,4096);attempts=0;out=plum_str_case(src,0);
+    src=text("",0,4096);attempts=0;out=case_borrowed(src,0);
     CHECK(out!=src && *(int64_t *)out==-1 && attempts==0);value(out,"",0);
     plum_rel_str(src);plum_rel_str(out);
     /* One million codepoints at O0: catches an alloca inside either loop. */
     const int64_t n=1024*1024;
     char *large=malloc((size_t)n);CHECK(large);memset(large,'a',(size_t)n);
-    src=text(large,n,n);out=plum_str_case(src,1);memset(large,'A',(size_t)n);value(out,large,n);
+    src=text(large,n,n);out=case_borrowed(src,1);memset(large,'A',(size_t)n);value(out,large,n);
     plum_rel_str(src);plum_rel_str(out);free(large);
 #ifdef PLUM_HEAP_STATS
     CHECK(field(2)==0 && field(3)==0);
@@ -727,6 +739,57 @@ static void case_conversion(void) {
 
 
 /* Independent grouping oracle: one initial byte plus following continuations. */
+/* Exercise the owned path separately, so the retained controls above cannot
+   accidentally prove reuse only by disabling it. Mapping widths vary by OS. */
+static void owned_transforms(void) {
+    const uint32_t cps[]={'a','A',0,0xE9,0x131,0x17F,0x23F,0x2C7E,0x10428,0x1F642};
+    for (unsigned i=0;i<sizeof(cps)/sizeof(cps[0]);i++) for(int upper=0;upper<2;upper++) {
+        unsigned char input[5]={0},expected[5]={0};
+        int n=encode_cp(input,cps[i]);
+        uint32_t mapped=(uint32_t)(upper?plum_toupper_cp((int)cps[i]):plum_tolower_cp((int)cps[i]));
+        int m=encode_cp(expected,mapped);
+        void *src=text((char *)input,n,4096); uintptr_t old=(uintptr_t)src;
+        int64_t allocs=plum_n_alloc;
+        attempts=0; failures=n==m;
+        void *out=plum_str_case(src,upper); failures=0;
+        value(out,(char *)expected,m);
+        CHECK(*(int64_t *)out==1);
+        CHECK(((uintptr_t)out==old)==(n==m));
+        CHECK(plum_n_alloc==allocs+(n!=m));
+#ifdef PLUM_HEAP_STATS
+        CHECK(field(3)==(n==m?4113:m+17));
+#endif
+        plum_rel_str(out);
+    }
+    /* A grow then a shrink can preserve total bytes while overwriting an
+       unread unit. Require each mapping to preserve its own unit width. */
+    unsigned char input[10]={0},expected[10]={0};int n=0,m=0,stable=1;
+    const uint32_t mixed[]={0x23F,0x131};
+    for(int i=0;i<2;i++) {
+        int a=encode_cp(input+n,mixed[i]),b=encode_cp(expected+m,(uint32_t)plum_toupper_cp((int)mixed[i]));
+        stable=stable && a==b;n+=a;m+=b;
+    }
+    void *src=text((char *)input,n,4096);uintptr_t original=(uintptr_t)src;attempts=0;
+    void *out=plum_str_case(src,1);value(out,(char *)expected,m);
+    CHECK(((uintptr_t)out==original)==stable && attempts==!stable);plum_rel_str(out);
+    for(int trial=0;trial<256;trial++) {
+        char input[65],expected[65];int n=trial%65;
+        for(int i=0;i<n;i++)input[i]=(char)(i%5);
+        char from[2]={1,2},to[2]={4,0};int matches;
+        int length=replace_reference(expected,input,n,from,2,to,2,&matches);
+        src=text(input,n,4096);uintptr_t old=(uintptr_t)src;
+        void *pattern=text(from,2,2),*target=text(to,2,2);
+        attempts=0;failures=1;int64_t allocs=plum_n_alloc;
+        out=plum_str_replace(src,pattern,target);failures=0;
+        value(out,expected,length);CHECK(attempts==0 && plum_n_alloc==allocs);
+        CHECK(((uintptr_t)out==old)==(n>0));
+        plum_rel_str(out);plum_rel_str(pattern);plum_rel_str(target);
+    }
+#ifdef PLUM_HEAP_STATS
+    CHECK(field(2)==0 && field(3)==0);
+#endif
+}
+
 static void reversal(void) {
     uint32_t state=493;
     for(int trial=0;trial<4096;trial++) {
@@ -864,7 +927,8 @@ int main(int argc, char **argv) {
                 struct {int64_t rc,n;char bytes[2];} s={1,1,"a"};
                 case_fault=!strcmp(argv[1],"case-fill-growth")?1:2;plum_str_case(&s,1);
             }
-            else if (!strcmp(argv[1],"case-oom")) { struct {int64_t rc,n;char bytes[2];} s={1,1,"a"};failures=1;plum_str_case(&s,1); }
+            else if (!strcmp(argv[1],"case-fill-overlap")) { void *s=text("ab",2,2);case_fault=3;plum_str_case(s,1); }
+            else if (!strcmp(argv[1],"case-oom")) { struct {int64_t rc,n;char bytes[2];} s={2,1,"a"};failures=1;plum_str_case(&s,1); }
             else return 3;
         }
         else if (!strcmp(argv[1], "negative")) plum_str_concat_length(-1, 0);
@@ -1019,6 +1083,6 @@ int main(int argc, char **argv) {
     }
     arithmetic(); fallback(); ownership(); growth_fallback(); snapshots();
     for (int steps = 512; steps <= 4096; steps *= 2) traffic(steps);
-    repetition(); hexadecimal(); joining(); percent_encoding(); base64_encoding(); base64_decoding(); percent_decoding(); hex_decoding(); replacement(); case_conversion(); reversal(); bytes_array_conversion();
+    repetition(); hexadecimal(); joining(); percent_encoding(); base64_encoding(); base64_decoding(); percent_decoding(); hex_decoding(); replacement(); case_conversion(); owned_transforms(); reversal(); bytes_array_conversion();
     return 0;
 }

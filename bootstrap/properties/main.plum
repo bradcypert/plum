@@ -2897,3 +2897,16 @@ pub let test_closure_last_use (): Unit = {
         assert_eq(source, "aé中🙂\x00é".repeat(count));
     };
 }
+
+pub let test_owned_string_transforms (): Unit = {
+    let replace = String.replace; let upper = String.to_upper; let lower = String.to_lower;
+    for count in [0, 1, 2, 7, 32, 127] {
+        let source = "ab\x00🙂".repeat(count); let saved = source;
+        assert_eq(replace(source, "ab", "zy"), "zy\x00🙂".repeat(count));
+        assert_eq(upper(source), "AB\x00🙂".repeat(count)); assert_eq(lower(upper("ab\x00🙂".repeat(count))), saved);
+        assert_eq(source, saved);
+        let mut result = "ab\x00🙂".repeat(count);
+        for round in 0..8 { result = if round % 2 == 0 { result.replace("ab", "zy").to_upper() } else { result.to_lower().replace("zy", "ab") }; };
+        assert_eq(result, saved);
+    };
+}
