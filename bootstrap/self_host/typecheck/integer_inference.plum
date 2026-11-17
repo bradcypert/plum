@@ -151,11 +151,23 @@ let seed_expected_result (acc: Subst) (actual: ITy) (expected: Option[ITy]): Sub
     None => acc,
 }
 
-let infer_global_initializer (p2: Program2) (state: FreshState) (acc: Subst) (def: parser.LetDefNode): InferResult =
-    match def.ret_ty {
+let infer_global_initializer (p2: Program2) (state: FreshState) (acc: Subst) (def: parser.LetDefNode): InferResult = {
+    let r = match def.ret_ty {
         Some(ann) => infer_expected(p2, state, tyenv_empty(()), acc, def.body, resolve_ann_seen(p2.ctx, p2.current, [], ann)),
         None => infer_expr(p2, state, tyenv_empty(()), acc, def.body),
-    }
+    };
+    // Retain the annotation's constraints before resolving ambiguous shifts.
+    // A mismatch is reported by the existing global declaration checks.
+    let checked = match def.ret_ty {
+        Some(ann) => match unify(subst_apply(r.subst, r.ty), resolve_ann_seen(p2.ctx, p2.current, [], ann)) {
+            Ok(s) => subst_compose(s, r.subst),
+            Err(_) => r.subst,
+        },
+        None => r.subst,
+    };
+    let s = resolve_integer_shifts(checked, r.texpr);
+    InferResult { ty: subst_apply(s, r.ty), subst: s, ..r }
+}
 
 let infer_variant_call_expected (p2: Program2) (state: FreshState) (env: TyEnv) (acc: Subst) (tag: String) (args: Array[parser.PExpr]) (v: VariantLookup) (expected: Option[ITy]): InferResult = {
     check_enum_named(p2.ctx, p2.current, v.enum_name);
@@ -249,6 +261,22 @@ let check_integer_negation (subst: Subst) (operand: ITy): Unit =
         ITInteger(k) => if !integer_spec(k).signed { fail_tc("unsigned integer negation is not supported"); },
         _ => (),
     }
+
+// Delay the Int fallback until the whole body and its result annotation have
+// contributed constraints. A later use of a closure parameter can still pin
+// its width after the shift expression; only truly ambiguous operands default.
+let resolve_integer_shifts (subst: Subst) (expr: TExpr): Subst = {
+    let here = match expr.node {
+        TBinary(op, left, _) => if integer_shift(op) {
+            match subst_apply(subst, left.ty) {
+                ITVar(_) => constrain_operand(subst, left.ty, ITInt, "shift operand: "),
+                _ => subst,
+            }
+        } else { subst },
+        _ => subst,
+    };
+    Array.fold(t_children(expr), here, |s, child| resolve_integer_shifts(s, child))
+}
 
 // Local closure parameters may still be variables at the first negation check.
 // Validate again against the completed body's substitution, before lowering.

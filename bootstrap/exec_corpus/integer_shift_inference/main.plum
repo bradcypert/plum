@@ -1,0 +1,28 @@
+let left (): (Int) -> Int = |x| x << 1
+let right (): (Int) -> Int = |x| x >> 1
+let GLOBAL_NARROW: U8 = {
+    let unused = |x| x >> 1;
+    let shift = |x| x << 1;
+    let value: U8 = 255;
+    shift(value)
+}
+
+let main (): Unit = {
+    // No call supplies an operand type. These still need an integer ABI.
+    let unused_left = |x| x << 1;
+    let unused_right = |x| x >> 1;
+    let shift = |x| x << 1;
+    let byte: U8 = 255;
+    assert_eq(shift(byte), 254);
+    let later = |x| {
+        let result = x >> 1;
+        let typed: U64 = x;
+        result
+    };
+    let high: U64 = 18446744073709551615;
+    assert_eq(later(high), 9223372036854775807);
+    assert_eq(left(())(2), 4);
+    assert_eq(right(())(2), 1);
+    assert_eq(GLOBAL_NARROW, 254);
+    println("integer shift inference ok")
+}

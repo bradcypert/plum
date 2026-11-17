@@ -114,6 +114,10 @@ def main():
                      f'let shifted: {kind} = 1 << 1; assert_eq(shifted, 2);',
                      f'let nested: {kind} = (1 << 1) | (1 & 1); assert_eq(nested, 3);',
                      f'let reverse: {kind} = ~0 & a; assert_eq(reverse, 1);']
+            body += [f'let later = |x| {{ let out = x << 1; let typed: {kind} = x; out }};',
+                     'assert_eq(later(a), 2);',
+                     'let deferred = |x| x >> 1;',
+                     f'let high: {kind} = {maximum}; assert_eq(deferred(high), {maximum >> 1});']
             functions.append(f'let test_{kind} (): Unit = {{\n' + '\n'.join(body) + '\n()}')
             calls.append(f'test_{kind}();')
         matrix = '\n'.join(functions) + '\nlet main (): Unit = {\n' + '\n'.join(calls) + '\nprintln("matrix ok")\n}\n'
@@ -133,6 +137,9 @@ def main():
             reject(f'let main (): Unit = {{ ~{value}; () }}\n', 'Int')
         reject('let main (): Unit = { let a: U8 = 1; let n = true; a << n; () }\n', 'shift count must be Int')
         reject('let main (): Unit = { let f = |x| x & x; f(true); () }\n', 'needs integer operands')
+        reject('let main (): Unit = { let f = |x| x << 1; f(1.0); () }\n', 'needs integer operands')
+        reject('let bad (): (Float) -> Float = |x| x << 1\n'
+               'let main (): Unit = ()\n', 'needs integer operands')
         for value in ('true', '1.0', '"x"'):
             reject('let bits[T] (x: T): T = x & x\n'
                    f'let main (): Unit = {{ bits({value}); () }}\n', 'to be an integer')
@@ -192,7 +199,9 @@ def main():
         for project, expected in ((app, 'matrix ok\n'), (behavior, 'behavior ok\n'),
                                   (values, 'values ok\n'), (collision, 'collision ok\n'),
                                   (ROOT / 'bootstrap/exec_corpus/bitwise',
-                                   (ROOT / 'bootstrap/exec_corpus/bitwise/expected.txt').read_text())):
+                                   (ROOT / 'bootstrap/exec_corpus/bitwise/expected.txt').read_text()),
+                                  (ROOT / 'bootstrap/exec_corpus/integer_shift_inference',
+                                   (ROOT / 'bootstrap/exec_corpus/integer_shift_inference/expected.txt').read_text())):
             for mode in ([], ['--release']):
                 for core in (False, True):
                     assert run(build(project, mode, core)).stdout == expected

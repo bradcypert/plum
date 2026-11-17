@@ -839,12 +839,16 @@ let check_fn_typed (p20: Program2) (def: parser.LetDefNode) (module_name: String
     let r = infer_expr_for_return(p2, fresh_state_new(()), env, subst_empty(()), def.body, sig.ret);
     let body_ty = subst_apply(r.subst, r.ty);
     let ret_ty = subst_apply(r.subst, sig.ret);
-    match unify(body_ty, ret_ty) {
-        Ok(_) => (),
-        Err(e) => fail_tc("function ${def.name}: declared return type ${render_ty(ret_ty)} doesn't match body type ${render_ty(body_ty)} (${e})"),
+    let checked = match unify(body_ty, ret_ty) {
+        Ok(s) => subst_compose(s, r.subst),
+        Err(e) => {
+            fail_tc("function ${def.name}: declared return type ${render_ty(ret_ty)} doesn't match body type ${render_ty(body_ty)} (${e})");
+            r.subst
+        },
     };
-    validate_integer_negations(r.subst, r.texpr);
-    TFn { name: def.name, module: module_name, path: err_path(()), offset: current_err_offset(()), generics: sig.generics, params: typed_params(def.params, sig.params, r.subst, 0, []), ret: ret_ty, body: r.texpr, subst: r.subst }
+    let resolved = resolve_integer_shifts(checked, r.texpr);
+    validate_integer_negations(resolved, r.texpr);
+    TFn { name: def.name, module: module_name, path: err_path(()), offset: current_err_offset(()), generics: sig.generics, params: typed_params(def.params, sig.params, resolved, 0, []), ret: subst_apply(resolved, ret_ty), body: r.texpr, subst: resolved }
 }
 
 // Parameter names paired with their (now resolved) declared types.
