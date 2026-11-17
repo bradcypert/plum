@@ -1544,6 +1544,9 @@ let cg_unary (p: CgProgram) (env: Array[CgSlot]) (n: Int) (op: parser.UOp) (inne
             if !typecheck.integer_spec(k).signed { cg_fail("unsigned integer negation is not supported"); };
             let g = cg_fixed_arithmetic(k, BSub, "0", r.val, r.n);
             Emit { code: r.code.concat(g.code), allocas: r.allocas, releases: r.releases, globals: r.globals, val: g.reg, ty: r.ty, n: g.next }
+        } else if op == UBitNot {
+            let g = cg_fixed_complement(k, r.val, r.n);
+            Emit { code: r.code.concat(g.code), val: g.reg, n: g.next, ..r }
         } else { cg_unary_plain(r, op) },
         None => if op == UNeg && cg_ty_eq(r.ty, CgInt) {
             let g = cg_overflow_guard("llvm.ssub.with.overflow.i64", "0", r.val, r.n);
@@ -3154,6 +3157,20 @@ let cg_runtime_fn (module_name: String) (name: String): Option[String] =
     else if module_name == "<prelude>" && name == "u64_wrapping_add_raw" { Some("@plum_u64_wrapping_add") }
     else if module_name == "<prelude>" && name == "u64_wrapping_sub_raw" { Some("@plum_u64_wrapping_sub") }
     else if module_name == "<prelude>" && name == "u64_wrapping_mul_raw" { Some("@plum_u64_wrapping_mul") }
+    else if module_name == "<prelude>" && name == "i8_shr_logical_raw" { Some("@plum_i8_shr_logical") }
+    else if module_name == "<prelude>" && name == "i8_count_ones_raw" { Some("@plum_i8_count_ones") }
+    else if module_name == "<prelude>" && name == "i16_shr_logical_raw" { Some("@plum_i16_shr_logical") }
+    else if module_name == "<prelude>" && name == "i16_count_ones_raw" { Some("@plum_i16_count_ones") }
+    else if module_name == "<prelude>" && name == "i32_shr_logical_raw" { Some("@plum_i32_shr_logical") }
+    else if module_name == "<prelude>" && name == "i32_count_ones_raw" { Some("@plum_i32_count_ones") }
+    else if module_name == "<prelude>" && name == "u8_shr_logical_raw" { Some("@plum_u8_shr_logical") }
+    else if module_name == "<prelude>" && name == "u8_count_ones_raw" { Some("@plum_u8_count_ones") }
+    else if module_name == "<prelude>" && name == "u16_shr_logical_raw" { Some("@plum_u16_shr_logical") }
+    else if module_name == "<prelude>" && name == "u16_count_ones_raw" { Some("@plum_u16_count_ones") }
+    else if module_name == "<prelude>" && name == "u32_shr_logical_raw" { Some("@plum_u32_shr_logical") }
+    else if module_name == "<prelude>" && name == "u32_count_ones_raw" { Some("@plum_u32_count_ones") }
+    else if module_name == "<prelude>" && name == "u64_shr_logical_raw" { Some("@plum_u64_shr_logical") }
+    else if module_name == "<prelude>" && name == "u64_count_ones_raw" { Some("@plum_u64_count_ones") }
     else if name == "abs_raw" { Some("@plum_abs_raw") }
     else if name == "sqrt_raw" { Some("@plum_sqrt_raw") }
     else if name == "pow_raw" { Some("@plum_pow_raw") }

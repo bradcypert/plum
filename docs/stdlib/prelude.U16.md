@@ -16,6 +16,14 @@ Subtracts modulo 2^16; returns the unsigned low bits. Ordinary arithmetic remain
 
 Multiplies modulo 2^16; returns the unsigned low bits. Ordinary arithmetic remains checked.
 
+## `let U16.shr_logical (x: U16) (n: Int): U16`
+
+Shifts the low 16 bits right with zero fill. Nonpositive counts return x; counts at least 16 return zero. The result retains U16.
+
+## `let U16.count_ones (x: U16): Int`
+
+Counts one bits within the 16-bit representation, excluding any sign extension. Returns an Int in 0..16 inclusive.
+
 ## `let U16.from (value: S): U16`
 
 Converts an integer whose entire source type range fits the destination. The source type must be known; signed-to-unsigned conversions require try_from. Evaluates value once. Does not introduce general function overloading or numeric generic constraints.

@@ -34,6 +34,11 @@ let cg_fixed_operation (kind: typecheck.IntegerKind) (op: parser.BOp) (lhs: Stri
         BMul => cg_fixed_arithmetic(kind, op, lhs, rhs, n),
         BDiv => cg_fixed_division(kind, op, lhs, rhs, n),
         BRem => cg_fixed_division(kind, op, lhs, rhs, n),
+        BShl => cg_fixed_shift(kind, op, lhs, rhs, n),
+        BShr => cg_fixed_shift(kind, op, lhs, rhs, n),
+        BBitAnd => cg_fixed_bitwise(op, lhs, rhs, n),
+        BBitOr => cg_fixed_bitwise(op, lhs, rhs, n),
+        BBitXor => cg_fixed_bitwise(op, lhs, rhs, n),
         _ => {
             let pred = match op {
                 BLt => if spec.signed { "slt" } else { "ult" },
@@ -44,6 +49,48 @@ let cg_fixed_operation (kind: typecheck.IntegerKind) (op: parser.BOp) (lhs: Stri
             };
             DivGuard { code: "  ${cg_reg(n)} = icmp ${pred} i64 ${lhs}, ${rhs}\n", reg: cg_reg(n), next: n + 1 }
         },
+    }
+}
+
+let cg_fixed_bitwise (op: parser.BOp) (lhs: String) (rhs: String) (n: Int): DivGuard =
+    DivGuard { code: "  ${cg_reg(n)} = ${cg_binary_op_text(op, CgInt)} i64 ${lhs}, ${rhs}\n", reg: cg_reg(n), next: n + 1 }
+
+let cg_fixed_normalize (kind: typecheck.IntegerKind) (value: String) (n: Int): DivGuard = {
+    let spec = typecheck.integer_spec(kind);
+    if spec.bits == 64 { DivGuard { code: "", reg: value, next: n } }
+    else {
+        let narrow = cg_reg(n);
+        let out = cg_reg(n + 1);
+        let extension = if spec.signed { "sext" } else { "zext" };
+        DivGuard { code: "  ${narrow} = trunc i64 ${value} to i${spec.bits}\n  ${out} = ${extension} i${spec.bits} ${narrow} to i64\n", reg: out, next: n + 2 }
+    }
+}
+
+let cg_fixed_complement (kind: typecheck.IntegerKind) (value: String) (n: Int): DivGuard = {
+    let raw = cg_reg(n);
+    let normalized = cg_fixed_normalize(kind, raw, n + 1);
+    DivGuard { code: "  ${raw} = xor i64 ${value}, -1\n".concat(normalized.code), reg: normalized.reg, next: normalized.next }
+}
+
+// Clamp before emitting a shift: LLVM must never see a negative or oversized
+// count, even on a branch whose eventual result is replaced by zero.
+let cg_fixed_shift (kind: typecheck.IntegerKind) (op: parser.BOp) (lhs: String) (rhs: String) (n: Int): DivGuard = {
+    let spec = typecheck.integer_spec(kind);
+    let neg = cg_reg(n);
+    let ok = cg_label(n + 1);
+    let bad = cg_label(n + 2);
+    let wide = cg_reg(n + 3);
+    let count = cg_reg(n + 4);
+    let raw = cg_reg(n + 5);
+    let out = cg_reg(n + 6);
+    let opcode = if op == BShl { "shl" } else if spec.signed { "ashr" } else { "lshr" };
+    let code = "  ${neg} = icmp slt i64 ${rhs}, 0\n  br i1 ${neg}, label %${bad}, label %${ok}\n${bad}:\n  call void @plum_shift_fail()\n  unreachable\n${ok}:\n"
+        .concat("  ${wide} = icmp sge i64 ${rhs}, ${spec.bits}\n  ${count} = select i1 ${wide}, i64 ${spec.bits - 1}, i64 ${rhs}\n")
+        .concat("  ${raw} = ${opcode} i64 ${lhs}, ${count}\n");
+    if op == BShr && spec.signed { DivGuard { code: code, reg: raw, next: n + 6 } }
+    else {
+        let normalized = cg_fixed_normalize(kind, out, n + 7);
+        DivGuard { code: code.concat("  ${out} = select i1 ${wide}, i64 0, i64 ${raw}\n").concat(normalized.code), reg: normalized.reg, next: normalized.next }
     }
 }
 
@@ -76,3 +123,49 @@ let cg_fixed_division (kind: typecheck.IntegerKind) (op: parser.BOp) (lhs: Strin
 }
 
 let cg_is_fixed (ty: CgTy): Bool = match ty { CgInteger(_) => true, _ => false }
+
+// Typed prelude wrappers keep these first-class functions on the same
+// module-qualified primitive path as fixed-width wrapping arithmetic.
+let cg_fixed_bits_runtime (): String = {
+    let mut functions: Array[String] = [];
+    for kind in [IntegerI8, IntegerI16, IntegerI32, IntegerU8, IntegerU16, IntegerU32, IntegerU64] {
+        let spec = typecheck.integer_spec(kind);
+        let name = (if spec.signed { "i" } else { "u" }).concat(spec.bits.to_string());
+        let mask = if spec.bits == 8 { "255" } else if spec.bits == 16 { "65535" } else { "4294967295" };
+        let bits = if spec.bits == 64 { "  %bits = or i64 %x, 0" }
+            else { "  %bits = and i64 %x, ${mask}" };
+        functions = functions.push(cg_lines([
+            "define i64 @plum_${name}_shr_logical(i64 %x, i64 %n) {",
+            "entry:",
+            "  %nonpositive = icmp sle i64 %n, 0",
+            "  br i1 %nonpositive, label %same, label %shift",
+            "same:",
+            "  ret i64 %x",
+            "shift:", bits,
+            "  %wide = icmp sge i64 %n, ${spec.bits}",
+            "  %count = select i1 %wide, i64 0, i64 %n",
+            "  %raw = lshr i64 %bits, %count",
+            "  %out = select i1 %wide, i64 0, i64 %raw",
+            "  ret i64 %out",
+            "}",
+            "",
+            "define i64 @plum_${name}_count_ones(i64 %x) {",
+            "entry:", bits,
+            "  br label %loop",
+            "loop:",
+            "  %remaining = phi i64 [ %bits, %entry ], [ %next, %step ]",
+            "  %total = phi i64 [ 0, %entry ], [ %inc, %step ]",
+            "  %done = icmp eq i64 %remaining, 0",
+            "  br i1 %done, label %finish, label %step",
+            "step:",
+            "  %less = sub i64 %remaining, 1",
+            "  %next = and i64 %remaining, %less",
+            "  %inc = add i64 %total, 1",
+            "  br label %loop",
+            "finish:",
+            "  ret i64 %total",
+            "}",
+        ]));
+    };
+    Array.concat_all(functions)
+}

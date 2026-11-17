@@ -666,6 +666,63 @@ let u64_wrapping_mul_raw (a: U64) (b: U64): U64 = 0
 /// Multiplies modulo 2^64; returns the unsigned low bits. Ordinary arithmetic remains checked.
 pub let U64.wrapping_mul (a: U64) (b: U64): U64 = u64_wrapping_mul_raw(a, b)
 
+// Fixed-width bit helpers retain the Int helper conventions.
+let i8_shr_logical_raw (x: I8) (n: Int): I8 = 0
+/// Shifts the low 8 bits right with zero fill. Nonpositive counts return x; counts at least 8 return zero. The result retains I8.
+pub let I8.shr_logical (x: I8) (n: Int): I8 = i8_shr_logical_raw(x, n)
+
+let i8_count_ones_raw (x: I8): Int = 0
+/// Counts one bits within the 8-bit representation, excluding any sign extension. Returns an Int in 0..8 inclusive.
+pub let I8.count_ones (x: I8): Int = i8_count_ones_raw(x)
+
+let i16_shr_logical_raw (x: I16) (n: Int): I16 = 0
+/// Shifts the low 16 bits right with zero fill. Nonpositive counts return x; counts at least 16 return zero. The result retains I16.
+pub let I16.shr_logical (x: I16) (n: Int): I16 = i16_shr_logical_raw(x, n)
+
+let i16_count_ones_raw (x: I16): Int = 0
+/// Counts one bits within the 16-bit representation, excluding any sign extension. Returns an Int in 0..16 inclusive.
+pub let I16.count_ones (x: I16): Int = i16_count_ones_raw(x)
+
+let i32_shr_logical_raw (x: I32) (n: Int): I32 = 0
+/// Shifts the low 32 bits right with zero fill. Nonpositive counts return x; counts at least 32 return zero. The result retains I32.
+pub let I32.shr_logical (x: I32) (n: Int): I32 = i32_shr_logical_raw(x, n)
+
+let i32_count_ones_raw (x: I32): Int = 0
+/// Counts one bits within the 32-bit representation, excluding any sign extension. Returns an Int in 0..32 inclusive.
+pub let I32.count_ones (x: I32): Int = i32_count_ones_raw(x)
+
+let u8_shr_logical_raw (x: U8) (n: Int): U8 = 0
+/// Shifts the low 8 bits right with zero fill. Nonpositive counts return x; counts at least 8 return zero. The result retains U8.
+pub let U8.shr_logical (x: U8) (n: Int): U8 = u8_shr_logical_raw(x, n)
+
+let u8_count_ones_raw (x: U8): Int = 0
+/// Counts one bits within the 8-bit representation, excluding any sign extension. Returns an Int in 0..8 inclusive.
+pub let U8.count_ones (x: U8): Int = u8_count_ones_raw(x)
+
+let u16_shr_logical_raw (x: U16) (n: Int): U16 = 0
+/// Shifts the low 16 bits right with zero fill. Nonpositive counts return x; counts at least 16 return zero. The result retains U16.
+pub let U16.shr_logical (x: U16) (n: Int): U16 = u16_shr_logical_raw(x, n)
+
+let u16_count_ones_raw (x: U16): Int = 0
+/// Counts one bits within the 16-bit representation, excluding any sign extension. Returns an Int in 0..16 inclusive.
+pub let U16.count_ones (x: U16): Int = u16_count_ones_raw(x)
+
+let u32_shr_logical_raw (x: U32) (n: Int): U32 = 0
+/// Shifts the low 32 bits right with zero fill. Nonpositive counts return x; counts at least 32 return zero. The result retains U32.
+pub let U32.shr_logical (x: U32) (n: Int): U32 = u32_shr_logical_raw(x, n)
+
+let u32_count_ones_raw (x: U32): Int = 0
+/// Counts one bits within the 32-bit representation, excluding any sign extension. Returns an Int in 0..32 inclusive.
+pub let U32.count_ones (x: U32): Int = u32_count_ones_raw(x)
+
+let u64_shr_logical_raw (x: U64) (n: Int): U64 = 0
+/// Shifts the low 64 bits right with zero fill. Nonpositive counts return x; counts at least 64 return zero. The result retains U64.
+pub let U64.shr_logical (x: U64) (n: Int): U64 = u64_shr_logical_raw(x, n)
+
+let u64_count_ones_raw (x: U64): Int = 0
+/// Counts one bits within the 64-bit representation, excluding any sign extension. Returns an Int in 0..64 inclusive.
+pub let U64.count_ones (x: U64): Int = u64_count_ones_raw(x)
+
 // i traverses the borrowed prefix [0, n); no optional byte cell is needed.
 let plum__string_hash_acc (b: Bytes) (i: Int) (n: Int) (h: Int): Int =
     if i >= n { h & 9223372036854775807 }

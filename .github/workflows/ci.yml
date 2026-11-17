@@ -81,6 +81,8 @@ jobs:
         run: python3 ./bootstrap/integer-conversion-check.py ./sh.real
       - name: truncating integer conversions and widening semantics
         run: python3 ./bootstrap/integer-truncating-check.py ./sh.real
+      - name: width-aware bit operations and shift boundaries
+        run: python3 ./bootstrap/integer-bits-check.py ./sh.real
 
   bootstrap_proofs:
     name: Linux compiler self-hosting and memory checks

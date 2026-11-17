@@ -16,6 +16,14 @@ Subtracts modulo 2^8; returns the unsigned low bits. Ordinary arithmetic remains
 
 Multiplies modulo 2^8; returns the unsigned low bits. Ordinary arithmetic remains checked.
 
+## `let U8.shr_logical (x: U8) (n: Int): U8`
+
+Shifts the low 8 bits right with zero fill. Nonpositive counts return x; counts at least 8 return zero. The result retains U8.
+
+## `let U8.count_ones (x: U8): Int`
+
+Counts one bits within the 8-bit representation, excluding any sign extension. Returns an Int in 0..8 inclusive.
+
 ## `let U8.from (value: S): U8`
 
 Converts an integer whose entire source type range fits the destination. The source type must be known; signed-to-unsigned conversions require try_from. Evaluates value once. Does not introduce general function overloading or numeric generic constraints.

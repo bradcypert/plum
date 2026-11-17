@@ -33,6 +33,11 @@ let infer_expected (p2: Program2) (state: FreshState) (env: TyEnv) (acc: Subst) 
             },
             _ => infer_expr(p2, state, env, acc, e),
         },
+        EUnary(UBitNot, inner) => if Option.is_some(integer_kind(expected)) {
+            let r = infer_expected(p2, state, env, acc, inner, expected);
+            let s = constrain_operand(r.subst, r.ty, expected, "bitwise complement: ");
+            ir_leaf(expected, s, r.state, TUnary(UBitNot, r.texpr))
+        } else { infer_expr(p2, state, env, acc, e) },
         EUnsafe(block) => {
             let was = UNSAFE.get();
             UNSAFE.set(true);
@@ -41,7 +46,7 @@ let infer_expected (p2: Program2) (state: FreshState) (env: TyEnv) (acc: Subst) 
             r
         },
         EBinary(BPipe, lhs, rhs) => infer_expected(p2, state, env, acc, parser.desugar_pipe(lhs, rhs), expected),
-        EBinary(op, lhs, rhs) => if integer_arithmetic(op) && Option.is_some(integer_kind(expected)) {
+        EBinary(op, lhs, rhs) => if integer_value_operator(op) && Option.is_some(integer_kind(expected)) {
             infer_binary_expected(p2, state, env, acc, op, lhs, rhs, Some(expected))
         } else { infer_expr(p2, state, env, acc, e) },
         EBlock(block) => infer_expected_block(p2, state, env, acc, block, expected),
@@ -101,10 +106,27 @@ let integer_arithmetic (op: parser.BOp): Bool = match op {
     BAdd => true, BSub => true, BMul => true, BDiv => true, BRem => true, _ => false,
 }
 
+let integer_shift (op: parser.BOp): Bool = match op { BShl => true, BShr => true, _ => false }
+
+let integer_value_operator (op: parser.BOp): Bool = integer_arithmetic(op) || is_bitwise(op)
+
+// Shift counts have their own type, independent of the value's width. In
+// particular an Int count must never contextualize or widen the left value.
+let infer_integer_shift (p2: Program2) (state: FreshState) (env: TyEnv) (acc: Subst) (op: parser.BOp) (lhs: parser.PExpr) (rhs: parser.PExpr) (expected: Option[ITy]): InferResult = {
+    let left = infer_optional_expected(p2, state, env, acc, lhs, expected);
+    let seeded = seed_expected_result(left.subst, left.ty, expected);
+    let right = infer_expected(p2, left.state, env, seeded, rhs, ITInt);
+    let s = constrain_operand(right.subst, right.ty, ITInt, "shift count must be Int: ");
+    let ty = subst_apply(s, left.ty);
+    reject_non_int_bitwise(op, ty);
+    ir_leaf(ty, s, right.state, TBinary(op, left.texpr, right.texpr))
+}
+
 let integer_literal_expression (e: parser.PExpr): Bool = match e {
     EInt(_, _) => true,
     EUnary(UNeg, inner) => integer_literal_expression(inner),
-    EBinary(op, lhs, rhs) => integer_arithmetic(op) && integer_literal_expression(lhs) && integer_literal_expression(rhs),
+    EUnary(UBitNot, inner) => integer_literal_expression(inner),
+    EBinary(op, lhs, rhs) => integer_value_operator(op) && integer_literal_expression(lhs) && integer_literal_expression(rhs),
     _ => false,
 }
 
@@ -231,6 +253,10 @@ let check_integer_negation (subst: Subst) (operand: ITy): Unit =
 // Local closure parameters may still be variables at the first negation check.
 // Validate again against the completed body's substitution, before lowering.
 let validate_integer_negations (subst: Subst) (expr: TExpr): Unit = {
-    match expr.node { TUnary(UNeg, operand) => check_integer_negation(subst, operand.ty), _ => () };
+    match expr.node {
+        TUnary(UNeg, operand) => check_integer_negation(subst, operand.ty),
+        TBinary(op, left, _) => reject_non_int_bitwise(op, subst_apply(subst, left.ty)),
+        _ => (),
+    };
     for child in t_children(expr) { validate_integer_negations(subst, child); };
 }

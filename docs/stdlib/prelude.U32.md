@@ -16,6 +16,14 @@ Subtracts modulo 2^32; returns the unsigned low bits. Ordinary arithmetic remain
 
 Multiplies modulo 2^32; returns the unsigned low bits. Ordinary arithmetic remains checked.
 
+## `let U32.shr_logical (x: U32) (n: Int): U32`
+
+Shifts the low 32 bits right with zero fill. Nonpositive counts return x; counts at least 32 return zero. The result retains U32.
+
+## `let U32.count_ones (x: U32): Int`
+
+Counts one bits within the 32-bit representation, excluding any sign extension. Returns an Int in 0..32 inclusive.
+
 ## `let U32.from (value: S): U32`
 
 Converts an integer whose entire source type range fits the destination. The source type must be known; signed-to-unsigned conversions require try_from. Evaluates value once. Does not introduce general function overloading or numeric generic constraints.

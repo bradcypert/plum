@@ -43,6 +43,7 @@ let cg_ascii_cells (): String = {
 
 pub let cg_runtime (heap: Bool): String = cg_lines([
     "; --- Stage 5 runtime (self-hosted backend) ---",
+    cg_fixed_bits_runtime(()),
     "declare ptr @malloc(i64)",
     "declare void @plum_memory_fatal(ptr, i64) noreturn",
     "declare i32 @printf(ptr, ...)",

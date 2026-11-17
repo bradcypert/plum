@@ -1,0 +1,54 @@
+let combine[T] (a: T) (b: T): T = (a & b) | (a ^ b)
+let shift[T] (a: T) (n: Int): T = a << n
+let inverse[T] (a: T): T = ~a
+
+let BYTE: U8 = ~0
+let SIGNED: I8 = 127 << 1
+let COMBINED: U8 = combine(BYTE, 1)
+
+let main (): Unit = {
+    assert_eq(BYTE, 255);
+    assert_eq(SIGNED, -2);
+    assert_eq(COMBINED, 255);
+    let x: I8 = -1;
+    let count: Int = 1;
+    assert_eq(x >> count, -1);
+    assert_eq(I8.shr_logical(x, count), 127);
+    assert_eq(I8.shr_logical(x, -1), x);
+    assert_eq(I8.count_ones(x), 8);
+    assert_eq(I16.count_ones(-1), 16);
+    assert_eq(I32.count_ones(-1), 32);
+    assert_eq(U8.count_ones(255), 8);
+    assert_eq(U16.count_ones(65535), 16);
+    assert_eq(U32.count_ones(4294967295), 32);
+    assert_eq(U64.count_ones(18446744073709551615), 64);
+    assert_eq(I16.shr_logical(-1, 1), 32767);
+    assert_eq(I32.shr_logical(-1, 1), 2147483647);
+    assert_eq(U8.shr_logical(255, 1), 127);
+    assert_eq(U16.shr_logical(65535, 1), 32767);
+    assert_eq(U32.shr_logical(4294967295, 1), 2147483647);
+    let high: U64 = 18446744073709551615;
+    let literal: U64 = 18446744073709551615 & 18446744073709551615;
+    assert_eq(literal, high);
+    assert_eq(U64.shr_logical(high, 1), 9223372036854775807);
+    assert_eq(high >> count, 9223372036854775807);
+    assert_eq(high << 63, 9223372036854775808);
+    assert_eq(high << 64, 0);
+    assert_eq(high >> 64, 0);
+    assert_eq(x >> 8, -1);
+    assert_eq(x << 8, 0);
+    assert_eq(BYTE << count, 254);
+    assert_eq(BYTE >> 8, 0);
+    let one: U8 = 1;
+    let two: U8 = 2;
+    assert_eq(combine(one, two), 3);
+    assert_eq(shift(one, count), two);
+    assert_eq(inverse(one), 254);
+    let logical = I8.shr_logical;
+    let ones = U64.count_ones;
+    assert_eq(logical(x, count), 127);
+    assert_eq(ones(high), 64);
+    assert_eq(Int.count_ones(-1), 64);
+    assert_eq(I64.shr_logical(-1, -1), -1);
+    println("fixed integer bits ok")
+}

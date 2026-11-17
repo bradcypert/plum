@@ -122,10 +122,39 @@ for every integer type. Both operands must have that type. Results wrap modulo
 2^N, where N is the type width; signed results use two's-complement
 interpretation. These named operations support checksums, hashes, and binary
 protocols without changing ordinary checked arithmetic. Existing `Int`/`I64`
-wrapping behavior is unchanged. New-width bit operations remain tracked in
-#525. New-width C extern signatures,
+wrapping behavior is unchanged. New-width C extern signatures,
 including aggregates containing these types, are rejected until the scalar ABI
 work in #526. `Int`/`I64` retain the existing C ABI.
+
+### Integer bit operations
+
+`&`, `|`, `^` and `~` operate on the integer type's own bits. Binary operands
+must have the same type, and the result retains that type. Signed results
+use two's-complement interpretation. Contextual literals work; typed values
+require explicit conversion when their types differ.
+
+`value << count` and `value >> count` take an `Int` count and return the
+value's type. Left shifts discard high bits; right shifts are arithmetic
+for signed values and logical for unsigned values. Negative operator counts
+panic. Counts at least the value's width produce zero for left shifts and
+unsigned right shifts, or sign fill (-1 or 0) for signed right shifts. Counts
+are not masked modulo the width. This preserves existing `Int`/`I64` behavior.
+
+`Type.shr_logical(value, count)` provides zero-fill right shifts for every
+integer type. As with the existing Int helper, nonpositive counts return the
+original value and counts at least the width return zero.
+`Type.count_ones(value)` returns an `Int` counting one bits within that width;
+`I8.count_ones(-1)` is 8. These operations support flags, binary formats,
+network protocols, hashing and checksums without changing checked arithmetic.
+
+```plum
+let byte: U8 = ~0 // 255
+let count: Int = 1
+let shifted: U8 = byte << count // 254
+let signed: I8 = -1
+let arithmetic: I8 = signed >> count // -1
+let logical: I8 = I8.shr_logical(signed, count) // 127
+```
 
 ### Explicit integer conversions
 
