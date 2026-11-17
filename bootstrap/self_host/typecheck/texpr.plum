@@ -30,6 +30,12 @@ use parser;
 
 pub struct TExpr { pub ty: ITy, pub node: TNode }
 
+pub enum IntegerConversionMode {
+    IntegerConvertPreserving,
+    IntegerConvertChecked,
+    IntegerConvertTruncating,
+}
+
 // `starts` mirrors `PBlock.starts`: one character offset per
 // statement, so a backend can say which LINE each one came from.
 // The checker already had these -- it threads them to point an
@@ -202,7 +208,7 @@ pub enum TNode {
     // Plum `String` cell and a raw `char*`.
     TAsCStr(TExpr),
     TAsString(TExpr),
-    TIntegerConvert(IntegerKind, Bool, TExpr),
+    TIntegerConvert(IntegerKind, IntegerConversionMode, TExpr),
     // `spawn { .. }` -- the block becomes a zero-parameter CLOSURE (the
     // backend lifts it exactly as it lifts a closure literal, because
     // the body captures locals the same way), and the closure is handed

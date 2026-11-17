@@ -27,3 +27,9 @@ Implemented by the compiler itself, so it has no Plum source to read.
 Converts an integer when its value fits the destination range. Otherwise returns source and destination IntegerKind tags, without retaining the rejected value or allocating an error message. Evaluates value once. Result and error storage may allocate.
 
 Implemented by the compiler itself, so it has no Plum source to read.
+
+## `let I8.truncating_from (value: S): I8`
+
+Reduces an integer's mathematical value modulo 2^N, where N is the destination width, then interprets those bits using the destination signedness. Signed negative sources sign-extend when widening; unsigned sources zero-extend. Accepts any known integer source type and evaluates it once. Does not allocate conversion storage or check the destination range.
+
+Implemented by the compiler itself, so it has no Plum source to read.
