@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 """Default layout must be readable, lossless, and stable on the next save."""
 from pathlib import Path
+import os
+import runpy
 import subprocess
 import sys
 import tempfile
@@ -119,5 +121,31 @@ with tempfile.TemporaryDirectory(prefix="plum-width-") as temp:
     assert result.returncode == 1
     run("fmt", "--write", str(source))
     run("fmt", "--check", str(source))
+
+# Generated Plum must also be a formatter fixed point. Keep the temporary
+# program beside the real manifest so @embed_file keeps its relative paths.
+generator = runpy.run_path(str(Path(__file__).with_name("gen-shims")))
+manifest = generator["OUT"]
+fd, generated_path = tempfile.mkstemp(prefix=".fmt-generator-", suffix=".plum", dir=manifest.parent)
+os.close(fd)
+generated_path = Path(generated_path)
+try:
+    generated = generator["generate"]()
+    generated_path.write_bytes(generated.encode("utf-8"))
+    assert run("fmt", str(generated_path)).decode() == generated, "shim generator output needs formatting"
+
+    # Exercise either side of the actual call-width boundary, rather than
+    # relying on today's vendored filenames to happen to cross it.
+    with tempfile.TemporaryDirectory(prefix=".fmt-payload-", dir=manifest.parent) as payloads:
+        for width in [99, 100, 101, 130]:
+            prefix = '        source: @embed_file("'
+            name_size = width - len(prefix) - len('")') - len(Path(payloads).name) - 1
+            payload = Path(payloads) / ("x" * name_size)
+            payload.write_text("sample")
+            generated = generator["HEADER"] + generator["render"]("sample", False, payload) + "]\n"
+            generated_path.write_bytes(generated.encode("utf-8"))
+            assert run("fmt", str(generated_path)).decode() == generated, f"generated embed call width {width} needs formatting"
+finally:
+    generated_path.unlink(missing_ok=True)
 
 print("formatter-width: boundaries, compact expressions, comments, literals, CRLF, tokens and idempotence passed")
