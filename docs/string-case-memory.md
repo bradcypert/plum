@@ -1,4 +1,4 @@
-# Checked case conversion with shared unchanged results
+# Checked case conversion with unique storage reuse
 
 `String.to_upper` and `String.to_lower` retain their existing platform
 one-codepoint Unicode mapping. This also resolves the documentation mismatch
@@ -13,17 +13,21 @@ supplementary codepoints unchanged. OS Unicode tables can differ.
 | Approach | Allocation and ownership | Decision |
 | --- | --- | --- |
 | Keep copying every result; only move decoder slots | Constant stack, but unchanged results still allocate and duplicate bytes | Leaves avoidable traffic in place |
-| Share unchanged input; one common checked count/fill routine | Zero result allocations for identity, one exact cell for changed output; borrowed input, owned result | Selected; fits current Perceus ABI |
-| Consume uniquely owned input and map in place | Could also avoid changed-result allocations when output fits | Requires a consuming compiler/runtime seam, capacity rules, and handling changing UTF-8 widths; a separate design discussion |
+| Share unchanged input; one common checked count/fill routine | Zero result allocations for identity; one exact cell for changed shared output | Exact-copy fallback |
+| Consume unique input when every mapped unit keeps its byte width | Avoids result allocation without overwriting unread units or growing storage | Selected alongside exact-copy fallback; prepared owned operands preserve aliases |
 | Reserve a maximum-size buffer before mapping | One mapping pass, but oversized storage or a later compacting copy | Trades away the exact-storage property |
 | Introduce platform-independent full Unicode tables | New mapping/versioning semantics and expansions | A different language/API decision, unnecessary for this ownership fix |
 
 Both directions delegate to `plum_str_case`; only the platform mapping direction
 differs. The routine checks the input length before reading bytes, counts the
 exact output length with checked addition, and records whether any codepoint
-changes. Empty output uses immortal static storage. An unchanged nonempty
-result increments the input reference. A changed result gets one exact-sized
-ByteStorage allocation and never mutates the input, even when it is unique.
+changes. The runtime consumes one receiver owner. Empty output releases that
+owner and uses immortal static storage; unchanged nonempty output returns it.
+A changed unique input can be rewritten in place only if every mapped unit
+keeps its byte width. Other changed results use exact-sized independent storage.
+Checking only total length would be unsafe: an early expansion could overwrite
+a later shrinking unit. The fill pass rechecks each unit before an in-place
+write so changing locale widths cannot corrupt unread input.
 
 The input contract remains a valid UTF-8 String. A bounded width check also
 rejects a truncated final codepoint before the decoder reads beyond its input.
@@ -78,8 +82,9 @@ included in the heap totals.
 
 This improves programs emitted by Plum, including a source-built compiler
 when it calls these methods. It does not add a compiler reuse analysis pass.
-The existing borrowed-argument/owned-result convention, reference counting,
-last-use releases, cell layout, and consuming append paths remain intact.
+Owned receiver preparation, last-use transfer, atomic uniqueness checks and
+reference counting now enable reuse of width-preserving results. Cell layout
+and the existing consuming append paths remain intact.
 
 Sharing avoids both allocation traffic and a second live byte buffer when
 the caller keeps its input. It can also retain spare capacity: a one-byte
@@ -87,9 +92,11 @@ String with capacity 4096 occupies a requested 4113-byte cell. After an
 identity conversion and release of the original caller reference, the result
 still owns all 4113 bytes until its final release. The native guard pins this
 tradeoff and verifies final release returns the tracked live bytes to zero.
-An alias can also prevent an append from using unique ownership. Changed
-conversion still compacts into one exact-sized independent result, while an
-empty result never retains an oversized empty input cell.
+An alias can also prevent an append from using unique ownership. Width-changing and shared changed results compact into exact independent
+storage. Unique width-preserving conversions retain existing capacity just as
+identity results do; a changed one-byte result may therefore keep a 4113-byte
+request instead of a new 18-byte compact cell. Empty results never retain an
+oversized empty input cell.
 
 The optimization therefore reduces unnecessary copies without claiming all
 programs retain less memory. Constant decoder stack space is a separate
@@ -103,16 +110,19 @@ with method/namespaced/first-class calls, embedded NUL, Unicode, empty results,
 large changed input, and immutable String/Bytes/CStr aliases. The existing
 ASCII properties remain; a public API storage-semantics property adds Unicode
 and NUL coverage. Allocation fixtures bound identity and empty results at zero
-and 1000 changed eight-byte results at 1000 allocations / 25,000 requested bytes.
+and 1000 changed static-input eight-byte results at 1000 allocations / 25,000 requested bytes.
+Separate owned-loop ceilings now bound 512 changed results plus construction
+and verification at three allocations / 20,000 requested bytes.
 
 The storage guard extracts actual emitted LLVM, uses the real platform shim,
 and tests 8192 conversions across special and randomized valid codepoints,
 including supplementary characters. Its independent UTF-8 encoder and platform
 mapping oracle verify bytes, exact requests, identity references, input
-immutability, retained capacity, static empties, final releases, invalid
+immutability with a retained owner, unique reuse, retained capacity, static empties, final releases, invalid
 headers, truncated input, near-limit scalar sums, and allocation failure.
 Deterministic mapping-shim fault injection also changes the mapping width
-between passes, testing both the pre-write bound and final-length refusal.
+between passes, testing the pre-write bound, per-unit overlap guard and
+final-length refusal.
 Invalid header tests have no payload; allocation failure uses valid input
 because the counting pass necessarily reads it before allocation.
 

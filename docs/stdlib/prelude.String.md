@@ -141,8 +141,9 @@ Whether the string ends with `suffix`.
 
 Every occurrence of `from` replaced with `to`. An empty `from`
 leaves the string alone rather than looping.
-Unchanged nonempty results share the input cell. Changed nonempty results
-use one exact-sized allocation; empty results use static storage.
+Unchanged nonempty results share the input cell. Equal-byte-length changes
+may reuse uniquely owned storage; other changed results allocate exactly.
+Empty results use static storage.
 
 ## `let String.to_upper (s: String): String`
 
@@ -150,8 +151,9 @@ Uppercased using the platform's one-codepoint Unicode mapping. This
 does not perform multi-codepoint expansions (for example, ß to SS).
 POSIX uses the initialized UTF-8 locale; Windows maps the BMP only
 and leaves supplementary codepoints unchanged. Mappings can vary by OS.
-Unchanged nonempty results share input storage; changed results use
-one exact-sized allocation. Empty results use static storage.
+Unchanged nonempty results share input storage. Changed results may reuse
+uniquely owned storage when every mapped codepoint keeps its byte width;
+otherwise they allocate exactly. Empty results use static storage.
 
 ## `let String.to_lower (s: String): String`
 

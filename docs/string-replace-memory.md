@@ -7,6 +7,10 @@ results also received a heap cell. This change retains exact construction while
 sharing unchanged nonempty results, using static empty storage, and checking
 all result-size arithmetic.
 
+The current follow-up consumes the receiver owner: equal-byte-width replacements
+can reuse a unique cell, while shared or width-changing results retain exact
+construction. The measurements below describe the earlier borrowed constructor.
+
 ## Alternatives compared
 
 [Program measurements](string-replace-measurements.json) compare the original
@@ -55,7 +59,8 @@ count nonoverlapping matches using the existing byte matcher
   no matches → owned input reference
 compute checked result size
   empty output → static empty
-  changed nonempty → one exact cell, copy literal spans and replacements
+  equal-width changed unique input → reuse existing cell
+  other changed nonempty → exact cell, copy literal spans and replacements
 ```
 
 The scalar plan validates input length `n`, pattern length `m`, and target length
@@ -88,13 +93,16 @@ Neither is necessary for the allocation and size-safety improvement here.
 
 ## Perceus ownership and capacity retention
 
-The constructor borrows all three arguments and returns a +1 String owner. For
-unchanged nonempty output it increments the input's existing reference count.
-Changed output always owns independent exact storage, even if input has a unique
-reference and surplus capacity, or if pattern/target alias input. Sources stay
-alive through copying and are never mutated. Empty results use the static cell.
+The compiler prepares owned operands left-to-right. The runtime consumes the
+receiver and borrows pattern/target until return; those prepared owners keep
+aliases alive. Unchanged output forwards the receiver owner. Equal-byte-width
+changes may reuse a unique cell after an acquire check; pattern/target aliases
+and shared inputs force copying. Width-changing results still get exact compact
+storage. Empty results release the receiver owner and use the static cell.
+Reuse preserves the original requested size and any spare capacity; final
+release remains governed by normal Perceus ARC.
 Normal Perceus ARC/last-use and copy-on-write behavior handles the returned owner;
-no compiler consuming ABI or cell layout changes are introduced.
+the private receiver ABI now consumes one owner; cell layout is unchanged.
 
 Sharing a whole unchanged cell retains its original capacity and can prevent an
 alias from being updated in place. This is a real tradeoff, not zero retained
@@ -104,13 +112,13 @@ that the result remains valid while retaining all 4,113 requested bytes until
 its final release. Previously a no-match replacement could compact that result
 into a fresh 20-byte cell. The common case avoids a duplicate allocation/copy;
 it does not promise that every unchanged result retains the smallest possible
-buffer. Changed output never replicates reserve capacity.
+buffer. Reusing a unique changed result also retains existing reserve capacity;
+shared and width-changing changed output remains exact-sized.
 
-Consuming in-place replacement would need a compiler-proven last-use boundary,
-plus handling of overlapping input/pattern/target aliases and growth/shrink.
-Reference count one alone does not permit mutation of a borrowed argument. The
-existing borrowed contract provides these memory savings without that larger
-ownership design.
+The owned-operand lowering holds pattern/target aliases through the call and
+consumes the receiver only after all operands have been evaluated. Equal widths
+avoid shifting unread input. Growth and shrink keep the exact-copy path rather
+than introducing a new reserve or compaction policy.
 
 ## Larger memory story
 
@@ -124,9 +132,9 @@ from RSS and allocator rounding.
 The compiler itself uses replacement in LLVM string escaping, HTML escaping,
 path normalization and native-cache command normalization. Its separate refreshed
 seed-to-source measurements below exercise real callers; they include combined
-runtime/module and caller effects. Ordinary program changes still use one exact
-allocation, and retained-capacity tradeoffs remain relevant to both compiler and
-programs. No RSS or timing improvement is inferred from requested-byte totals.
+runtime/module and caller effects. Those earlier changed-program measurements
+used exact allocation; current unique reuse also retains reserve capacity.
+Retained-capacity tradeoffs remain relevant to both compiler and programs. No RSS or timing improvement is inferred from requested-byte totals.
 
 ## Reproduction and safeguards
 
@@ -146,15 +154,15 @@ of the receiver. Properties preserve identity rules and nonoverlapping behavior.
 
 The emitted-runtime guard extracts actual compiler functions, testing O0/O2,
 tracked/untracked and ASan/LSan. A separate native reference checks 2,048 binary
-cases, exact requests and ByteStorage accounting, input immutability even at
-unique ownership, aliased arguments, shared-result last-owner lifetime and
+cases, exact requests and ByteStorage accounting, retained-input immutability,
+owned equal-width reuse, aliased arguments, shared-result last-owner lifetime and
 retained capacity, scalar near-limit arithmetic, header-only invalid input
 lengths, buffer-free scalar size/count faults and injected allocation failure.
 Header checks precede payload reads; OOM injection uses valid data because
 counting necessarily reads input first.
 
 Budgets for 1,000 public calls require unchanged and empty outputs to allocate
-nothing; changed output requires exactly 1,000 allocations / 27,000 requested
+nothing; changed static-input output requires 1,000 allocations / 27,000 requested
 bytes in the selected workload. The existing Path helper fixture also drops
 eight allocations, and its count budget is tightened from 72,371 to 72,363.
 The seed is refreshed and actually rebuilt, bootstrap/native filename checks
