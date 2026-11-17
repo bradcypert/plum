@@ -101,8 +101,8 @@ pub struct Manifest {
 // The libraries this manifest asks for when building for `os`.
 pub let manifest_link_for (m: Manifest) (os: String): Array[String] = {
     let per_os = if os == "windows" { m.link_windows }
-        else if os == "macos" { m.link_macos }
-        else { m.link_linux };
+    else if os == "macos" { m.link_macos }
+    else { m.link_linux };
     let posix = if os == "windows" { [] } else { m.link_posix };
     Array.concat(m.link, Array.concat(posix, per_os))
 }
@@ -111,7 +111,18 @@ pub let manifest_name (unit: Unit): String = "plum.pkg"
 
 // What a project with no `plum.pkg` has. Not an error: the file is
 // optional, and its absence means "no dependencies", not "malformed".
-pub let no_manifest (unit: Unit): Manifest = Manifest { name: "", version: "", symlinks: "within-root", deps: [], link: [], link_linux: [], link_macos: [], link_windows: [], link_posix: [], native_deps: None }
+pub let no_manifest (unit: Unit): Manifest = Manifest {
+    name: "",
+    version: "",
+    symlinks: "within-root",
+    deps: [],
+    link: [],
+    link_linux: [],
+    link_macos: [],
+    link_windows: [],
+    link_posix: [],
+    native_deps: None
+}
 
 pub let manifest_path (root: String): String = Path.join(root, manifest_name(()))
 
@@ -124,7 +135,10 @@ pub let manifest_path (root: String): String = Path.join(root, manifest_name(())
 pub let read (root: String): Manifest =
     match treefs.open_root(root) {
         Ok(held) => read_held(root, held),
-        Err(e) => if Result.unwrap_or(Os.is_directory(root), false) { panic_raw(e); no_manifest(()) } else { no_manifest(()) },
+        Err(e) => if Result.unwrap_or(Os.is_directory(root), false) {
+            panic_raw(e);
+            no_manifest(())
+        } else { no_manifest(()) },
     }
 
 // Consumers that already acquired a root must load policy from that same
@@ -132,20 +146,30 @@ pub let read (root: String): Manifest =
 pub let read_held (root: String) (held: treefs.TreeRoot): Manifest = {
     let path = manifest_path(root);
     let present = match treefs.child_present(held, manifest_name(())) {
-        Ok(found) => found, Err(e) => { panic_raw("failed to inspect ${path}: ${e}"); false },
+        Ok(found) => found,
+        Err(e) => {
+            panic_raw("failed to inspect ${path}: ${e}");
+            false
+        },
     };
     if !present { no_manifest(()) }
     else {
         let entry = match treefs.open_entry(held, manifest_name(()), false) {
-            Ok(e) => e, Err(e) => treefs.fail_entry("failed to read ${path}: ${e}"),
+            Ok(e) => e,
+            Err(e) => treefs.fail_entry("failed to read ${path}: ${e}"),
         };
         let src = match treefs.read_text(held, manifest_name(()), false, treefs.identity(entry)) {
-            Ok(s) => s, Err(e) => { panic_raw("failed to read ${path}: ${e}"); "" },
+            Ok(s) => s,
+            Err(e) => {
+                panic_raw("failed to read ${path}: ${e}");
+                ""
+            },
         };
         let manifest = parse(path, src);
         if manifest.symlinks == "reject" {
             match treefs.open_entry(held, manifest_name(()), true) {
-                Ok(_) => (), Err(e) => panic_raw("failed to read ${path}: ${e}"),
+                Ok(_) => (),
+                Err(e) => panic_raw("failed to read ${path}: ${e}"),
             }
         };
         manifest
@@ -184,10 +208,19 @@ let check_value (path: String) (src: String) (e: parser.PExpr): Unit = match e {
 
 let check_all (path: String) (src: String) (elems: Array[parser.PExpr]) (i: Int): Unit =
     if i >= elems.len() { () }
-    else { check_value(path, src, elems[i]); check_all(path, src, elems, i + 1) }
+    else {
+        check_value(path, src, elems[i]);
+        check_all(path, src, elems, i + 1)
+    }
 
 // Check every struct before any typed accessor can discard a later field.
-let check_fields (path: String) (src: String) (fields: Array[parser.FieldInitNode]) (i: Int) (seen: Map[String, Int]): Unit =
+let check_fields
+    (path: String)
+    (src: String)
+    (fields: Array[parser.FieldInitNode])
+    (i: Int)
+    (seen: Map[String, Int]): Unit
+=
     if i >= fields.len() { () }
     else {
         let next = unique_name(path, src, seen, fields[i].name, fields[i].offset, "field");
@@ -197,10 +230,20 @@ let check_fields (path: String) (src: String) (fields: Array[parser.FieldInitNod
 
 // Both configuration keys and dependency namespaces must have one meaning.
 // Keep the original position so the error can point to both declarations.
-let unique_name (path: String) (src: String) (seen: Map[String, Int]) (name: String) (offset: Int) (what: String): Map[String, Int] = {
+let unique_name
+    (path: String)
+    (src: String)
+    (seen: Map[String, Int])
+    (name: String)
+    (offset: Int)
+    (what: String): Map[String, Int]
+= {
     match Map.get(seen, name) {
-        Some(first) => panic_raw(lexer.render_at(src, path, offset, "duplicate ${what} `${name}`")
-            .concat("\n").concat(lexer.render_at(src, path, first, "first ${what} `${name}` is here"))),
+        Some(first) => panic_raw(
+            lexer.render_at(src, path, offset, "duplicate ${what} `${name}`")
+                .concat("\n")
+                .concat(lexer.render_at(src, path, first, "first ${what} `${name}` is here"))
+        ),
         None => (),
     };
     Map.insert(seen, name, offset)
@@ -227,17 +270,38 @@ let kind_of (e: parser.PExpr): String = match e {
 }
 
 let not_data (path: String) (what: String): Unit =
-    panic_raw("${path}: a manifest is data, not a program, and ${what} is not data.\n  Only strings, numbers, `true`/`false`, arrays and struct literals are allowed.")
+    panic_raw(
+        "${path}: a manifest is data, not a program, and ${what} is not data.\n  Only strings, numbers, `true`/`false`, arrays and struct literals are allowed."
+    )
 
 // ------------------------------------------------------------ the shape
 
 let to_manifest (path: String) (src: String) (e: parser.PExpr): Manifest = match e {
     EStructLit(lit_path, fields, _) => {
         if last_segment(lit_path) != "Package" {
-            fail(path, "a manifest is one `Package { .. }`, but this one is `${last_segment(lit_path)}`")
+            fail(
+                path,
+                "a manifest is one `Package { .. }`, but this one is `${last_segment(lit_path)}`"
+            )
         };
-        reject_unknown(path, fields, 0,
-            ["name", "version", "deps", "link", "link_linux", "link_macos", "link_windows", "link_posix", "native_deps", "symlinks"], "Package");
+        reject_unknown(
+            path,
+            fields,
+            0,
+            [
+                "name",
+                "version",
+                "deps",
+                "link",
+                "link_linux",
+                "link_macos",
+                "link_windows",
+                "link_posix",
+                "native_deps",
+                "symlinks"
+            ],
+            "Package"
+        );
         Manifest {
             name: required_string(path, fields, "name", "Package"),
             version: optional_string(path, fields, "version"),
@@ -251,7 +315,10 @@ let to_manifest (path: String) (src: String) (e: parser.PExpr): Manifest = match
             native_deps: native_deps_field(path, fields),
         }
     },
-    _ => { fail(path, "a manifest is one `Package { .. }`"); no_manifest(()) },
+    _ => {
+        fail(path, "a manifest is one `Package { .. }`");
+        no_manifest(())
+    },
 }
 
 // Embedded native dependencies are capabilities, not linker flags or
@@ -262,18 +329,31 @@ let native_deps_field (path: String) (fields: Array[parser.FieldInitNode]): Opti
         None => None,
         Some(v) => match v {
             EArray(elems) => Some(native_dep_names(path, elems, 0, [])),
-            _ => { fail(path, "`native_deps` is an array of embedded dependency names (`tls`)"); None },
+            _ => {
+                fail(path, "`native_deps` is an array of embedded dependency names (`tls`)");
+                None
+            },
         },
     }
 
-let native_dep_names (path: String) (elems: Array[parser.PExpr]) (i: Int) (acc: Array[String]): Array[String] =
+let native_dep_names
+    (path: String)
+    (elems: Array[parser.PExpr])
+    (i: Int)
+    (acc: Array[String]): Array[String]
+=
     if i >= elems.len() { acc }
     else {
         let name = match elems[i] {
             EStr(s) => s,
-            _ => { fail(path, "`native_deps` holds strings (`tls`)"); "" },
+            _ => {
+                fail(path, "`native_deps` holds strings (`tls`)");
+                ""
+            },
         };
-        if name != "tls" { fail(path, "unknown embedded native dependency `${name}`; expected `tls`") };
+        if name != "tls" {
+            fail(path, "unknown embedded native dependency `${name}`; expected `tls`")
+        };
         if Array.contains(acc, name) { fail(path, "duplicate native dependency `${name}`") };
         native_dep_names(path, elems, i + 1, acc.push(name))
     }
@@ -297,19 +377,34 @@ let link_field (path: String) (fields: Array[parser.FieldInitNode]) (name: Strin
         None => [],
         Some(v) => match v {
             EArray(elems) => link_names(path, name, elems, 0, []),
-            _ => { fail(path, "`${name}` is an array of library names"); [] },
+            _ => {
+                fail(path, "`${name}` is an array of library names");
+                []
+            },
         },
     }
 
-let link_names (path: String) (field: String) (elems: Array[parser.PExpr]) (i: Int) (acc: Array[String]): Array[String] =
+let link_names
+    (path: String)
+    (field: String)
+    (elems: Array[parser.PExpr])
+    (i: Int)
+    (acc: Array[String]): Array[String]
+=
     if i >= elems.len() { acc }
     else {
         let lib = match elems[i] {
             EStr(s) => s,
-            _ => { fail(path, "`${field}` holds library names, which are strings"); "" },
+            _ => {
+                fail(path, "`${field}` holds library names, which are strings");
+                ""
+            },
         };
         if !is_library_name(lib) {
-            fail(path, "`${lib}` is not a library name.\n  `${field}` takes what `-l` takes: `sqlite3`, `ws2_32`, `stdc++`. A linker FLAG is not a library name, and a manifest may not pass one into someone else's build.")
+            fail(
+                path,
+                "`${lib}` is not a library name.\n  `${field}` takes what `-l` takes: `sqlite3`, `ws2_32`, `stdc++`. A linker FLAG is not a library name, and a manifest may not pass one into someone else's build."
+            )
         };
         link_names(path, field, elems, i + 1, acc.push(lib))
     }
@@ -323,18 +418,31 @@ let all_library_chars (cs: Array[String]) (i: Int): Bool =
     else { false }
 
 let is_library_char (c: String): Bool =
-    Array.contains(chars_of("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_-.+"), c)
+    Array.contains(
+        chars_of("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_-.+"),
+        c
+    )
 
 let deps_of (path: String) (src: String) (fields: Array[parser.FieldInitNode]): Array[Dep] =
     match field_named(fields, "deps", 0) {
         None => [],
         Some(v) => match v {
             EArray(elems) => dep_list(path, src, elems, 0, [], Map.new(())),
-            _ => { fail(path, "`deps` is an array of `Dep { .. }`"); [] },
+            _ => {
+                fail(path, "`deps` is an array of `Dep { .. }`");
+                []
+            },
         },
     }
 
-let dep_list (path: String) (src: String) (elems: Array[parser.PExpr]) (i: Int) (acc: Array[Dep]) (seen: Map[String, Int]): Array[Dep] =
+let dep_list
+    (path: String)
+    (src: String)
+    (elems: Array[parser.PExpr])
+    (i: Int)
+    (acc: Array[Dep])
+    (seen: Map[String, Int]): Array[Dep]
+=
     if i >= elems.len() { acc }
     else {
         let dep = dep_of(path, elems[i]);
@@ -354,9 +462,18 @@ let name_offset (fields: Array[parser.FieldInitNode]) (i: Int): Int =
 let dep_of (path: String) (e: parser.PExpr): Dep = match e {
     EStructLit(lit_path, fields, _) => {
         if last_segment(lit_path) != "Dep" {
-            fail(path, "every entry in `deps` is a `Dep { .. }`, but this one is `${last_segment(lit_path)}`")
+            fail(
+                path,
+                "every entry in `deps` is a `Dep { .. }`, but this one is `${last_segment(lit_path)}`"
+            )
         };
-        reject_unknown(path, fields, 0, ["name", "path", "git", "rev", "sha256", "hash_version"], "Dep");
+        reject_unknown(
+            path,
+            fields,
+            0,
+            ["name", "path", "git", "rev", "sha256", "hash_version"],
+            "Dep"
+        );
         let name = required_string(path, fields, "name", "Dep");
         let dep_path = optional_string(path, fields, "path");
         let git = optional_string(path, fields, "git");
@@ -369,7 +486,10 @@ let dep_of (path: String) (e: parser.PExpr): Dep = match e {
         // that cannot be written in source is a name that will have to
         // be changed later. Catching it here names the manifest line.
         if !is_identifier(name) {
-            fail(path, "`${name}` cannot be a package name: it must start with a letter and hold only letters, digits and `_`")
+            fail(
+                path,
+                "`${name}` cannot be a package name: it must start with a letter and hold only letters, digits and `_`"
+            )
         };
         // An explicitly EMPTY path gets its own message, because it is a
         // different mistake from omitting the field and the generic
@@ -383,9 +503,26 @@ let dep_of (path: String) (e: parser.PExpr): Dep = match e {
             None => (),
         };
         check_source(path, name, dep_path, git, rev, sha256);
-        Dep { name: name, path: dep_path, git: git, rev: rev, sha256: sha256, hash_version: hash_version }
+        Dep {
+            name: name,
+            path: dep_path,
+            git: git,
+            rev: rev,
+            sha256: sha256,
+            hash_version: hash_version
+        }
     },
-    _ => { fail(path, "every entry in `deps` is a `Dep { .. }`"); Dep { name: "", path: "", git: "", rev: "", sha256: "", hash_version: 1 } },
+    _ => {
+        fail(path, "every entry in `deps` is a `Dep { .. }`");
+        Dep {
+            name: "",
+            path: "",
+            git: "",
+            rev: "",
+            sha256: "",
+            hash_version: 1
+        }
+    },
 }
 
 // Where a dependency comes from, checked once, here.
@@ -393,12 +530,22 @@ let dep_of (path: String) (e: parser.PExpr): Dep = match e {
 // Every one of these is a manifest that PARSES and that the loader
 // would otherwise discover much later, somewhere that cannot name the
 // line that was wrong.
-let check_source (path: String) (name: String) (dep_path: String) (git: String) (rev: String) (sha256: String): Unit = {
+let check_source
+    (path: String)
+    (name: String)
+    (dep_path: String)
+    (git: String)
+    (rev: String)
+    (sha256: String): Unit
+= {
     let has_path = !String.is_empty(dep_path);
     let has_git = !String.is_empty(git);
 
     if has_path && has_git {
-        fail(path, "dependency `${name}` has both a `path` and a `git`.\n  A dependency comes from one place. Delete whichever is not the one you meant.")
+        fail(
+            path,
+            "dependency `${name}` has both a `path` and a `git`.\n  A dependency comes from one place. Delete whichever is not the one you meant."
+        )
     };
     // An empty path is rejected HERE because by the time the loader
     // sees it, it is indistinguishable from a cycle. `Path.join`
@@ -409,12 +556,18 @@ let check_source (path: String) (name: String) (dep_path: String) (git: String) 
     // pointing at the user's source rather than at the manifest
     // line that was actually wrong.
     if !has_path && !has_git {
-        fail(path, "dependency `${name}` says where it is called but not where it comes from.\n  Give it a `path` (a directory on this machine) or a `git` and a `rev`.")
+        fail(
+            path,
+            "dependency `${name}` says where it is called but not where it comes from.\n  Give it a `path` (a directory on this machine) or a `git` and a `rev`."
+        )
     };
 
     if has_git {
         if String.is_empty(rev) {
-            fail(path, "dependency `${name}` has a `git` but no `rev`.\n  A manifest is the lockfile here, so a git dependency names an exact commit.")
+            fail(
+                path,
+                "dependency `${name}` has a `git` but no `rev`.\n  A manifest is the lockfile here, so a git dependency names an exact commit."
+            )
         };
         // A branch or a tag is NOT a pin. Both move, and a dependency
         // that can change underneath a build makes "the manifest is the
@@ -424,19 +577,31 @@ let check_source (path: String) (name: String) (dep_path: String) (git: String) 
         // rejects an abbreviated SHA, which is a pin that can become
         // ambiguous as a repository grows.
         if !String.is_empty(rev) && !is_hex_of_length(rev, 40) {
-            fail(path, "dependency `${name}` has `rev: \"${rev}\"`, which is not a commit.\n  A `rev` is a full 40-character commit hash. A branch or a tag moves, and a dependency that moves is not pinned.")
+            fail(
+                path,
+                "dependency `${name}` has `rev: \"${rev}\"`, which is not a commit.\n  A `rev` is a full 40-character commit hash. A branch or a tag moves, and a dependency that moves is not pinned."
+            )
         }
     } else {
         if !String.is_empty(rev) {
-            fail(path, "dependency `${name}` has a `rev` but no `git`. A path dependency is whatever is in the directory.")
+            fail(
+                path,
+                "dependency `${name}` has a `rev` but no `git`. A path dependency is whatever is in the directory."
+            )
         };
         if !String.is_empty(sha256) {
-            fail(path, "dependency `${name}` has a `sha256` but no `git`.\n  A path dependency is a directory you control and is not verified; the hash would be checking your own working tree against itself.")
+            fail(
+                path,
+                "dependency `${name}` has a `sha256` but no `git`.\n  A path dependency is a directory you control and is not verified; the hash would be checking your own working tree against itself."
+            )
         }
     };
 
     if !String.is_empty(sha256) && !is_hex_of_length(sha256, 64) {
-        fail(path, "dependency `${name}` has a `sha256` that is not a 64-character hex hash.\n  `plum fetch` prints the hash of what it fetched; paste that.")
+        fail(
+            path,
+            "dependency `${name}` has a `sha256` that is not a 64-character hex hash.\n  `plum fetch` prints the hash of what it fetched; paste that."
+        )
     }
 }
 
@@ -460,18 +625,35 @@ let field_named (fields: Array[parser.FieldInitNode]) (name: String) (i: Int): O
 // what it did not understand is a typo that does nothing and says
 // nothing -- `dependencies:` instead of `deps:`, and a build that
 // cannot find a module for reasons the manifest appears to contradict.
-let reject_unknown (path: String) (fields: Array[parser.FieldInitNode]) (i: Int) (known: Array[String]) (what: String): Unit =
+let reject_unknown
+    (path: String)
+    (fields: Array[parser.FieldInitNode])
+    (i: Int)
+    (known: Array[String])
+    (what: String): Unit
+=
     if i >= fields.len() { () }
     else {
         if !Array.contains(known, fields[i].name) {
-            fail(path, "`${what}` has no field `${fields[i].name}`. It understands ${Array.join(known, ", ")}")
+            fail(
+                path,
+                "`${what}` has no field `${fields[i].name}`. It understands ${Array.join(known, ", ")}"
+            )
         };
         reject_unknown(path, fields, i + 1, known, what)
     }
 
-let required_string (path: String) (fields: Array[parser.FieldInitNode]) (name: String) (what: String): String =
+let required_string
+    (path: String)
+    (fields: Array[parser.FieldInitNode])
+    (name: String)
+    (what: String): String
+=
     match field_named(fields, name, 0) {
-        None => { fail(path, "`${what}` needs a `${name}`"); "" },
+        None => {
+            fail(path, "`${what}` needs a `${name}`");
+            ""
+        },
         Some(v) => string_value(path, name, v),
     }
 
@@ -483,7 +665,10 @@ let optional_string (path: String) (fields: Array[parser.FieldInitNode]) (name: 
 
 let string_value (path: String) (name: String) (e: parser.PExpr): String = match e {
     EStr(s) => s,
-    _ => { fail(path, "`${name}` is a string"); "" },
+    _ => {
+        fail(path, "`${name}` is a string");
+        ""
+    },
 }
 
 let last_segment (path: Array[String]): String = Option.unwrap_or(Array.last(path), "")
@@ -495,7 +680,10 @@ let last_segment (path: Array[String]): String = Option.unwrap_or(Array.last(pat
 // hand-written letters-and-digits test would have let through.
 let is_identifier (s: String): Bool = {
     let tokens = lexer.tokenize(s);
-    tokens.len() == 2 && match tokens[0] { TokIdent(n) => n == s, _ => false }
+    tokens.len() == 2 && match tokens[0] {
+        TokIdent(n) => n == s,
+        _ => false
+    }
 }
 
 let fail (path: String) (msg: String): Unit = panic_raw("${path}: ${msg}")
@@ -514,14 +702,26 @@ pub let test_native_dependency_contract (): Unit = {
 let hash_version_field (path: String) (fields: Array[parser.FieldInitNode]): Int =
     match field_named(fields, "hash_version", 0) {
         None => 1,
-        Some(EInt(v, _)) => if v == "1" { 1 } else if v == "2" { 2 } else { fail(path, "`hash_version` must be 1 or 2"); 1 },
-        _ => { fail(path, "`hash_version` must be the integer 1 or 2"); 1 },
+        Some(EInt(v, _)) => if v == "1" { 1 } else if v == "2" { 2 } else {
+            fail(path, "`hash_version` must be 1 or 2");
+            1
+        },
+        _ => {
+            fail(path, "`hash_version` must be the integer 1 or 2");
+            1
+        },
     }
 
 let symlinks_field (path: String) (fields: Array[parser.FieldInitNode]): String =
     match field_named(fields, "symlinks", 0) {
         None => "within-root",
         Some(EStr(v)) => if v == "within-root" || v == "reject" { v }
-            else { fail(path, "`symlinks` must be `within-root` or `reject`"); "within-root" },
-        _ => { fail(path, "`symlinks` must be a string (`within-root` or `reject`)"); "within-root" },
+        else {
+            fail(path, "`symlinks` must be `within-root` or `reject`");
+            "within-root"
+        },
+        _ => {
+            fail(path, "`symlinks` must be a string (`within-root` or `reject`)");
+            "within-root"
+        },
     }

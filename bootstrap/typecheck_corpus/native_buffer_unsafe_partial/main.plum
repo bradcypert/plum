@@ -1,2 +1,11 @@
 use NativeBuffer;
-let main (): Unit = unsafe { match NativeBuffer.create(4) { Err(_) => (), Ok(b) => { let borrow = NativeBuffer.with_mut(b); () } } }
+
+let main (): Unit = unsafe {
+    match NativeBuffer.create(4) {
+        Err(_) => (),
+        Ok(b) => {
+            let borrow = NativeBuffer.with_mut(b);
+            ()
+        }
+    }
+}

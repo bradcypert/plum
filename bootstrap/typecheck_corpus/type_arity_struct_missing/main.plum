@@ -1,3 +1,5 @@
 struct Pair[A, B] { first: A, second: B }
+
 let unused (value: Pair): Unit = ()
+
 let main (): Unit = ()

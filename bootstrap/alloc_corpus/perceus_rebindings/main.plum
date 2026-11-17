@@ -9,6 +9,7 @@ let grow (n: Int) (xs: Array[Int]): Array[Int] =
 
 // The same proof must apply across an ordinary consuming function call.
 let append (xs: Array[Int]) (value: Int): Array[Int] = xs.push(value)
+
 let grow_indirect (n: Int) (xs: Array[Int]): Array[Int] =
     if n == 0 { xs } else {
         xs = append(xs, 0);

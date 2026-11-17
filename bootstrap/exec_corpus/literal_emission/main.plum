@@ -4,19 +4,36 @@ let labeled (counter: Ref[Int]) (text: String): String = {
     n.to_string().concat(":").concat(text)
 }
 
-let joined (a: String) (b: String) (c: String): String = a.concat("|").concat(b).concat("|").concat(c)
+let joined (a: String) (b: String) (c: String): String =
+    a.concat("|").concat(b).concat("|").concat(c)
 
 let main (): Unit = {
     let counter = ref(0);
     let values = [
-        { let local = "α"; labeled(counter, local.concat("\x00x")) },
-        { let middle = labeled(counter, "中"); let finish = |s| s.concat("🙂"); finish(middle) },
-        { let inner = [labeled(counter, "tail")]; inner[0] },
+        {
+            let local = "α";
+            labeled(counter, local.concat("\x00x"))
+        },
+        {
+            let middle = labeled(counter, "中");
+            let finish = |s| s.concat("🙂");
+            finish(middle)
+        },
+        {
+            let inner = [labeled(counter, "tail")];
+            inner[0]
+        },
     ];
     assert_eq(values[0], "0:α\x00x");
     assert_eq(values[1], "1:中🙂");
     assert_eq(values[2], "2:tail");
-    let tuple = ({ let local = "tuple-a"; labeled(counter, local) }, labeled(counter, "tuple-b"));
+    let tuple = (
+        {
+            let local = "tuple-a";
+            labeled(counter, local)
+        },
+        labeled(counter, "tuple-b")
+    );
     let (left, right) = tuple;
     assert_eq(left, "3:tuple-a");
     assert_eq(right, "4:tuple-b");
@@ -29,7 +46,14 @@ let main (): Unit = {
     reused = [labeled(counter, reused[1]), labeled(counter, "last")];
     assert_eq(reused[0], "8:7:new");
     assert_eq(reused[1], "9:last");
-    let called = joined(labeled(counter, "a"), { let local = "b"; labeled(counter, local) }, labeled(counter, "c"));
+    let called = joined(
+        labeled(counter, "a"),
+        {
+            let local = "b";
+            labeled(counter, local)
+        },
+        labeled(counter, "c")
+    );
     assert_eq(called, "10:a|11:b|12:c");
     assert_eq(counter.get(), 13);
     let empty: Array[String] = [];

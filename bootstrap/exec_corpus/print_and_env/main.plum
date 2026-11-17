@@ -21,9 +21,11 @@ let main (): Unit = {
     print("");
     println("empty print leaves no trace");
 
-    println(match Os.env_var("PLUM_DEFINITELY_NOT_SET_4f3a9") {
-        Some(v) => "unexpectedly set: ".concat(v),
-        None => "unset reads as None",
-    });
+    println(
+        match Os.env_var("PLUM_DEFINITELY_NOT_SET_4f3a9") {
+            Some(v) => "unexpectedly set: ".concat(v),
+            None => "unset reads as None",
+        }
+    );
     println(Option.unwrap_or(Os.env_var("PLUM_DEFINITELY_NOT_SET_4f3a9"), "fallback"))
 }

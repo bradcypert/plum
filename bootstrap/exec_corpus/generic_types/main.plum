@@ -1,7 +1,11 @@
 struct Box[T] { item: T }
+
 enum Maybe[T] { Yes(T), Nope }
 
-let unwrap_or[T] (m: Maybe[T]) (fallback: T): T = match m { Yes(v) => v, Nope => fallback }
+let unwrap_or[T] (m: Maybe[T]) (fallback: T): T = match m {
+    Yes(v) => v,
+    Nope => fallback
+}
 
 let boxed_of[T] (x: T): Box[T] = Box { item: x }
 

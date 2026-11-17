@@ -1,38 +1,59 @@
 use Time;
+
 extern "C" {
     fn channel_probe_drop(h: Int);
     fn channel_probe_count() -> Int;
 }
+
 handle Probe { on_drop: channel_probe_drop }
+
 struct Payload { resource: Probe, items: Array[String] }
-let probe (): Payload = Payload { resource: unsafe { Probe.from_raw(42) }, items: ["owned".concat(" payload")] }
+
+let probe (): Payload =
+    Payload { resource: unsafe { Probe.from_raw(42) }, items: ["owned".concat(" payload")] }
+
 let count (): Int = unsafe { channel_probe_count() }
+
 let closed (): Receiver[Int] = {
     let (tx, rx) = channel[Int]();
     rx
 }
+
 let queued (): Receiver[Int] = {
     let (tx, rx) = channel[Int]();
-    assert(match tx.send(0) { Ok(_) => true, Err(_) => false });
+    assert(
+        match tx.send(0) {
+            Ok(_) => true,
+            Err(_) => false
+        }
+    );
     tx.send(7);
     rx
 }
+
 let orphan (): Sender[Payload] = {
     let (tx, rx) = channel[Payload]();
     tx.send(probe());
     assert(count() == 0);
     tx
 }
+
 let async_closed (): Receiver[String] = {
     let (tx, rx) = channel[String]();
-    spawn { Time.sleep(Time.millis(20)); tx.send("delivered".concat(" value")); () };
+    spawn {
+        Time.sleep(Time.millis(20));
+        tx.send("delivered".concat(" value"));
+        ()
+    };
     rx
 }
+
 let ended[T] (value: T): Receiver[T] = {
     let (tx, rx) = channel[T]();
     tx.send(value);
     rx
 }
+
 let main (): Unit = {
     let absent: Option[Int] = None;
     let nested = ended(absent);
@@ -51,8 +72,18 @@ let main (): Unit = {
     assert(rx.recv() == None);
     // A temporary receiver must live through both blocking and timed waits.
     assert(select { value = closed() => value == None });
-    assert(select { value = closed() => value == None, else => false });
-    assert(select { value = closed() => value == None, Time.seconds(30) => false });
+    assert(
+        select {
+            value = closed() => value == None,
+            else => false
+        }
+    );
+    assert(
+        select {
+            value = closed() => value == None,
+            Time.seconds(30) => false
+        }
+    );
     let worker_rx = async_closed();
     assert(worker_rx.recv() == Some("delivered value"));
     assert(worker_rx.recv() == None);

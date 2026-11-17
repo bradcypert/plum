@@ -10,7 +10,9 @@
 // against real use rather than guessed -- and it stays purely additive.
 
 let flag_read: Int = 1
+
 let flag_write: Int = 2
+
 let flag_exec: Int = 4
 
 let main (): Unit = {
@@ -36,8 +38,12 @@ let main (): Unit = {
     // after this function had been written to delegate. The rounding is
     // now applied to the digits by the prelude, so every platform
     // answers the same.
-    println("halves   ${Float.to_fixed(0.5, 0)} ${Float.to_fixed(1.5, 0)} ${Float.to_fixed(2.5, 0)} ${Float.to_fixed(3.5, 0)}");
-    println("more     ${Float.to_fixed(0.125, 2)} ${Float.to_fixed(0.375, 2)} ${Float.to_fixed(2.5, 2)}");
+    println(
+        "halves   ${Float.to_fixed(0.5, 0)} ${Float.to_fixed(1.5, 0)} ${Float.to_fixed(2.5, 0)} ${Float.to_fixed(3.5, 0)}"
+    );
+    println(
+        "more     ${Float.to_fixed(0.125, 2)} ${Float.to_fixed(0.375, 2)} ${Float.to_fixed(2.5, 2)}"
+    );
     // `Float.round` rounds half AWAY from zero, and that is not an
     // inconsistency: C specifies it that way regardless of the rounding
     // mode, because it is arithmetic rather than rendering. Every
@@ -45,7 +51,9 @@ let main (): Unit = {
     println("round    ${Float.round(0.5)} ${Float.round(1.5)} ${Float.round(2.5)}");
     // A carry that runs off the end, which the digit-string rounding
     // has to handle rather than inherit.
-    println("carry    ${Float.to_fixed(9.99, 1)} ${Float.to_fixed(9.99, 0)} ${Float.to_fixed(99.995, 2)}");
+    println(
+        "carry    ${Float.to_fixed(9.99, 1)} ${Float.to_fixed(9.99, 0)} ${Float.to_fixed(99.995, 2)}"
+    );
 
     // A negative that rounds to zero keeps its sign: it is information.
     println("neg zero ${Float.to_fixed(0.0 - 0.001, 2)}");
@@ -84,5 +92,7 @@ let main (): Unit = {
     // --- Padding, and a table ---
     println("[${String.pad_center("hi", 8, ".")}] [${String.pad_center("odd", 8, ".")}]");
     println("${String.pad_right("name", 8, " ")}${String.pad_left("size", 6, " ")}");
-    println("${String.pad_right("main.plum", 8, " ")}${String.pad_left((1284).to_string(), 6, " ")}");
+    println(
+        "${String.pad_right("main.plum", 8, " ")}${String.pad_left((1284).to_string(), 6, " ")}"
+    );
 }

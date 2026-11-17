@@ -6,6 +6,7 @@
 // `n` comes from a function so no constant folding can see it: the
 // check has to be in the emitted code, not in the compiler.
 let n (): Int = 0 - 1
+
 let main (): Unit = {
     println("before");
     println((1 << n()).to_string());

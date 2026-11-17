@@ -7,6 +7,7 @@
 // last iteration's cell, and nothing can read it any more. Three
 // allocations: the three slots' first cells, and the string printed.
 struct P { x: Int, y: Int }
+
 enum Step { Idle, Moving(Int) }
 
 let main (): Unit = {
@@ -17,7 +18,10 @@ let main (): Unit = {
         let p = P { x: i, y: 2 };
         s = Moving(p.x);
         xs = [p.x, p.y];
-        t = t + xs[0] + xs[1] + match s { Idle => 0, Moving(k) => k };
+        t = t + xs[0] + xs[1] + match s {
+            Idle => 0,
+            Moving(k) => k
+        };
     };
     println(t.to_string())
 }

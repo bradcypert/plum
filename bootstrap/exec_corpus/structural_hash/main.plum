@@ -1,9 +1,11 @@
 struct Key { name: String, points: Array[Float] }
+
 enum Tree[T] { Leaf(T), Branch(Tree[T], Tree[T]), Empty }
 
 let GLOBAL_HASH: Int = Some([0.0, 1.0]).hash()
 
 let hash_of[T] (x: T): Int = x.hash()
+
 let array_hash[T] (x: Array[T]): Int = x.hash()
 
 let main (): Unit = {
@@ -11,7 +13,10 @@ let main (): Unit = {
     let neg = -0.0;
     assert_eq(neg.to_string(), "-0");
     assert_eq(0.0.hash(), neg.hash());
-    let text = Result.unwrap_or(Bytes.as_string(Bytes.from_array([104, 195, 169, 0, 108, 108, 111])), "invalid");
+    let text = Result.unwrap_or(
+        Bytes.as_string(Bytes.from_array([104, 195, 169, 0, 108, 108, 111])),
+        "invalid"
+    );
     assert_eq(hash_of(text), String.hash(text));
     assert_eq("".hash(), String.hash(""));
     assert_eq(Bytes.from_array([0, 255, 42]).hash(), Bytes.from_array([0, 255, 42]).hash());
@@ -35,7 +40,9 @@ let main (): Unit = {
     assert_eq(Map.get(m, b), Some("first"));
     assert_eq(Map.len(Map.remove(replaced, b)), 0);
     let mut floats = Map.insert(Map.new(()), 0.0, 10);
-    for i in 1..50 { floats = Map.insert(floats, i.to_float(), i); };
+    for i in 1..50 {
+        floats = Map.insert(floats, i.to_float(), i);
+    };
     assert_eq(Map.get(floats, neg), Some(10));
     floats = Map.insert(floats, neg, 99);
     assert_eq(Map.len(floats), 50);

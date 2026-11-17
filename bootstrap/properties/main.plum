@@ -40,8 +40,11 @@ use Memory;
 // all 64 bits, while the mixer supplies well-diffused non-negative bits
 // for choosing property inputs.
 let PRNG_GAMMA: Int = -7046029254386353131
+
 let PRNG_MIX_1: Int = -4658895280553007687
+
 let PRNG_MIX_2: Int = -7723592293110705685
+
 let PRNG_RANGE: Int = 9223372036854775807
 
 let next_seed (seed: Int): Int = Int.wrapping_add(seed, PRNG_GAMMA)
@@ -128,8 +131,18 @@ let json_unsafe_ints (seed: Int) (left: Int): Unit =
 pub let test_json_int_precision (): Unit = {
     json_int_roundtrip(157, 300);
     json_unsafe_ints(157, 300);
-    check_eq("JSON integer edge", "max safe", decoded_json_int("9007199254740991"), "9007199254740991");
-    check_eq("JSON integer edge", "min safe", decoded_json_int("-9007199254740991"), "-9007199254740991")
+    check_eq(
+        "JSON integer edge",
+        "max safe",
+        decoded_json_int("9007199254740991"),
+        "9007199254740991"
+    );
+    check_eq(
+        "JSON integer edge",
+        "min safe",
+        decoded_json_int("-9007199254740991"),
+        "-9007199254740991"
+    )
 }
 
 // --- Float round trip ---
@@ -150,8 +163,12 @@ let float_roundtrip (seed: Int) (left: Int): Unit =
         let exponent = rand_between(next_seed(seed), 0 - 20, 20);
         let x = mantissa.to_float() * Float.pow(10.0, exponent.to_float());
         let text = x.to_string();
-        check_eq("float round trip", text,
-            text.parse_float().unwrap_or(0.0 - 1.0).to_string(), text);
+        check_eq(
+            "float round trip",
+            text,
+            text.parse_float().unwrap_or(0.0 - 1.0).to_string(),
+            text
+        );
         float_roundtrip(next_seed(next_seed(seed)), left - 1)
     }
 
@@ -160,7 +177,12 @@ pub let test_float_roundtrip (): Unit = {
     // The two the formatting bug actually showed up on, and the
     // boundaries where `%g` switches notation.
     check_eq("float edge", "1e-06", "0.000001".parse_float().unwrap_or(0.0).to_string(), "1e-06");
-    check_eq("float edge", "1e+20", "100000000000000000000.0".parse_float().unwrap_or(0.0).to_string(), "1e+20");
+    check_eq(
+        "float edge",
+        "1e+20",
+        "100000000000000000000.0".parse_float().unwrap_or(0.0).to_string(),
+        "1e+20"
+    );
     check_eq("float edge", "0.1", "0.1".parse_float().unwrap_or(0.0).to_string(), "0.1");
     check_eq("float edge", "zero", 0.0.to_string(), "0")
 }
@@ -181,8 +203,12 @@ let sep_string (seed: Int) (left: Int) (acc: String): String =
 let split_join (seed: Int) (left: Int): Unit =
     if left <= 0 { () } else {
         let s = sep_string(seed, rand_between(seed, 0, 12), "");
-        check_eq("split/join round trip", "[".concat(s).concat("]"),
-            s.split(",").join(","), s);
+        check_eq(
+            "split/join round trip",
+            "[".concat(s).concat("]"),
+            s.split(",").join(","),
+            s
+        );
         split_join(next_seed(seed), left - 1)
     }
 
@@ -204,7 +230,9 @@ pub let test_split_join (): Unit = {
 let ascii_string (seed: Int) (left: Int) (acc: String): String =
     if left <= 0 { acc } else {
         let pick = random_bits(seed) % 4;
-        let c = if pick == 0 { "a" } else if pick == 1 { "Z" } else if pick == 2 { "m" } else { "7" };
+        let c = if pick == 0 { "a" } else if pick == 1 { "Z" } else if pick == 2 { "m" } else {
+            "7"
+        };
         ascii_string(next_seed(seed), left - 1, acc.concat(c))
     }
 
@@ -238,8 +266,18 @@ let sort_props (seed: Int) (left: Int): Unit =
         let xs = int_array(seed, rand_between(seed, 0, 15), []);
         let sorted = Array.sort_int(xs);
         check_eq("sort orders", xs.to_string(), is_sorted(sorted, 0).to_string(), "true");
-        check_eq("sort keeps length", xs.to_string(), sorted.len().to_string(), xs.len().to_string());
-        check_eq("sort keeps sum", xs.to_string(), Array.sum_int(sorted).to_string(), Array.sum_int(xs).to_string());
+        check_eq(
+            "sort keeps length",
+            xs.to_string(),
+            sorted.len().to_string(),
+            xs.len().to_string()
+        );
+        check_eq(
+            "sort keeps sum",
+            xs.to_string(),
+            Array.sum_int(sorted).to_string(),
+            Array.sum_int(xs).to_string()
+        );
         sort_props(next_seed(seed), left - 1)
     }
 
@@ -247,11 +285,27 @@ pub let test_sorting (): Unit = sort_props(777, 120)
 
 // Unique positions expose lost elements and reordered ties even when
 // the keys are equal. String payloads also exercise owned heap values.
-struct SortItem { key: Int, position: Int, payload: String }
+struct SortItem {
+    key: Int,
+    position: Int,
+    payload: String
+}
 
 let sort_items (xs: Array[Int]) (i: Int) (acc: Array[SortItem]): Array[SortItem] =
     if i >= xs.len() { acc }
-    else { sort_items(xs, i + 1, acc.push(SortItem { key: xs[i], position: i, payload: i.to_string() })) }
+    else {
+        sort_items(
+            xs,
+            i + 1,
+            acc.push(
+                SortItem {
+                    key: xs[i],
+                    position: i,
+                    payload: i.to_string()
+                }
+            )
+        )
+    }
 
 let sort_items_stable (xs: Array[SortItem]) (i: Int): Bool =
     if i + 1 >= xs.len() { true }
@@ -266,17 +320,30 @@ let stable_sort_props (seed: Int) (left: Int): Unit =
         let before = items.to_string();
         let sorted = Array.sort_by(items, |a: SortItem, b: SortItem| a.key <= b.key);
         check_eq("sort preserves input", xs.to_string(), items.to_string(), before);
-        check_eq("sort orders keys and preserves tie order", xs.to_string(),
-            sort_items_stable(sorted, 0).to_string(), "true");
-        check_eq("sort preserves every item", xs.to_string(),
+        check_eq(
+            "sort orders keys and preserves tie order",
+            xs.to_string(),
+            sort_items_stable(sorted, 0).to_string(),
+            "true"
+        );
+        check_eq(
+            "sort preserves every item",
+            xs.to_string(),
             Array.sort_int(sorted.map(|p: SortItem| p.position)).to_string(),
-            sort_sequence(xs.len(), 0, []).to_string());
-        check_eq("sort preserves item keys", xs.to_string(),
+            sort_sequence(xs.len(), 0, []).to_string()
+        );
+        check_eq(
+            "sort preserves item keys",
+            xs.to_string(),
             sorted.map(|p: SortItem| p.key).to_string(),
-            sorted.map(|p: SortItem| xs[p.position]).to_string());
-        check_eq("sort preserves heap payloads", xs.to_string(),
+            sorted.map(|p: SortItem| xs[p.position]).to_string()
+        );
+        check_eq(
+            "sort preserves heap payloads",
+            xs.to_string(),
             sorted.map(|p: SortItem| p.payload).to_string(),
-            sorted.map(|p: SortItem| p.position.to_string()).to_string());
+            sorted.map(|p: SortItem| p.position.to_string()).to_string()
+        );
         stable_sort_props(next_seed(seed), left - 1)
     }
 
@@ -290,34 +357,65 @@ let sort_log_bound (n: Int) (width: Int) (levels: Int): Int =
 
 let sort_comparison_check (xs: Array[Int]): Unit = {
     let calls = ref(0);
-    let sorted = Array.sort_by(xs, |a: Int, b: Int| {
-        calls.set(calls.get() + 1);
-        a <= b
-    });
-    check_eq("sort orders large inputs", xs.len().to_string(), is_sorted(sorted, 0).to_string(), "true");
-    check_eq("sort keeps every large input element", xs.len().to_string(),
-        sorted.to_string(), sort_sequence(xs.len(), 0, []).to_string());
-    check_eq("sort uses at most n * ceil(log2(n)) comparisons", xs.len().to_string(),
-        (calls.get() <= sort_log_bound(xs.len(), 1, 0)).to_string(), "true")
+    let sorted = Array.sort_by(
+        xs,
+        |a: Int, b: Int| {
+            calls.set(calls.get() + 1);
+            a <= b
+        }
+    );
+    check_eq(
+        "sort orders large inputs",
+        xs.len().to_string(),
+        is_sorted(sorted, 0).to_string(),
+        "true"
+    );
+    check_eq(
+        "sort keeps every large input element",
+        xs.len().to_string(),
+        sorted.to_string(),
+        sort_sequence(xs.len(), 0, []).to_string()
+    );
+    check_eq(
+        "sort uses at most n * ceil(log2(n)) comparisons",
+        xs.len().to_string(),
+        (calls.get() <= sort_log_bound(xs.len(), 1, 0)).to_string(),
+        "true"
+    )
 }
 
 pub let test_sorting_comparison_bound (): Unit =
-    Array.fold([0, 1, 2, 3, 15, 16, 17, 255, 256, 257, 4096], (), |u: Unit, n: Int| {
-        let xs = sort_sequence(n, 0, []);
-        sort_comparison_check(xs);
-        sort_comparison_check(Array.reverse(xs));
-        let (_, shuffled) = Rng.shuffle(Rng.from_seed(217), xs);
-        sort_comparison_check(shuffled);
-        let calls = ref(0);
-        let ties = Array.map(xs, |i: Int| 0);
-        check_eq("all equal elements survive", n.to_string(),
-            Array.sort_by(ties, |a: Int, b: Int| {
-                calls.set(calls.get() + 1);
-                a <= b
-            }).to_string(), ties.to_string());
-        check_eq("equal keys stay within comparison bound", n.to_string(),
-            (calls.get() <= sort_log_bound(n, 1, 0)).to_string(), "true")
-    })
+    Array.fold(
+        [0, 1, 2, 3, 15, 16, 17, 255, 256, 257, 4096],
+        (),
+        |u: Unit, n: Int| {
+            let xs = sort_sequence(n, 0, []);
+            sort_comparison_check(xs);
+            sort_comparison_check(Array.reverse(xs));
+            let (_, shuffled) = Rng.shuffle(Rng.from_seed(217), xs);
+            sort_comparison_check(shuffled);
+            let calls = ref(0);
+            let ties = Array.map(xs, |i: Int| 0);
+            check_eq(
+                "all equal elements survive",
+                n.to_string(),
+                Array.sort_by(
+                    ties,
+                    |a: Int, b: Int| {
+                        calls.set(calls.get() + 1);
+                        a <= b
+                    }
+                ).to_string(),
+                ties.to_string()
+            );
+            check_eq(
+                "equal keys stay within comparison bound",
+                n.to_string(),
+                (calls.get() <= sort_log_bound(n, 1, 0)).to_string(),
+                "true"
+            )
+        }
+    )
 
 // --- Arithmetic ---
 
@@ -359,7 +457,10 @@ let json_leaf (seed: Int): JsonValue = {
     else if pick == 3 {
         // Exponent territory, where the number parser is most likely to
         // be wrong -- and was.
-        JsonNumber(rand_between(seed, 1, 999999).to_float() * Float.pow(10.0, rand_between(next_seed(seed), 0 - 15, 15).to_float()))
+        JsonNumber(
+            rand_between(seed, 1, 999999).to_float()
+                * Float.pow(10.0, rand_between(next_seed(seed), 0 - 15, 15).to_float())
+        )
     }
     else { JsonString(ascii_string(seed, rand_between(seed, 0, 6), "")) }
 }
@@ -370,10 +471,12 @@ let json_value (seed: Int) (depth: Int): JsonValue =
         let pick = random_bits(seed) % 4;
         if pick == 0 { JsonArray(json_items(seed, rand_between(seed, 0, 3), depth - 1, [])) }
         else if pick == 1 {
-            JsonObject([
-                JsonEntry { key: "a", value: json_value(next_seed(seed), depth - 1) },
-                JsonEntry { key: "b", value: json_value(next_seed(next_seed(seed)), depth - 1) },
-            ])
+            JsonObject(
+                [
+                    JsonEntry { key: "a", value: json_value(next_seed(seed), depth - 1) },
+                    JsonEntry { key: "b", value: json_value(next_seed(next_seed(seed)), depth - 1) },
+                ]
+            )
         }
         else { json_leaf(seed) }
     }
@@ -449,7 +552,10 @@ pub let test_json_duplicate_names (): Unit = {
         "[{\"a\":1},{\"a\":2}]",
         "{\"a/b\":1,\"a\\\\/b\":2}",
     ] { check_eq("JSON unique names", text, json_parse_status(text), text) };
-    let role = match Json.decode_string(Json.field("role", Json.string()), "{\"role\":\"user\",\"role\":\"admin\"}") {
+    let role = match Json.decode_string(
+        Json.field("role", Json.string()),
+        "{\"role\":\"user\",\"role\":\"admin\"}"
+    ) {
         Ok(v) => v,
         Err(e) => e,
     };
@@ -467,15 +573,22 @@ let array_laws (seed: Int) (left: Int): Unit =
         check_eq("reverse twice", case, Array.reverse(Array.reverse(xs)).to_string(), case);
         // `take(n) ++ drop(n)` is the whole array, for every split
         // point including both ends.
-        check_eq("take ++ drop", case.concat(" at ").concat(n.to_string()),
-            Array.concat(xs.take(n), xs.drop(n)).to_string(), case);
+        check_eq(
+            "take ++ drop",
+            case.concat(" at ").concat(n.to_string()),
+            Array.concat(xs.take(n), xs.drop(n)).to_string(),
+            case
+        );
         // Two functions that must never disagree about the same
         // question.
         if xs.len() > 0 {
             let probe = xs[random_bits(seed) % xs.len()];
-            check_eq("contains agrees with index_of", case.concat(" find ").concat(probe.to_string()),
+            check_eq(
+                "contains agrees with index_of",
+                case.concat(" find ").concat(probe.to_string()),
                 xs.contains(probe).to_string(),
-                Option.is_some(xs.index_of(probe)).to_string())
+                Option.is_some(xs.index_of(probe)).to_string()
+            )
         } else { () };
         array_laws(next_seed(seed), left - 1)
     }
@@ -488,11 +601,19 @@ let string_laws (seed: Int) (left: Int): Unit =
     if left <= 0 { () } else {
         let s = ascii_string(seed, rand_between(seed, 0, 10), "");
         let i = rand_between(next_seed(seed), 0, s.len());
-        check_eq("slice halves rejoin", s.concat(" at ").concat(i.to_string()),
-            s.slice(0, i).concat(s.slice(i, s.len())), s);
+        check_eq(
+            "slice halves rejoin",
+            s.concat(" at ").concat(i.to_string()),
+            s.slice(0, i).concat(s.slice(i, s.len())),
+            s
+        );
         let reps = rand_between(next_seed(next_seed(seed)), 0, 4);
-        check_eq("repeat multiplies length", s.concat(" x ").concat(reps.to_string()),
-            s.repeat(reps).len().to_string(), (s.len() * reps).to_string());
+        check_eq(
+            "repeat multiplies length",
+            s.concat(" x ").concat(reps.to_string()),
+            s.repeat(reps).len().to_string(),
+            (s.len() * reps).to_string()
+        );
         string_laws(next_seed(seed), left - 1)
     }
 
@@ -506,20 +627,34 @@ let float_laws (seed: Int) (left: Int): Unit =
         let case = x.to_string();
         check_eq("floor <= x", case, (Float.floor(x) <= x).to_string(), "true");
         check_eq("x <= ceil", case, (x <= Float.ceil(x)).to_string(), "true");
-        check_eq("ceil - floor <= 1", case, (Float.ceil(x) - Float.floor(x) <= 1.0).to_string(), "true");
+        check_eq(
+            "ceil - floor <= 1",
+            case,
+            (Float.ceil(x) - Float.floor(x) <= 1.0).to_string(),
+            "true"
+        );
         check_eq("abs is non-negative", case, (Float.abs(x) >= 0.0).to_string(), "true");
         // `sqrt` of a square, back to where it started. Compared with a
         // tolerance: this is the one law here that is not exact.
         let p = Float.abs(x);
-        check_eq("sqrt of square", case, (Float.abs(Float.sqrt(p * p) - p) < 0.0001).to_string(), "true");
+        check_eq(
+            "sqrt of square",
+            case,
+            (Float.abs(Float.sqrt(p * p) - p) < 0.0001).to_string(),
+            "true"
+        );
         float_laws(next_seed(seed), left - 1)
     }
 
 pub let test_float_laws (): Unit = float_laws(2718, 150)
 
 pub let test_float_abs_negative_zero (): Unit =
-    check_eq("absolute value clears negative zero sign", "-0.0",
-        Float.abs(-0.0).to_string(), "0")
+    check_eq(
+        "absolute value clears negative zero sign",
+        "-0.0",
+        Float.abs(-0.0).to_string(),
+        "0"
+    )
 
 // --- String ordering ---
 
@@ -572,10 +707,17 @@ let float_to_int_rt (seed: Int) (left: Int): Unit =
         let v = rand_between(seed, 0 - 1000000000, 1000000000);
         check_eq("int via float", v.to_string(), v.to_float().to_int().to_string(), v.to_string());
         let frac = 0.25;
-        let truncated = if v >= 0 { (v.to_float() + frac).to_int() } else { (v.to_float() - frac).to_int() };
+        let truncated = if v >= 0 { (v.to_float() + frac).to_int() } else {
+            (v.to_float() - frac).to_int()
+        };
         check_eq("trunc toward zero", v.to_string(), truncated.to_string(), v.to_string());
         let x = v.to_float() + frac;
-        check_eq("round_to_int matches round", x.to_string(), x.round_to_int().to_string(), Float.round(x).to_int().to_string());
+        check_eq(
+            "round_to_int matches round",
+            x.to_string(),
+            x.round_to_int().to_string(),
+            Float.round(x).to_int().to_string()
+        );
         float_to_int_rt(next_seed(seed), left - 1)
     }
 
@@ -602,7 +744,12 @@ pub let test_string_ordering (): Unit = {
     check_eq("literal prefix", "ab vs a", ("ab" > "a").to_string(), "true");
     // The operators and the sort must agree, since the prelude sorts
     // with a helper rather than with `<=`.
-    check_eq("sort agrees", "cba", Array.sort_string(["c", "a", "b"]).to_string(), "[\"a\", \"b\", \"c\"]")
+    check_eq(
+        "sort agrees",
+        "cba",
+        Array.sort_string(["c", "a", "b"]).to_string(),
+        "[\"a\", \"b\", \"c\"]"
+    )
 }
 
 // --- Encoding round trips ---
@@ -637,19 +784,48 @@ let encoding_roundtrip (seed: Int) (left: Int): Unit =
         let want = b.to_hex();
         let label = "len ".concat(len.to_string()).concat(" = ").concat(want);
 
-        check_eq("hex round trip", label,
-            match Encoding.hex_decode(Encoding.hex_encode(b)) { Ok(d) => d.to_hex(), Err(e) => e }, want);
-        check_eq("base64 round trip", label,
-            match Encoding.base64_decode(Encoding.base64_encode(b)) { Ok(d) => d.to_hex(), Err(e) => e }, want);
-        check_eq("base64url round trip", label,
-            match Encoding.base64_url_decode(Encoding.base64_url_encode(b)) { Ok(d) => d.to_hex(), Err(e) => e }, want);
-        check_eq("percent round trip", label,
-            match Encoding.percent_decode(Encoding.percent_encode(b)) { Ok(d) => d.to_hex(), Err(e) => e }, want);
+        check_eq(
+            "hex round trip",
+            label,
+            match Encoding.hex_decode(Encoding.hex_encode(b)) {
+                Ok(d) => d.to_hex(),
+                Err(e) => e
+            },
+            want
+        );
+        check_eq(
+            "base64 round trip",
+            label,
+            match Encoding.base64_decode(Encoding.base64_encode(b)) {
+                Ok(d) => d.to_hex(),
+                Err(e) => e
+            },
+            want
+        );
+        check_eq(
+            "base64url round trip",
+            label,
+            match Encoding.base64_url_decode(Encoding.base64_url_encode(b)) {
+                Ok(d) => d.to_hex(),
+                Err(e) => e
+            },
+            want
+        );
+        check_eq(
+            "percent round trip",
+            label,
+            match Encoding.percent_decode(Encoding.percent_encode(b)) {
+                Ok(d) => d.to_hex(),
+                Err(e) => e
+            },
+            want
+        );
 
         encoding_roundtrip(next_seed(next_seed(seed)), left - 1)
     }
 
 let b64_of (s: String): String = Encoding.base64_encode(s.as_bytes())
+
 let hex_of (s: String): String = Encoding.hex_encode(s.as_bytes())
 
 pub let test_encoding_roundtrip (): Unit = {
@@ -679,32 +855,93 @@ pub let test_encoding_roundtrip (): Unit = {
 
     // Percent-encoding against the unreserved set, which is the whole
     // specification of this encoder.
-    check_eq("pct unreserved", "alnum+mark",
-        Encoding.percent_encode("azAZ09-._~".as_bytes()), "azAZ09-._~");
-    check_eq("pct reserved", "delims",
-        Encoding.percent_encode(" &=?#/+".as_bytes()), "%20%26%3D%3F%23%2F%2B");
+    check_eq(
+        "pct unreserved",
+        "alnum+mark",
+        Encoding.percent_encode("azAZ09-._~".as_bytes()),
+        "azAZ09-._~"
+    );
+    check_eq(
+        "pct reserved",
+        "delims",
+        Encoding.percent_encode(" &=?#/+".as_bytes()),
+        "%20%26%3D%3F%23%2F%2B"
+    );
 
     // Decoders reject rather than guess.
-    check_eq("hex odd rejected", "686",
-        match Encoding.hex_decode("686") { Ok(_) => "accepted", Err(_) => "rejected" }, "rejected");
-    check_eq("b64 truncated rejected", "a",
-        match Encoding.base64_decode("a") { Ok(_) => "accepted", Err(_) => "rejected" }, "rejected");
-    check_eq("pct truncated rejected", "%2",
-        match Encoding.percent_decode("%2") { Ok(_) => "accepted", Err(_) => "rejected" }, "rejected")
+    check_eq(
+        "hex odd rejected",
+        "686",
+        match Encoding.hex_decode("686") {
+            Ok(_) => "accepted",
+            Err(_) => "rejected"
+        },
+        "rejected"
+    );
+    check_eq(
+        "b64 truncated rejected",
+        "a",
+        match Encoding.base64_decode("a") {
+            Ok(_) => "accepted",
+            Err(_) => "rejected"
+        },
+        "rejected"
+    );
+    check_eq(
+        "pct truncated rejected",
+        "%2",
+        match Encoding.percent_decode("%2") {
+            Ok(_) => "accepted",
+            Err(_) => "rejected"
+        },
+        "rejected"
+    )
 }
 
 // Both public decoder names share the same validation contract.
 let check_b64_decode (text: String) (want: String): Unit = {
-    check_eq("base64 validation", text,
-        match Encoding.base64_decode(text) { Ok(b) => b.to_hex(), Err(_) => "rejected" }, want);
-    check_eq("base64url validation", text,
-        match Encoding.base64_url_decode(text) { Ok(b) => b.to_hex(), Err(_) => "rejected" }, want)
+    check_eq(
+        "base64 validation",
+        text,
+        match Encoding.base64_decode(text) {
+            Ok(b) => b.to_hex(),
+            Err(_) => "rejected"
+        },
+        want
+    );
+    check_eq(
+        "base64url validation",
+        text,
+        match Encoding.base64_url_decode(text) {
+            Ok(b) => b.to_hex(),
+            Err(_) => "rejected"
+        },
+        want
+    )
 }
 
 pub let test_base64_validation (): Unit = {
-    let malformed = ["=", "==", "====", "A=AA", "AA=A", "=AAA", "AA==AA==",
-        "AA=", "AAA==", "AAAA=", "AAAA====", "AA===", "AA====", "A===",
-        "A", "AAAAA", "AA AA", "AA\n", "AA*="];
+    let malformed = [
+        "=",
+        "==",
+        "====",
+        "A=AA",
+        "AA=A",
+        "=AAA",
+        "AA==AA==",
+        "AA=",
+        "AAA==",
+        "AAAA=",
+        "AAAA====",
+        "AA===",
+        "AA====",
+        "A===",
+        "A",
+        "AAAAA",
+        "AA AA",
+        "AA\n",
+        "AA*="
+    ];
     for text in malformed {
         check_b64_decode(text, "rejected");
     };
@@ -719,15 +956,21 @@ pub let test_base64_validation (): Unit = {
     // Enumerate every possible final sextet in both tail lengths and
     // alphabets. Acceptance depends only on the unused low bits being
     // zero, regardless of whether padding or complete groups precede it.
-    let alphabets = ["ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/",
-        "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_"];
+    let alphabets = [
+        "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/",
+        "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_"
+    ];
     for alphabet in alphabets {
         let chars = chars_of(alphabet);
         for v in 0..64 {
             let one = "A".concat(chars[v]);
             let two = "AA".concat(chars[v]);
-            let want_one = if v % 16 == 0 { Bytes.from_array([v / 16]).to_hex() } else { "rejected" };
-            let want_two = if v % 4 == 0 { Bytes.from_array([0, v / 4]).to_hex() } else { "rejected" };
+            let want_one = if v % 16 == 0 { Bytes.from_array([v / 16]).to_hex() } else {
+                "rejected"
+            };
+            let want_two = if v % 4 == 0 { Bytes.from_array([0, v / 4]).to_hex() } else {
+                "rejected"
+            };
             check_b64_decode(one, want_one);
             check_b64_decode(one.concat("=="), want_one);
             check_b64_decode(two, want_two);
@@ -783,13 +1026,25 @@ let url_roundtrip (seed: Int) (left: Int): Unit =
             Err(e) => check_eq("url parses", text, e, "parsed"),
             Ok(u) => {
                 let again = Url.stringify(u);
-                check_eq("url stringify round trip", text,
-                    match Url.parse(again) { Ok(v) => url_fields(v), Err(e) => e },
-                    url_fields(u));
+                check_eq(
+                    "url stringify round trip",
+                    text,
+                    match Url.parse(again) {
+                        Ok(v) => url_fields(v),
+                        Err(e) => e
+                    },
+                    url_fields(u)
+                );
                 // Canonical means canonical: a second pass changes nothing.
-                check_eq("url stringify idempotent", text,
-                    match Url.parse(again) { Ok(v) => Url.stringify(v), Err(e) => e },
-                    again)
+                check_eq(
+                    "url stringify idempotent",
+                    text,
+                    match Url.parse(again) {
+                        Ok(v) => Url.stringify(v),
+                        Err(e) => e
+                    },
+                    again
+                )
             },
         };
         url_roundtrip(next_seed(seed), left - 1)
@@ -805,15 +1060,29 @@ let query_roundtrip (seed: Int) (left: Int): Unit =
             Err(e) => check_eq("query base parses", "http://h/p", e, "parsed"),
             Ok(base) => {
                 let u = Url.with_query(base, [Url.Param { name: name, value: value }]);
-                check_eq("query round trip", name.concat(" = ").concat(value),
-                    match Url.query_get(u, name) { Some(v) => v, None => "<none>" }, value);
+                check_eq(
+                    "query round trip",
+                    name.concat(" = ").concat(value),
+                    match Url.query_get(u, name) {
+                        Some(v) => v,
+                        None => "<none>"
+                    },
+                    value
+                );
                 // And it survives the text form, which is the part that
                 // has to escape `&` and `=` correctly.
-                check_eq("query survives stringify", name.concat(" = ").concat(value),
+                check_eq(
+                    "query survives stringify",
+                    name.concat(" = ").concat(value),
                     match Url.parse(Url.stringify(u)) {
-                        Ok(v) => match Url.query_get(v, name) { Some(x) => x, None => "<none>" },
+                        Ok(v) => match Url.query_get(v, name) {
+                            Some(x) => x,
+                            None => "<none>"
+                        },
                         Err(e) => e,
-                    }, value)
+                    },
+                    value
+                )
             },
         };
         query_roundtrip(next_seed(seed), left - 1)
@@ -828,22 +1097,64 @@ pub let test_url_roundtrip (): Unit = {
     // and what to put in the request line. `Http` builds its request
     // target by leaving the query IN the path; `Url` splits them and
     // `request_target` puts them back, so these must match.
-    check_eq("http compat target", "http://h/x?q=1",
-        match Url.parse("http://h/x?q=1") { Ok(u) => Url.request_target(u), Err(e) => e }, "/x?q=1");
-    check_eq("http compat target", "http://h",
-        match Url.parse("http://h") { Ok(u) => Url.request_target(u), Err(e) => e }, "/");
-    check_eq("http compat port", "http://h/x",
-        match Url.parse("http://h/x") { Ok(u) => u.port.to_string(), Err(e) => e }, "80");
-    check_eq("http compat port", "http://h:8080/x",
-        match Url.parse("http://h:8080/x") { Ok(u) => u.port.to_string(), Err(e) => e }, "8080");
-    check_eq("http compat host", "http://h:8080/x",
-        match Url.parse("http://h:8080/x") { Ok(u) => u.host, Err(e) => e }, "h");
+    check_eq(
+        "http compat target",
+        "http://h/x?q=1",
+        match Url.parse("http://h/x?q=1") {
+            Ok(u) => Url.request_target(u),
+            Err(e) => e
+        },
+        "/x?q=1"
+    );
+    check_eq(
+        "http compat target",
+        "http://h",
+        match Url.parse("http://h") {
+            Ok(u) => Url.request_target(u),
+            Err(e) => e
+        },
+        "/"
+    );
+    check_eq(
+        "http compat port",
+        "http://h/x",
+        match Url.parse("http://h/x") {
+            Ok(u) => u.port.to_string(),
+            Err(e) => e
+        },
+        "80"
+    );
+    check_eq(
+        "http compat port",
+        "http://h:8080/x",
+        match Url.parse("http://h:8080/x") {
+            Ok(u) => u.port.to_string(),
+            Err(e) => e
+        },
+        "8080"
+    );
+    check_eq(
+        "http compat host",
+        "http://h:8080/x",
+        match Url.parse("http://h:8080/x") {
+            Ok(u) => u.host,
+            Err(e) => e
+        },
+        "h"
+    );
 
     // Parsing is not connecting: https parses even though the client
     // cannot yet speak it. This is the line that made the split worth
     // making.
-    check_eq("https parses", "https://example.com/x",
-        match Url.parse("https://example.com/x") { Ok(u) => u.port.to_string(), Err(e) => e }, "443")
+    check_eq(
+        "https parses",
+        "https://example.com/x",
+        match Url.parse("https://example.com/x") {
+            Ok(u) => u.port.to_string(),
+            Err(e) => e
+        },
+        "443"
+    )
 }
 
 // --- Path splits describe the same split ---
@@ -890,7 +1201,7 @@ let path_split_rt (windows: Bool) (seed: Int) (left: Int): Unit =
         let dir = Path.dirname_in(windows, p);
         let base = Path.basename_in(windows, p);
         let joined = if dir == clean { Path.join_in(windows, dir, "") }
-            else { Path.join_in(windows, dir, base) };
+        else { Path.join_in(windows, dir, base) };
         check_eq("dirname+basename or root == clean", p, joined, clean);
         // `clean` is idempotent: cleaning an already-clean path changes
         // nothing. A normaliser that is not idempotent has no canonical
@@ -900,7 +1211,9 @@ let path_split_rt (windows: Bool) (seed: Int) (left: Int): Unit =
     }
 
 pub let test_path_splits (): Unit = {
-    for windows in [false, true] { path_split_rt(windows, 24601, 300); };
+    for windows in [false, true] {
+        path_split_rt(windows, 24601, 300);
+    };
 
     // The documented edges, which a generator will not reliably hit.
     check_eq("clean empty", "''", Path.clean(""), ".");
@@ -910,15 +1223,28 @@ pub let test_path_splits (): Unit = {
     check_eq("dirname root", "/", Path.dirname("/"), Path.separator());
 
     // Extension and stem describe the same name.
-    check_eq("stem+ext", "x.plum", Path.stem("x.plum").concat(".").concat(Path.extension("x.plum")), "x.plum");
+    check_eq(
+        "stem+ext",
+        "x.plum",
+        Path.stem("x.plum").concat(".").concat(Path.extension("x.plum")),
+        "x.plum"
+    );
     check_eq("leading dot is not an extension", ".hidden", Path.extension(".hidden"), "");
     check_eq("leading dot keeps its stem", ".hidden", Path.stem(".hidden"), ".hidden");
 
     // Joining must never invent an absolute path out of relative parts.
-    check_eq("join stays relative", "a + b",
-        Path.is_absolute(Path.join("a", "b")).to_string(), "false");
-    check_eq("join keeps the first root", "/a + b",
-        Path.is_absolute(Path.join("/a", "b")).to_string(), "true")
+    check_eq(
+        "join stays relative",
+        "a + b",
+        Path.is_absolute(Path.join("a", "b")).to_string(),
+        "false"
+    );
+    check_eq(
+        "join keeps the first root",
+        "/a + b",
+        Path.is_absolute(Path.join("/a", "b")).to_string(),
+        "true"
+    )
 }
 
 // --- Trigonometry and logs (issue #20) ---
@@ -943,28 +1269,63 @@ let trig_laws (seed: Int) (left: Int): Unit =
         // Radians in roughly [-6.28, 6.28], so a full turn either way.
         let x = rand_between(seed, 0 - 6283, 6283).to_float() / 1000.0;
         let case = x.to_string();
-        check_eq("sin^2 + cos^2 = 1", case,
-            close(Float.sin(x) * Float.sin(x) + Float.cos(x) * Float.cos(x), 1.0).to_string(), "true");
-        check_eq("sin is odd", case, close(Float.sin(0.0 - x), 0.0 - Float.sin(x)).to_string(), "true");
+        check_eq(
+            "sin^2 + cos^2 = 1",
+            case,
+            close(Float.sin(x) * Float.sin(x) + Float.cos(x) * Float.cos(x), 1.0).to_string(),
+            "true"
+        );
+        check_eq(
+            "sin is odd",
+            case,
+            close(Float.sin(0.0 - x), 0.0 - Float.sin(x)).to_string(),
+            "true"
+        );
         check_eq("cos is even", case, close(Float.cos(0.0 - x), Float.cos(x)).to_string(), "true");
-        check_eq("sin and cos are bounded", case,
-            (Float.abs(Float.sin(x)) <= 1.0 && Float.abs(Float.cos(x)) <= 1.0).to_string(), "true");
+        check_eq(
+            "sin and cos are bounded",
+            case,
+            (Float.abs(Float.sin(x)) <= 1.0 && Float.abs(Float.cos(x)) <= 1.0).to_string(),
+            "true"
+        );
         // `atan2(sin t, cos t)` is `t` folded into (-pi, pi]. Checked
         // through `cos`, which is even and periodic, so the fold does
         // not have to be spelled out -- and the ARGUMENT ORDER is what
         // this catches, since swapping them gives the co-angle.
-        check_eq("atan2 recovers the angle", case,
-            close(Float.cos(Float.atan2(Float.sin(x), Float.cos(x))), Float.cos(x)).to_string(), "true");
+        check_eq(
+            "atan2 recovers the angle",
+            case,
+            close(Float.cos(Float.atan2(Float.sin(x), Float.cos(x))), Float.cos(x)).to_string(),
+            "true"
+        );
         // exp and log undo each other, on the range where log is defined.
         let p = Float.abs(x) + 0.001;
-        check_eq("log undoes exp", case, close(Float.log(Float.exp(p)) - p, 0.0).to_string(), "true");
-        check_eq("exp undoes log", case, (Float.abs(Float.exp(Float.log(p)) - p) < 0.000001).to_string(), "true");
-        check_eq("log2 agrees with log", case,
-            (Float.abs(Float.log2(p) - Float.log(p) / Float.log(2.0)) < 0.000001).to_string(), "true");
+        check_eq(
+            "log undoes exp",
+            case,
+            close(Float.log(Float.exp(p)) - p, 0.0).to_string(),
+            "true"
+        );
+        check_eq(
+            "exp undoes log",
+            case,
+            (Float.abs(Float.exp(Float.log(p)) - p) < 0.000001).to_string(),
+            "true"
+        );
+        check_eq(
+            "log2 agrees with log",
+            case,
+            (Float.abs(Float.log2(p) - Float.log(p) / Float.log(2.0)) < 0.000001).to_string(),
+            "true"
+        );
         // Degrees and radians are inverse, which is what stops a factor
         // of 180 or a stray pi from hiding in one of them.
-        check_eq("degrees undoes radians", case,
-            (Float.abs(Float.degrees(Float.radians(x)) - x) < 0.000001).to_string(), "true");
+        check_eq(
+            "degrees undoes radians",
+            case,
+            (Float.abs(Float.degrees(Float.radians(x)) - x) < 0.000001).to_string(),
+            "true"
+        );
         trig_laws(next_seed(seed), left - 1)
     }
 
@@ -984,9 +1345,24 @@ pub let test_trig_laws (): Unit = {
     // `atan2` in all four quadrants. `atan(y/x)` cannot tell these
     // apart, and the whole point of `atan2` is that it can.
     check_eq("atan2 Q1", "1,1", close(Float.atan2(1.0, 1.0), Float.pi() / 4.0).to_string(), "true");
-    check_eq("atan2 Q2", "1,-1", close(Float.atan2(1.0, 0.0 - 1.0), 3.0 * Float.pi() / 4.0).to_string(), "true");
-    check_eq("atan2 Q3", "-1,-1", close(Float.atan2(0.0 - 1.0, 0.0 - 1.0), 0.0 - 3.0 * Float.pi() / 4.0).to_string(), "true");
-    check_eq("atan2 Q4", "-1,1", close(Float.atan2(0.0 - 1.0, 1.0), 0.0 - Float.pi() / 4.0).to_string(), "true")
+    check_eq(
+        "atan2 Q2",
+        "1,-1",
+        close(Float.atan2(1.0, 0.0 - 1.0), 3.0 * Float.pi() / 4.0).to_string(),
+        "true"
+    );
+    check_eq(
+        "atan2 Q3",
+        "-1,-1",
+        close(Float.atan2(0.0 - 1.0, 0.0 - 1.0), 0.0 - 3.0 * Float.pi() / 4.0).to_string(),
+        "true"
+    );
+    check_eq(
+        "atan2 Q4",
+        "-1,1",
+        close(Float.atan2(0.0 - 1.0, 1.0), 0.0 - Float.pi() / 4.0).to_string(),
+        "true"
+    )
 }
 
 // --- Seeded random numbers (issue #20) ---
@@ -1018,15 +1394,32 @@ let rng_laws (seed: Int) (left: Int): Unit =
     if left <= 0 { () } else {
         let case = seed.to_string();
         // Same seed, same sequence -- the entire reason this type exists.
-        check_eq("a seed replays", case,
-            Array.join(Array.map(rng_take(Rng.from_seed(seed), 20, []), |v: Int| v.to_string()), ","),
-            Array.join(Array.map(rng_take(Rng.from_seed(seed), 20, []), |v: Int| v.to_string()), ","));
+        check_eq(
+            "a seed replays",
+            case,
+            Array.join(
+                Array.map(rng_take(Rng.from_seed(seed), 20, []), |v: Int| v.to_string()),
+                ","
+            ),
+            Array.join(
+                Array.map(rng_take(Rng.from_seed(seed), 20, []), |v: Int| v.to_string()),
+                ","
+            )
+        );
         // The upper bound is EXCLUDED, which is what makes
         // `int_range(r, 0, xs.len())` an index.
-        check_eq("int_range respects its bounds", case,
-            rng_in_range(Rng.from_seed(seed), 0 - 5, 7, 200).to_string(), "true");
-        check_eq("float is in [0,1)", case,
-            rng_floats_in_unit(Rng.from_seed(seed), 200).to_string(), "true");
+        check_eq(
+            "int_range respects its bounds",
+            case,
+            rng_in_range(Rng.from_seed(seed), 0 - 5, 7, 200).to_string(),
+            "true"
+        );
+        check_eq(
+            "float is in [0,1)",
+            case,
+            rng_floats_in_unit(Rng.from_seed(seed), 200).to_string(),
+            "true"
+        );
         // An empty range has no number to return and must not draw one.
         let (_, empty) = Rng.int_range(Rng.from_seed(seed), 4, 4);
         check_eq("an empty range gives its low end", case, empty.to_string(), "4");
@@ -1035,11 +1428,18 @@ let rng_laws (seed: Int) (left: Int): Unit =
         // order -- a shuffle that dropped or duplicated one would show here.
         let xs = rng_take(Rng.from_seed(seed), 12, []);
         let (_, shuffled) = Rng.shuffle(Rng.from_seed(seed + 1), xs);
-        check_eq("shuffle is a permutation", case,
+        check_eq(
+            "shuffle is a permutation",
+            case,
             Array.join(Array.map(Array.sort_int(shuffled), |v: Int| v.to_string()), ","),
-            Array.join(Array.map(Array.sort_int(xs), |v: Int| v.to_string()), ","));
-        check_eq("shuffle keeps the length", case,
-            shuffled.len().to_string(), xs.len().to_string());
+            Array.join(Array.map(Array.sort_int(xs), |v: Int| v.to_string()), ",")
+        );
+        check_eq(
+            "shuffle keeps the length",
+            case,
+            shuffled.len().to_string(),
+            xs.len().to_string()
+        );
         rng_laws(next_seed(seed), left - 1)
     }
 
@@ -1048,18 +1448,38 @@ pub let test_rng_laws (): Unit = {
 
     // Seeds a generator must survive: zero, negative, and one that
     // would land on a modulus boundary if it were used unfolded.
-    check_eq("seed 0 is usable", "0",
-        rng_in_range(Rng.from_seed(0), 0, 10, 100).to_string(), "true");
-    check_eq("a negative seed is usable", "-99",
-        rng_in_range(Rng.from_seed(0 - 99), 0, 10, 100).to_string(), "true");
-    check_eq("seed 0 is not stuck", "0",
-        (rng_take(Rng.from_seed(0), 5, [])[0] == rng_take(Rng.from_seed(0), 5, [])[4]).to_string(), "false");
+    check_eq(
+        "seed 0 is usable",
+        "0",
+        rng_in_range(Rng.from_seed(0), 0, 10, 100).to_string(),
+        "true"
+    );
+    check_eq(
+        "a negative seed is usable",
+        "-99",
+        rng_in_range(Rng.from_seed(0 - 99), 0, 10, 100).to_string(),
+        "true"
+    );
+    check_eq(
+        "seed 0 is not stuck",
+        "0",
+        (rng_take(Rng.from_seed(0), 5, [])[0] == rng_take(Rng.from_seed(0), 5, [])[4]).to_string(),
+        "false"
+    );
 
     // Different seeds are different streams.
-    check_eq("seeds differ", "1 vs 2",
-        (Array.join(Array.map(rng_take(Rng.from_seed(1), 10, []), |v: Int| v.to_string()), ",")
-         == Array.join(Array.map(rng_take(Rng.from_seed(2), 10, []), |v: Int| v.to_string()), ",")).to_string(),
-        "false");
+    check_eq(
+        "seeds differ",
+        "1 vs 2",
+        (
+            Array.join(Array.map(rng_take(Rng.from_seed(1), 10, []), |v: Int| v.to_string()), ",")
+                == Array.join(
+                    Array.map(rng_take(Rng.from_seed(2), 10, []), |v: Int| v.to_string()),
+                    ","
+                )
+        ).to_string(),
+        "false"
+    );
 
     // `choice` on an empty array has nothing to return.
     let (_, none) = Rng.choice(Rng.from_seed(5), []);
@@ -1072,18 +1492,39 @@ pub let test_rng_integer_boundaries (): Unit = {
     let min = 0 - 9223372036854775807 - 1;
     let max = 9223372036854775807;
     for seed in [0, 1, -1, min, max, 959135552437182909, 3453682501520545093, 3558559446808474027] {
-        for bounds in [(min, max), (min, 0), (-1, max), (min, 1),
-                         (min, -1), (0, max), (min, min + 1), (max - 1, max)] {
+        for bounds in [
+            (min, max),
+            (min, 0),
+            (-1, max),
+            (min, 1),
+            (min, -1),
+            (0, max),
+            (min, min + 1),
+            (max - 1, max)
+        ] {
             let (lo, hi) = bounds;
-            check_eq("integer boundary range", seed.to_string(),
-                rng_in_range(Rng.from_seed(seed), lo, hi, 200).to_string(), "true")
+            check_eq(
+                "integer boundary range",
+                seed.to_string(),
+                rng_in_range(Rng.from_seed(seed), lo, hi, 200).to_string(),
+                "true"
+            )
         };
         for bounds in [(min, min), (max, max), (max, min), (0, min), (max, -1)] {
             let (lo, hi) = bounds;
             let (next, value) = Rng.int_range(Rng.from_seed(seed), lo, hi);
-            check_eq("empty/backwards returns lo", seed.to_string(), value.to_string(), lo.to_string());
-            check_eq("empty/backwards preserves state", seed.to_string(),
-                ints_for_rng_test(next), ints_for_rng_test(Rng.from_seed(seed)))
+            check_eq(
+                "empty/backwards returns lo",
+                seed.to_string(),
+                value.to_string(),
+                lo.to_string()
+            );
+            check_eq(
+                "empty/backwards preserves state",
+                seed.to_string(),
+                ints_for_rng_test(next),
+                ints_for_rng_test(Rng.from_seed(seed))
+            )
         }
     };
     // Seed 1 produces three rejected negatives before this first
@@ -1096,7 +1537,12 @@ pub let test_rng_integer_boundaries (): Unit = {
     let (r4, _) = Rng.float(r3);
     let (next, value) = Rng.int_range(r, -1, max);
     check_eq("wide rejection result", "seed 1", value.to_string(), "8196980753821780235");
-    check_eq("wide rejection advances state", "seed 1", ints_for_rng_test(next), ints_for_rng_test(r4));
+    check_eq(
+        "wide rejection advances state",
+        "seed 1",
+        ints_for_rng_test(next),
+        ints_for_rng_test(r4)
+    );
     // These seeds invert SplitMix64 for the exact boundary outputs.
     let (_, lowest) = Rng.int_range(Rng.from_seed(3453682501520545093), min, 0);
     check_eq("wide range includes minimum Int", "inverse seed", lowest.to_string(), min.to_string());
@@ -1113,13 +1559,32 @@ pub let test_rng_float_rounding_boundary (): Unit = {
     for seed in [959135552437182909, 3558559446808474027] {
         let r = Rng.from_seed(seed);
         let (next, f) = Rng.float(r);
-        check_eq("float excludes one", seed.to_string(),
-            (f == 1.0 - 1.0 / 9007199254740992.0).to_string(), "true");
+        check_eq(
+            "float excludes one",
+            seed.to_string(),
+            (f == 1.0 - 1.0 / 9007199254740992.0).to_string(),
+            "true"
+        );
         let (range_next, ranged) = Rng.float_range(r, 0.0, 1.0);
-        check_eq("unit float_range excludes hi", seed.to_string(), (ranged < 1.0).to_string(), "true");
-        check_eq("float_range advances once", seed.to_string(), ints_for_rng_test(range_next), ints_for_rng_test(next));
+        check_eq(
+            "unit float_range excludes hi",
+            seed.to_string(),
+            (ranged < 1.0).to_string(),
+            "true"
+        );
+        check_eq(
+            "float_range advances once",
+            seed.to_string(),
+            ints_for_rng_test(range_next),
+            ints_for_rng_test(next)
+        );
         let expected_next = Rng.from_seed(Int.wrapping_add(seed, -7046029254386353131));
-        check_eq("float advances once", seed.to_string(), ints_for_rng_test(next), ints_for_rng_test(expected_next))
+        check_eq(
+            "float advances once",
+            seed.to_string(),
+            ints_for_rng_test(next),
+            ints_for_rng_test(expected_next)
+        )
     };
     let (_, zero) = Rng.float(Rng.from_seed(7046029254386353131));
     check_eq("float includes zero", "inverse seed", zero.to_string(), "0")
@@ -1193,32 +1658,60 @@ let bitwise_laws (seed: Int) (left: Int): Unit =
         // limit of the sequence rather than garbage.
         if n >= 64 {
             check_eq("<< past the width is 0", scase, (a << n).to_string(), "0");
-            check_eq(">> past the width is the sign", scase,
-                (a >> n).to_string(), (if a < 0 { 0 - 1 } else { 0 }).to_string())
+            check_eq(
+                ">> past the width is the sign",
+                scase,
+                (a >> n).to_string(),
+                (if a < 0 { 0 - 1 } else { 0 }).to_string()
+            )
         } else { () };
 
         // An arithmetic shift right is a floor division by a power of
         // two, which is where it differs from truncating `/` for
         // negatives -- and is the reason `Rng` needs `plum__mod_floor`.
-        check_eq(">> by 1 halves toward -inf", case,
-            (a >> 1).to_string(), (if a < 0 { (a - 1) / 2 } else { a / 2 }).to_string());
+        check_eq(
+            ">> by 1 halves toward -inf",
+            case,
+            (a >> 1).to_string(),
+            (if a < 0 { (a - 1) / 2 } else { a / 2 }).to_string()
+        );
 
         // The unsigned shift agrees with the signed one on
         // non-negatives, and differs on exactly the sign bit.
         let p = Int.abs(a);
-        check_eq("ushr agrees on non-negatives", case,
-            Int.shr_logical(p, 3).to_string(), (p >> 3).to_string());
-        check_eq("ushr never goes negative", scase,
-            (Int.shr_logical(a, 1) >= 0).to_string(), "true");
+        check_eq(
+            "ushr agrees on non-negatives",
+            case,
+            Int.shr_logical(p, 3).to_string(),
+            (p >> 3).to_string()
+        );
+        check_eq(
+            "ushr never goes negative",
+            scase,
+            (Int.shr_logical(a, 1) >= 0).to_string(),
+            "true"
+        );
         check_eq("ushr by 0 is identity", case, Int.shr_logical(a, 0).to_string(), a.to_string());
-        check_eq("ushr past the width is 0", scase,
-            (if n >= 64 { Int.shr_logical(a, n) } else { 0 }).to_string(), "0");
+        check_eq(
+            "ushr past the width is 0",
+            scase,
+            (if n >= 64 { Int.shr_logical(a, n) } else { 0 }).to_string(),
+            "0"
+        );
 
         // Population count, and its complement.
-        check_eq("ones of a and ~a fill the word", case,
-            (Int.count_ones(a) + Int.count_ones(~a)).to_string(), "64");
-        check_eq("ones is in range", case,
-            (Int.count_ones(a) >= 0 && Int.count_ones(a) <= 64).to_string(), "true");
+        check_eq(
+            "ones of a and ~a fill the word",
+            case,
+            (Int.count_ones(a) + Int.count_ones(~a)).to_string(),
+            "64"
+        );
+        check_eq(
+            "ones is in range",
+            case,
+            (Int.count_ones(a) >= 0 && Int.count_ones(a) <= 64).to_string(),
+            "true"
+        );
 
         bitwise_laws(next_seed(seed), left - 1)
     }
@@ -1230,8 +1723,18 @@ pub let test_bitwise_laws (): Unit = {
     // every one of these parses differently in C.
     check_eq("bitwise binds tighter than ==", "12 & 10 == 8", (12 & 10 == 8).to_string(), "true");
     check_eq("shifts bind like multiplication", "1 << 3 + 1", (1 << 3 + 1).to_string(), "9");
-    check_eq("& binds tighter than ^", "12 ^ 10 & 6", (12 ^ 10 & 6).to_string(), (12 ^ (10 & 6)).to_string());
-    check_eq("^ binds tighter than |", "1 | 6 ^ 3", (1 | 6 ^ 3).to_string(), (1 | (6 ^ 3)).to_string());
+    check_eq(
+        "& binds tighter than ^",
+        "12 ^ 10 & 6",
+        (12 ^ 10 & 6).to_string(),
+        (12 ^ (10 & 6)).to_string()
+    );
+    check_eq(
+        "^ binds tighter than |",
+        "1 | 6 ^ 3",
+        (1 | 6 ^ 3).to_string(),
+        (1 | (6 ^ 3)).to_string()
+    );
     check_eq("~ binds tightest", "~5 + 1", (~5 + 1).to_string(), ((~5) + 1).to_string());
 
     // The word's edges.
@@ -1248,7 +1751,10 @@ pub let test_bitwise_laws (): Unit = {
 // digits back proves it is a base conversion.
 
 let digit_value_at (c: String): Int =
-    match String.index_of("0123456789abcdefghijklmnopqrstuvwxyz", c) { Some(i) => i, None => 0 - 1 }
+    match String.index_of("0123456789abcdefghijklmnopqrstuvwxyz", c) {
+        Some(i) => i,
+        None => 0 - 1
+    }
 
 // Reads a radix string back to an Int, which is the inverse `parse_int`
 // only offers for base 10.
@@ -1260,7 +1766,9 @@ let from_radix (s: String) (radix: Int): Int = {
 }
 
 let from_radix_acc (cs: Array[String]) (radix: Int) (i: Int) (acc: Int): Int =
-    if i >= cs.len() { acc } else { from_radix_acc(cs, radix, i + 1, acc * radix + digit_value_at(cs[i])) }
+    if i >= cs.len() { acc } else {
+        from_radix_acc(cs, radix, i + 1, acc * radix + digit_value_at(cs[i]))
+    }
 
 let count_char (s: String) (c: String): Int =
     Array.fold(chars_of(s), 0, |acc, ch| if ch == c { acc + 1 } else { acc })
@@ -1273,28 +1781,49 @@ let format_laws (seed: Int) (left: Int): Unit =
 
         // A base conversion is reversible. This is the property; the
         // digits themselves are an implementation detail.
-        check_eq("to_radix round trips", case,
-            from_radix(Int.to_radix(n, radix), radix).to_string(), n.to_string());
+        check_eq(
+            "to_radix round trips",
+            case,
+            from_radix(Int.to_radix(n, radix), radix).to_string(),
+            n.to_string()
+        );
         // Base 10 must agree with the one everybody already uses.
         check_eq("base 10 is to_string", case, Int.to_radix(n, 10), n.to_string());
         check_eq("hex is radix 16", case, Int.to_hex(n), Int.to_radix(n, 16));
         check_eq("binary is radix 2", case, Int.to_binary(n), Int.to_radix(n, 2));
         // The sign lives in the string, not in the digits.
-        check_eq("sign is a prefix", case,
-            String.starts_with(Int.to_radix(n, radix), "-").to_string(), (n < 0).to_string());
+        check_eq(
+            "sign is a prefix",
+            case,
+            String.starts_with(Int.to_radix(n, radix), "-").to_string(),
+            (n < 0).to_string()
+        );
 
         // Bit patterns are fixed width, and their ones agree with
         // `count_ones` -- two independent implementations of the same
         // question, which is what makes this worth checking.
         check_eq("to_bits is 64 wide", case, String.char_len(Int.to_bits(n)).to_string(), "64");
-        check_eq("to_hex_bits is 16 wide", case, String.char_len(Int.to_hex_bits(n)).to_string(), "16");
-        check_eq("bits agree with count_ones", case,
-            count_char(Int.to_bits(n), "1").to_string(), Int.count_ones(n).to_string());
+        check_eq(
+            "to_hex_bits is 16 wide",
+            case,
+            String.char_len(Int.to_hex_bits(n)).to_string(),
+            "16"
+        );
+        check_eq(
+            "bits agree with count_ones",
+            case,
+            count_char(Int.to_bits(n), "1").to_string(),
+            Int.count_ones(n).to_string()
+        );
         // A non-negative number's bit pattern is its unsigned hex,
         // zero-extended -- so the two renderings cannot drift apart.
         let p = Int.abs(n);
-        check_eq("hex_bits ends with hex", case,
-            String.ends_with(Int.to_hex_bits(p), Int.to_hex(p)).to_string(), "true");
+        check_eq(
+            "hex_bits ends with hex",
+            case,
+            String.ends_with(Int.to_hex_bits(p), Int.to_hex(p)).to_string(),
+            "true"
+        );
 
         // --- Fixed decimals ---
         let d = rand_between(next_seed(next_seed(seed)), 0, 9);
@@ -1304,32 +1833,57 @@ let format_laws (seed: Int) (left: Int): Unit =
 
         // Exactly `d` digits after the point, and a point only when
         // there are digits to follow it.
-        check_eq("decimal places", fcase, count_char(text, ".").to_string(), (if d == 0 { 0 } else { 1 }).to_string());
+        check_eq(
+            "decimal places",
+            fcase,
+            count_char(text, ".").to_string(),
+            (if d == 0 { 0 } else { 1 }).to_string()
+        );
         if d > 0 {
-            check_eq("digits after the point", fcase,
-                (String.char_len(text) - Option.unwrap_or(String.index_of(text, "."), 0) - 1).to_string(),
-                d.to_string())
+            check_eq(
+                "digits after the point",
+                fcase,
+                (String.char_len(text) - Option.unwrap_or(String.index_of(text, "."), 0) - 1)
+                    .to_string(),
+                d.to_string()
+            )
         } else { () };
         // The rendering is within half a unit in the last place of the
         // value -- which is what "correctly rounded" means, and is a
         // statement no recorded string can make.
-        check_eq("stays within half a ulp", fcase,
-            (Float.abs(Result.unwrap_or(String.parse_float(text), 0.0 - 999999.0) - x)
-                <= 0.5 / Float.pow(10.0, d.to_float()) + 0.0000001).to_string(), "true");
+        check_eq(
+            "stays within half a ulp",
+            fcase,
+            (
+                Float.abs(Result.unwrap_or(String.parse_float(text), 0.0 - 999999.0) - x)
+                    <= 0.5 / Float.pow(10.0, d.to_float()) + 0.0000001
+            ).to_string(),
+            "true"
+        );
 
         // --- Padding ---
         let w = rand_between(next_seed(seed), 0, 20);
         let s = String.slice("abcdefghij", 0, rand_between(seed, 0, 10));
         let pcase = "'".concat(s).concat("' to ").concat(w.to_string());
-        check_eq("pad_center reaches the width", pcase,
+        check_eq(
+            "pad_center reaches the width",
+            pcase,
             String.char_len(String.pad_center(s, w, ".")).to_string(),
-            Int.max(w, String.char_len(s)).to_string());
-        check_eq("pad_center keeps the text", pcase,
-            String.contains(String.pad_center(s, w, "."), s).to_string(), "true");
+            Int.max(w, String.char_len(s)).to_string()
+        );
+        check_eq(
+            "pad_center keeps the text",
+            pcase,
+            String.contains(String.pad_center(s, w, "."), s).to_string(),
+            "true"
+        );
         // The three pads agree on length, differing only in placement.
-        check_eq("pads agree on width", pcase,
+        check_eq(
+            "pads agree on width",
+            pcase,
             String.char_len(String.pad_left(s, w, ".")).to_string(),
-            String.char_len(String.pad_center(s, w, ".")).to_string());
+            String.char_len(String.pad_center(s, w, ".")).to_string()
+        );
 
         format_laws(next_seed(seed), left - 1)
     }
@@ -1343,8 +1897,12 @@ pub let test_format_laws (): Unit = {
     check_eq("bits of -1", "-1", count_char(Int.to_bits(0 - 1), "1").to_string(), "64");
     // The most negative Int cannot be negated, so its conversion has to
     // peel the last digit off first.
-    check_eq("radix of the most negative Int", "min",
-        Int.to_radix(1 << 63, 16), "-8000000000000000");
+    check_eq(
+        "radix of the most negative Int",
+        "min",
+        Int.to_radix(1 << 63, 16),
+        "-8000000000000000"
+    );
     check_eq("radix is clamped", "base 99", Int.to_radix(255, 99), Int.to_radix(255, 36));
 
     // Half to EVEN, unlike `Float.round`. Pinned because it is
@@ -1365,12 +1923,24 @@ pub let test_format_laws (): Unit = {
     // Correctly rounded from the exact binary value: 2.675 is really
     // 2.674999..., which a scale-and-round implementation gets wrong.
     check_eq("rounds from the exact value", "2.675", Float.to_fixed(2.675, 2), "2.67");
-    check_eq("a negative that rounds to zero keeps its sign", "-0.001",
-        Float.to_fixed(0.0 - 0.001, 2), "-0.00");
-    check_eq("precision clamps at 17", "1.0", Float.to_fixed(1.0, 18),
-        Float.to_fixed(1.0, 17));
-    check_eq("negative precision clamps at zero", "1.5", Float.to_fixed(1.5, 0 - 1),
-        Float.to_fixed(1.5, 0))
+    check_eq(
+        "a negative that rounds to zero keeps its sign",
+        "-0.001",
+        Float.to_fixed(0.0 - 0.001, 2),
+        "-0.00"
+    );
+    check_eq(
+        "precision clamps at 17",
+        "1.0",
+        Float.to_fixed(1.0, 18),
+        Float.to_fixed(1.0, 17)
+    );
+    check_eq(
+        "negative precision clamps at zero",
+        "1.5",
+        Float.to_fixed(1.5, 0 - 1),
+        Float.to_fixed(1.5, 0)
+    )
 }
 
 // --- Wrapping arithmetic ---
@@ -1395,12 +1965,24 @@ let wrapping_agrees (seed: Int) (left: Int): Unit =
         let a = rand_between(seed, 0 - 32768, 32768);
         let b = rand_between(next_seed(seed), 0 - 32768, 32768);
         let input = "${a}, ${b}";
-        check_eq("wrapping_add agrees with +", input,
-            Int.wrapping_add(a, b).to_string(), (a + b).to_string());
-        check_eq("wrapping_sub agrees with -", input,
-            Int.wrapping_sub(a, b).to_string(), (a - b).to_string());
-        check_eq("wrapping_mul agrees with *", input,
-            Int.wrapping_mul(a, b).to_string(), (a * b).to_string());
+        check_eq(
+            "wrapping_add agrees with +",
+            input,
+            Int.wrapping_add(a, b).to_string(),
+            (a + b).to_string()
+        );
+        check_eq(
+            "wrapping_sub agrees with -",
+            input,
+            Int.wrapping_sub(a, b).to_string(),
+            (a - b).to_string()
+        );
+        check_eq(
+            "wrapping_mul agrees with *",
+            input,
+            Int.wrapping_mul(a, b).to_string(),
+            (a * b).to_string()
+        );
         wrapping_agrees(next_seed(next_seed(seed)), left - 1)
     }
 
@@ -1410,8 +1992,12 @@ pub let test_wrapping_agrees_with_checked (): Unit = {
     // The method spelling is the same function. `T.f(x, a)` and
     // `x.f(a)` are one call, and a primitive is exactly where that
     // could quietly stop being true.
-    check_eq("the method spelling agrees", "7, 6",
-        7.wrapping_mul(6).to_string(), Int.wrapping_mul(7, 6).to_string())
+    check_eq(
+        "the method spelling agrees",
+        "7, 6",
+        7.wrapping_mul(6).to_string(),
+        Int.wrapping_mul(7, 6).to_string()
+    )
 }
 
 // And the edges, which are the whole reason these exist. Pinned as
@@ -1424,19 +2010,32 @@ pub let test_wrapping_at_the_edges (): Unit = {
     check_eq("max + 1 wraps to min", "max", Int.wrapping_add(max, 1).to_string(), min.to_string());
     check_eq("min - 1 wraps to max", "min", Int.wrapping_sub(min, 1).to_string(), max.to_string());
     check_eq("max * 2 wraps to -2", "max", Int.wrapping_mul(max, 2).to_string(), "-2");
-    check_eq("min * -1 wraps to itself", "min", Int.wrapping_mul(min, 0 - 1).to_string(), min.to_string());
+    check_eq(
+        "min * -1 wraps to itself",
+        "min",
+        Int.wrapping_mul(min, 0 - 1).to_string(),
+        min.to_string()
+    );
 
     // Wrapping twice is identity, which is what "mod 2^64" means and is
     // the property a checksum actually relies on.
-    check_eq("add then sub returns the input", "max",
-        Int.wrapping_sub(Int.wrapping_add(max, 12345), 12345).to_string(), max.to_string());
+    check_eq(
+        "add then sub returns the input",
+        "max",
+        Int.wrapping_sub(Int.wrapping_add(max, 12345), 12345).to_string(),
+        max.to_string()
+    );
 
     // splitmix64's first mix step, which `*` cannot express at all: the
     // multiply overflows by construction, so before this existed the
     // only way to write it was a C shim.
     let z = Int.wrapping_add(0, 0 - 7046029254386353131);
-    check_eq("splitmix64 first step", "0",
-        Int.wrapping_mul(z, 0 - 4658895280553007687).to_string(), "-2993748316962524115")
+    check_eq(
+        "splitmix64 first step",
+        "0",
+        Int.wrapping_mul(z, 0 - 4658895280553007687).to_string(),
+        "-2993748316962524115"
+    )
 }
 
 // --- SHA-256 ---------------------------------------------------------
@@ -1450,16 +2049,25 @@ pub let test_wrapping_at_the_edges (): Unit = {
 // the input allocated 1+2+3+...+n bytes and never finished, which is
 // why the fix and this vector arrived together.
 pub let test_sha256_long_vector (): Unit =
-    check_eq("sha256 of a million a's", "1000000 x a",
+    check_eq(
+        "sha256 of a million a's",
+        "1000000 x a",
         Encoding.hex_encode(Crypto.sha256(Bytes.from_string(String.repeat("a", 1000000)))),
-        "cdc76e5c9914fb9281a1c7e284d73e67f1809a48a497200e046d39ccc7112cd0")
+        "cdc76e5c9914fb9281a1c7e284d73e67f1809a48a497200e046d39ccc7112cd0"
+    )
 
 // Raw whitespace/control rejection must cover every URL component, including
 // fragments (which HTTP omits) and authority text used by DNS/TLS and Host.
 pub let test_url_rejects_raw_controls (): Unit = {
     for c in 0..128 {
         if c <= 32 || c == 127 {
-            let ch = match Bytes.from_array([c]).as_string() { Ok(s) => s, Err(e) => { panic_raw(e); "" } };
+            let ch = match Bytes.from_array([c]).as_string() {
+                Ok(s) => s,
+                Err(e) => {
+                    panic_raw(e);
+                    ""
+                }
+            };
             for text in [
                 "ht".concat(ch).concat("tp://h/"),
                 "http://h".concat(ch).concat("ost/"),
@@ -1469,24 +2077,39 @@ pub let test_url_rejects_raw_controls (): Unit = {
                 "http://h/?q=a".concat(ch).concat("b"),
                 "http://h/#a".concat(ch).concat("b"),
             ] {
-                check_eq("reject raw URL control", c.to_string(),
-                    match Url.parse(text) { Ok(_) => "accepted", Err(_) => "rejected" }, "rejected")
+                check_eq(
+                    "reject raw URL control",
+                    c.to_string(),
+                    match Url.parse(text) {
+                        Ok(_) => "accepted",
+                        Err(_) => "rejected"
+                    },
+                    "rejected"
+                )
             }
         } else { () }
     };
     // Encoded controls are application data, never raw wire delimiters.
     for encoded in ["%00", "%09", "%0D", "%0A", "%20", "%7F"] {
-        let text = "http://h/".concat(encoded).concat("?q=").concat(encoded).concat("#").concat(encoded);
+        let text = "http://h/".concat(encoded).concat("?q=").concat(encoded).concat("#")
+            .concat(encoded);
         match Url.parse(text) {
             Err(e) => panic_raw(e),
             Ok(u) => {
                 check_eq("preserve encoded URL data", text, Url.stringify(u), text);
                 let with_q = Url.with_query(u, [Url.Param { name: "line", value: "a\r\nb" }]);
-                check_eq("encoded query round trip", text,
+                check_eq(
+                    "encoded query round trip",
+                    text,
                     match Url.parse(Url.stringify(with_q)) {
                         Err(e) => e,
-                        Ok(v) => match Url.query_get(v, "line") { Some(value) => value, None => "missing" },
-                    }, "a\r\nb")
+                        Ok(v) => match Url.query_get(v, "line") {
+                            Some(value) => value,
+                            None => "missing"
+                        },
+                    },
+                    "a\r\nb"
+                )
             },
         }
     }
@@ -1500,27 +2123,60 @@ pub let test_url_component_alphabets (): Unit = {
         let ch = Result.unwrap_or(Bytes.from_array([c]).as_string(), "");
         let shared = String.contains(common, ch);
         if !String.contains(":/?#", ch) {
-            check_eq("reg-name alphabet", ch,
-                Result.is_ok(Url.parse("http://ho".concat(ch).concat("st/"))).to_string(), shared.to_string())
+            check_eq(
+                "reg-name alphabet",
+                ch,
+                Result.is_ok(Url.parse("http://ho".concat(ch).concat("st/"))).to_string(),
+                shared.to_string()
+            )
         } else { () };
         if ch != "?" && ch != "#" {
-            check_eq("path alphabet", ch,
+            check_eq(
+                "path alphabet",
+                ch,
                 Result.is_ok(Url.parse("http://h/a".concat(ch).concat("b"))).to_string(),
-                (shared || String.contains(":@/", ch)).to_string())
+                (shared || String.contains(":@/", ch)).to_string()
+            )
         } else { () };
         if ch != "#" {
-            check_eq("query alphabet", ch,
+            check_eq(
+                "query alphabet",
+                ch,
                 Result.is_ok(Url.parse("http://h/?a=".concat(ch).concat("b"))).to_string(),
-                (shared || String.contains(":@/?", ch)).to_string())
+                (shared || String.contains(":@/?", ch)).to_string()
+            )
         } else { () };
-        check_eq("fragment alphabet", ch,
+        check_eq(
+            "fragment alphabet",
+            ch,
             Result.is_ok(Url.parse("http://h/#a".concat(ch).concat("b"))).to_string(),
-            (shared || String.contains(":@/?", ch)).to_string())
+            (shared || String.contains(":@/?", ch)).to_string()
+        )
     };
     for text in ["http://h:+80/", "http://h:1_0/", "http://[::1]:+80/", "http://h:80:90/"] {
-        check_eq("port contains digits only", text, Result.is_ok(Url.parse(text)).to_string(), "false")
+        check_eq(
+            "port contains digits only",
+            text,
+            Result.is_ok(Url.parse(text)).to_string(),
+            "false"
+        )
     };
-    for component in ["é", "日本語", "%", "%0", "%GG", "%C3", "%80", "%ED%A0%80", "%F4%90%80%80", "%C3x", "%C3%20", "%E0%80%80", "%C0%AF", "%F5%80%80%80"] {
+    for component in [
+        "é",
+        "日本語",
+        "%",
+        "%0",
+        "%GG",
+        "%C3",
+        "%80",
+        "%ED%A0%80",
+        "%F4%90%80%80",
+        "%C3x",
+        "%C3%20",
+        "%E0%80%80",
+        "%C0%AF",
+        "%F5%80%80%80"
+    ] {
         for text in [
             "http://".concat(component).concat("/"),
             "http://h/".concat(component),
@@ -1528,13 +2184,30 @@ pub let test_url_component_alphabets (): Unit = {
             "http://h/?ok=".concat(component),
             "http://h/#".concat(component),
         ] {
-            check_eq("invalid component text", text,
-                Result.is_ok(Url.parse(text)).to_string(), "false")
+            check_eq(
+                "invalid component text",
+                text,
+                Result.is_ok(Url.parse(text)).to_string(),
+                "false"
+            )
         }
     };
-    for component in ["%20", "%2f", "%00", "%C3%A9", "%F0%9F%98%80", "%25", "%23", "%C2%80", "%E0%A0%80", "%ED%9F%BF", "%F4%8F%BF%BF"] {
+    for component in [
+        "%20",
+        "%2f",
+        "%00",
+        "%C3%A9",
+        "%F0%9F%98%80",
+        "%25",
+        "%23",
+        "%C2%80",
+        "%E0%A0%80",
+        "%ED%9F%BF",
+        "%F4%8F%BF%BF"
+    ] {
         let text = "http://".concat(component).concat("/").concat(component)
-            .concat("?").concat(component).concat("=").concat(component).concat("#").concat(component);
+            .concat("?").concat(component).concat("=").concat(component).concat("#")
+            .concat(component);
         match Url.parse(text) {
             Err(e) => panic_raw(e),
             Ok(u) => check_eq("encoded components stay encoded", text, Url.stringify(u), text),
@@ -1543,26 +2216,61 @@ pub let test_url_component_alphabets (): Unit = {
 }
 
 pub let test_url_ip_literals (): Unit = {
-    for host in ["::", "::1", "1::", "2001:db8::1", "1:2:3:4:5:6:7:8",
-                 "1:2:3:4:5:6::8", "::ffff:192.0.2.128", "1:2:3:4:5:6:192.0.2.1",
-                 "::192.0.2.1", "1:2:3:4:5::192.0.2.1"] {
+    for host in [
+        "::",
+        "::1",
+        "1::",
+        "2001:db8::1",
+        "1:2:3:4:5:6:7:8",
+        "1:2:3:4:5:6::8",
+        "::ffff:192.0.2.128",
+        "1:2:3:4:5:6:192.0.2.1",
+        "::192.0.2.1",
+        "1:2:3:4:5::192.0.2.1"
+    ] {
         for port in ["", ":80", ":8080"] {
             let text = "http://[".concat(host).concat("]").concat(port).concat("/x");
             match Url.parse(text) {
                 Err(e) => panic_raw(text.concat(": ").concat(e)),
                 Ok(u) => {
                     check_eq("IP brackets stripped", text, u.host, host);
-                    check_eq("IP literal canonical round trip", text,
-                        match Url.parse(Url.stringify(u)) { Err(e) => e, Ok(v) => url_fields(v) }, url_fields(u))
+                    check_eq(
+                        "IP literal canonical round trip",
+                        text,
+                        match Url.parse(Url.stringify(u)) {
+                            Err(e) => e,
+                            Ok(v) => url_fields(v)
+                        },
+                        url_fields(u)
+                    )
                 },
             }
         }
     };
-    for host in ["", "example.com", "not-an-ip", ":", ":::1", "1:::2", "1::2::3",
-                 "1:2:3:4:5:6:7", "1:2:3:4:5:6:7:8:9", "1:2:3:4:5:6:7:8::",
-                 "::1:2:3:4:5:6:7:8", "12345::", "gggg::", "1:2:3:4:5:6:7:",
-                 "::ffff:256.1.1.1", "::ffff:01.2.3.4", "::ffff:1.2.3", "::ffff:1.2.3.4.5",
-                 "1:2:3:4:5:6::192.0.2.1", "1:2:3:4:5:192.0.2.1", "fe80::1%25eth0", "v1.test"] {
+    for host in [
+        "",
+        "example.com",
+        "not-an-ip",
+        ":",
+        ":::1",
+        "1:::2",
+        "1::2::3",
+        "1:2:3:4:5:6:7",
+        "1:2:3:4:5:6:7:8:9",
+        "1:2:3:4:5:6:7:8::",
+        "::1:2:3:4:5:6:7:8",
+        "12345::",
+        "gggg::",
+        "1:2:3:4:5:6:7:",
+        "::ffff:256.1.1.1",
+        "::ffff:01.2.3.4",
+        "::ffff:1.2.3",
+        "::ffff:1.2.3.4.5",
+        "1:2:3:4:5:6::192.0.2.1",
+        "1:2:3:4:5:192.0.2.1",
+        "fe80::1%25eth0",
+        "v1.test"
+    ] {
         for port in ["", ":80"] {
             let text = "http://[".concat(host).concat("]").concat(port).concat("/");
             check_eq("invalid IP literal", text, Result.is_ok(Url.parse(text)).to_string(), "false")
@@ -1579,8 +2287,15 @@ pub let test_url_long_components (): Unit = {
         Err(e) => panic_raw(e),
         Ok(u) => {
             check_eq("long URL round trip", "large components", Url.stringify(u), text);
-            check_eq("long query lookup", "last",
-                match Url.query_get(u, "last") { Some(v) => v, None => "missing" }, "é")
+            check_eq(
+                "long query lookup",
+                "last",
+                match Url.query_get(u, "last") {
+                    Some(v) => v,
+                    None => "missing"
+                },
+                "é"
+            )
         },
     }
 }
@@ -1593,9 +2308,14 @@ pub let test_url_encoded_utf8 (): Unit = {
             for values in [[lead], [lead, tail], [lead, tail, 128], [lead, tail, 191, 191]] {
                 let bytes = Bytes.from_array(values);
                 let encoded = Encoding.percent_encode(bytes);
-                let text = "http://h/".concat(encoded).concat("?q=").concat(encoded).concat("#").concat(encoded);
-                check_eq("URL encoded UTF-8 agrees with Bytes", bytes.to_hex(),
-                    Result.is_ok(Url.parse(text)).to_string(), bytes.is_utf8().to_string())
+                let text = "http://h/".concat(encoded).concat("?q=").concat(encoded).concat("#")
+                    .concat(encoded);
+                check_eq(
+                    "URL encoded UTF-8 agrees with Bytes",
+                    bytes.to_hex(),
+                    Result.is_ok(Url.parse(text)).to_string(),
+                    bytes.is_utf8().to_string()
+                )
             }
         }
     }
@@ -1633,7 +2353,9 @@ pub let test_hash_equality_and_map_laws (): Unit = {
 // Exercise every control byte and multi-byte UTF-8 alongside escapes.
 // Compare decoded values: re-serialization alone could hide data loss.
 let json_string_bytes (seed: Int) (left: Int) (acc: Array[Int]): String =
-    if left == 0 { Result.unwrap_or(Bytes.as_string(Bytes.from_array(acc)), "invalid generated UTF-8") }
+    if left == 0 {
+        Result.unwrap_or(Bytes.as_string(Bytes.from_array(acc)), "invalid generated UTF-8")
+    }
     else {
         let c = rand_between(seed, 0, 255);
         let next = if c < 128 { acc.push(c) } else { acc.push(192 + c / 64).push(128 + c % 64) };
@@ -1646,7 +2368,10 @@ let json_string_roundtrips (seed: Int) (left: Int): Unit =
         let encoded = stringify_valid(JsonString(text));
         let decoded = match json_parse(encoded) {
             Ok(JsonString(s)) => s,
-            _ => { panic_raw("generated JSON string did not parse"); "" },
+            _ => {
+                panic_raw("generated JSON string did not parse");
+                ""
+            },
         };
         check_eq("JSON string value round trip", encoded, decoded, text);
         json_string_roundtrips(next_seed(seed), left - 1)
@@ -1661,8 +2386,12 @@ pub let test_map_from_arrays_shared_prefix (): Unit = {
         for value_count in 0..17 {
             let mut keys = [];
             let mut values = [];
-            for i in 0..key_count { keys = keys.push(i.to_string()); };
-            for i in 0..value_count { values = values.push("value-".concat(i.to_string())); };
+            for i in 0..key_count {
+                keys = keys.push(i.to_string());
+            };
+            for i in 0..value_count {
+                values = values.push("value-".concat(i.to_string()));
+            };
             let m = Map.from_arrays(keys, values);
             let paired = Int.min(key_count, value_count);
             assert_eq(Map.len(m), paired);
@@ -1685,7 +2414,10 @@ pub let test_float_finite_and_overflow (): Unit = {
     for x in [1.0 / zero, -1.0 / zero, zero / zero] {
         assert(!Float.is_finite(x));
         assert_eq(json_stringify(JsonNumber(x)), Err("non-finite JSON number"));
-        assert_eq(json_stringify(JsonArray([JsonNull, JsonNumber(x)])), Err("non-finite JSON number"));
+        assert_eq(
+            json_stringify(JsonArray([JsonNull, JsonNumber(x)])),
+            Err("non-finite JSON number")
+        );
     };
     for exponent in 309..400 {
         let text = "1e".concat(exponent.to_string());
@@ -1705,7 +2437,10 @@ pub let test_float_finite_and_overflow (): Unit = {
 // These fixtures construct finite JSON. Fail loudly if that invariant changes.
 let stringify_valid (value: JsonValue): String = match json_stringify(value) {
     Ok(text) => text,
-    Err(e) => { panic_raw(e); "" },
+    Err(e) => {
+        panic_raw(e);
+        ""
+    },
 }
 
 pub let test_json_finite_number_roundtrip (): Unit = {
@@ -1729,18 +2464,48 @@ pub let test_path_unc_roots (): Unit = {
         for tail in ["", "/", "/..", "/../../..", "/a/../.."] {
             let path = prefix.concat(tail);
             check_eq("UNC clean clamps at share", path, Path.clean_in(true, path), root);
-            check_eq("UNC clean idempotent", path, Path.clean_in(true, Path.clean_in(true, path)), root);
+            check_eq(
+                "UNC clean idempotent",
+                path,
+                Path.clean_in(true, Path.clean_in(true, path)),
+                root
+            );
         };
         for tail in ["", "/", "///", "/file", "/file/"] {
             let path = prefix.concat(tail);
             check_eq("UNC dirname keeps share", path, Path.dirname_in(true, path), root);
         };
-        check_eq("UNC descendant", prefix, Path.clean_in(true, prefix.concat("/a/../../other")), root.concat("\\other"));
-        check_eq("UNC join clamps", prefix, Path.join_in(true, prefix, "../other"), root.concat("\\other"));
+        check_eq(
+            "UNC descendant",
+            prefix,
+            Path.clean_in(true, prefix.concat("/a/../../other")),
+            root.concat("\\other")
+        );
+        check_eq(
+            "UNC join clamps",
+            prefix,
+            Path.join_in(true, prefix, "../other"),
+            root.concat("\\other")
+        );
     };
-    check_eq("UNC duplicate root separators", "//server//share///a/../../x", Path.clean_in(true, "//server//share///a/../../x"), "\\\\server\\share\\x");
-    check_eq("three slashes are not UNC", "///server/share/../x", Path.clean_in(true, "///server/share/../x"), "\\server\\x");
-    check_eq("POSIX double slash", "//server/share/../x", Path.clean_in(false, "//server/share/../x"), "/server/x")
+    check_eq(
+        "UNC duplicate root separators",
+        "//server//share///a/../../x",
+        Path.clean_in(true, "//server//share///a/../../x"),
+        "\\\\server\\share\\x"
+    );
+    check_eq(
+        "three slashes are not UNC",
+        "///server/share/../x",
+        Path.clean_in(true, "///server/share/../x"),
+        "\\server\\x"
+    );
+    check_eq(
+        "POSIX double slash",
+        "//server/share/../x",
+        Path.clean_in(false, "//server/share/../x"),
+        "/server/x"
+    )
 }
 
 pub let test_path_long_unicode (): Unit = {
@@ -1754,16 +2519,41 @@ pub let test_path_long_unicode (): Unit = {
             check_eq("long dirname", "UTF-8", Path.dirname_in(windows, path), "目录");
             check_eq("long extension", "UTF-8", Path.extension_in(windows, path), "扩展");
             check_eq("long stem", "UTF-8", Path.stem_in(windows, path), stem);
-            check_eq("long with_extension", "UTF-8", Path.with_extension_in(windows, path, "new"), "目录".concat(sep).concat(stem).concat(".new"));
+            check_eq(
+                "long with_extension",
+                "UTF-8",
+                Path.with_extension_in(windows, path, "new"),
+                "目录".concat(sep).concat(stem).concat(".new")
+            );
             let deep = String.repeat("目录/", n);
-            check_eq("deep stack drains", "segments", Path.clean_in(windows, deep), String.replace(String.repeat("目录/", n - 1).concat("目录"), "/", sep));
-            check_eq("deep stack pops", "segments", Path.clean_in(windows, deep.concat(String.repeat("../", n))), ".");
-            check_eq("relative parents kept", "segments", Path.clean_in(windows, deep.concat(String.repeat("../", n + 2))), "..".concat(sep).concat(".."));
+            check_eq(
+                "deep stack drains",
+                "segments",
+                Path.clean_in(windows, deep),
+                String.replace(String.repeat("目录/", n - 1).concat("目录"), "/", sep)
+            );
+            check_eq(
+                "deep stack pops",
+                "segments",
+                Path.clean_in(windows, deep.concat(String.repeat("../", n))),
+                "."
+            );
+            check_eq(
+                "relative parents kept",
+                "segments",
+                Path.clean_in(windows, deep.concat(String.repeat("../", n + 2))),
+                "..".concat(sep).concat("..")
+            );
         };
         check_eq("hidden UTF-8", "dot", Path.extension_in(windows, ".隐"), "");
         check_eq("trailing dot", "dot", Path.stem_in(windows, "名."), "名");
         check_eq("all separators", "root", Path.basename_in(windows, String.repeat("/", 4096)), sep);
-        check_eq("drive parent clamp", "C:/../../名", Path.clean_in(windows, "C:/../../名"), if windows { "C:\\名" } else { "../名" });
+        check_eq(
+            "drive parent clamp",
+            "C:/../../名",
+            Path.clean_in(windows, "C:/../../名"),
+            if windows { "C:\\名" } else { "../名" }
+        );
     }
 }
 
@@ -1772,21 +2562,45 @@ pub let test_path_long_unicode (): Unit = {
 pub let test_path_extension_containment (): Unit = {
     for windows in [false, true] {
         let paths = if windows {
-            ["project/file.txt", "./file.txt", "C:file.txt", "C:/project/file.txt", "//server/share/file.txt", "目录/名.txt", "a/../project/file.txt", "project/.hidden", "project/file.txt/"]
+            [
+                "project/file.txt",
+                "./file.txt",
+                "C:file.txt",
+                "C:/project/file.txt",
+                "//server/share/file.txt",
+                "目录/名.txt",
+                "a/../project/file.txt",
+                "project/.hidden",
+                "project/file.txt/"
+            ]
         } else {
-            ["project/file.txt", "./file.txt", "/project/file.txt", "目录/名.txt", "a/../project/file.txt", "project/.hidden", "project/file.txt/"]
+            [
+                "project/file.txt",
+                "./file.txt",
+                "/project/file.txt",
+                "目录/名.txt",
+                "a/../project/file.txt",
+                "project/.hidden",
+                "project/file.txt/"
+            ]
         };
         for path in paths {
             for ext in ["", "md", "tar.gz", "扩展", String.repeat("é", 4096)] {
                 let changed = match Path.try_with_extension_in(windows, path, ext) {
                     Ok(v) => v,
-                    Err(e) => { panic_raw(e); "" },
+                    Err(e) => {
+                        panic_raw(e);
+                        ""
+                    },
                 };
                 assert_eq(Path.dirname_in(windows, changed), Path.dirname_in(windows, path));
                 assert_eq(Path.with_extension_in(windows, path, ext), changed);
             };
             for ext in ["../../../outside", "a/b", "/outside", ".", "..", "bad\x00ext"] {
-                assert_eq(Path.try_with_extension_in(windows, path, ext), Err("invalid path extension"));
+                assert_eq(
+                    Path.try_with_extension_in(windows, path, ext),
+                    Err("invalid path extension")
+                );
             };
             for ext in ["..\\..\\outside", "ads:stream", "C:outside"] {
                 assert_eq(Result.is_ok(Path.try_with_extension_in(windows, path, ext)), !windows);
@@ -1798,8 +2612,14 @@ pub let test_path_extension_containment (): Unit = {
         for path in ["project/...", "project/..txt"] {
             assert(Result.is_err(Path.try_with_extension_in(windows, path, "")));
         };
-        assert_eq(Path.try_with_extension_in(windows, "project/file.txt", "tar.gz"), Ok("project".concat(Path.separator_in(windows)).concat("file.tar.gz")));
-        assert_eq(Path.try_with_extension_in(windows, "project/.hidden", ""), Ok("project".concat(Path.separator_in(windows)).concat(".hidden")));
+        assert_eq(
+            Path.try_with_extension_in(windows, "project/file.txt", "tar.gz"),
+            Ok("project".concat(Path.separator_in(windows)).concat("file.tar.gz"))
+        );
+        assert_eq(
+            Path.try_with_extension_in(windows, "project/.hidden", ""),
+            Ok("project".concat(Path.separator_in(windows)).concat(".hidden"))
+        );
     };
     for path in ["C:", "C:/", "//server/share", "\\\\server\\share\\"] {
         assert_eq(Path.try_with_extension_in(true, path, "md"), Err("path has no filename"));
@@ -1810,8 +2630,14 @@ pub let test_path_extension_containment (): Unit = {
     for ext in ["", " ", "...", ". . "] {
         assert(Result.is_err(Path.try_with_extension_in(true, "project/..txt", ext)));
     };
-    assert_eq(Path.try_with_extension("project/file.txt", "md"), Ok(Path.with_extension("project/file.txt", "md")));
-    assert_eq(Path.try_with_extension("project/file.txt", "../../../outside"), Err("invalid path extension"));
+    assert_eq(
+        Path.try_with_extension("project/file.txt", "md"),
+        Ok(Path.with_extension("project/file.txt", "md"))
+    );
+    assert_eq(
+        Path.try_with_extension("project/file.txt", "../../../outside"),
+        Err("invalid path extension")
+    );
 }
 
 // A single literal key must survive diagnostic rendering, even when it
@@ -1826,14 +2652,47 @@ pub let test_json_decoder_literal_paths (): Unit = {
             Ok(_) => "unexpected success",
         };
         let prefix = "expected String at [";
-        check_eq("path prefix", seed.to_string(), String.starts_with(error, prefix).to_string(), "true");
+        check_eq(
+            "path prefix",
+            seed.to_string(),
+            String.starts_with(error, prefix).to_string(),
+            "true"
+        );
         check_eq("path suffix", seed.to_string(), String.ends_with(error, "]").to_string(), "true");
         let quoted = String.slice(error, prefix.char_len(), error.char_len() - 1);
-        check_eq("path key", seed.to_string(), match json_parse(quoted) { Ok(JsonString(s)) => s, _ => "invalid segment" }, key);
-        let nested = JsonObject([JsonEntry { key: "", value: JsonObject([JsonEntry { key: String.slice(key, 1, key.char_len()), value: JsonNull }]) }]);
-        let nested_error = Json.decode(Json.at(["", String.slice(key, 1, key.char_len())], Json.string()), nested);
-        let nested_path = match nested_error { Err(e) => e, Ok(_) => "unexpected success" };
-        check_eq("path distinct", seed.to_string().concat(" ").concat(error).concat(" / ").concat(nested_path), (nested_path != error).to_string(), "true");
+        check_eq(
+            "path key",
+            seed.to_string(),
+            match json_parse(quoted) {
+                Ok(JsonString(s)) => s,
+                _ => "invalid segment"
+            },
+            key
+        );
+        let nested = JsonObject(
+            [
+                JsonEntry {
+                    key: "",
+                    value: JsonObject(
+                        [JsonEntry { key: String.slice(key, 1, key.char_len()), value: JsonNull }]
+                    )
+                }
+            ]
+        );
+        let nested_error = Json.decode(
+            Json.at(["", String.slice(key, 1, key.char_len())], Json.string()),
+            nested
+        );
+        let nested_path = match nested_error {
+            Err(e) => e,
+            Ok(_) => "unexpected success"
+        };
+        check_eq(
+            "path distinct",
+            seed.to_string().concat(" ").concat(error).concat(" / ").concat(nested_path),
+            (nested_path != error).to_string(),
+            "true"
+        );
     }
 }
 
@@ -1844,7 +2703,11 @@ pub let test_json_decoder_literal_paths (): Unit = {
 let search_text (seed: Int) (n: Int) (acc: String): String =
     if n <= 0 { acc } else {
         let alphabet = ["a", "a", "b", "é", "中", "🙂", "́"];
-        search_text(next_seed(seed), n - 1, acc.concat(alphabet[rand_between(seed, 0, alphabet.len() - 1)]))
+        search_text(
+            next_seed(seed),
+            n - 1,
+            acc.concat(alphabet[rand_between(seed, 0, alphabet.len() - 1)])
+        )
     }
 
 let search_reference (s: String) (needle: String): Int = {
@@ -1855,9 +2718,13 @@ let search_reference (s: String) (needle: String): Int = {
         if found < 0 && pattern.len() <= text.len() - i {
             let mut same = true;
             for j in 0..pattern.len() {
-                if text[i + j] != pattern[j] { same = false; };
+                if text[i + j] != pattern[j] {
+                    same = false;
+                };
             };
-            if same { found = i; };
+            if same {
+                found = i;
+            };
         };
     };
     found
@@ -1866,8 +2733,23 @@ let search_reference (s: String) (needle: String): Int = {
 // An independently materialized codepoint array is the count oracle.
 // Include UTF-8 width boundaries, combining marks and embedded NULs.
 pub let test_string_char_len (): Unit = {
-    let alphabet = ["\x00", "a", "\u{7f}", "\u{80}", "\u{7ff}", "\u{800}",
-        "\u{d7ff}", "\u{e000}", "\u{ffff}", "\u{10000}", "\u{10ffff}", "é", "中", "🙂", "́"];
+    let alphabet = [
+        "\x00",
+        "a",
+        "\u{7f}",
+        "\u{80}",
+        "\u{7ff}",
+        "\u{800}",
+        "\u{d7ff}",
+        "\u{e000}",
+        "\u{ffff}",
+        "\u{10000}",
+        "\u{10ffff}",
+        "é",
+        "中",
+        "🙂",
+        "́"
+    ];
     assert_eq(String.char_len(""), 0);
     assert_eq(String.char_len("aé中🙂\x00é"), 7);
     for i in 0..250 {
@@ -1878,8 +2760,12 @@ pub let test_string_char_len (): Unit = {
             seed = next_seed(seed);
             text = text.concat(alphabet[rand_between(seed, 0, alphabet.len() - 1)]);
         };
-        check_eq("String.char_len codepoint oracle", i.to_string(),
-            String.char_len(text).to_string(), chars_of(text).len().to_string());
+        check_eq(
+            "String.char_len codepoint oracle",
+            i.to_string(),
+            String.char_len(text).to_string(),
+            chars_of(text).len().to_string()
+        );
         assert_eq(String.char_len(text), n);
     }
 }
@@ -1887,8 +2773,23 @@ pub let test_string_char_len (): Unit = {
 // Array slicing of materialized characters is an independent oracle.
 // Bounds span both Int extremes, reversed/empty ranges and Unicode.
 pub let test_string_slice (): Unit = {
-    let alphabet = ["\x00", "a", "\u{7f}", "\u{80}", "\u{7ff}", "\u{800}",
-        "\u{d7ff}", "\u{e000}", "\u{ffff}", "\u{10000}", "\u{10ffff}", "é", "中", "🙂", "́"];
+    let alphabet = [
+        "\x00",
+        "a",
+        "\u{7f}",
+        "\u{80}",
+        "\u{7ff}",
+        "\u{800}",
+        "\u{d7ff}",
+        "\u{e000}",
+        "\u{ffff}",
+        "\u{10000}",
+        "\u{10ffff}",
+        "é",
+        "中",
+        "🙂",
+        "́"
+    ];
     for i in 0..200 {
         let mut seed = next_seed(i + 1);
         let mut text = "";
@@ -1903,8 +2804,13 @@ pub let test_string_slice (): Unit = {
         let bounds = [(-9223372036854775807 - 1), -1, 0, a, b, n, n + 1, 9223372036854775807];
         for start in bounds {
             for end in bounds {
-                check_eq("String.slice codepoint oracle", i.to_string().concat(" / ").concat(start.to_string()).concat("..").concat(end.to_string()),
-                    String.slice(text, start, end), Array.concat_all(Array.slice(chars, start, end)));
+                check_eq(
+                    "String.slice codepoint oracle",
+                    i.to_string().concat(" / ").concat(start.to_string()).concat("..")
+                        .concat(end.to_string()),
+                    String.slice(text, start, end),
+                    Array.concat_all(Array.slice(chars, start, end))
+                );
             };
         };
         assert_eq(String.slice(text, 0, a).concat(String.slice(text, a, 9223372036854775807)), text);
@@ -1919,9 +2825,12 @@ pub let test_string_index_of (): Unit = {
         let start = rand_between(seed, 0, String.char_len(text));
         let end = rand_between(next_seed(seed), start, String.char_len(text));
         for needle in [independent, String.slice(text, start, end), "", "aab", "é中"] {
-            check_eq("String.index_of codepoint oracle", text.concat(" / ").concat(needle),
+            check_eq(
+                "String.index_of codepoint oracle",
+                text.concat(" / ").concat(needle),
                 Option.unwrap_or(String.index_of(text, needle), -1).to_string(),
-                search_reference(text, needle).to_string());
+                search_reference(text, needle).to_string()
+            );
         };
     }
 }
@@ -1929,40 +2838,77 @@ pub let test_string_index_of (): Unit = {
 // Public-API model: updates against an independent array, including retained
 // versions and real full-hash collisions. No compiler-private helpers.
 pub let test_map_persistent_updates (): Unit = {
-    let keys = [0, -3592346752865808038, 7849046083877192578, -586861493372274958,
-        1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12];
+    let keys = [
+        0,
+        -3592346752865808038,
+        7849046083877192578,
+        -586861493372274958,
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8,
+        9,
+        10,
+        11,
+        12
+    ];
     assert_eq(keys[0].hash(), keys[1].hash());
     assert_eq(keys[2].hash(), keys[3].hash());
     for seed in 1..11 {
         let mut m: Map[Int, Int] = Map.new(());
         let mut model: Array[Option[Int]] = [];
-        for k in keys { model = model.push(None); };
+        for k in keys {
+            model = model.push(None);
+        };
         let mut versions: Array[Map[Int, Int]] = [];
         let mut models: Array[Array[Option[Int]]] = [];
         let mut state = seed;
         for step in 0..160 {
             state = next_seed(state);
             let i = rand_between(state, 0, keys.len() - 1);
-            if step % 17 == 0 { versions = versions.push(m); models = models.push(model); };
-            if step % 3 == 0 { m = Map.remove(m, keys[i]); model = model.set(i, None); }
-            else { m = Map.insert(m, keys[i], step); model = model.set(i, Some(step)); };
+            if step % 17 == 0 {
+                versions = versions.push(m);
+                models = models.push(model);
+            };
+            if step % 3 == 0 {
+                m = Map.remove(m, keys[i]);
+                model = model.set(i, None);
+            }
+            else {
+                m = Map.insert(m, keys[i], step);
+                model = model.set(i, Some(step));
+            };
             let mut size = 0;
             for j in 0..keys.len() {
                 assert_eq(Map.get(m, keys[j]), model[j]);
-                let present = match model[j] { None => false, Some(_) => true };
+                let present = match model[j] {
+                    None => false,
+                    Some(_) => true
+                };
                 assert_eq(Map.contains(m, keys[j]), present);
-                if present { size = size + 1; };
+                if present {
+                    size = size + 1;
+                };
             };
             assert_eq(Map.len(m), size);
             let ks = Map.keys(m);
             let vs = Map.values(m);
-            assert_eq(ks.len(), size); assert_eq(vs.len(), size);
+            assert_eq(ks.len(), size);
+            assert_eq(vs.len(), size);
             assert_eq(Set.len(Set.from_array(ks)), size);
-            for j in 0..size { assert_eq(Map.get(m, ks[j]), Some(vs[j])); };
+            for j in 0..size {
+                assert_eq(Map.get(m, ks[j]), Some(vs[j]));
+            };
         };
-        for i in 0..versions.len() { for j in 0..keys.len() {
-            assert_eq(Map.get(versions[i], keys[j]), models[i][j]);
-        }; };
+        for i in 0..versions.len() {
+            for j in 0..keys.len() {
+                assert_eq(Map.get(versions[i], keys[j]), models[i][j]);
+            };
+        };
     }
 }
 
@@ -1972,7 +2918,9 @@ let split_reference (text: String) (separator: String): Array[String] = {
     let sep = chars_of(separator);
     if sep.len() == 0 {
         let mut out = [""];
-        for c in chars { out = out.push(c); };
+        for c in chars {
+            out = out.push(c);
+        };
         out.push("")
     } else {
         let mut out = [];
@@ -1981,9 +2929,21 @@ let split_reference (text: String) (separator: String): Array[String] = {
         for i in 0..chars.len() {
             if i >= next {
                 let mut matches = sep.len() <= chars.len() - i;
-                if matches { for j in 0..sep.len() { if chars[i + j] != sep[j] { matches = false; }; }; };
-                if matches { out = out.push(piece); piece = ""; next = i + sep.len(); }
-                else { piece = piece.concat(chars[i]); };
+                if matches {
+                    for j in 0..sep.len() {
+                        if chars[i + j] != sep[j] {
+                            matches = false;
+                        };
+                    };
+                };
+                if matches {
+                    out = out.push(piece);
+                    piece = "";
+                    next = i + sep.len();
+                }
+                else {
+                    piece = piece.concat(chars[i]);
+                };
             };
         };
         out.push(piece)
@@ -2012,16 +2972,36 @@ let file_partition (path: String) (payload: Bytes) (capacity: Int): Unit =
                 let mut eof = false;
                 for step in 0..(payload.len() + 1) {
                     if !eof {
-                        let n = match f.read_into(buffer) { Ok(n) => n, Err(e) => { panic_raw(e); -1 } };
+                        let n = match f.read_into(buffer) {
+                            Ok(n) => n,
+                            Err(e) => {
+                                panic_raw(e);
+                                -1
+                            }
+                        };
                         assert(n >= 0 && n <= capacity);
-                        let part = match NativeBuffer.copy_out(buffer) { Ok(b) => b, Err(e) => { panic_raw(e); Bytes.empty() } };
+                        let part = match NativeBuffer.copy_out(buffer) {
+                            Ok(b) => b,
+                            Err(e) => {
+                                panic_raw(e);
+                                Bytes.empty()
+                            }
+                        };
                         assert_eq(part.len(), n);
-                        if n == 0 { eof = true; } else { result = result.concat(part); };
+                        if n == 0 {
+                            eof = true;
+                        } else {
+                            result = result.concat(part);
+                        };
                     };
                 };
                 assert(eof);
-                check_eq("file read partition", payload.to_hex().concat(" / ").concat(capacity.to_string()),
-                    result.to_hex(), payload.to_hex())
+                check_eq(
+                    "file read partition",
+                    payload.to_hex().concat(" / ").concat(capacity.to_string()),
+                    result.to_hex(),
+                    payload.to_hex()
+                )
             },
         },
     }
@@ -2032,9 +3012,14 @@ pub let test_file_read_partitions (): Unit = match Os.temp_dir() {
         let path = root.concat("/partition.bin");
         for seed in 0..100 {
             let payload = if seed == 0 { Bytes.empty() }
-                else { Bytes.from_array([0, 255, 13, 10]).concat(rand_bytes(next_seed(seed), rand_between(seed, 0, 60))) };
+            else {
+                Bytes.from_array([0, 255, 13, 10])
+                    .concat(rand_bytes(next_seed(seed), rand_between(seed, 0, 60)))
+            };
             assert(Os.write_bytes(path, payload) == Ok(()));
-            for capacity in [1, 2, 3, 7, 16, 65] { file_partition(path, payload, capacity); };
+            for capacity in [1, 2, 3, 7, 16, 65] {
+                file_partition(path, payload, capacity);
+            };
         };
         assert(Os.remove_tree(root) == Ok(()))
     },
@@ -2067,22 +3052,53 @@ let origin_conservation (seed: Int): Unit = {
     };
     assert(held.get()[0] == payload)
 }
+
 pub let test_memory_origin_conservation (): Unit = {
-    if Option.is_none(Memory.by_origin()) { assert(Option.is_none(Memory.snapshot())); }
-    else { for seed in 0..64 { origin_conservation(seed); }; }
+    if Option.is_none(Memory.by_origin()) {
+        assert(Option.is_none(Memory.snapshot()));
+    }
+    else {
+        for seed in 0..64 {
+            origin_conservation(seed);
+        };
+    }
 }
 
 // Known non-whitespace endpoints make the expected boundaries independent
 // of the scanner. Interior whitespace and NULs must survive all directions.
 pub let test_unicode_trim_boundaries (): Unit = {
-    let spaces = ["\t", "\n", "\u{b}", "\u{c}", "\r", " ", "\u{85}", "\u{a0}", "\u{1680}",
-        "\u{2000}", "\u{2001}", "\u{2002}", "\u{2003}", "\u{2004}", "\u{2005}",
-        "\u{2006}", "\u{2007}", "\u{2008}", "\u{2009}", "\u{200a}", "\u{2028}",
-        "\u{2029}", "\u{202f}", "\u{205f}", "\u{3000}"];
+    let spaces = [
+        "\t",
+        "\n",
+        "\u{b}",
+        "\u{c}",
+        "\r",
+        " ",
+        "\u{85}",
+        "\u{a0}",
+        "\u{1680}",
+        "\u{2000}",
+        "\u{2001}",
+        "\u{2002}",
+        "\u{2003}",
+        "\u{2004}",
+        "\u{2005}",
+        "\u{2006}",
+        "\u{2007}",
+        "\u{2008}",
+        "\u{2009}",
+        "\u{200a}",
+        "\u{2028}",
+        "\u{2029}",
+        "\u{202f}",
+        "\u{205f}",
+        "\u{3000}"
+    ];
     let alphabet = ["a", "\x00", "中", " ", "\n", "🙂"];
     for seed in 0..250 {
         let left = spaces[seed % spaces.len()].repeat(rand_between(seed, 0, 8));
-        let right = spaces[rand_between(next_seed(seed), 0, spaces.len() - 1)].repeat(rand_between(next_seed(seed), 0, 8));
+        let right = spaces[rand_between(next_seed(seed), 0, spaces.len() - 1)]
+            .repeat(rand_between(next_seed(seed), 0, 8));
         let mut core = "é";
         for i in 0..rand_between(seed, 0, 20) {
             core = core.concat(alphabet[rand_between(next_seed(seed + i), 0, alphabet.len() - 1)]);
@@ -2117,7 +3133,9 @@ pub let test_string_repeat_laws (): Unit = {
         let m = rand_between(seed, 0, 7);
         let repeated = text.repeat(n);
         let mut expected = "";
-        for j in 0..n { expected = expected.concat(text); };
+        for j in 0..n {
+            expected = expected.concat(text);
+        };
         assert_eq(repeated, expected);
         assert_eq(repeated.len(), text.len() * n);
         assert_eq(text.repeat(n + m), repeated.concat(text.repeat(m)));
@@ -2137,8 +3155,10 @@ pub let test_int_scan_spelling (): Unit = {
         let spelling = value.to_string();
         seed = next_seed(seed);
         let zeros = "0".repeat(rand_between(seed, 0, 80));
-        let padded = if value < 0 { "-".concat(zeros).concat(String.slice(spelling, 1, spelling.len())) }
-            else { zeros.concat(spelling) };
+        let padded = if value < 0 {
+            "-".concat(zeros).concat(String.slice(spelling, 1, spelling.len()))
+        }
+        else { zeros.concat(spelling) };
         assert_eq(padded.parse_int().unwrap_or(0 - 9223372036854775807 - 1), value);
         seed = next_seed(seed);
         let bad = invalid[rand_between(seed, 0, invalid.len() - 1)];
@@ -2169,7 +3189,9 @@ pub let test_bytes_hex_laws (): Unit = {
         assert_eq(encoded, a.to_hex().concat(b.to_hex()));
         assert_eq(encoded.len(), joined.len() * 2);
         assert_eq(encoded, Encoding.hex_encode(joined));
-        for digit in chars_of(encoded) { assert("0123456789abcdef".contains(digit)); };
+        for digit in chars_of(encoded) {
+            assert("0123456789abcdef".contains(digit));
+        };
         assert_eq(joined.to_array(), a.to_array().concat(b.to_array()));
     };
     assert_eq(Bytes.from_array([0, 128, 255]).to_hex(), "0080ff");
@@ -2190,7 +3212,9 @@ pub let test_string_join_laws (): Unit = {
             seed = next_seed(seed);
             let text = alphabet[rand_between(seed, 0, alphabet.len() - 1)];
             parts = parts.push(text);
-            if i > 0 { expected = expected.concat(sep); };
+            if i > 0 {
+                expected = expected.concat(sep);
+            };
             expected = expected.concat(text);
             sum = sum + text.len();
         };
@@ -2221,7 +3245,8 @@ pub let test_percent_encode_laws (): Unit = {
         let mut expected_length = 0;
         for value in joined.to_array() {
             let plain = (value >= 65 && value <= 90) || (value >= 97 && value <= 122)
-                || (value >= 48 && value <= 57) || value == 45 || value == 46 || value == 95 || value == 126;
+                || (value >= 48 && value <= 57) || value == 45 || value == 46 || value == 95
+                || value == 126;
             expected_length = expected_length + (if plain { 1 } else { 3 });
         };
         assert_eq(encoded.len(), expected_length);
@@ -2253,8 +3278,14 @@ pub let test_base64_encode_laws (): Unit = {
         let right = input.slice(k, n);
         assert_eq(standard, Encoding.base64_encode(left).concat(Encoding.base64_encode(right)));
         assert_eq(url, Encoding.base64_url_encode(left).concat(Encoding.base64_url_encode(right)));
-        match Encoding.base64_decode(standard) { Ok(out) => assert_eq(out.to_array(), input.to_array()), Err(_) => assert(false) };
-        match Encoding.base64_url_decode(url) { Ok(out) => assert_eq(out.to_array(), input.to_array()), Err(_) => assert(false) };
+        match Encoding.base64_decode(standard) {
+            Ok(out) => assert_eq(out.to_array(), input.to_array()),
+            Err(_) => assert(false)
+        };
+        match Encoding.base64_url_decode(url) {
+            Ok(out) => assert_eq(out.to_array(), input.to_array()),
+            Err(_) => assert(false)
+        };
     };
 }
 
@@ -2268,12 +3299,23 @@ pub let test_base64_decode_laws (): Unit = {
         let url = Encoding.base64_url_encode(input);
         let unpadded = standard.replace("=", "");
         for text in [standard, url, unpadded, standard.replace("+", "-").replace("/", "_")] {
-            match Encoding.base64_decode(text) { Ok(out) => assert_eq(out.to_array(), input.to_array()), Err(_) => assert(false) };
-            match Encoding.base64_url_decode(text) { Ok(out) => assert_eq(out.to_array(), input.to_array()), Err(_) => assert(false) };
+            match Encoding.base64_decode(text) {
+                Ok(out) => assert_eq(out.to_array(), input.to_array()),
+                Err(_) => assert(false)
+            };
+            match Encoding.base64_url_decode(text) {
+                Ok(out) => assert_eq(out.to_array(), input.to_array()),
+                Err(_) => assert(false)
+            };
         };
         match Encoding.base64_decode(unpadded.concat("!")) {
             Ok(_) => assert(false),
-            Err(e) => assert_eq(e, "Encoding.base64_decode: invalid character at byte ".concat(unpadded.len().to_string())),
+            Err(e) => assert_eq(
+                e,
+                "Encoding.base64_decode: invalid character at byte ".concat(
+                    unpadded.len().to_string()
+                )
+            ),
         };
     };
     for n in 0..60 {
@@ -2281,7 +3323,12 @@ pub let test_base64_decode_laws (): Unit = {
         for suffix in ["AB!", "AAB!"] {
             match Encoding.base64_decode(prefix.concat(suffix)) {
                 Ok(_) => assert(false),
-                Err(e) => assert_eq(e, "Encoding.base64_decode: invalid character at byte ".concat((prefix.len() + suffix.len() - 1).to_string())),
+                Err(e) => assert_eq(
+                    e,
+                    "Encoding.base64_decode: invalid character at byte ".concat(
+                        (prefix.len() + suffix.len() - 1).to_string()
+                    )
+                ),
             };
         };
     };
@@ -2298,19 +3345,31 @@ pub let test_percent_decode_laws (): Unit = {
         let offset = prefix.len().to_string();
         for suffix in ["%", "%G"] {
             match Encoding.percent_decode(prefix.concat(suffix)) {
-                Err(e) => assert_eq(e, "Encoding.percent_decode: truncated escape at byte ".concat(offset)),
+                Err(e) => assert_eq(
+                    e,
+                    "Encoding.percent_decode: truncated escape at byte ".concat(offset)
+                ),
                 Ok(_) => assert(false),
             };
         };
         for suffix in ["%GG", "%0G%", "%G0%00"] {
             match Encoding.percent_decode(prefix.concat(suffix)) {
-                Err(e) => assert_eq(e, "Encoding.percent_decode: invalid escape at byte ".concat(offset)),
+                Err(e) => assert_eq(
+                    e,
+                    "Encoding.percent_decode: invalid escape at byte ".concat(offset)
+                ),
                 Ok(_) => assert(false),
             };
         };
     };
-    assert_eq(Encoding.percent_decode("a+b%2Bc").unwrap_or(Bytes.empty()).to_array(), "a+b+c".as_bytes().to_array());
-    assert_eq(Encoding.percent_decode("%2520").unwrap_or(Bytes.empty()).to_array(), "%20".as_bytes().to_array());
+    assert_eq(
+        Encoding.percent_decode("a+b%2Bc").unwrap_or(Bytes.empty()).to_array(),
+        "a+b+c".as_bytes().to_array()
+    );
+    assert_eq(
+        Encoding.percent_decode("%2520").unwrap_or(Bytes.empty()).to_array(),
+        "%20".as_bytes().to_array()
+    );
 }
 
 // Hex length is checked before digits; invalid pairs report the first byte of the pair.
@@ -2332,7 +3391,10 @@ pub let test_hex_decode_laws (): Unit = {
         };
         for suffix in ["AG", "G0", "é", "\x000"] {
             match Encoding.hex_decode(prefix.concat(suffix)) {
-                Err(e) => assert_eq(e, "Encoding.hex_decode: not a hex digit at byte ".concat(prefix.len().to_string())),
+                Err(e) => assert_eq(
+                    e,
+                    "Encoding.hex_decode: not a hex digit at byte ".concat(prefix.len().to_string())
+                ),
                 Ok(_) => assert(false),
             };
         };
@@ -2374,7 +3436,10 @@ pub let test_string_replace_laws (): Unit = {
         assert_eq(s.replace("\x00", "\x00\x00"), prefix.concat("é\x00\x00🙂"));
     };
     for n in 0..100 {
-        assert_eq("a".repeat(n).replace("aa", "X"), "X".repeat(n / 2).concat(if n % 2 == 0 { "" } else { "a" }));
+        assert_eq(
+            "a".repeat(n).replace("aa", "X"),
+            "X".repeat(n / 2).concat(if n % 2 == 0 { "" } else { "a" })
+        );
         assert_eq("a".repeat(n).replace("a", "aa"), "a".repeat(n * 2));
         assert_eq("a".repeat(n).replace("a", ""), "");
     };
@@ -2407,7 +3472,8 @@ pub let test_string_reverse_laws (): Unit = {
         assert_eq(reversed, Array.concat_all(Array.reverse(chars_of(s))));
         assert_eq(String.reverse(s.concat("中")), "中".concat(reversed));
     };
-    assert_eq(String.reverse(""), ""); assert_eq(String.reverse("🙂"), "🙂")
+    assert_eq(String.reverse(""), "");
+    assert_eq(String.reverse("🙂"), "🙂")
 }
 
 // Separate models avoid retaining an alias to each consumed loop input.
@@ -2418,7 +3484,10 @@ pub let test_string_reverse_owned_loops (): Unit = {
             let mut text = unit.repeat(count);
             for i in 0..8 {
                 text = String.reverse(text);
-                assert_eq(text, if i % 2 == 0 { reversed.repeat(count) } else { unit.repeat(count) });
+                assert_eq(
+                    text,
+                    if i % 2 == 0 { reversed.repeat(count) } else { unit.repeat(count) }
+                );
             };
         };
     };
@@ -2427,14 +3496,19 @@ pub let test_string_reverse_owned_loops (): Unit = {
 // Every byte widens unsigned and the result has independent Array storage.
 pub let test_bytes_array_conversion (): Unit = {
     let mut values: Array[Int] = [];
-    for i in 0..256 { values = values.push(i); };
+    for i in 0..256 {
+        values = values.push(i);
+    };
     assert_eq(Bytes.from_array(values).to_array(), values);
     for n in 0..128 {
-        let b = "aé\x00🙂".repeat(n).as_bytes(); let a = Bytes.to_array(b);
-        assert_eq(a.len(), b.len()); assert_eq(Bytes.from_array(a) == b, true);
+        let b = "aé\x00🙂".repeat(n).as_bytes();
+        let a = Bytes.to_array(b);
+        assert_eq(a.len(), b.len());
+        assert_eq(Bytes.from_array(a) == b, true);
         if n > 0 {
             let changed = a.set(0, 255).push(7);
-            assert_eq(changed[0], 255); assert_eq(a[0], 97);
+            assert_eq(changed[0], 255);
+            assert_eq(a[0], 97);
             assert_eq(b.at(0).unwrap_or(0), 97);
         };
     };
@@ -2443,21 +3517,37 @@ pub let test_bytes_array_conversion (): Unit = {
 
 // Decode into a negative accumulator so Int::MIN can round-trip in every base.
 let radix_negative_read (s: String) (base: Int): Int = {
-    let negative = s.starts_with("-"); let mut value = 0;
+    let negative = s.starts_with("-");
+    let mut value = 0;
     let units = chars_of(s);
     let first = if negative { 1 } else { 0 };
     for i in first..units.len() {
-        let digit = String.index_of("0123456789abcdefghijklmnopqrstuvwxyz", units[i]).unwrap_or(0 - 1);
+        let digit = String.index_of("0123456789abcdefghijklmnopqrstuvwxyz", units[i])
+            .unwrap_or(0 - 1);
         assert_eq(digit >= 0 && digit < base, true);
         value = value * base - digit;
     };
     if negative { value } else { 0 - value }
 }
+
 pub let test_radix_full_range (): Unit = {
     let min = 0 - 9223372036854775807 - 1;
-    let values = [min, min + 1, 0 - 9223372036854775807, 0 - 256, 0 - 1, 0, 1, 255, 256, 9223372036854775807];
+    let values = [
+        min,
+        min + 1,
+        0 - 9223372036854775807,
+        0 - 256,
+        0 - 1,
+        0,
+        1,
+        255,
+        256,
+        9223372036854775807
+    ];
     for radix in 2..37 {
-        for n in values { assert_eq(radix_negative_read(Int.to_radix(n, radix), radix), n); };
+        for n in values {
+            assert_eq(radix_negative_read(Int.to_radix(n, radix), radix), n);
+        };
     };
     for n in values {
         assert_eq(Int.to_radix(n, min), Int.to_binary(n));
@@ -2475,9 +3565,21 @@ pub let test_padding_placement (): Unit = {
                 let valid = String.char_len(fill) == 1;
                 let padding = if valid { fill.repeat(count) } else { "" };
                 let left = count / 2;
-                let center = if valid { fill.repeat(left).concat(text).concat(fill.repeat(count - left)) } else { text };
-                check_eq("left padding bytes", text, String.pad_left(text, width, fill), padding.concat(text));
-                check_eq("right padding bytes", text, String.pad_right(text, width, fill), text.concat(padding));
+                let center = if valid {
+                    fill.repeat(left).concat(text).concat(fill.repeat(count - left))
+                } else { text };
+                check_eq(
+                    "left padding bytes",
+                    text,
+                    String.pad_left(text, width, fill),
+                    padding.concat(text)
+                );
+                check_eq(
+                    "right padding bytes",
+                    text,
+                    String.pad_right(text, width, fill),
+                    text.concat(padding)
+                );
                 check_eq("center padding bytes", text, String.pad_center(text, width, fill), center);
             };
         };
@@ -2492,7 +3594,12 @@ pub let test_fixed_half_even_range (): Unit = {
         let even = i + if i - (i / 2) * 2 == 0 { 0 } else { 1 };
         let expected = even.to_string();
         check_eq("positive half-even range", i.to_string(), Float.to_fixed(x, 0), expected);
-        check_eq("negative half-even range", i.to_string(), Float.to_fixed(0.0 - x, 0), "-".concat(expected));
+        check_eq(
+            "negative half-even range",
+            i.to_string(),
+            Float.to_fixed(0.0 - x, 0),
+            "-".concat(expected)
+        );
     }
 }
 
@@ -2512,9 +3619,12 @@ pub let test_fixed_width_integer_bits (): Unit = {
             for i in 0..width {
                 let c = bytes.at(i).unwrap_or(0);
                 let digit = if c >= 48 && c <= 57 { c - 48 }
-                    else if c >= 97 && c <= 102 { c - 87 } else { 0 - 1 };
+                else if c >= 97 && c <= 102 { c - 87 } else { 0 - 1 };
                 assert_eq(digit >= 0 && digit < if hex { 16 } else { 2 }, true);
-                decoded = Int.wrapping_add(Int.wrapping_mul(decoded, if hex { 16 } else { 2 }), digit);
+                decoded = Int.wrapping_add(
+                    Int.wrapping_mul(decoded, if hex { 16 } else { 2 }),
+                    digit
+                );
             };
             assert_eq(decoded, n);
         };
@@ -2534,7 +3644,9 @@ pub let test_array_set_persistence (): Unit = {
             let value = rand_between(seed, 0 - 1000, 1000);
             xs = xs.set(at, value);
             let mut rebuilt: Array[Int] = [];
-            for i in 0..model.len() { rebuilt = rebuilt.push(if i == at { value } else { model[i] }); };
+            for i in 0..model.len() {
+                rebuilt = rebuilt.push(if i == at { value } else { model[i] });
+            };
             model = rebuilt;
             assert_eq(xs, model);
             assert_eq(original.to_string(), before);
@@ -2543,7 +3655,9 @@ pub let test_array_set_persistence (): Unit = {
 }
 
 let callback_map (xs: Array[Int]): Array[Int] = Array.map(xs, |v| v + xs[0])
+
 let callback_filter (xs: Array[Int]): Array[Int] = Array.filter(xs, |v| v > xs[0])
+
 pub let test_array_callback_captures (): Unit = {
     let mut seed = 65407;
     for trial in 0..128 {
@@ -2593,8 +3707,12 @@ pub let test_array_slice_ranges (): Unit = {
                 let hi = Int.max(lo, Int.min(xs.len(), end));
                 let ys = Array.slice(xs, start, end);
                 let strings = Array.slice(texts, start, end);
-                assert_eq(ys.len(), hi - lo); assert_eq(strings.len(), hi - lo);
-                for i in 0..ys.len() { assert_eq(ys[i], saved[lo + i]); assert_eq(strings[i], texts[lo + i]); };
+                assert_eq(ys.len(), hi - lo);
+                assert_eq(strings.len(), hi - lo);
+                for i in 0..ys.len() {
+                    assert_eq(ys[i], saved[lo + i]);
+                    assert_eq(strings[i], texts[lo + i]);
+                };
             };
         };
         assert_eq(Array.take(xs, 7), Array.slice(xs, 0, 7));
@@ -2607,34 +3725,54 @@ pub let test_array_slice_ranges (): Unit = {
 pub let test_array_concat_persistence (): Unit = {
     let mut seed = 29761;
     for trial in 0..64 {
-        seed = next_seed(seed); let left = int_array(seed, trial % 33, []);
-        seed = next_seed(seed); let right = int_array(seed, (trial * 7) % 33, []);
+        seed = next_seed(seed);
+        let left = int_array(seed, trial % 33, []);
+        seed = next_seed(seed);
+        let right = int_array(seed, (trial * 7) % 33, []);
         let out = Array.concat(left, right);
         assert_eq(out.len(), left.len() + right.len());
-        for i in 0..out.len() { assert_eq(out[i], if i < left.len() { left[i] } else { right[i - left.len()] }); };
+        for i in 0..out.len() {
+            assert_eq(out[i], if i < left.len() { left[i] } else { right[i - left.len()] });
+        };
         let texts = Array.map(left, |n| (n % 7).to_string().repeat(4));
         let joined = Array.concat(texts, texts);
         assert_eq(joined.len(), 2 * texts.len());
-        for i in 0..joined.len() { assert_eq(joined[i], texts[i % texts.len()]); };
-        assert_eq(Array.take(out, left.len()), left); assert_eq(Array.drop(out, left.len()), right);
+        for i in 0..joined.len() {
+            assert_eq(joined[i], texts[i % texts.len()]);
+        };
+        assert_eq(Array.take(out, left.len()), left);
+        assert_eq(Array.drop(out, left.len()), right);
     };
-    let mut xs: Array[Int] = []; let mut saved: Array[Array[Int]] = [];
-    for i in 0..128 { saved = saved.push(xs); xs = Array.concat(xs, [i]); };
-    for n in 0..128 { assert_eq(saved[n].len(), n); for i in 0..n { assert_eq(saved[n][i], i); }; };
+    let mut xs: Array[Int] = [];
+    let mut saved: Array[Array[Int]] = [];
+    for i in 0..128 {
+        saved = saved.push(xs);
+        xs = Array.concat(xs, [i]);
+    };
+    for n in 0..128 {
+        assert_eq(saved[n].len(), n);
+        for i in 0..n {
+            assert_eq(saved[n][i], i);
+        };
+    };
 }
 
 pub let test_bytes_concat_persistence (): Unit = {
     let mut seed = 41213;
     for trial in 0..64 {
-        seed = next_seed(seed); let left = Bytes.from_array(int_array(seed, trial % 33, []));
-        seed = next_seed(seed); let right = Bytes.from_array(int_array(seed, (trial * 7) % 33, []));
-        let original_left = left.to_array(); let original_right = right.to_array();
+        seed = next_seed(seed);
+        let left = Bytes.from_array(int_array(seed, trial % 33, []));
+        seed = next_seed(seed);
+        let right = Bytes.from_array(int_array(seed, (trial * 7) % 33, []));
+        let original_left = left.to_array();
+        let original_right = right.to_array();
         let out = Bytes.concat(left, right);
         assert_eq(out.len(), left.len() + right.len());
         for i in 0..out.len() {
             assert_eq(out.at(i), if i < left.len() { left.at(i) } else { right.at(i - left.len()) });
         };
-        assert_eq(left.to_array(), original_left); assert_eq(right.to_array(), original_right);
+        assert_eq(left.to_array(), original_left);
+        assert_eq(right.to_array(), original_right);
         assert(Bytes.concat(left, Bytes.empty()) == left);
         assert(Bytes.concat(Bytes.empty(), right) == right);
         assert(Bytes.concat(out, left) == Bytes.concat(left, Bytes.concat(right, left)));
@@ -2645,7 +3783,8 @@ pub let test_bytes_slice_ranges (): Unit = {
     let mut seed = 6037;
     let bounds = [0 - 9223372036854775807 - 1, -1, 0, 1, 7, 32, 9223372036854775807];
     for trial in 0..32 {
-        seed = next_seed(seed); let bytes = Bytes.from_array(int_array(seed, trial, []));
+        seed = next_seed(seed);
+        let bytes = Bytes.from_array(int_array(seed, trial, []));
         let saved = bytes.to_array();
         for start in bounds {
             for end in bounds {
@@ -2653,12 +3792,15 @@ pub let test_bytes_slice_ranges (): Unit = {
                 let hi = Int.max(lo, Int.min(bytes.len(), end));
                 let out = Bytes.slice(bytes, start, end);
                 assert_eq(out.len(), hi - lo);
-                for i in 0..out.len() { assert_eq(out.at(i), Some(saved[lo + i])); };
+                for i in 0..out.len() {
+                    assert_eq(out.at(i), Some(saved[lo + i]));
+                };
             };
         };
         let mut changed = Bytes.slice(bytes, 0, 9223372036854775807);
         changed = changed.concat(Bytes.from_array([0, 255]));
-        assert_eq(changed.len(), bytes.len() + 2); assert_eq(bytes.to_array(), saved);
+        assert_eq(changed.len(), bytes.len() + 2);
+        assert_eq(bytes.to_array(), saved);
     }
 }
 
@@ -2670,7 +3812,7 @@ pub let test_integer_conversion_roundtrips (): Unit = {
         seed = next_seed(seed);
         let mixed = random_bits(seed);
         let value = if i % 2 == 0 { rand_between(seed, -1000, 1000) }
-            else if i % 3 == 0 { 0 - mixed } else { mixed };
+        else if i % 3 == 0 { 0 - mixed } else { mixed };
         let byte_result = U8.try_from(value);
         assert_eq(Result.is_ok(byte_result), value >= 0 && value <= 255);
         match byte_result {
@@ -2685,10 +3827,16 @@ pub let test_integer_conversion_roundtrips (): Unit = {
         };
         let signed_result = I8.try_from(value);
         assert_eq(Result.is_ok(signed_result), value >= -128 && value <= 127);
-        match signed_result { Ok(byte) => assert_eq(Int.from(byte), value), Err(_) => () };
+        match signed_result {
+            Ok(byte) => assert_eq(Int.from(byte), value),
+            Err(_) => ()
+        };
         let unsigned_result = U64.try_from(value);
         assert_eq(Result.is_ok(unsigned_result), value >= 0);
-        match unsigned_result { Ok(word) => assert_eq(Int.try_from(word), Ok(value)), Err(_) => () };
+        match unsigned_result {
+            Ok(word) => assert_eq(Int.try_from(word), Ok(value)),
+            Err(_) => ()
+        };
     };
 }
 
@@ -2697,15 +3845,23 @@ pub let test_array_remove_persistence (): Unit = {
     for trial in 0..64 {
         seed = next_seed(seed);
         let xs = int_array(seed, 1 + trial % 33, []);
-        let index = rand_between(seed, 0, xs.len() - 1); let saved = xs;
+        let index = rand_between(seed, 0, xs.len() - 1);
+        let saved = xs;
         let out = xs.remove(index);
         assert_eq(out.len(), xs.len() - 1);
-        for i in 0..out.len() { assert_eq(out[i], saved[if i < index { i } else { i + 1 }]); };
+        for i in 0..out.len() {
+            assert_eq(out[i], saved[if i < index { i } else { i + 1 }]);
+        };
         assert_eq(xs, saved);
-        let texts = Array.map(xs, |n| n.to_string()); let strings = texts.remove(index);
-        for i in 0..strings.len() { assert_eq(strings[i], texts[if i < index { i } else { i + 1 }]); };
+        let texts = Array.map(xs, |n| n.to_string());
+        let strings = texts.remove(index);
+        for i in 0..strings.len() {
+            assert_eq(strings[i], texts[if i < index { i } else { i + 1 }]);
+        };
         let mut remaining = out;
-        for i in 0..out.len() { remaining = remaining.remove(remaining.len() - 1); };
+        for i in 0..out.len() {
+            remaining = remaining.remove(remaining.len() - 1);
+        };
         assert_eq(remaining, []);
     }
 }
@@ -2714,18 +3870,28 @@ pub let test_ascii_character_storage (): Unit = {
     let mut seed = 913;
     for trial in 0..64 {
         let mut values: Array[Int] = [];
-        for i in 0..trial { seed = next_seed(seed); values = values.push(rand_between(seed, 0, 127)); };
+        for i in 0..trial {
+            seed = next_seed(seed);
+            values = values.push(rand_between(seed, 0, 127));
+        };
         let text = Bytes.from_array(values).as_string().unwrap_or("");
-        let chars = chars_of(text); let split = text.split("");
-        assert_eq(chars.len(), values.len()); assert_eq(split.len(), values.len() + 2);
+        let chars = chars_of(text);
+        let split = text.split("");
+        assert_eq(chars.len(), values.len());
+        assert_eq(split.len(), values.len() + 2);
         for i in 0..chars.len() {
-            assert_eq(chars[i].len(), 1); assert_eq(chars[i].as_bytes().at(0), Some(values[i]));
+            assert_eq(chars[i].len(), 1);
+            assert_eq(chars[i].as_bytes().at(0), Some(values[i]));
             assert_eq(split[i + 1], chars[i]);
             assert_eq(chars_of(chars[i]), [chars[i]]);
         };
-        assert_eq(Array.join(chars, ""), text); assert_eq(Array.join(split, ""), text);
+        assert_eq(Array.join(chars, ""), text);
+        assert_eq(Array.join(split, ""), text);
         let changed = Array.map(chars, |c| c.concat("!"));
-        for i in 0..chars.len() { assert_eq(chars[i].as_bytes().at(0), Some(values[i])); assert_eq(changed[i].len(), 2); };
+        for i in 0..chars.len() {
+            assert_eq(chars[i].as_bytes().at(0), Some(values[i]));
+            assert_eq(changed[i].len(), 2);
+        };
     }
 }
 
@@ -2733,13 +3899,18 @@ pub let test_string_fragment_storage (): Unit = {
     let mut seed = 2207;
     for count in [0, 1, 2, 7, 8, 9, 15, 16, 17, 31, 32, 33, 64] {
         let mut words: Array[String] = [];
-        for i in 0..count { seed = next_seed(seed); words = words.push(seed.to_string().concat("é")); };
+        for i in 0..count {
+            seed = next_seed(seed);
+            words = words.push(seed.to_string().concat("é"));
+        };
         for separator in ["|", "::", "🙂"] {
             let text = Array.join(words, separator);
-            let parts = text.split(separator); let saved = parts;
+            let parts = text.split(separator);
+            let saved = parts;
             assert_eq(parts, if count == 0 { [""] } else { words });
             assert_eq(Array.join(parts, separator), text);
-            let changed = parts.set(0, "changed"); assert_eq(changed[0], "changed");
+            let changed = parts.set(0, "changed");
+            assert_eq(changed[0], "changed");
             assert_eq(parts, saved);
             assert_eq(" \u{2003}".concat(text).concat("\u{2003}\t ").trim(), text);
             assert_eq(" \u{2003}".concat(text).trim_start(), text);
@@ -2751,24 +3922,53 @@ pub let test_string_fragment_storage (): Unit = {
 pub let test_array_literal_reset (): Unit = {
     for count in [0, 1, 2, 7, 8, 9, 32, 64] {
         let seed = count.to_string().repeat(16);
-        let mut values = [seed]; let saved = values;
-        for i in 0..count { values = [i.to_string(), values[0]]; };
+        let mut values = [seed];
+        let saved = values;
+        for i in 0..count {
+            values = [i.to_string(), values[0]];
+        };
         assert_eq(saved, [seed]);
-        if count == 0 { assert_eq(values, [seed]); }
-        else { assert_eq(values, [(count - 1).to_string(), if count == 1 { seed } else { (count - 2).to_string() }]); };
+        if count == 0 {
+            assert_eq(values, [seed]);
+        }
+        else {
+            assert_eq(
+                values,
+                [(count - 1).to_string(), if count == 1 { seed } else { (count - 2).to_string() }]
+            );
+        };
     };
 }
 
 pub let test_empty_array_results (): Unit = {
     for count in [0, 1, 2, 7, 8, 16, 64] {
         let mut source: Array[Int] = [];
-        for i in 0..count { source = source.push(i); };
-        let empty = source.slice(0, 0); let saved = empty; let calls = ref(0);
-        let strings = empty.map(|x| { calls.set(calls.get() + 1); x.to_string() });
-        let filtered = empty.filter(|x| { calls.set(calls.get() + 1); x > 0 });
-        assert_eq(calls.get(), 0); assert_eq(strings, []); assert_eq(filtered, []);
-        assert_eq(strings.push("value"), ["value"]); assert_eq(filtered.push(count), [count]);
-        assert_eq(empty, saved); assert_eq(empty, []); assert_eq(source.len(), count);
+        for i in 0..count {
+            source = source.push(i);
+        };
+        let empty = source.slice(0, 0);
+        let saved = empty;
+        let calls = ref(0);
+        let strings = empty.map(
+            |x| {
+                calls.set(calls.get() + 1);
+                x.to_string()
+            }
+        );
+        let filtered = empty.filter(
+            |x| {
+                calls.set(calls.get() + 1);
+                x > 0
+            }
+        );
+        assert_eq(calls.get(), 0);
+        assert_eq(strings, []);
+        assert_eq(filtered, []);
+        assert_eq(strings.push("value"), ["value"]);
+        assert_eq(filtered.push(count), [count]);
+        assert_eq(empty, saved);
+        assert_eq(empty, []);
+        assert_eq(source.len(), count);
         assert_eq(chars_of(""), []);
     };
 }
@@ -2776,12 +3976,20 @@ pub let test_empty_array_results (): Unit = {
 pub let test_array_push_snapshots (): Unit = {
     for count in [0, 1, 2, 3, 7, 8, 15, 16, 31, 64] {
         for seed in [-4, 0, 29] {
-            let mut values: Array[Int] = []; let mut versions: Array[Array[Int]] = [];
-            for i in 0..count { versions = versions.push(values); values = values.push(seed + i); };
-            assert_eq(values.len(), count); assert_eq(versions.len(), count);
+            let mut values: Array[Int] = [];
+            let mut versions: Array[Array[Int]] = [];
             for i in 0..count {
-                assert_eq(values[i], seed + i); assert_eq(versions[i].len(), i);
-                for j in 0..i { assert_eq(versions[i][j], seed + j); };
+                versions = versions.push(values);
+                values = values.push(seed + i);
+            };
+            assert_eq(values.len(), count);
+            assert_eq(versions.len(), count);
+            for i in 0..count {
+                assert_eq(values[i], seed + i);
+                assert_eq(versions[i].len(), i);
+                for j in 0..i {
+                    assert_eq(versions[i][j], seed + j);
+                };
             };
         };
     };
@@ -2791,37 +3999,54 @@ pub let test_array_map_string_growth (): Unit = {
     for count in [0, 1, 2, 7, 16] {
         for rounds in [0, 1, 2, 17, 64] {
             let mut values: Array[String] = [];
-            for i in 0..count { values = values.push(i.to_string().repeat(8)); };
+            for i in 0..count {
+                values = values.push(i.to_string().repeat(8));
+            };
             let saved = values;
-            for round in 0..rounds { values = values.map(|s| s.concat("!")); };
-            assert_eq(values.len(), count); assert_eq(saved.len(), count);
+            for round in 0..rounds {
+                values = values.map(|s| s.concat("!"));
+            };
+            assert_eq(values.len(), count);
+            assert_eq(saved.len(), count);
             for i in 0..count {
                 let original = i.to_string().repeat(8);
                 assert_eq(saved[i], original);
                 assert_eq(values[i], original.concat("!".repeat(rounds)));
             };
             let sizes = values.map(|s| s.len());
-            for i in 0..count { assert_eq(sizes[i], i.to_string().len() * 8 + rounds); };
+            for i in 0..count {
+                assert_eq(sizes[i], i.to_string().len() * 8 + rounds);
+            };
         };
     };
 }
 
 let map_words (count: Int): Array[String] = {
     let mut values: Array[String] = [];
-    for i in 0..count { values = values.push(i.to_string().repeat(8)); };
+    for i in 0..count {
+        values = values.push(i.to_string().repeat(8));
+    };
     values
 }
+
 pub let test_array_map_owned_sources (): Unit = {
     for count in [0, 1, 2, 7, 16, 31] {
         let out = map_words(count).map(|s| s.concat("!")).map(|s| s.concat("?"));
         assert_eq(out.len(), count);
-        for i in 0..count { assert_eq(out[i], i.to_string().repeat(8).concat("!?")); };
+        for i in 0..count {
+            assert_eq(out[i], i.to_string().repeat(8).concat("!?"));
+        };
         for rounds in [0, 1, 2, 17] {
-            let mut values = map_words(count); let saved = values;
-            for round in 0..rounds { values = values.map(|s| s.concat("!")).map(|s| s.concat("?")); };
-            assert_eq(values.len(), count); assert_eq(saved.len(), count);
+            let mut values = map_words(count);
+            let saved = values;
+            for round in 0..rounds {
+                values = values.map(|s| s.concat("!")).map(|s| s.concat("?"));
+            };
+            assert_eq(values.len(), count);
+            assert_eq(saved.len(), count);
             for i in 0..count {
-                let initial = i.to_string().repeat(8); assert_eq(saved[i], initial);
+                let initial = i.to_string().repeat(8);
+                assert_eq(saved[i], initial);
                 assert_eq(values[i], initial.concat("!?".repeat(rounds)));
             };
         };
@@ -2832,34 +4057,62 @@ pub let test_array_filter_owned_sources (): Unit = {
     for count in [0, 1, 2, 7, 16, 31] {
         for divisor in [1, 2, 3, 5, 16] {
             let calls = ref(0);
-            let out = map_words(count).filter(|s| { calls.set(calls.get() + 1); s.len() % divisor == 0 }).filter(|s| s != "");
+            let out = map_words(count)
+                .filter(
+                    |s| {
+                        calls.set(calls.get() + 1);
+                        s.len() % divisor == 0
+                    }
+                ).filter(|s| s != "");
             let mut model: Array[String] = [];
             for i in 0..count {
-                let s = i.to_string().repeat(8); if s.len() % divisor == 0 { model = model.push(s); };
+                let s = i.to_string().repeat(8);
+                if s.len() % divisor == 0 {
+                    model = model.push(s);
+                };
             };
-            assert_eq(calls.get(), count); assert_eq(out, model);
-            let source = map_words(count); let saved = source;
+            assert_eq(calls.get(), count);
+            assert_eq(out, model);
+            let source = map_words(count);
+            let saved = source;
             let out = { source }.filter(|s| s.concat("!").len() > 0).filter(|s| s != "");
-            assert_eq(out, saved); assert_eq(source, saved);
+            assert_eq(out, saved);
+            assert_eq(source, saved);
         };
     };
 }
 
 pub let test_array_fold_owned_arguments (): Unit = {
     for count in [0, 1, 2, 7, 16, 31] {
-        let out = Array.fold(map_words(count), [], |acc: Array[String], s: String| acc.push(s.concat("!")));
+        let out = Array.fold(
+            map_words(count),
+            [],
+            |acc: Array[String], s: String| acc.push(s.concat("!"))
+        );
         assert_eq(out.len(), count);
         let mut total = 0;
         for i in 0..count {
-            let original = i.to_string().repeat(8); total = total + original.len();
+            let original = i.to_string().repeat(8);
+            total = total + original.len();
             assert_eq(out[i], original.concat("!"));
         };
-        let xs = map_words(count); let saved = xs;
-        assert_eq(Array.fold(xs, 0, |n, s| n + s.len()), total); assert_eq(xs, saved);
-        let out = Array.fold(xs, xs, |acc, s| acc); assert_eq(out, saved);
+        let xs = map_words(count);
+        let saved = xs;
+        assert_eq(Array.fold(xs, 0, |n, s| n + s.len()), total);
+        assert_eq(xs, saved);
+        let out = Array.fold(xs, xs, |acc, s| acc);
+        assert_eq(out, saved);
         let published = ref(map_words(0));
-        let size = Array.fold(xs, { published.set(xs); 0 }, |n, s| n + s.len());
-        assert_eq(size, total); assert_eq(published.get(), saved);
+        let size = Array.fold(
+            xs,
+            {
+                published.set(xs);
+                0
+            },
+            |n, s| n + s.len()
+        );
+        assert_eq(size, total);
+        assert_eq(published.get(), saved);
     };
 }
 
@@ -2875,38 +4128,65 @@ pub let test_parameter_owned_forwarding (): Unit = {
         let source = "aé中🙂\x00é".repeat(count);
         let model = Array.concat_all(Array.reverse(chars_of(source)));
         assert_eq(forward("aé中🙂\x00é".repeat(count)), model);
-        assert_eq(forward(source), model); assert_eq(identity(source), source);
-        assert_eq(nest(Some(source)), Some(Some(source))); assert_eq(array(source), [source]);
+        assert_eq(forward(source), model);
+        assert_eq(identity(source), source);
+        assert_eq(nest(Some(source)), Some(Some(source)));
+        assert_eq(array(source), [source]);
         assert_eq(twice(source), model.concat(source));
-        let saved = capture(source); assert_eq(saved(), source); assert_eq(saved(), source);
+        let saved = capture(source);
+        assert_eq(saved(), source);
+        assert_eq(saved(), source);
     };
 }
 
 pub let test_closure_last_use (): Unit = {
-    let change = |s: String| { assert(s.starts_with("")); String.reverse(s) };
-    let later = |s: String| { let out = String.reverse(s); assert(s.starts_with("")); out };
-    let nest = |s: Option[String]| { assert(Option.is_some(s)); Some(s) };
+    let change = |s: String| {
+        assert(s.starts_with(""));
+        String.reverse(s)
+    };
+    let later = |s: String| {
+        let out = String.reverse(s);
+        assert(s.starts_with(""));
+        out
+    };
+    let nest = |s: Option[String]| {
+        assert(Option.is_some(s));
+        Some(s)
+    };
     for count in [0, 1, 2, 7, 32, 127] {
         let source = "aé中🙂\x00é".repeat(count);
         let model = Array.concat_all(Array.reverse(chars_of(source)));
         assert_eq(change("aé中🙂\x00é".repeat(count)), model);
-        assert_eq(change(source), model); assert_eq(later(source), model);
+        assert_eq(change(source), model);
+        assert_eq(later(source), model);
         assert_eq(nest(Some(source)), Some(Some(source)));
-        let captured = || { assert(source.starts_with("")); String.reverse(source) };
-        assert_eq(captured(), model); assert_eq(captured(), model);
+        let captured = || {
+            assert(source.starts_with(""));
+            String.reverse(source)
+        };
+        assert_eq(captured(), model);
+        assert_eq(captured(), model);
         assert_eq(source, "aé中🙂\x00é".repeat(count));
     };
 }
 
 pub let test_owned_string_transforms (): Unit = {
-    let replace = String.replace; let upper = String.to_upper; let lower = String.to_lower;
+    let replace = String.replace;
+    let upper = String.to_upper;
+    let lower = String.to_lower;
     for count in [0, 1, 2, 7, 32, 127] {
-        let source = "ab\x00🙂".repeat(count); let saved = source;
+        let source = "ab\x00🙂".repeat(count);
+        let saved = source;
         assert_eq(replace(source, "ab", "zy"), "zy\x00🙂".repeat(count));
-        assert_eq(upper(source), "AB\x00🙂".repeat(count)); assert_eq(lower(upper("ab\x00🙂".repeat(count))), saved);
+        assert_eq(upper(source), "AB\x00🙂".repeat(count));
+        assert_eq(lower(upper("ab\x00🙂".repeat(count))), saved);
         assert_eq(source, saved);
         let mut result = "ab\x00🙂".repeat(count);
-        for round in 0..8 { result = if round % 2 == 0 { result.replace("ab", "zy").to_upper() } else { result.to_lower().replace("zy", "ab") }; };
+        for round in 0..8 {
+            result = if round % 2 == 0 { result.replace("ab", "zy").to_upper() } else {
+                result.to_lower().replace("zy", "ab")
+            };
+        };
         assert_eq(result, saved);
     };
 }

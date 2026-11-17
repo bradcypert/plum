@@ -20,15 +20,20 @@ enum Note { Blank, Text(String), Count(Int) }
 let step (v: Note) (n: Int): Note =
     if n <= 0 { v }
     else {
-        step(match v {
-            Blank => Text("a"),
-            Text(s) => if s.len() > 3 { Count(s.len()) } else { Text(s.concat("!")) },
-            Count(k) => Blank,
-        }, n - 1)
+        step(
+            match v {
+                Blank => Text("a"),
+                Text(s) => if s.len() > 3 { Count(s.len()) } else { Text(s.concat("!")) },
+                Count(k) => Blank,
+            },
+            n - 1
+        )
     }
 
-let main (): Unit = println(match step(Blank, 25) {
-    Blank => "blank",
-    Text(s) => s,
-    Count(k) => k.to_string(),
-})
+let main (): Unit = println(
+    match step(Blank, 25) {
+        Blank => "blank",
+        Text(s) => s,
+        Count(k) => k.to_string(),
+    }
+)

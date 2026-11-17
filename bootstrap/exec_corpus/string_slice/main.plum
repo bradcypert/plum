@@ -1,5 +1,7 @@
 let temporary (): String = String.slice("aé中🙂\x00".repeat(64), 1, 4)
-let raw_string (bytes: Array[Int]): String = unsafe { Bytes.from_array(bytes).as_cstr().as_string() }
+
+let raw_string (bytes: Array[Int]): String =
+    unsafe { Bytes.from_array(bytes).as_cstr().as_string() }
 
 let main (): Unit = {
     assert_eq(temporary(), "é中🙂");
@@ -27,14 +29,19 @@ let main (): Unit = {
         let chars = chars_of(text);
         for start in [(-9223372036854775807 - 1), -1, 0, 1, 2, 3, 5, 9223372036854775807] {
             for end in [(-9223372036854775807 - 1), -1, 0, 1, 2, 3, 5, 9223372036854775807] {
-                assert_eq(String.slice(text, start, end), Array.concat_all(Array.slice(chars, start, end)));
+                assert_eq(
+                    String.slice(text, start, end),
+                    Array.concat_all(Array.slice(chars, start, end))
+                );
             };
         };
     };
     // Multi-million-byte scans must use bounded stack space. The
     // retained result is independent storage, not a view of the input.
     let mut long = "é中🙂\x00";
-    for i in 0..18 { long = long.concat(long); };
+    for i in 0..18 {
+        long = long.concat(long);
+    };
     assert_eq(String.slice(long, 1048573, 9223372036854775807), "中🙂\x00");
     assert_eq(String.slice(long, 1048576, 9223372036854775807), "");
     println("slices preserve codepoint bounds, raw bytes, aliases and bounded stack")

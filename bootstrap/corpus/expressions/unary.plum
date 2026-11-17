@@ -1,2 +1,3 @@
 let case (n: Int) (flag: Bool): Bool = !flag
+
 let neg (n: Int): Int = -n

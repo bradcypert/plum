@@ -1,6 +1,7 @@
 // Public ownership paths, including spare capacity retained by later aliases.
 let grow (s: String) (n: Int): String =
     if n <= 0 { s } else { grow(s.concat("aé\x00🙂"), n - 1) }
+
 let aliases (): Unit = unsafe {
     let mut s = grow("", 37);
     let original = s;
@@ -14,6 +15,7 @@ let aliases (): Unit = unsafe {
     assert_eq(s, grow("", 37).concat("suffix"));
     assert_eq(original.len(), 296)
 }
+
 let bytes_alias (): Unit = {
     let mut s = grow("", 37);
     let bytes = s.as_bytes();
@@ -21,6 +23,7 @@ let bytes_alias (): Unit = {
     assert(bytes == grow("", 37).as_bytes());
     assert_eq(s, grow("", 37).concat("suffix"))
 }
+
 let cstr_alias (): Unit = unsafe {
     let mut s = "x".repeat(512);
     let pointer = s.as_cstr();
@@ -28,6 +31,7 @@ let cstr_alias (): Unit = unsafe {
     assert_eq(pointer.as_string(), "x".repeat(512));
     assert_eq(s.len(), 518)
 }
+
 let main (): Unit = {
     let text = grow("", 4096);
     assert_eq(text.len(), 32768);
@@ -37,13 +41,20 @@ let main (): Unit = {
     bytes_alias();
     cstr_alias();
     let mut s = "abc".repeat(17);
-    for i in 0..5 { s = s.concat(s); };
+    for i in 0..5 {
+        s = s.concat(s);
+    };
     assert_eq(s, "abc".repeat(544));
     s = s.concat("");
     assert_eq(s.len(), 1632);
     let mut saved = [];
     let mut prefix = "";
-    for i in 0..64 { prefix = prefix.concat("é"); saved = saved.push(prefix); };
-    for i in 0..64 { assert_eq(saved[i], "é".repeat(i + 1)); };
+    for i in 0..64 {
+        prefix = prefix.concat("é");
+        saved = saved.push(prefix);
+    };
+    for i in 0..64 {
+        assert_eq(saved[i], "é".repeat(i + 1));
+    };
     println("String growth: values, snapshots, UTF-8, NUL and String/Bytes/CStr aliases")
 }

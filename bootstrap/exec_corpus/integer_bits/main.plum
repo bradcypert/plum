@@ -30,9 +30,14 @@ let main (): Unit = {
     assert_eq(Int.to_hex_bits(min), "8000000000000000");
     assert_eq(Int.to_hex_bits(9223372036854775807), "7fffffffffffffff");
     assert_eq(Int.to_hex_bits(0 - 1), "ffffffffffffffff");
-    for n in [min, min + 1, 0 - 1, 0, 1, 9223372036854775807] { worker(n); };
+    for n in [min, min + 1, 0 - 1, 0, 1, 9223372036854775807] {
+        worker(n);
+    };
     let first = spawn { worker(min) };
     let second = spawn { worker(9223372036854775807) };
-    first.join(); second.join();
-    println("Integer bit patterns: fixed width, signed extremes, native bytes, function values and immutable concurrent results")
+    first.join();
+    second.join();
+    println(
+        "Integer bit patterns: fixed width, signed extremes, native bytes, function values and immutable concurrent results"
+    )
 }

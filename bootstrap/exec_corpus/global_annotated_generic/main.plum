@@ -12,16 +12,32 @@
 struct Entry { label: String }
 
 let NOTHING: Option[String] = None
+
 let TABLE: Map[String, String] = Map.new(())
+
 let COUNTS: Ref[Map[String, Int]] = ref(Map.new(()))
+
 let EMPTY: Array[Entry] = []
 
-let looked_up (): String = match Map.get(TABLE, "a") { Some(v) => v, None => "absent" }
+let looked_up (): String = match Map.get(TABLE, "a") {
+    Some(v) => v,
+    None => "absent"
+}
 
 let main (): Unit = {
-    println(match NOTHING { Some(v) => v, None => "none" });
+    println(
+        match NOTHING {
+            Some(v) => v,
+            None => "none"
+        }
+    );
     println(looked_up());
     COUNTS.set(Map.insert(COUNTS.get(), "k", 7));
-    println(match Map.get(COUNTS.get(), "k") { Some(n) => n.to_string(), None => "missing" });
+    println(
+        match Map.get(COUNTS.get(), "k") {
+            Some(n) => n.to_string(),
+            None => "missing"
+        }
+    );
     println(Array.concat(EMPTY, [Entry { label: "e" }])[0].label)
 }

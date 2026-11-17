@@ -2,7 +2,9 @@
 // doubling keeps construction independent of allocator size classes.
 let main (): Unit = {
     let mut text = "aé中🙂\x00";
-    for i in 0..12 { text = text.concat(text); };
+    for i in 0..12 {
+        text = text.concat(text);
+    };
     for i in 0..100 {
         assert_eq(String.slice(text, 0, 2), "aé");
         assert_eq(String.slice(text, 10242, 10245), "中🙂\x00");

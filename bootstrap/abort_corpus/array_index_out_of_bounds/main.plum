@@ -3,6 +3,7 @@
 // division guards were built to match: the same abort path, the same
 // shape of message, the same exit code.
 let five (): Int = 5
+
 let main (): Unit = {
     println("before");
     let a = [1, 2];

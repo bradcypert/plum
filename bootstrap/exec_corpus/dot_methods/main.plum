@@ -12,7 +12,9 @@
 // never applied to the other three. Each line below is one that used to
 // be a type error.
 let double (n: Int): Int = n * 2
+
 let double_str (n: Int): String = n.to_string()
+
 let upper (s: String): String = s.to_upper()
 
 let main (): Unit = {
@@ -39,8 +41,18 @@ let main (): Unit = {
     println(if s.contains(7) { "set-has" } else { "set-hasnt" });
     println(if "abc".contains("b") { "str-has" } else { "str-hasnt" });
     println(if [1, 2].contains(2) { "arr-has" } else { "arr-hasnt" });
-    println(match m.get("a") { Some(v) => v.to_string(), None => "none" });
-    println(match Option.map(Some(2), double) { Some(v) => v.to_string(), None => "none" });
+    println(
+        match m.get("a") {
+            Some(v) => v.to_string(),
+            None => "none"
+        }
+    );
+    println(
+        match Option.map(Some(2), double) {
+            Some(v) => v.to_string(),
+            None => "none"
+        }
+    );
     println(Array.join(Array.map(["p"], upper), ","));
 
     // `set` is shared between `Array.set(i, v)` and `Ref.set(v)`, and
@@ -58,8 +70,18 @@ let main (): Unit = {
     // the one place the UTF-8 promise is established rather than
     // assumed. Both readings, and both outcomes of the fallible one.
     println(unsafe { "cs".as_cstr().as_string() });
-    println(match Bytes.from_string("by").as_string() { Ok(v) => v, Err(e) => e });
-    println(match Bytes.from_array([255]).as_string() { Ok(v) => v, Err(_) => "not-utf8" });
+    println(
+        match Bytes.from_string("by").as_string() {
+            Ok(v) => v,
+            Err(e) => e
+        }
+    );
+    println(
+        match Bytes.from_array([255]).as_string() {
+            Ok(v) => v,
+            Err(_) => "not-utf8"
+        }
+    );
 
     // And the forms that already worked still do.
     println("ab".concat("c"));

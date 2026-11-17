@@ -16,24 +16,53 @@
 //     Pattern matching loads a payload before confirming the tag, so a
 //     `Nothing` sized for `Nothing` would be read past its end when
 //     matched against the arm for `Pair`.
-struct Flags { on: Bool, off: Bool, count: Int, ratio: Float, label: String }
+struct Flags {
+    on: Bool,
+    off: Bool,
+    count: Int,
+    ratio: Float,
+    label: String
+}
+
 struct Nested { flags: Flags, xs: Array[Bool] }
+
 enum Shape { Nothing, One(Int), Pair(Int, Int) }
 
-let describe (s: Shape): Int = match s { Nothing => 0, One(a) => a, Pair(a, b) => a + b }
+let describe (s: Shape): Int = match s {
+    Nothing => 0,
+    One(a) => a,
+    Pair(a, b) => a + b
+}
 
 let main (): Unit = {
-    let f = Flags { on: true, off: false, count: 42, ratio: 0.5, label: "hi" };
-    let n = Nested { flags: Flags { on: false, off: true, count: 7, ratio: 1.5, label: "x" }, xs: [true, false, true] };
-    println(f.on.to_string()
-        .concat(" ").concat(f.off.to_string())
-        .concat(" ").concat(f.count.to_string())
-        .concat(" ").concat(f.ratio.to_string())
-        .concat(" ").concat(f.label)
-        .concat(" | ").concat(n.flags.count.to_string())
-        .concat(" ").concat(n.flags.off.to_string())
-        .concat(" ").concat(n.xs[2].to_string())
-        .concat(" | ").concat(describe(Nothing).to_string())
-        .concat(" ").concat(describe(One(5)).to_string())
-        .concat(" ").concat(describe(Pair(3, 4)).to_string()))
+    let f = Flags {
+        on: true,
+        off: false,
+        count: 42,
+        ratio: 0.5,
+        label: "hi"
+    };
+    let n = Nested {
+        flags: Flags {
+            on: false,
+            off: true,
+            count: 7,
+            ratio: 1.5,
+            label: "x"
+        },
+        xs: [true, false, true]
+    };
+    println(
+        f.on.to_string()
+            .concat(" ").concat(f.off.to_string())
+            .concat(" ").concat(f.count.to_string())
+            .concat(" ").concat(f.ratio.to_string())
+            .concat(" ").concat(f.label)
+            .concat(" | ").concat(n.flags.count.to_string())
+            .concat(" ").concat(n.flags.off.to_string())
+            .concat(" ").concat(n.xs[2].to_string())
+            .concat(" | ").concat(describe(Nothing).to_string())
+            .concat(" ").concat(describe(One(5)).to_string())
+            .concat(" ").concat(describe(Pair(3, 4)).to_string())
+    )
 }

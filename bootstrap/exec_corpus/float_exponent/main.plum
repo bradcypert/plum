@@ -19,7 +19,10 @@
 // notice -- the obvious place to look was already correct.
 
 let show (s: String): String =
-    match String.parse_float(s) { Ok(f) => f.to_string(), Err(e) => "Err: ".concat(e) }
+    match String.parse_float(s) {
+        Ok(f) => f.to_string(),
+        Err(e) => "Err: ".concat(e)
+    }
 
 let main (): Unit = {
     // Literals. An exponent makes a literal a Float with no decimal
@@ -43,14 +46,19 @@ let main (): Unit = {
     println(show("1e+"));
 
     // JSON, which handled exponents throughout.
-    println(match json_parse("{\"a\": 1e3, \"b\": 2.5e-2}") {
-        Ok(v) => stringify_valid(v),
-        Err(e) => "Err: ".concat(e),
-    })
+    println(
+        match json_parse("{\"a\": 1e3, \"b\": 2.5e-2}") {
+            Ok(v) => stringify_valid(v),
+            Err(e) => "Err: ".concat(e),
+        }
+    )
 }
 
 // These fixtures construct finite JSON. Fail loudly if that invariant changes.
 let stringify_valid (value: JsonValue): String = match json_stringify(value) {
     Ok(text) => text,
-    Err(e) => { panic_raw(e); "" },
+    Err(e) => {
+        panic_raw(e);
+        ""
+    },
 }

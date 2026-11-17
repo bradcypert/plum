@@ -4,9 +4,31 @@
 // dead immediately afterwards, so the cell can be recycled rather than
 // reallocated. Two allocations: the first `Entity`, and the string
 // `main` prints. It was 1002 before the last-use pass existed.
-struct Entity { x: Int, y: Int, hp: Int }
+struct Entity {
+    x: Int,
+    y: Int,
+    hp: Int
+}
 
 let step (e: Entity) (n: Int): Entity =
-    if n <= 0 { e } else { step(Entity { x: e.x + 1, y: e.y, hp: e.hp }, n - 1) }
+    if n <= 0 { e } else {
+        step(
+            Entity {
+                x: e.x + 1,
+                y: e.y,
+                hp: e.hp
+            },
+            n - 1
+        )
+    }
 
-let main (): Unit = println(step(Entity { x: 0, y: 0, hp: 100 }, 1000).x.to_string())
+let main (): Unit = println(
+    step(
+        Entity {
+            x: 0,
+            y: 0,
+            hp: 100
+        },
+        1000
+    ).x.to_string()
+)

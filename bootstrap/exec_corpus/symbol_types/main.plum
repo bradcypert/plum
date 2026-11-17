@@ -1,5 +1,7 @@
 struct Box[T] { value: T }
+
 struct Box_Int { value: String }
+
 struct Pair[A, B] { left: A, right: B }
 
 let main (): Unit = {
@@ -18,5 +20,7 @@ let main (): Unit = {
     assert(b == b);
     assert_eq(a.to_string(), "Pair { left: Box { value: 1 }, right: \"two\" }");
     assert_eq(b.to_string(), "Pair { left: 1, right: Box { value: \"two\" } }");
-    println("nominal types and nested generic shapes have distinct equality, hash, render and release helpers")
+    println(
+        "nominal types and nested generic shapes have distinct equality, hash, render and release helpers"
+    )
 }

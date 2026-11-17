@@ -3,5 +3,7 @@
 // makes the `declare` come from exactly one place -- the extern block --
 // so the handle declaration cannot emit a duplicate.
 handle Res { on_drop: my_close }
+
 let my_close (h: Int): Unit = println(h.to_string())
+
 let main (): Unit = println("unreachable")

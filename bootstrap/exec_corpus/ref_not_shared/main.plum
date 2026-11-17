@@ -26,5 +26,7 @@ let fresh_point (): Int = {
 }
 
 let main (): Unit =
-    println(fresh_counter().to_string().concat(fresh_counter().to_string())
-        .concat(" ").concat(fresh_point().to_string()).concat(fresh_point().to_string()))
+    println(
+        fresh_counter().to_string().concat(fresh_counter().to_string())
+            .concat(" ").concat(fresh_point().to_string()).concat(fresh_point().to_string())
+    )

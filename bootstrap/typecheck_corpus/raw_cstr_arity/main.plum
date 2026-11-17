@@ -1,2 +1,3 @@
 let invalid (pointer: RawCStr[Int]): Unit = ()
+
 let main (): Unit = ()

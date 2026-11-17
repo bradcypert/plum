@@ -18,20 +18,25 @@ let IS_WINDOWS: Bool = Os.platform() == "windows"
 /// They are also what to call when you are building a path FOR
 /// another platform rather than for the one you are running on.
 pub let separator_in (windows: Bool): String = if windows { "\\" } else { "/" }
+
 pub let separator (): String = separator_in(IS_WINDOWS)
 
 /// Backslashes become forward slashes on Windows so the rest of this
 /// module has ONE separator to reason about. A no-op elsewhere: a
 /// backslash is a legal character in a Unix filename and must not be
 /// touched there.
-let normalize_in (windows: Bool) (p: String): String = if windows { String.replace(p, "\\", "/") } else { p }
+let normalize_in (windows: Bool) (p: String): String =
+    if windows { String.replace(p, "\\", "/") } else { p }
 
 // All indices below are UTF-8 byte offsets. Separators, dots and drive
 // letters are ASCII, so boundaries found here cannot split a codepoint.
 let byte_at (b: Bytes) (i: Int): Int = Option.unwrap_or(b.at(i), 0)
+
 let alpha (c: Int): Bool = (c >= 65 && c <= 90) || (c >= 97 && c <= 122)
+
 let drive_end (windows: Bool) (b: Bytes): Int =
     if windows && b.len() >= 2 && alpha(byte_at(b, 0)) && byte_at(b, 1) == 58 { 2 } else { 0 }
+
 let has_drive_in (windows: Bool) (p: String): Bool = drive_end(windows, p.as_bytes()) == 2
 
 // Native argv and filesystem paths can carry non-UTF-8 bytes (POSIX
@@ -40,18 +45,30 @@ let has_drive_in (windows: Bool) (p: String): Bool = drive_end(windows, p.as_byt
 // This private runtime retag keeps the slice's explicit length and
 // ownership, including embedded NULs; Bytes.as_string stays validating.
 let str_of_bytes_raw (b: Bytes): String = ""
+
 let text_range (b: Bytes) (start: Int) (end: Int): String =
     str_of_bytes_raw(b.slice(start, end))
 
 // Input is normalized once. The root includes the UNC server/share,
 // but base still names the last component (including a bare share).
-struct Bounds { drive: Int, root: Int, end: Int, base: Int, rooted: Bool, unc: Bool }
+struct Bounds {
+    drive: Int,
+    root: Int,
+    end: Int,
+    base: Int,
+    rooted: Bool,
+    unc: Bool
+}
+
 let segment_end (b: Bytes) (i: Int): Int =
     if i >= b.len() || byte_at(b, i) == 47 { i } else { segment_end(b, i + 1) }
+
 let skip_seps (b: Bytes) (i: Int): Int =
     if i < b.len() && byte_at(b, i) == 47 { skip_seps(b, i + 1) } else { i }
+
 let trim_end (b: Bytes) (i: Int) (floor: Int): Int =
     if i > floor && byte_at(b, i - 1) == 47 { trim_end(b, i - 1, floor) } else { i }
+
 let base_start (b: Bytes) (i: Int) (floor: Int): Int =
     if i <= floor || byte_at(b, i - 1) == 47 { i } else { base_start(b, i - 1, floor) }
 
@@ -65,7 +82,14 @@ let bounds (windows: Bool) (b: Bytes): Bounds = {
         if server_end < b.len() { segment_end(b, skip_seps(b, server_end)) } else { server_end }
     } else { drive + if rooted { 1 } else { 0 } };
     let end = trim_end(b, b.len(), drive);
-    Bounds { drive: drive, root: root, end: end, base: base_start(b, end, drive), rooted: rooted, unc: unc }
+    Bounds {
+        drive: drive,
+        root: root,
+        end: end,
+        base: base_start(b, end, drive),
+        rooted: rooted,
+        unc: unc
+    }
 }
 
 /// Rooted: `/x` anywhere, and on Windows also `C:/x` and a `//server`
@@ -78,6 +102,7 @@ pub let is_absolute_in (windows: Bool) (p: String): Bool = {
     let drive = drive_end(windows, b);
     drive < b.len() && byte_at(b, drive) == 47
 }
+
 pub let is_absolute (p: String): Bool = is_absolute_in(IS_WINDOWS, p)
 
 /// --- clean ---
@@ -91,6 +116,7 @@ pub let is_absolute (p: String): Bool = is_absolute_in(IS_WINDOWS, p)
 // or Array.slice copying a growing prefix. Drain it explicitly at the end
 // so neither scanning nor releasing a deep path grows the machine stack.
 enum Segments { NoSegments, Segment(String, Segments) }
+
 let segment_strings (stack: Segments) (parts: Array[String]): Array[String] = match stack {
     NoSegments => Array.reverse(parts),
     Segment(part, rest) => {
@@ -98,18 +124,21 @@ let segment_strings (stack: Segments) (parts: Array[String]): Array[String] = ma
         segment_strings(rest, parts)
     },
 }
+
 let clean_parts (b: Bytes) (i: Int) (rooted: Bool) (stack: Segments): Array[String] =
     if i >= b.len() { segment_strings(stack, []) }
     else {
         let end = segment_end(b, i);
         let part = text_range(b, i, end);
         if part == "" || part == "." { clean_parts(b, end + 1, rooted, stack) }
-        else if part == ".." { match stack {
-            Segment(top, rest) => if top != ".." { clean_parts(b, end + 1, rooted, rest) }
+        else if part == ".." {
+            match stack {
+                Segment(top, rest) => if top != ".." { clean_parts(b, end + 1, rooted, rest) }
                 else { clean_parts(b, end + 1, rooted, Segment(part, Segment(top, rest))) },
-            NoSegments => if rooted { clean_parts(b, end + 1, rooted, NoSegments) }
+                NoSegments => if rooted { clean_parts(b, end + 1, rooted, NoSegments) }
                 else { clean_parts(b, end + 1, rooted, Segment(part, NoSegments)) },
-        } } else { clean_parts(b, end + 1, rooted, Segment(part, stack)) }
+            }
+        } else { clean_parts(b, end + 1, rooted, Segment(part, stack)) }
     }
 
 /// Removes duplicate separators, `.` segments, and resolvable `..`
@@ -126,7 +155,8 @@ pub let clean_in (windows: Bool) (p: String): String = {
     let joined = Array.join(parts, separator_in(windows));
     let root = if split.unc {
         let names = drop_empty(String.split(text_range(b, 2, split.root), "/"), 0, []);
-        separator_in(windows).concat(separator_in(windows)).concat(Array.join(names, separator_in(windows)))
+        separator_in(windows).concat(separator_in(windows))
+            .concat(Array.join(names, separator_in(windows)))
     } else if split.rooted { drive.concat(separator_in(windows)) } else { drive };
     if String.is_empty(joined) {
         if split.rooted { root } else { drive.concat(".") }
@@ -162,11 +192,17 @@ pub let join_all_in (windows: Bool) (parts: Array[String]): String = {
             // one by adding a separator after a single rooted prefix.
             // A bare drive stays relative unless the next part is rooted.
             let insert = !ends_sep && !(i == 1 && drive_only && start == 0);
-            if insert { chunks = chunks.push("/"); };
+            if insert {
+                chunks = chunks.push("/");
+            };
             if start < b.len() {
-                chunks = chunks.push(if start == 0 { kept[i] } else { text_range(b, start, b.len()) });
+                chunks = chunks.push(
+                    if start == 0 { kept[i] } else { text_range(b, start, b.len()) }
+                );
                 ends_sep = join_sep(windows, byte_at(b, b.len() - 1));
-            } else { ends_sep = ends_sep || insert; };
+            } else {
+                ends_sep = ends_sep || insert;
+            };
         };
         // Assemble once instead of repeatedly copying an accumulating path.
         clean_in(windows, Array.join(chunks, ""))
@@ -174,8 +210,12 @@ pub let join_all_in (windows: Bool) (parts: Array[String]): String = {
 }
 
 let join_sep (windows: Bool) (c: Int): Bool = c == 47 || (windows && c == 92)
+
 let join_skip_seps (windows: Bool) (b: Bytes) (i: Int): Int =
-    if i < b.len() && join_sep(windows, byte_at(b, i)) { join_skip_seps(windows, b, i + 1) } else { i }
+    if i < b.len() && join_sep(windows, byte_at(b, i)) { join_skip_seps(windows, b, i + 1) } else {
+        i
+    }
+
 pub let join_all (parts: Array[String]): String = join_all_in(IS_WINDOWS, parts)
 
 let drop_empty (parts: Array[String]) (i: Int) (acc: Array[String]): Array[String] =
@@ -201,6 +241,7 @@ let drop_empty (parts: Array[String]) (i: Int) (acc: Array[String]): Array[Strin
 /// manifest, producing `/home/x/opt/parsec` and blaming the user's
 /// manifest for a path the compiler had invented.
 pub let join_in (windows: Bool) (a: String) (b: String): String = join_all_in(windows, [a, b])
+
 pub let join (a: String) (b: String): String = join_all([a, b])
 
 // --- Splitting a path apart ---
@@ -269,7 +310,11 @@ pub let dirname (p: String): String = dirname_in(IS_WINDOWS, p)
 let ext_index (name: String): Int = {
     let b = name.as_bytes();
     let mut best = 0 - 1;
-    for i in 0..b.len() { if byte_at(b, i) == 46 { best = i; }; };
+    for i in 0..b.len() {
+        if byte_at(b, i) == 46 {
+            best = i;
+        };
+    };
     if best <= 0 { 0 - 1 } else { best }
 }
 
@@ -286,6 +331,7 @@ pub let extension_in (windows: Bool) (p: String): String = {
     let i = ext_index(name);
     if i < 0 { "" } else { text_range(name.as_bytes(), i + 1, name.len()) }
 }
+
 pub let extension (p: String): String = extension_in(IS_WINDOWS, p)
 
 /// The last component without its extension.
@@ -294,6 +340,7 @@ pub let stem_in (windows: Bool) (p: String): String = {
     let i = ext_index(name);
     if i < 0 { name } else { text_range(name.as_bytes(), 0, i) }
 }
+
 pub let stem (p: String): String = stem_in(IS_WINDOWS, p)
 
 // Validate bytes directly: no split arrays, Unicode decoding, or growing
@@ -305,7 +352,9 @@ let valid_extension_in (windows: Bool) (ext: String): Bool = {
         let mut valid = true;
         for i in 0..b.len() {
             let c = byte_at(b, i);
-            if c == 0 || c == 47 || (windows && (c == 92 || c == 58)) { valid = false; };
+            if c == 0 || c == 47 || (windows && (c == 92 || c == 58)) {
+                valid = false;
+            };
         };
         valid
     }
@@ -319,7 +368,9 @@ let has_filename_in (windows: Bool) (name: String): Bool = {
         let mut found = false;
         for i in 0..b.len() {
             let c = byte_at(b, i);
-            if c != 46 && c != 32 { found = true; };
+            if c != 46 && c != 32 {
+                found = true;
+            };
         };
         found
     } else { name != "" && name != "." && name != ".." }
@@ -349,15 +400,24 @@ pub let try_with_extension_in (windows: Bool) (p: String) (ext: String): Result[
             let dot = ext_index(name);
             let stem = if dot < 0 { name } else { text_range(name.as_bytes(), 0, dot) };
             let base = if String.is_empty(ext) { stem } else { stem.concat(".").concat(ext) };
-            if !has_filename_in(windows, base) { Err("extension removal would produce a parent or current directory") }
-            else { Ok(if dir == "." && !String.starts_with(n, "./") { base } else { join_in(windows, dir, base) }) }
+            if !has_filename_in(windows, base) {
+                Err("extension removal would produce a parent or current directory")
+            }
+            else {
+                Ok(
+                    if dir == "." && !String.starts_with(n, "./") { base } else {
+                        join_in(windows, dir, base)
+                    }
+                )
+            }
         }
     }
 }
 
 /// Host-platform form of `try_with_extension_in`; returns an error for
 /// invalid extensions or paths without a filename.
-pub let try_with_extension (p: String) (ext: String): Result[String, String] = try_with_extension_in(IS_WINDOWS, p, ext)
+pub let try_with_extension (p: String) (ext: String): Result[String, String] =
+    try_with_extension_in(IS_WINDOWS, p, ext)
 
 /// `p` with a different extension, given without a dot. Empty removes it.
 /// Panics on invalid input under `try_with_extension_in`'s rules; use
@@ -365,7 +425,10 @@ pub let try_with_extension (p: String) (ext: String): Result[String, String] = t
 pub let with_extension_in (windows: Bool) (p: String) (ext: String): String =
     match try_with_extension_in(windows, p, ext) {
         Ok(path) => path,
-        Err(e) => { panic_raw(e); "" },
+        Err(e) => {
+            panic_raw(e);
+            ""
+        },
     }
 
 /// Host-platform form of `with_extension_in`, with the same validation

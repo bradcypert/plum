@@ -1,27 +1,47 @@
 let named_shadow (s: String): String = {
-    let s = "a".concat("b"); let t = s.concat("c"); println(s); t
+    let s = "a".concat("b");
+    let t = s.concat("c");
+    println(s);
+    t
 }
+
 let named_guard (s: String): String = match 0 {
     0 if s.concat("x") == "never" => "unreachable",
     _ => s.concat("y"),
 }
+
 let main (): Unit = {
     let shadow = |s: String| {
-        let s = "a".concat("b"); let t = s.concat("c"); println(s); t
+        let s = "a".concat("b");
+        let t = s.concat("c");
+        println(s);
+        t
     };
-    assert_eq(shadow("unused"), "abc"); assert_eq(named_shadow("unused"), "abc");
+    assert_eq(shadow("unused"), "abc");
+    assert_eq(named_shadow("unused"), "abc");
     let nested = |s: String| {
-        let t = { let s = "a".concat("b"); let t = s.concat("c"); assert_eq(s, "ab"); t };
+        let t = {
+            let s = "a".concat("b");
+            let t = s.concat("c");
+            assert_eq(s, "ab");
+            t
+        };
         s.concat(t)
     };
     assert_eq(nested("z"), "zabc");
     let destructure = |s: String| {
         let (s, n) = ("a".concat("b"), 7);
-        let t = s.concat(n.to_string()); assert_eq(s, "ab"); t
+        let t = s.concat(n.to_string());
+        assert_eq(s, "ab");
+        t
     };
     assert_eq(destructure("unused"), "ab7");
     let pattern = |s: String| match Some("a".concat("b")) {
-        Some(s) => { let t = s.concat("c"); assert_eq(s, "ab"); t },
+        Some(s) => {
+            let t = s.concat("c");
+            assert_eq(s, "ab");
+            t
+        },
         None => s.concat("!"),
     };
     assert_eq(pattern("unused"), "abc");
@@ -29,18 +49,22 @@ let main (): Unit = {
         0 if s.concat("x") == "never" => "unreachable",
         _ => s.concat("y"),
     };
-    assert_eq(guarded("ab"), "aby"); assert_eq(guarded("cd"), "cdy");
+    assert_eq(guarded("ab"), "aby");
+    assert_eq(guarded("cd"), "cdy");
     assert_eq(named_guard("ab"), "aby");
     let multiple = |s: String| match 0 {
         0 if s.concat("x") == "never" => "unreachable",
         0 if s.concat("y") == "aby" => s.concat("!"),
         _ => s.concat("z"),
     };
-    assert_eq(multiple("ab"), "ab!"); assert_eq(multiple("cd"), "cdz");
+    assert_eq(multiple("ab"), "ab!");
+    assert_eq(multiple("cd"), "cdz");
     // General owned reads must respect the same binding and guard proofs.
     let shadow_forward = |s: String| {
-        let s = "a".repeat(32).concat("b"); let out = String.reverse(s);
-        assert_eq(s, "a".repeat(32).concat("b")); out
+        let s = "a".repeat(32).concat("b");
+        let out = String.reverse(s);
+        assert_eq(s, "a".repeat(32).concat("b"));
+        out
     };
     assert_eq(shadow_forward("unused"), "b".concat("a".repeat(32)));
     let guarded_forward = |s: String| match 0 {
@@ -48,6 +72,7 @@ let main (): Unit = {
         0 if String.reverse(s) == "ba" => s,
         _ => String.reverse(s),
     };
-    assert_eq(guarded_forward("ab"), "ab"); assert_eq(guarded_forward("cd"), "dc");
+    assert_eq(guarded_forward("ab"), "ab");
+    assert_eq(guarded_forward("cd"), "dc");
     println("Parameter moves preserve shadowed locals and failed guard continuations")
 }

@@ -1,2 +1,3 @@
 let scale (factor: Int) (x: Int): Int = factor * x
+
 let case: Int = scale(2)(21)

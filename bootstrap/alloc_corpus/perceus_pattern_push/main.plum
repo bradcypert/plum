@@ -6,7 +6,9 @@ extern "C" {
     fn guard_close(h: Int);
     fn guard_live() -> Int;
 }
+
 handle Resource { on_drop: guard_close }
+
 let fill (): Unit = {
     let root = unsafe { Resource.from_raw(guard_open()) };
     let mut entries: Array[Resource] = [];
@@ -22,6 +24,7 @@ let fill (): Unit = {
     assert_eq(entries.len(), 1024);
     assert_eq(unsafe { guard_live() }, 1);
 }
+
 let main (): Unit = {
     fill();
     assert_eq(unsafe { guard_live() }, 0);

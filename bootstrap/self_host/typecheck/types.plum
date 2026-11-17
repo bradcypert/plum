@@ -76,9 +76,11 @@ pub enum ITy {
 // --- Substitution ---
 
 struct SubstEntry { id: Int, ty: ITy }
+
 pub struct Subst { pub entries: Array[SubstEntry] }
 
 pub let subst_empty (unit: Unit): Subst = Subst { entries: [] }
+
 pub let subst_single (id: Int) (ty: ITy): Subst = Subst { entries: [SubstEntry { id: id, ty: ty }] }
 
 let subst_lookup (s: Subst) (id: Int): Option[ITy] = subst_lookup_acc(s.entries, id, 0)
@@ -98,7 +100,10 @@ pub let subst_apply (s: Subst) (ty: ITy): ITy =
             Some(replacement) => subst_apply(s, replacement),
             None => ty,
         },
-        ITFunction(params, ret) => ITFunction(Array.map(params, |p| subst_apply(s, p)), subst_apply(s, ret)),
+        ITFunction(params, ret) => ITFunction(
+            Array.map(params, |p| subst_apply(s, p)),
+            subst_apply(s, ret)
+        ),
         ITTuple(elems) => ITTuple(Array.map(elems, |e| subst_apply(s, e))),
         ITRef(inner) => ITRef(subst_apply(s, inner)),
         ITStruct(name, args) => ITStruct(name, Array.map(args, |a| subst_apply(s, a))),
@@ -106,7 +111,8 @@ pub let subst_apply (s: Subst) (ty: ITy): ITy =
         _ => ty,
     }
 
-let entries_have_key (entries: Array[SubstEntry]) (id: Int): Bool = Option.is_some(subst_lookup_acc(entries, id, 0))
+let entries_have_key (entries: Array[SubstEntry]) (id: Int): Bool =
+    Option.is_some(subst_lookup_acc(entries, id, 0))
 
 // `self_s.compose(other)` — equivalent to applying `other` FIRST, then
 // `self_s`. Mirrors `Subst::compose` exactly, INCLUDING the documented
@@ -122,14 +128,29 @@ pub let subst_compose (self_s: Subst) (other: Subst): Subst = {
     Subst { entries: Array.concat(resolved_other, kept_self) }
 }
 
-let compose_resolve_acc (self_s: Subst) (other_entries: Array[SubstEntry]) (i: Int) (acc: Array[SubstEntry]): Array[SubstEntry] =
+let compose_resolve_acc
+    (self_s: Subst)
+    (other_entries: Array[SubstEntry])
+    (i: Int)
+    (acc: Array[SubstEntry]): Array[SubstEntry]
+=
     if i >= other_entries.len() { acc }
     else {
         let k = other_entries[i].id;
         let resolved = subst_apply(self_s, other_entries[i].ty);
-        let is_self_loop = match resolved { ITVar(v) => v == k, _ => false };
+        let is_self_loop = match resolved {
+            ITVar(v) => v == k,
+            _ => false
+        };
         if is_self_loop { compose_resolve_acc(self_s, other_entries, i + 1, acc) }
-        else { compose_resolve_acc(self_s, other_entries, i + 1, acc.push(SubstEntry { id: k, ty: resolved })) }
+        else {
+            compose_resolve_acc(
+                self_s,
+                other_entries,
+                i + 1,
+                acc.push(SubstEntry { id: k, ty: resolved })
+            )
+        }
     }
 
 // --- Unification ---
@@ -154,25 +175,56 @@ pub let unify (a: ITy) (b: ITy): Result[Subst, String] =
 
 let unify_non_var (a: ITy) (b: ITy): Result[Subst, String] =
     match a {
-        ITInt => match b { ITInt => Ok(subst_empty(())), _ => type_mismatch(a, b) },
-        ITInteger(k) => match b { ITInteger(other) => if k == other { Ok(subst_empty(())) } else { type_mismatch(a, b) }, _ => type_mismatch(a, b) },
-        ITFloat => match b { ITFloat => Ok(subst_empty(())), _ => type_mismatch(a, b) },
-        ITBool => match b { ITBool => Ok(subst_empty(())), _ => type_mismatch(a, b) },
-        ITStr => match b { ITStr => Ok(subst_empty(())), _ => type_mismatch(a, b) },
-        ITCStr => match b { ITCStr => Ok(subst_empty(())), _ => type_mismatch(a, b) },
-        ITRawCStr => match b { ITRawCStr => Ok(subst_empty(())), _ => type_mismatch(a, b) },
+        ITInt => match b {
+            ITInt => Ok(subst_empty(())),
+            _ => type_mismatch(a, b)
+        },
+        ITInteger(k) => match b {
+            ITInteger(other) => if k == other { Ok(subst_empty(())) } else { type_mismatch(a, b) },
+            _ => type_mismatch(a, b)
+        },
+        ITFloat => match b {
+            ITFloat => Ok(subst_empty(())),
+            _ => type_mismatch(a, b)
+        },
+        ITBool => match b {
+            ITBool => Ok(subst_empty(())),
+            _ => type_mismatch(a, b)
+        },
+        ITStr => match b {
+            ITStr => Ok(subst_empty(())),
+            _ => type_mismatch(a, b)
+        },
+        ITCStr => match b {
+            ITCStr => Ok(subst_empty(())),
+            _ => type_mismatch(a, b)
+        },
+        ITRawCStr => match b {
+            ITRawCStr => Ok(subst_empty(())),
+            _ => type_mismatch(a, b)
+        },
         // Does NOT unify with `ITStr`, despite the identical runtime
         // cell. That is the entire point of the type: a `Bytes` that
         // silently passed where a `String` was wanted would put the
         // UTF-8 promise back to being trusted rather than checked.
-        ITBytes => match b { ITBytes => Ok(subst_empty(())), _ => type_mismatch(a, b) },
-        ITUnit => match b { ITUnit => Ok(subst_empty(())), _ => type_mismatch(a, b) },
+        ITBytes => match b {
+            ITBytes => Ok(subst_empty(())),
+            _ => type_mismatch(a, b)
+        },
+        ITUnit => match b {
+            ITUnit => Ok(subst_empty(())),
+            _ => type_mismatch(a, b)
+        },
         ITStruct(a_name, a_args) => match b {
-            ITStruct(b_name, b_args) => if a_name == b_name { unify_arg_lists(a_args, b_args) } else { type_mismatch(a, b) },
+            ITStruct(b_name, b_args) => if a_name == b_name { unify_arg_lists(a_args, b_args) } else {
+                type_mismatch(a, b)
+            },
             _ => type_mismatch(a, b),
         },
         ITEnum(a_name, a_args) => match b {
-            ITEnum(b_name, b_args) => if a_name == b_name { unify_arg_lists(a_args, b_args) } else { type_mismatch(a, b) },
+            ITEnum(b_name, b_args) => if a_name == b_name { unify_arg_lists(a_args, b_args) } else {
+                type_mismatch(a, b)
+            },
             _ => type_mismatch(a, b),
         },
         // A generic parameter is RIGID inside its own function's body:
@@ -211,7 +263,9 @@ let unify_non_var (a: ITy) (b: ITy): Result[Subst, String] =
     }
 
 let bind_var (id: Int) (ty: ITy): Result[Subst, String] =
-    if occurs(id, ty) { Err("infinite type: a type variable occurs within its own binding") } else { Ok(subst_single(id, ty)) }
+    if occurs(id, ty) { Err("infinite type: a type variable occurs within its own binding") } else {
+        Ok(subst_single(id, ty))
+    }
 
 // True if type variable `id` appears anywhere inside `ty` — binding a
 // variable to a type containing itself would describe an infinite
@@ -231,9 +285,16 @@ let occurs (id: Int) (ty: ITy): Bool =
 // accumulator — the shared shape `unify_args`/`Tuple`'s own
 // element-wise unify both need in the real compiler.
 let unify_arg_lists (a_list: Array[ITy]) (b_list: Array[ITy]): Result[Subst, String] =
-    if a_list.len() != b_list.len() { Err("argument/arity count mismatch") } else { unify_pairwise(a_list, b_list, 0, subst_empty(())) }
+    if a_list.len() != b_list.len() { Err("argument/arity count mismatch") } else {
+        unify_pairwise(a_list, b_list, 0, subst_empty(()))
+    }
 
-let unify_pairwise (a_list: Array[ITy]) (b_list: Array[ITy]) (i: Int) (acc: Subst): Result[Subst, String] =
+let unify_pairwise
+    (a_list: Array[ITy])
+    (b_list: Array[ITy])
+    (i: Int)
+    (acc: Subst): Result[Subst, String]
+=
     if i >= a_list.len() { Ok(acc) }
     else {
         match unify(subst_apply(acc, a_list[i]), subst_apply(acc, b_list[i])) {
@@ -244,30 +305,49 @@ let unify_pairwise (a_list: Array[ITy]) (b_list: Array[ITy]) (i: Int) (acc: Subs
 
 let unify_fn_types (p1: Array[ITy]) (r1: ITy) (p2: Array[ITy]) (r2: ITy): Result[Subst, String] =
     if p1.len() != p2.len() { Err("function arity mismatch") }
-    else { match unify_pairwise(p1, p2, 0, subst_empty(())) {
-        Err(e) => Err(e),
-        Ok(acc) => match unify(subst_apply(acc, r1), subst_apply(acc, r2)) {
+    else {
+        match unify_pairwise(p1, p2, 0, subst_empty(())) {
             Err(e) => Err(e),
-            Ok(step) => Ok(subst_compose(step, acc)),
-        },
-    } }
+            Ok(acc) => match unify(subst_apply(acc, r1), subst_apply(acc, r2)) {
+                Err(e) => Err(e),
+                Ok(step) => Ok(subst_compose(step, acc)),
+            },
+        }
+    }
 
-let type_mismatch (a: ITy) (b: ITy): Result[Subst, String] = Err(render_ty(a).concat(" != ").concat(render_ty(b)))
+let type_mismatch (a: ITy) (b: ITy): Result[Subst, String] =
+    Err(render_ty(a).concat(" != ").concat(render_ty(b)))
 
 // --- Rendering (for error messages) ---
 
 pub let render_ty (ty: ITy): String =
     match ty {
         ITInteger(k) => integer_name(k),
-        ITInt => "Int", ITFloat => "Float", ITBool => "Bool", ITStr => "String", ITUnit => "Unit", ITCStr => "CStr", ITRawCStr => "RawCStr",
+        ITInt => "Int",
+        ITFloat => "Float",
+        ITBool => "Bool",
+        ITStr => "String",
+        ITUnit => "Unit",
+        ITCStr => "CStr",
+        ITRawCStr => "RawCStr",
         ITBytes => "Bytes",
         ITVar(id) => "T".concat(id.to_string()),
-        ITFunction(params, ret) => "(".concat(join_comma_ty(params)).concat(") -> ").concat(render_ty(ret)),
-        ITStruct(name, args) => if Array.is_empty(args) { name } else { name.concat("[").concat(join_comma_ty(args)).concat("]") },
-        ITEnum(name, args) => if Array.is_empty(args) { name } else { name.concat("[").concat(join_comma_ty(args)).concat("]") },
+        ITFunction(params, ret) => "(".concat(join_comma_ty(params)).concat(") -> ")
+            .concat(render_ty(ret)),
+        ITStruct(name, args) => if Array.is_empty(args) { name } else {
+            name.concat("[").concat(join_comma_ty(args)).concat("]")
+        },
+        ITEnum(name, args) => if Array.is_empty(args) { name } else {
+            name.concat("[").concat(join_comma_ty(args)).concat("]")
+        },
         ITParam(name) => name,
         ITTuple(elems) => "(".concat(join_comma_ty(elems)).concat(")"),
         ITRef(inner) => "Ref[".concat(render_ty(inner)).concat("]"),
     }
 
-let join_comma_ty (tys: Array[ITy]): String = Array.fold(tys, "", |acc, t| if acc == "" { render_ty(t) } else { acc.concat(", ").concat(render_ty(t)) })
+let join_comma_ty (tys: Array[ITy]): String =
+    Array.fold(
+        tys,
+        "",
+        |acc, t| if acc == "" { render_ty(t) } else { acc.concat(", ").concat(render_ty(t)) }
+    )

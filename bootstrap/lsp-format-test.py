@@ -100,6 +100,18 @@ def check(compiler):
         change(uri_a, original)
         formatting(original, {"line": 6, "character": 2},
                    'let text (): String = {\n    "a\n\t\n\n\nb"\n}')
+        # The default editor layout shares statement splitting and width
+        # handling with the CLI; no editor-specific style setting is needed.
+        original = 'let live (): Int = { let a = 1; let b = 2; a + b }'
+        change(uri_a, original)
+        formatting(original, {"line": 0, "character": len(original)},
+                   'let live (): Int = {\n    let a = 1;\n    let b = 2;\n    a + b\n}')
+        values = ['"' + letter * 30 + '"' for letter in 'abc']
+        original = 'let render (): String = render_values(' + ', '.join(values) + ')'
+        change(uri_a, original)
+        formatting(original, {"line": 0, "character": len(original)},
+                   'let render (): String =\n    render_values(\n'
+                   + ',\n'.join('        ' + value for value in values) + '\n    )')
         # Close releases unsaved text: formatting must now use disk.
         notify("didClose", uri_a)
         formatting(disk)

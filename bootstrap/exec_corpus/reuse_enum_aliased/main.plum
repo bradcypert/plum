@@ -8,10 +8,24 @@
 // use-after-free rather than "a b".
 enum Tag { Off, On(String) }
 
-let relabel (t: Tag): Tag = match t { Off => On("b"), On(_) => On("b") }
+let relabel (t: Tag): Tag = match t {
+    Off => On("b"),
+    On(_) => On("b")
+}
 
 let main (): Unit = {
     let a = On("a");
     let b = relabel(a);
-    println(match a { Off => "off", On(s) => s }.concat(" ").concat(match b { Off => "off", On(s) => s }))
+    println(
+        match a {
+            Off => "off",
+            On(s) => s
+        }.concat(" ")
+            .concat(
+                match b {
+                    Off => "off",
+                    On(s) => s
+                }
+            )
+    )
 }

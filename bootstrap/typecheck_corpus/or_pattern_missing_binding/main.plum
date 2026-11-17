@@ -1,2 +1,3 @@
 let f (v: Option[Int]): Int = match v { None | Some(x) => x }
+
 let main (): Unit = ()

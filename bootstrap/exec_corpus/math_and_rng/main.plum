@@ -62,8 +62,17 @@ let main (): Unit = {
     println("deg pi  ".concat(r3(Float.degrees(Float.pi()))));
 
     // --- Identities, which hold to full precision everywhere ---
-    println("sin2+cos2".concat(" ").concat(yes(close(
-        Float.sin(0.7) * Float.sin(0.7) + Float.cos(0.7) * Float.cos(0.7), 1.0))));
+    println(
+        "sin2+cos2".concat(" ")
+            .concat(
+                yes(
+                    close(
+                        Float.sin(0.7) * Float.sin(0.7) + Float.cos(0.7) * Float.cos(0.7),
+                        1.0
+                    )
+                )
+            )
+    );
     println("log undoes exp ".concat(yes(close(Float.log(Float.exp(2.5)), 2.5))));
 
     // --- A seeded generator ---
@@ -71,7 +80,11 @@ let main (): Unit = {
     // Exact numbers, on purpose: same seed, same sequence, everywhere.
     println("seed 42 ".concat(ints(draw(Rng.from_seed(42), 8, []))));
     println("seed 43 ".concat(ints(draw(Rng.from_seed(43), 8, []))));
-    println("replays ".concat(yes(ints(draw(Rng.from_seed(42), 8, [])) == ints(draw(Rng.from_seed(42), 8, [])))));
+    println(
+        "replays ".concat(
+            yes(ints(draw(Rng.from_seed(42), 8, [])) == ints(draw(Rng.from_seed(42), 8, [])))
+        )
+    );
 
     // Seeds that could break a naive folding: zero and negative.
     println("seed 0  ".concat(ints(draw(Rng.from_seed(0), 4, []))));

@@ -1,3 +1,8 @@
 enum Choice { A(Int), B }
-let f (v: Choice): Int = match v { A => 1, B => 2 }
+
+let f (v: Choice): Int = match v {
+    A => 1,
+    B => 2
+}
+
 let main (): Unit = ()

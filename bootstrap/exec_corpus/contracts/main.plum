@@ -9,7 +9,10 @@
 
 struct Account { balance: Int }
 
-let withdraw (account: Account) (amount: Int): Account
+let withdraw
+    (account: Account)
+    (amount: Int)
+    : Account
     require amount > 0 : "withdrawal amount must be positive"
     require amount <= account.balance : "insufficient funds"
     ensure result.balance >= 0

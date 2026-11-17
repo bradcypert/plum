@@ -1,5 +1,8 @@
 let main (): Unit = {
     let mut text = "aé\x00🙂".repeat(1024);
-    for i in 0..512 { text = if i % 2 == 0 { text.to_upper() } else { text.to_lower() }; assert_eq(text.starts_with("A"), i % 2 == 0); };
+    for i in 0..512 {
+        text = if i % 2 == 0 { text.to_upper() } else { text.to_lower() };
+        assert_eq(text.starts_with("A"), i % 2 == 0);
+    };
     assert_eq(text, "aé\x00🙂".repeat(1024));
 }

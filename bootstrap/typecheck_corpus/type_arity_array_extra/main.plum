@@ -1,3 +1,4 @@
 // Reject even when the parameter is unused.
 let unused (value: Array[Int, String]): Unit = ()
+
 let main (): Unit = ()

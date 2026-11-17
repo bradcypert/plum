@@ -1,4 +1,7 @@
 use left;
 use right;
 
-let main (): Unit = { let s = Shade { n: 1 }; println(s.n.to_string()) }
+let main (): Unit = {
+    let s = Shade { n: 1 };
+    println(s.n.to_string())
+}

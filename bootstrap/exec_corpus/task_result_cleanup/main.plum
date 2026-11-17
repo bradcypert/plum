@@ -8,8 +8,14 @@ extern "C" {
     fn result_verify();
     fn result_drop(h: Int);
 }
+
 handle Probe { on_drop: result_drop }
-struct Payload { resource: Probe, text: String, items: Array[String] }
+
+struct Payload {
+    resource: Probe,
+    text: String,
+    items: Array[String]
+}
 
 let produce (): Payload = {
     unsafe { result_gate() };
@@ -19,17 +25,27 @@ let produce (): Payload = {
         items: ["nested".concat(" value")],
     }
 }
+
 let handle_first (): Unit = {
     let task = spawn { produce() };
     ()
 }
+
 let worker_first (): Unit = {
     let task = spawn { produce() };
-    unsafe { result_resume(); result_wait() }
+    unsafe {
+        result_resume();
+        result_wait()
+    }
 }
+
 let main (): Unit = {
     handle_first();
-    unsafe { result_resume(); result_wait(); result_reset() };
+    unsafe {
+        result_resume();
+        result_wait();
+        result_reset()
+    };
     worker_first();
     unsafe { result_verify() };
     println("released both unjoined results")

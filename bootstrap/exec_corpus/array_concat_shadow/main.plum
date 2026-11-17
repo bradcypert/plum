@@ -1,4 +1,5 @@
 use custom;
+
 let main (): Unit = {
     assert_eq(Array.concat([1, 2], [99]), [99]);
     assert_eq(Array.concat(["a"], ["b"]), ["b"]);

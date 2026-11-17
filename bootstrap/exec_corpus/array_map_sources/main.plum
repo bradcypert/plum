@@ -1,78 +1,187 @@
 use Memory;
+
 struct Owner { resource: Resource }
-extern "C" { fn map_source_close(n: Int) -> Unit; fn map_source_total() -> Int; fn map_source_at(i: Int) -> Int; }
+
+extern "C" {
+    fn map_source_close(n: Int) -> Unit; fn map_source_total() -> Int; fn map_source_at(i: Int) -> Int;
+}
+
 handle Resource { on_drop: map_source_close }
+
 let make (n: Int): Resource = unsafe { Resource.from_raw(n) }
+
 let total (): Int = unsafe { map_source_total() }
-let live (): Int = match Memory.snapshot() { Some(s) => s.live_bytes, None => -1 }
+
+let live (): Int = match Memory.snapshot() {
+    Some(s) => s.live_bytes,
+    None => -1
+}
+
 let ints (n: Int): Array[Int] = [n, n + 1]
+
 let texts (): Array[String] = ["a".repeat(32), "b".repeat(32)]
+
 let resources (n: Int): Array[Resource] = [make(n), make(n + 1)]
+
 let owners (n: Int): Array[Owner] = [Owner { resource: make(n) }, Owner { resource: make(n + 1) }]
-let captured (n: Int): () -> Int = { let owner = make(n); || unsafe { owner.raw() } }
+
+let captured (n: Int): () -> Int = {
+    let owner = make(n);
+    || unsafe { owner.raw() }
+}
+
 let functions (): Array[() -> Int] = [captured(4), captured(5)]
+
 let scoped (): Unit = {
     // A temporary source must retain every scoped child through all callbacks.
-    let out = resources(0).map(|r| { assert_eq(total(), 0); unsafe { r.raw() } });
-    assert_eq(out, [0, 1]); assert_eq(total(), 2);
-    let out = owners(2).map(|o| { assert_eq(total(), 2); unsafe { o.resource.raw() } });
-    assert_eq(out, [2, 3]); assert_eq(total(), 4);
-    let out = functions().map(|f| { assert_eq(total(), 4); f() });
-    assert_eq(out, [4, 5]); assert_eq(total(), 6);
-    let out = Array.map(resources(6), {
-        let marker = make(8);
-        |r: Resource| { assert_eq(total(), 6); assert_eq(unsafe { marker.raw() }, 8); unsafe { Resource.raw(r) } }
-    });
-    assert_eq(out, [6, 7]); assert_eq(total(), 9);
+    let out = resources(0)
+        .map(
+            |r| {
+                assert_eq(total(), 0);
+                unsafe { r.raw() }
+            }
+        );
+    assert_eq(out, [0, 1]);
+    assert_eq(total(), 2);
+    let out = owners(2)
+        .map(
+            |o| {
+                assert_eq(total(), 2);
+                unsafe { o.resource.raw() }
+            }
+        );
+    assert_eq(out, [2, 3]);
+    assert_eq(total(), 4);
+    let out = functions()
+        .map(
+            |f| {
+                assert_eq(total(), 4);
+                f()
+            }
+        );
+    assert_eq(out, [4, 5]);
+    assert_eq(total(), 6);
+    let out = Array.map(
+        resources(6),
+        {
+            let marker = make(8);
+            |r: Resource| {
+                assert_eq(total(), 6);
+                assert_eq(unsafe { marker.raw() }, 8);
+                unsafe { Resource.raw(r) }
+            }
+        }
+    );
+    assert_eq(out, [6, 7]);
+    assert_eq(total(), 9);
     // Ordinary input storage may become an Array of scoped result values.
     let out = ints(9).map(|n| make(n));
-    assert_eq(unsafe { out[0].raw() }, 9); assert_eq(unsafe { out[1].raw() }, 10); assert_eq(total(), 9);
+    assert_eq(unsafe { out[0].raw() }, 9);
+    assert_eq(unsafe { out[1].raw() }, 10);
+    assert_eq(total(), 9);
 }
+
 let round (): Unit = {
     // General empty results release temporary capacity; named builders keep it.
     let before = live();
     let empty = "x".repeat(4096).as_bytes().to_array().filter(|x| false).map(|x| x);
-    if before >= 0 { assert_eq(live(), before); }; assert_eq(empty.len(), 0);
+    if before >= 0 {
+        assert_eq(live(), before);
+    };
+    assert_eq(empty.len(), 0);
     let mut reserved: Array[Int] = [];
-    for i in 0..4096 { reserved = reserved.push(i); };
-    reserved = reserved.filter(|x| false); let before = live();
-    reserved = reserved.map(|x| x); if before >= 0 { assert_eq(live(), before); };
-    for i in 0..4096 { reserved = reserved.push(i); };
-    assert_eq(reserved.len(), 4096); assert_eq(reserved[4095], 4095);
+    for i in 0..4096 {
+        reserved = reserved.push(i);
+    };
+    reserved = reserved.filter(|x| false);
+    let before = live();
+    reserved = reserved.map(|x| x);
+    if before >= 0 {
+        assert_eq(live(), before);
+    };
+    for i in 0..4096 {
+        reserved = reserved.push(i);
+    };
+    assert_eq(reserved.len(), 4096);
+    assert_eq(reserved[4095], 4095);
     assert_eq(ints(10).map(|n| n + 1).map(|n| n - 1), [10, 11]);
     let mut xs = texts();
-    for i in 0..128 { xs = xs.map(|s| s.concat("!")).map(|s| s.concat("?")); };
+    for i in 0..128 {
+        xs = xs.map(|s| s.concat("!")).map(|s| s.concat("?"));
+    };
     assert_eq(xs[0], "a".repeat(32).concat("!?".repeat(128)));
     assert_eq(xs[1], "b".repeat(32).concat("!?".repeat(128)));
-    let original = texts(); let saved = ref(original); let events = ref(0);
-    let out = Array.map({ events.set(1); original }, {
-        events.set(events.get() * 10 + 2); saved.set(original);
-        |s| s.concat("!")
-    });
-    assert_eq(events.get(), 12); assert_eq(saved.get(), texts()); assert_eq(original, texts());
+    let original = texts();
+    let saved = ref(original);
+    let events = ref(0);
+    let out = Array.map(
+        {
+            events.set(1);
+            original
+        },
+        {
+            events.set(events.get() * 10 + 2);
+            saved.set(original);
+            |s| s.concat("!")
+        }
+    );
+    assert_eq(events.get(), 12);
+    assert_eq(saved.get(), texts());
+    assert_eq(original, texts());
     assert_eq(out[0], "a".repeat(32).concat("!"));
     let mut source = texts();
-    let out = Array.map({ source }, { source = ["new"]; |s| s.concat("!") });
-    assert_eq(source, ["new"]); assert_eq(out[1], "b".repeat(32).concat("!"));
-    let original = "z".repeat(32); let bytes = original.as_bytes(); let view = original.as_cstr();
+    let out = Array.map(
+        { source },
+        {
+            source = ["new"];
+            |s| s.concat("!")
+        }
+    );
+    assert_eq(source, ["new"]);
+    assert_eq(out[1], "b".repeat(32).concat("!"));
+    let original = "z".repeat(32);
+    let bytes = original.as_bytes();
+    let view = original.as_cstr();
     let out = [original, original].map(|s| s.concat("!")).map(|s| s.concat("?"));
-    assert_eq(out, [original.concat("!?"), original.concat("!?")]); assert_eq(original, "z".repeat(32));
-    assert_eq(bytes.to_hex(), "7a".repeat(32)); assert_eq(unsafe { view.as_string() }, original);
+    assert_eq(out, [original.concat("!?"), original.concat("!?")]);
+    assert_eq(original, "z".repeat(32));
+    assert_eq(bytes.to_hex(), "7a".repeat(32));
+    assert_eq(unsafe { view.as_string() }, original);
     let callbacks = texts().map(|s| { || s });
-    assert_eq(callbacks[0](), "a".repeat(32)); assert_eq(callbacks[0](), "a".repeat(32));
+    assert_eq(callbacks[0](), "a".repeat(32));
+    assert_eq(callbacks[0](), "a".repeat(32));
     let views = texts().map(|s| s.as_cstr());
     assert_eq(unsafe { views[1].as_string() }, "b".repeat(32));
-    let escaped = ref(""); let out = texts().map(|s| { escaped.set(s); s.len() });
-    assert_eq(out, [32, 32]); assert_eq(escaped.get(), "b".repeat(32));
-    let empty: Array[String] = []; assert_eq({ empty }.map(|s| s.concat("!")), []);
-    let shared = texts(); let left = spawn { { shared }.map(|s| s.concat("!")) };
+    let escaped = ref("");
+    let out = texts()
+        .map(
+            |s| {
+                escaped.set(s);
+                s.len()
+            }
+        );
+    assert_eq(out, [32, 32]);
+    assert_eq(escaped.get(), "b".repeat(32));
+    let empty: Array[String] = [];
+    assert_eq({ empty }.map(|s| s.concat("!")), []);
+    let shared = texts();
+    let left = spawn { { shared }.map(|s| s.concat("!")) };
     let right = spawn { { shared }.map(|s| s.concat("?")) };
     assert_eq(left.join()[0], "a".repeat(32).concat("!"));
-    assert_eq(right.join()[1], "b".repeat(32).concat("?")); assert_eq(shared, texts());
+    assert_eq(right.join()[1], "b".repeat(32).concat("?"));
+    assert_eq(shared, texts());
 }
+
 let main (): Unit = {
-    let baseline = live(); round(); scoped();
-    if baseline >= 0 { assert_eq(live(), baseline); };
-    assert_eq(total(), 11); for i in 0..11 { assert_eq(unsafe { map_source_at(i) }, i); };
+    let baseline = live();
+    round();
+    scoped();
+    if baseline >= 0 {
+        assert_eq(live(), baseline);
+    };
+    assert_eq(total(), 11);
+    for i in 0..11 {
+        assert_eq(unsafe { map_source_at(i) }, i);
+    };
     println("Array.map sources: owned temporaries, pipelines, aliases and scoped cleanup")
 }

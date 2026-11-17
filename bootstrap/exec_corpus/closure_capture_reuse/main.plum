@@ -29,10 +29,14 @@
 // covers it with nothing else in the way.
 
 enum Val { VNull, VStr(String) }
+
 struct Entry { key: String, value: Val }
 
 let inner_run (v: Val) (p: String): Result[String, String] =
-    match v { VStr(s) => Ok(s.concat(p)), VNull => Err("null") }
+    match v {
+        VStr(s) => Ok(s.concat(p)),
+        VNull => Err("null")
+    }
 
 let step (entries: Array[Entry]) (p: String): Result[Option[String], String] = {
     let found = entries[0].value;
@@ -41,10 +45,12 @@ let step (entries: Array[Entry]) (p: String): Result[Option[String], String] = {
 
 let go (n: Int): Unit = {
     let es = [Entry { key: "k".concat(n.to_string()), value: VStr("b".concat(n.to_string())) }];
-    println(match step(es, "!") {
-        Err(e) => "ERR ".concat(e),
-        Ok(o) => Option.unwrap_or(o, "<none>"),
-    });
+    println(
+        match step(es, "!") {
+            Err(e) => "ERR ".concat(e),
+            Ok(o) => Option.unwrap_or(o, "<none>"),
+        }
+    );
 }
 
 // The same thing where the binding comes from a match arm rather than a
@@ -57,13 +63,19 @@ let step_arm (entries: Array[Entry]) (p: String): Result[Option[String], String]
 
 let go_arm (n: Int): Unit = {
     let es = [Entry { key: "k".concat(n.to_string()), value: VStr("a".concat(n.to_string())) }];
-    println(match step_arm(es, "?") {
-        Err(e) => "ERR ".concat(e),
-        Ok(o) => Option.unwrap_or(o, "<none>"),
-    });
+    println(
+        match step_arm(es, "?") {
+            Err(e) => "ERR ".concat(e),
+            Ok(o) => Option.unwrap_or(o, "<none>"),
+        }
+    );
 }
 
 let main (): Unit = {
-    go(1); go(2); go(3);
-    go_arm(1); go_arm(2); go_arm(3);
+    go(1);
+    go(2);
+    go(3);
+    go_arm(1);
+    go_arm(2);
+    go_arm(3);
 }

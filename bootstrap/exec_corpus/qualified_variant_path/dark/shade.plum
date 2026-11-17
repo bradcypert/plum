@@ -1,2 +1,3 @@
 pub enum Shade { On, Off }
+
 pub struct Lamp { pub watts: Int }

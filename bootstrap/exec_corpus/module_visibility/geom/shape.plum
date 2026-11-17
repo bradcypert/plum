@@ -9,7 +9,8 @@
 // one has a constructor, which is the point of hiding the field.
 pub struct Circle { pub radius: Float, cached: Float }
 
-pub let circle (radius: Float): Circle = Circle { radius: radius, cached: 3.14159 * radius * radius }
+pub let circle (radius: Float): Circle =
+    Circle { radius: radius, cached: 3.14159 * radius * radius }
 
 pub enum Kind { Round, Pointy }
 
@@ -30,4 +31,7 @@ pub let perimeter (c: Circle): Float = 2.0 * 3.14159 * c.radius
 
 pub let diameter (c: Circle): Float = scratch_of(c).doubled
 
-pub let kind_name (k: Kind): String = match k { Round => "round", Pointy => "pointy" }
+pub let kind_name (k: Kind): String = match k {
+    Round => "round",
+    Pointy => "pointy"
+}

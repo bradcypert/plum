@@ -3,10 +3,23 @@
 /// inherit the parent environment; non-empty entries are `NAME=value`
 /// overlays. `stdin: None` is an empty stdin, not the parent's.
 
-let process_run_ex_raw (program: String) (args_joined: String) (argc: Int) (env_joined: String) (envc: Int) (stdin: String) (stdin_len: Int) (has_stdin: Int): Int = 0
+let process_run_ex_raw
+    (program: String)
+    (args_joined: String)
+    (argc: Int)
+    (env_joined: String)
+    (envc: Int)
+    (stdin: String)
+    (stdin_len: Int)
+    (has_stdin: Int): Int
+= 0
+
 let process_ex_exit_code_raw (handle: Int): Int = 0
+
 let process_ex_stdout_raw (handle: Int): String = ""
+
 let process_ex_stderr_raw (handle: Int): String = ""
+
 let process_ex_free_raw (handle: Int): Bool = false
 
 /// What to run, and how.
@@ -20,7 +33,13 @@ let process_ex_free_raw (handle: Int): Bool = false
 /// from UTF-8 to UTF-16. Invalid UTF-8 or an oversized command line fails
 /// to start. Environment names are case-insensitive on Windows; the last
 /// overlay entry for a name wins.
-pub struct Options { pub program: String, pub args: Array[String], pub env: Array[String], pub stdin: Option[String] }
+pub struct Options {
+    pub program: String,
+    pub args: Array[String],
+    pub env: Array[String],
+    pub stdin: Option[String]
+}
+
 /// What a finished process left behind.
 ///
 /// `exit_code` is the child's own status: a non-zero one is an ordinary
@@ -31,7 +50,11 @@ pub struct Options { pub program: String, pub args: Array[String], pub env: Arra
 /// a result into Plum temporarily retains both native and Plum buffers.
 /// A `Child` retains its native capture until dropped, and each successful
 /// wait or poll copies the output again. There is no configurable output limit.
-pub struct ProcessResult { pub exit_code: Int, pub stdout: String, pub stderr: String }
+pub struct ProcessResult {
+    pub exit_code: Int,
+    pub stdout: String,
+    pub stderr: String
+}
 
 let join_args_acc (args: Array[String]) (i: Int) (acc: String): String =
     if i >= args.len() { acc }
@@ -47,7 +70,16 @@ pub let run (opts: Options): Result[ProcessResult, String] = {
     let stdin_s = Option.unwrap_or(opts.stdin, "");
     let stdin_len = stdin_s.len();
     let has_stdin = if Option.is_some(opts.stdin) { 1 } else { 0 };
-    let handle = process_run_ex_raw(opts.program, joined, opts.args.len(), env_joined, opts.env.len(), stdin_s, stdin_len, has_stdin);
+    let handle = process_run_ex_raw(
+        opts.program,
+        joined,
+        opts.args.len(),
+        env_joined,
+        opts.env.len(),
+        stdin_s,
+        stdin_len,
+        has_stdin
+    );
     if handle < 0 { Err("Process.run: could not start process: ".concat(opts.program)) }
     else {
         let result = result_of(handle);
@@ -76,7 +108,16 @@ pub let run (opts: Options): Result[ProcessResult, String] = {
 // would mean defining what a partial read of a file somebody is still
 // writing means, and nothing needs that yet.
 extern "C" {
-    fn process_spawn(program: CStr, args: CStr, argc: Int, env: CStr, envc: Int, input: CStr, input_len: Int, has_input: Int) -> Int;
+    fn process_spawn(
+        program: CStr,
+        args: CStr,
+        argc: Int,
+        env: CStr,
+        envc: Int,
+        input: CStr,
+        input_len: Int,
+        has_input: Int
+    ) -> Int;
     fn process_capture_status(h: Int) -> Int;
     fn process_poll(h: Int) -> Int;
     fn process_child_wait(h: Int, timeout_nanos: Int) -> Int;
@@ -114,8 +155,16 @@ pub let start (opts: Options): Result[Child, String] = unsafe {
     let argc = opts.args.len();
     let envc = opts.env.len();
     let has_input = if Option.is_some(opts.stdin) { 1 } else { 0 };
-    let h = process_spawn(opts.program.as_cstr(), joined.as_cstr(), argc,
-                          env_joined.as_cstr(), envc, input.as_cstr(), input_len, has_input);
+    let h = process_spawn(
+        opts.program.as_cstr(),
+        joined.as_cstr(),
+        argc,
+        env_joined.as_cstr(),
+        envc,
+        input.as_cstr(),
+        input_len,
+        has_input
+    );
     if h < 0 { Err("Process.start: could not start process: ".concat(opts.program)) }
     else { Ok(Child.from_raw(h)) }
 }
@@ -124,11 +173,15 @@ pub let start (opts: Options): Result[Child, String] = unsafe {
 /// child's status. Readable any number of times; capture errors persist.
 let result_of (h: Int): Result[ProcessResult, String] = unsafe {
     if process_capture_status(h) != 0 { Err("Process: could not read captured output") }
-    else { Ok(ProcessResult {
-        exit_code: process_ex_exit_code_raw(h),
-        stdout: process_ex_stdout_raw(h),
-        stderr: process_ex_stderr_raw(h),
-    }) }
+    else {
+        Ok(
+            ProcessResult {
+                exit_code: process_ex_exit_code_raw(h),
+                stdout: process_ex_stdout_raw(h),
+                stderr: process_ex_stderr_raw(h),
+            }
+        )
+    }
 }
 
 /// The operating system's identifier for the child, for a caller that
@@ -143,7 +196,12 @@ pub let Child.poll (c: Child): Result[Option[ProcessResult], String] = unsafe {
     let r = process_poll(h);
     if r < 0 { Err("Child.poll: not a running child") }
     else if r == 0 { Ok(None) }
-    else { match result_of(h) { Ok(r) => Ok(Some(r)), Err(e) => Err(e) } }
+    else {
+        match result_of(h) {
+            Ok(r) => Ok(Some(r)),
+            Err(e) => Err(e)
+        }
+    }
 }
 
 /// Blocks until the child exits. Calling it on a child that has already
@@ -159,14 +217,20 @@ pub let Child.wait (c: Child): Result[ProcessResult, String] = unsafe {
 /// is still going. It has NOT been signalled, so the caller can wait
 /// again, give up, or `terminate` it. Zero or negative durations only poll;
 /// use `wait` to wait without a timeout.
-pub let Child.wait_timeout (c: Child) (d: Time.Duration): Result[Option[ProcessResult], String] = unsafe {
-    let h = Child.raw(c);
-    let nanos = d.as_nanos();
-    let r = process_child_wait(h, if nanos > 0 { nanos } else { 0 });
-    if r < 0 { Err("Child.wait_timeout: could not wait for child") }
-    else if r == 0 { Ok(None) }
-    else { match result_of(h) { Ok(r) => Ok(Some(r)), Err(e) => Err(e) } }
-}
+pub let Child.wait_timeout (c: Child) (d: Time.Duration): Result[Option[ProcessResult], String] =
+    unsafe {
+        let h = Child.raw(c);
+        let nanos = d.as_nanos();
+        let r = process_child_wait(h, if nanos > 0 { nanos } else { 0 });
+        if r < 0 { Err("Child.wait_timeout: could not wait for child") }
+        else if r == 0 { Ok(None) }
+        else {
+            match result_of(h) {
+                Ok(r) => Ok(Some(r)),
+                Err(e) => Err(e)
+            }
+        }
+    }
 
 /// Asks the child to stop, and returns at once; the child may still be
 /// running when this returns, so a caller that needs it gone should

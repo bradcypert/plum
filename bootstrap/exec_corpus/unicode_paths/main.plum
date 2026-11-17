@@ -3,7 +3,10 @@ use Path;
 
 let must[T] (r: Result[T, String]): T = match r {
     Ok(value) => value,
-    Err(message) => { panic_raw(message); must(r) },
+    Err(message) => {
+        panic_raw(message);
+        must(r)
+    },
 }
 
 let main (): Unit = {

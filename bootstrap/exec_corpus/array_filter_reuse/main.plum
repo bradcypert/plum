@@ -16,7 +16,8 @@ let long_names (xs: Array[String]): Array[String] = Array.filter(xs, |s| s.len()
 // must not be recycled out from under the second read.
 let sum_and_kept (xs: Array[Int]): String = {
     let kept = Array.filter(xs, |x| x > 2);
-    Array.fold(xs, 0, |a, x| a + x).to_string().concat("/").concat(Array.fold(kept, 0, |a, x| a + x).to_string())
+    Array.fold(xs, 0, |a, x| a + x).to_string().concat("/")
+        .concat(Array.fold(kept, 0, |a, x| a + x).to_string())
 }
 
 let main (): Unit = {

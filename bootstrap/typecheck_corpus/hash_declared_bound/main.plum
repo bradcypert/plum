@@ -1,2 +1,3 @@
 let constrained[T: Hash] (x: T): Int = 1
+
 let main (): Unit = println(constrained(|x: Int| x).to_string())

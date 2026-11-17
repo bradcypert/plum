@@ -1,5 +1,7 @@
 use Encoding;
+
 let oracle_at (b: Bytes) (i: Int): Int = b.at(i).unwrap_or(0)
+
 let oracle_hex (c: Int): Int =
     if c >= 48 && c <= 57 { c - 48 }
     else if c >= 97 && c <= 102 { c - 97 + 10 }
@@ -11,11 +13,15 @@ let oracle_scan (b: Bytes) (i: Int) (n: Int) (acc: Array[Int]): Result[Array[Int
     else {
         let c = oracle_at(b, i);
         if c != 37 { oracle_scan(b, i + 1, n, acc.push(c)) }
-        else if i + 2 >= n { Err("Encoding.percent_decode: truncated escape at byte ".concat(i.to_string())) }
+        else if i + 2 >= n {
+            Err("Encoding.percent_decode: truncated escape at byte ".concat(i.to_string()))
+        }
         else {
             let hi = oracle_hex(oracle_at(b, i + 1));
             let lo = oracle_hex(oracle_at(b, i + 2));
-            if hi < 0 || lo < 0 { Err("Encoding.percent_decode: invalid escape at byte ".concat(i.to_string())) }
+            if hi < 0 || lo < 0 {
+                Err("Encoding.percent_decode: invalid escape at byte ".concat(i.to_string()))
+            }
             else { oracle_scan(b, i + 3, n, acc.push(hi * 16 + lo)) }
         }
     }
@@ -24,11 +30,15 @@ let oracle_decode (s: String): Result[Bytes, String] = {
     let b = s.as_bytes();
     Result.map(oracle_scan(b, 0, b.len(), []), |vals| Bytes.from_array(vals))
 }
+
 let describe (r: Result[Bytes, String]): String = match r {
     Ok(b) => "ok:".concat(b.to_hex()),
     Err(e) => "err:".concat(e),
 }
-let compare (text: String): Unit = assert_eq(describe(Encoding.percent_decode(text)), describe(oracle_decode(text)))
+
+let compare (text: String): Unit =
+    assert_eq(describe(Encoding.percent_decode(text)), describe(oracle_decode(text)))
+
 let main (): Unit = {
     let alphabet = ["%", "0", "9", "A", "f", "G", "+", "x", "\x00", "é"];
     let mut count = 1;
@@ -36,7 +46,10 @@ let main (): Unit = {
         for code in 0..count {
             let mut rest = code;
             let mut text = "";
-            for i in 0..length { text = text.concat(alphabet[rest % alphabet.len()]); rest = rest / alphabet.len(); };
+            for i in 0..length {
+                text = text.concat(alphabet[rest % alphabet.len()]);
+                rest = rest / alphabet.len();
+            };
             compare(text);
         };
         count = count * alphabet.len();
@@ -57,7 +70,20 @@ let main (): Unit = {
     };
     assert_eq(Encoding.percent_decode(encoded).unwrap_or(Bytes.empty()).to_array(), values);
     assert(Result.is_err(Encoding.percent_decode("%FF").unwrap_or(Bytes.empty()).as_string()));
-    for text in ["a+b", "%25FF", "%2b%2B", "é%", "é%G", "é%GG", "%00\x00é🙂", "%00%GG%", "%GG%00", "%25%"] { compare(text); };
+    for text in [
+        "a+b",
+        "%25FF",
+        "%2b%2B",
+        "é%",
+        "é%G",
+        "é%GG",
+        "%00\x00é🙂",
+        "%00%GG%",
+        "%GG%00",
+        "%25%"
+    ] {
+        compare(text);
+    };
     for text in ["abc+\x00é🙂", "ab%00%ffé%2B"] {
         let mut input = text;
         let saved = input;
@@ -77,6 +103,11 @@ let main (): Unit = {
     out = out.concat(Bytes.from_array([0]));
     assert_eq(unsafe { view.as_string() }.as_bytes().to_array(), [251, 255]);
     assert_eq(out.to_array(), [251, 255, 0]);
-    assert_eq(Encoding.percent_decode("a%00%FF+".repeat(32768)).unwrap_or(Bytes.empty()).to_hex(), "6100ff2b".repeat(32768));
-    println("Percent decode: exact errors, byte offsets, all triplets, literal plus, binary bytes and immutable aliases")
+    assert_eq(
+        Encoding.percent_decode("a%00%FF+".repeat(32768)).unwrap_or(Bytes.empty()).to_hex(),
+        "6100ff2b".repeat(32768)
+    );
+    println(
+        "Percent decode: exact errors, byte offsets, all triplets, literal plus, binary bytes and immutable aliases"
+    )
 }

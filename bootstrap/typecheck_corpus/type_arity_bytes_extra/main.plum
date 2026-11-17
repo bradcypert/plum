@@ -1,2 +1,3 @@
 let unused (value: Bytes[Int]): Unit = ()
+
 let main (): Unit = ()

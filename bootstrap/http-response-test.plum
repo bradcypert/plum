@@ -1,21 +1,31 @@
 // Appended to std/Http.plum by net-smoke to exercise private framing
 // boundaries alongside public requests, without exporting test helpers.
 let test_int (r: Result[Int, String]): Int = match r {
-    Ok(n) => n, Err(e) => { panic_raw(e); -1 },
+    Ok(n) => n,
+    Err(e) => {
+        panic_raw(e);
+        -1
+    },
 }
+
 let test_write (fd: Int) (s: String): Unit = {
     let n = test_int(Net.write(fd, s));
     if n <= 0 { panic_raw("test peer made no write progress") }
     else if n < s.len() { test_write(fd, String.slice(s, n, String.char_len(s))) }
     else { () }
 }
+
 let test_read_closed (fd: Int) (acc: String): String = {
     let chunk = Net.read(fd, 4096);
     if String.is_empty(chunk) { acc } else { test_read_closed(fd, acc.concat(chunk)) }
 }
+
 let test_response (r: Result[Response, String]) (status: Int) (body: String): Unit = match r {
     Err(e) => panic_raw(e),
-    Ok(resp) => { assert_eq(resp.status, status); assert_eq(resp.body == body.as_bytes(), true) },
+    Ok(resp) => {
+        assert_eq(resp.status, status);
+        assert_eq(resp.body == body.as_bytes(), true)
+    },
 }
 
 // Peer waits for the client to close. Reading a nonexistent body, waiting
@@ -56,7 +66,11 @@ let test_split_heads (): Unit = {
                 assert_eq(head.status, 200);
                 assert_eq(http_find_header(head.headers, "X-Interim"), None);
                 assert_eq(http_find_header(head.headers, "X-Final"), Some("yes"));
-                assert_eq(http_read_body(fd, 0, "GET", head.status, head.headers, head.leftover_body) == Ok("abc".as_bytes()), true)
+                assert_eq(
+                    http_read_body(fd, 0, "GET", head.status, head.headers, head.leftover_body)
+                        == Ok("abc".as_bytes()),
+                    true
+                )
             },
         };
         Net.close(fd);
@@ -87,18 +101,32 @@ let test_expect_continue (): Unit = {
     let listener = test_int(Net.listen_on(18806));
     let peer = spawn {
         let fd = test_int(Net.accept(listener));
-        let result = http_handle_connection(fd, |req| {
-            assert_eq(req.body == "abc".as_bytes(), true);
-            Response { status: 200, headers: [], body: req.body }
-        });
+        let result = http_handle_connection(
+            fd,
+            |req| {
+                assert_eq(req.body == "abc".as_bytes(), true);
+                Response {
+                    status: 200,
+                    headers: [],
+                    body: req.body
+                }
+            }
+        );
         Net.close(fd);
         result
     };
     let fd = test_int(Net.connect_to("127.0.0.1", 18806));
     test_write(fd, "POST / HTTP/1.1\r\nHost:a\r\nContent-Length:3\r\nExpect: 100-CoNtInUe\r\n\r\n");
-    assert_eq(http_recv_headers_acc(fd, 0, Bytes.empty()) == Ok("HTTP/1.1 100 Continue\r\n\r\n".as_bytes()), true);
+    assert_eq(
+        http_recv_headers_acc(fd, 0, Bytes.empty())
+            == Ok("HTTP/1.1 100 Continue\r\n\r\n".as_bytes()),
+        true
+    );
     test_write(fd, "abc");
-    assert_eq(test_read_closed(fd, ""), "HTTP/1.1 200 OK\r\nContent-Length: 3\r\nConnection: close\r\n\r\nabc");
+    assert_eq(
+        test_read_closed(fd, ""),
+        "HTTP/1.1 200 OK\r\nContent-Length: 3\r\nConnection: close\r\n\r\nabc"
+    );
     Net.close(fd);
     assert_eq(peer.join(), Ok(()));
     Net.close(listener)
@@ -108,41 +136,124 @@ let main (): Unit = {
     test_expect_continue();
     // Framing precedence includes malformed/overflowing lengths and an
     // unsupported coding. Nothing may read fd=-1 or return buffered junk.
-    let framing = [Header { name: "Content-Length", value: "99999999999999999999999" }, Header { name: "Transfer-Encoding", value: "chunked" }];
+    let framing = [
+        Header { name: "Content-Length", value: "99999999999999999999999" },
+        Header { name: "Transfer-Encoding", value: "chunked" }
+    ];
     for status in 100..600 {
-        assert_eq(http_read_body(-1, 0, "HEAD", status, framing, "not a body".as_bytes()) == Ok(Bytes.empty()), true);
+        assert_eq(
+            http_read_body(-1, 0, "HEAD", status, framing, "not a body".as_bytes())
+                == Ok(Bytes.empty()),
+            true
+        );
         if status < 200 || status == 204 || status == 304 {
-            assert_eq(http_read_body(-1, 0, "GET", status, framing, "not a body".as_bytes()) == Ok(Bytes.empty()), true)
+            assert_eq(
+                http_read_body(-1, 0, "GET", status, framing, "not a body".as_bytes())
+                    == Ok(Bytes.empty()),
+                true
+            )
         } else { () }
     };
-    assert_eq(http_read_body(-1, 0, "head", 200, [], "case sensitive".as_bytes()) == Err("Net.read_bytes: recv failed"), true);
+    assert_eq(
+        http_read_body(-1, 0, "head", 200, [], "case sensitive".as_bytes())
+            == Err("Net.read_bytes: recv failed"),
+        true
+    );
     for code in ["-1", "+200", "20", "0200", "099", "600", "999", "2x0"] {
-        assert_eq(Result.is_err(http_parse_status_line("HTTP/1.1 ".concat(code).concat(" bad"))), true)
+        assert_eq(
+            Result.is_err(http_parse_status_line("HTTP/1.1 ".concat(code).concat(" bad"))),
+            true
+        )
     };
     assert_eq(http_parse_status_line("HTTP/1.0 599 Unknown"), Ok(599));
     assert_eq(Result.is_err(http_parse_status_line("HTTP/2.0 200 OK")), true);
 
-    for fields in ["", "Content-Length: 999999999999\r\n", "Transfer-Encoding: chunked\r\n", "Content-Length: nonsense\r\nTransfer-Encoding: chunked\r\n"] {
-        test_response(test_client("HEAD", "HTTP/1.1 200 OK\r\n".concat(fields).concat("\r\n"), false), 200, "");
+    for fields in [
+        "",
+        "Content-Length: 999999999999\r\n",
+        "Transfer-Encoding: chunked\r\n",
+        "Content-Length: nonsense\r\nTransfer-Encoding: chunked\r\n"
+    ] {
+        test_response(
+            test_client("HEAD", "HTTP/1.1 200 OK\r\n".concat(fields).concat("\r\n"), false),
+            200,
+            ""
+        );
         for status in [204, 304] {
-            test_response(test_client("GET", "HTTP/1.1 ".concat(status.to_string()).concat(" Empty\r\n").concat(fields).concat("\r\n"), false), status, "")
+            test_response(
+                test_client(
+                    "GET",
+                    "HTTP/1.1 ".concat(status.to_string()).concat(" Empty\r\n").concat(fields)
+                        .concat("\r\n"),
+                    false
+                ),
+                status,
+                ""
+            )
         }
     };
     let interim = "HTTP/1.1 100 Continue\r\nContent-Length: 999999999999\r\n\r\nHTTP/1.1 103 Early Hints\r\n\r\n";
-    test_response(test_client("GET", interim.concat("HTTP/1.1 200 OK\r\nContent-Length: 3\r\n\r\nabc"), false), 200, "abc");
-    test_response(test_client("HEAD", interim.concat("HTTP/1.1 200 OK\r\nContent-Length: 999999999999\r\n\r\n"), false), 200, "");
+    test_response(
+        test_client("GET", interim.concat("HTTP/1.1 200 OK\r\nContent-Length: 3\r\n\r\nabc"), false),
+        200,
+        "abc"
+    );
+    test_response(
+        test_client(
+            "HEAD",
+            interim.concat("HTTP/1.1 200 OK\r\nContent-Length: 999999999999\r\n\r\n"),
+            false
+        ),
+        200,
+        ""
+    );
     test_response(test_client("GET", "HTTP/1.0 200 OK\r\n\r\nclose body", true), 200, "close body");
     assert_eq(Result.is_err(test_client("GET", interim, true)), true);
-    assert_eq(Result.is_err(test_client("GET", interim.concat("HTTP/1.1 200 OK\r\nX:"), true)), true);
-    assert_eq(Result.is_err(test_client("GET", "HTTP/1.1 200 OK\r\nContent-Length: 3\r\n\r\na", true)), true);
+    assert_eq(
+        Result.is_err(test_client("GET", interim.concat("HTTP/1.1 200 OK\r\nX:"), true)),
+        true
+    );
+    assert_eq(
+        Result.is_err(test_client("GET", "HTTP/1.1 200 OK\r\nContent-Length: 3\r\n\r\na", true)),
+        true
+    );
     assert_eq(Result.is_err(test_client("GET", "HTTP/1.1 600 Invalid\r\n\r\n", false)), true);
-    assert_eq(test_client("GET", "HTTP/1.1 101 Switching Protocols\r\nUpgrade: test\r\n\r\n", false) == Err("http client: protocol upgrades are not supported"), true);
-    assert_eq(test_client("CONNECT", "HTTP/1.1 200 OK\r\nContent-Length: 999999999999\r\n\r\n", false) == Err("http client: CONNECT tunnels are not supported"), true);
-    test_response(test_client("CONNECT", "HTTP/1.1 403 Forbidden\r\nContent-Length: 2\r\n\r\nno", false), 403, "no");
-    for fields in ["Content-Length: -1", "Content-Length: 2\r\ncontent-length: 3", "Content-Length: 2\r\nTransfer-Encoding: chunked"] {
-        assert_eq(Result.is_err(test_client("GET", "HTTP/1.1 200 OK\r\n".concat(fields).concat("\r\n\r\n"), false)), true)
+    assert_eq(
+        test_client("GET", "HTTP/1.1 101 Switching Protocols\r\nUpgrade: test\r\n\r\n", false)
+            == Err("http client: protocol upgrades are not supported"),
+        true
+    );
+    assert_eq(
+        test_client("CONNECT", "HTTP/1.1 200 OK\r\nContent-Length: 999999999999\r\n\r\n", false)
+            == Err("http client: CONNECT tunnels are not supported"),
+        true
+    );
+    test_response(
+        test_client("CONNECT", "HTTP/1.1 403 Forbidden\r\nContent-Length: 2\r\n\r\nno", false),
+        403,
+        "no"
+    );
+    for fields in [
+        "Content-Length: -1",
+        "Content-Length: 2\r\ncontent-length: 3",
+        "Content-Length: 2\r\nTransfer-Encoding: chunked"
+    ] {
+        assert_eq(
+            Result.is_err(
+                test_client("GET", "HTTP/1.1 200 OK\r\n".concat(fields).concat("\r\n\r\n"), false)
+            ),
+            true
+        )
     };
-    test_response(test_client("GET", "HTTP/1.1 200 OK\r\nContent-Length: 3,003\r\ncontent-length:3\r\n\r\nabcEXTRA", false), 200, "abc");
+    test_response(
+        test_client(
+            "GET",
+            "HTTP/1.1 200 OK\r\nContent-Length: 3,003\r\ncontent-length:3\r\n\r\nabcEXTRA",
+            false
+        ),
+        200,
+        "abc"
+    );
     test_split_heads();
 
     let hints = String.repeat("HTTP/1.1 103 Early Hints\r\n\r\n", 100);
@@ -150,26 +261,88 @@ let main (): Unit = {
     // Repeat within one process to exercise reclamation across tail calls.
     for i in 0..100 {
         match http_recv_final_head(-1, 0, hints.concat(final_head).as_bytes(), 0) {
-            Ok(head) => assert_eq(head.status, 204), Err(e) => panic_raw(e),
+            Ok(head) => assert_eq(head.status, 204),
+            Err(e) => panic_raw(e),
         }
     };
-    assert_eq(http_recv_final_head(-1, 0, hints.concat("HTTP/1.1 100 Continue\r\n\r\n").concat(final_head).as_bytes(), 0) == Err("http client: too many informational responses"), true);
+    assert_eq(
+        http_recv_final_head(
+            -1,
+            0,
+            hints.concat("HTTP/1.1 100 Continue\r\n\r\n").concat(final_head).as_bytes(),
+            0
+        ) == Err("http client: too many informational responses"),
+        true
+    );
 
     // The writer owns framing even when caller fields use mixed case.
-    let headers = [Header { name: "cOnTeNt-LeNgTh", value: "999" }, Header { name: "Content-Length", value: "1" }, Header { name: "TRANSFER-ENCODING", value: "chunked" }, Header { name: "X-Test", value: "kept" }];
+    let headers = [
+        Header { name: "cOnTeNt-LeNgTh", value: "999" },
+        Header { name: "Content-Length", value: "1" },
+        Header { name: "TRANSFER-ENCODING", value: "chunked" },
+        Header { name: "X-Test", value: "kept" }
+    ];
     let body = "hé";
     for method in ["GET", "HEAD"] {
         let tail = if method == "HEAD" { "" } else { body };
-        test_server(method, Response { status: 200, headers: headers, body: body.as_bytes() }, "HTTP/1.1 200 OK\r\nContent-Length: 3\r\nConnection: close\r\nX-Test: kept\r\n\r\n".concat(tail), true);
+        test_server(
+            method,
+            Response {
+                status: 200,
+                headers: headers,
+                body: body.as_bytes()
+            },
+            "HTTP/1.1 200 OK\r\nContent-Length: 3\r\nConnection: close\r\nX-Test: kept\r\n\r\n".concat(
+                tail
+            ),
+            true
+        );
         for status in [204, 304] {
             let reason = if status == 204 { "No Content" } else { "Unknown" };
-            test_server(method, Response { status: status, headers: headers, body: body.as_bytes() }, "HTTP/1.1 ".concat(status.to_string()).concat(" ").concat(reason).concat("\r\nConnection: close\r\nX-Test: kept\r\n\r\n"), true)
+            test_server(
+                method,
+                Response {
+                    status: status,
+                    headers: headers,
+                    body: body.as_bytes()
+                },
+                "HTTP/1.1 ".concat(status.to_string()).concat(" ").concat(reason)
+                    .concat("\r\nConnection: close\r\nX-Test: kept\r\n\r\n"),
+                true
+            )
         }
     };
     for status in [-1, 20, 99, 100, 101, 103, 199, 600] {
-        test_server("GET", Response { status: status, headers: headers, body: body.as_bytes() }, "", false)
+        test_server(
+            "GET",
+            Response {
+                status: status,
+                headers: headers,
+                body: body.as_bytes()
+            },
+            "",
+            false
+        )
     };
-    test_server("CONNECT", Response { status: 200, headers: [], body: body.as_bytes() }, "", false);
-    test_server("GET", Response { status: 599, headers: [], body: Bytes.empty() }, "HTTP/1.1 599 Unknown\r\nContent-Length: 0\r\nConnection: close\r\n\r\n", true);
+    test_server(
+        "CONNECT",
+        Response {
+            status: 200,
+            headers: [],
+            body: body.as_bytes()
+        },
+        "",
+        false
+    );
+    test_server(
+        "GET",
+        Response {
+            status: 599,
+            headers: [],
+            body: Bytes.empty()
+        },
+        "HTTP/1.1 599 Unknown\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
+        true
+    );
     println("HTTP responses: method/status framing, interim heads and server wire output verified")
 }

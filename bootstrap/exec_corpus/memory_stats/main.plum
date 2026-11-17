@@ -1,8 +1,16 @@
 use Memory;
+
 extern "C" { fn check_memory_registry() -> Int; }
 
-let live_bytes (): Int = match Memory.snapshot() { Some(s) => s.live_bytes, None => -1 }
-let peak_bytes (): Int = match Memory.snapshot() { Some(s) => s.peak_bytes, None => -1 }
+let live_bytes (): Int = match Memory.snapshot() {
+    Some(s) => s.live_bytes,
+    None => -1
+}
+
+let peak_bytes (): Int = match Memory.snapshot() {
+    Some(s) => s.peak_bytes,
+    None => -1
+}
 
 let bounded_work (): Unit = {
     let mut values: Array[String] = [];
@@ -18,7 +26,9 @@ let bounded_work (): Unit = {
     assert_eq(values.len(), 128);
     assert_eq(Map.len(map), 128);
     let mut reused = "";
-    for i in 0..64 { reused = reused.concat("x"); };
+    for i in 0..64 {
+        reused = reused.concat("x");
+    };
     assert_eq(reused.len(), 64)
 }
 
@@ -29,7 +39,10 @@ let main (): Unit = {
     } else {
         let baseline = live_bytes();
         let old_peak = peak_bytes();
-        for i in 0..4 { bounded_work(); assert_eq(live_bytes(), baseline); };
+        for i in 0..4 {
+            bounded_work();
+            assert_eq(live_bytes(), baseline);
+        };
         assert_eq(peak_bytes() >= old_peak, true);
         match Memory.snapshot() {
             None => panic_raw("diagnostics unexpectedly disabled"),
@@ -48,6 +61,8 @@ let main (): Unit = {
             },
         };
         assert_eq(unsafe { check_memory_registry() }, 1);
-        println("memory diagnostics enabled: bounded ownership, reuse, capacity and threaded snapshots pass")
+        println(
+            "memory diagnostics enabled: bounded ownership, reuse, capacity and threaded snapshots pass"
+        )
     }
 }

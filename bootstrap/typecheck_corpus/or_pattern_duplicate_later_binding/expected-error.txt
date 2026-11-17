@@ -1,2 +1,2 @@
 error: or-pattern alternatives must not bind a name more than once
-main.plum:2:39
+main.plum:3:39

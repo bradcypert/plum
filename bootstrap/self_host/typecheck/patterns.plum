@@ -22,10 +22,17 @@ pub struct TFieldPattern { pub name: String, pub pattern: TPattern }
 // catch-all exempts a match, and top-level tags count even with nested
 // payload tests or guards. A struct constructor contributes no enum tag.
 pub let pattern_is_catchall (pattern: TPattern): Bool =
-    match pattern { TPWildcard => true, TPIdent(_, _) => true, _ => false }
+    match pattern {
+        TPWildcard => true,
+        TPIdent(_, _) => true,
+        _ => false
+    }
 
 pub let pattern_is_binding (pattern: TPattern): Bool =
-    match pattern { TPIdent(_, _) => true, _ => false }
+    match pattern {
+        TPIdent(_, _) => true,
+        _ => false
+    }
 
 pub let pattern_tags (pattern: TPattern): Array[String] =
     match pattern {
@@ -54,7 +61,9 @@ let pattern_list_names (ps: Array[TPattern]) (i: Int) (acc: Array[String]): Arra
     if i >= ps.len() { acc } else { pattern_list_names(ps, i + 1, pattern_names(ps[i], acc)) }
 
 let pattern_field_names (fields: Array[TFieldPattern]) (i: Int) (acc: Array[String]): Array[String] =
-    if i >= fields.len() { acc } else { pattern_field_names(fields, i + 1, pattern_names(fields[i].pattern, acc)) }
+    if i >= fields.len() { acc } else {
+        pattern_field_names(fields, i + 1, pattern_names(fields[i].pattern, acc))
+    }
 
 // Whether testing this pattern reads through a scrutinee pointer.
 // Codegen uses this when guarding nested payload tests with a tag test.
@@ -76,17 +85,31 @@ pub let test_pattern_coverage (): Unit = {
     assert(pattern_is_catchall(TPIdent("x", 0)));
     assert(!pattern_is_catchall(TPOr([TPWildcard, TPInt(1)])));
     assert_eq(pattern_tags(TPStruct("Pair", [])), []);
-    assert_eq(pattern_tags(TPOr([TPVariant("Choice", "A", [TPInt(1)]), TPVariant("Choice", "B", [])])), ["A", "B"]);
+    assert_eq(
+        pattern_tags(TPOr([TPVariant("Choice", "A", [TPInt(1)]), TPVariant("Choice", "B", [])])),
+        ["A", "B"]
+    );
     assert_eq(pattern_tags(TPTuple([TPVariant("Choice", "A", [])])), []);
 }
 
 pub let test_pattern_shared_bindings (): Unit = {
-    let pattern = TPOr([
-        TPVariant("Choice", "A", [TPIdent("x", 0), TPIdent("y", 1)]),
-        TPVariant("Choice", "B", [TPIdent("y", 2), TPIdent("x", 3)]),
-    ]);
+    let pattern = TPOr(
+        [
+            TPVariant("Choice", "A", [TPIdent("x", 0), TPIdent("y", 1)]),
+            TPVariant("Choice", "B", [TPIdent("y", 2), TPIdent("x", 3)]),
+        ]
+    );
     assert_eq(pattern_names(pattern, ["outer"]), ["outer", "x", "y"]);
-    assert_eq(pattern_names(TPStruct("Pair", [TFieldPattern { name: "left", pattern: TPTuple([TPIdent("z", 0), TPWildcard]) }]), []), ["z"]);
+    assert_eq(
+        pattern_names(
+            TPStruct(
+                "Pair",
+                [TFieldPattern { name: "left", pattern: TPTuple([TPIdent("z", 0), TPWildcard]) }]
+            ),
+            []
+        ),
+        ["z"]
+    );
 }
 
 pub let test_pattern_payload_safety (): Unit = {

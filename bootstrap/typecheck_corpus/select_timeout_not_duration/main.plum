@@ -6,8 +6,10 @@
 // nanoseconds, and only the author knows which -- so the type asks.
 let main (): Unit = {
     let (tx, rx) = channel[Int]();
-    println(select {
-        n = rx => n.to_string(),
-        200 => "timed out",
-    })
+    println(
+        select {
+            n = rx => n.to_string(),
+            200 => "timed out",
+        }
+    )
 }

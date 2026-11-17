@@ -41,8 +41,17 @@ trap 'rm -rf "$work"' EXIT
 # records fixing IN THE COMPILER: "a hand-maintained second copy of that
 # list... Found when `Encoding` landed and silently did not appear."
 # The harness kept its copy.
-mods="$(grep -oE 'pub let std_module_names \(\): Array\[String\] = \[[^]]*\]' \
-    bootstrap/self_host/parser/parser.plum | grep -oE '"[A-Za-z_]+"' | tr -d '"')"
+# Whitespace and line wrapping are formatter-owned. Read the literal array
+# across lines rather than requiring the declaration to fit on one line.
+mods="$("$PY_BIN" - <<'PY_MODULES'
+from pathlib import Path
+import re
+source = Path("bootstrap/self_host/parser/parser.plum").read_text()
+match = re.search(r"\bpub\s+let\s+std_module_names\b[^=]*=\s*\[([^]]*)\]", source)
+if match:
+    print("\n".join(re.findall(r'"([A-Za-z_]+)"', match.group(1))))
+PY_MODULES
+)"
 if [ -z "$mods" ]; then
     echo "check-doc-names: could not read std_module_names from parser.plum" >&2
     exit 1

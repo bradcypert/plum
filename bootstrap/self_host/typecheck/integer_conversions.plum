@@ -10,28 +10,56 @@ pub let integer_range_fits (source: IntegerKind) (destination: IntegerKind): Boo
 }
 
 let integer_conversion_call (namespace: String) (name: String): Bool =
-    (name == "from" || name == "try_from" || name == "truncating_from") && Option.is_some(integer_named(namespace))
+    (name == "from" || name == "try_from" || name == "truncating_from")
+        && Option.is_some(integer_named(namespace))
 
-let infer_integer_conversion (p2: Program2) (state: FreshState) (env: TyEnv) (acc: Subst) (namespace: String) (namespace_offset: Int) (name: String) (args: Array[parser.PExpr]): InferResult = {
+let infer_integer_conversion
+    (p2: Program2)
+    (state: FreshState)
+    (env: TyEnv)
+    (acc: Subst)
+    (namespace: String)
+    (namespace_offset: Int)
+    (name: String)
+    (args: Array[parser.PExpr]): InferResult
+= {
     require_call_arity("${namespace}.${name}", 1, args.len());
-    let dest_ty = match integer_named(namespace) { Some(t) => t, None => ITUnit };
+    let dest_ty = match integer_named(namespace) {
+        Some(t) => t,
+        None => ITUnit
+    };
     note_at(namespace, namespace_offset, dest_ty, 0 - 1);
-    let destination = match integer_kind(dest_ty) { Some(k) => k, None => IntegerI64 };
+    let destination = match integer_kind(dest_ty) {
+        Some(k) => k,
+        None => IntegerI64
+    };
     let value = infer_expr(p2, state, env, acc, args[0]);
     let source_ty = subst_apply(value.subst, value.ty);
     let source = match integer_kind(source_ty) {
         Some(k) => k,
-        None => { fail_tc("integer conversion requires a known integer source type, found ${render_ty(source_ty)}"); IntegerI64 },
+        None => {
+            fail_tc(
+                "integer conversion requires a known integer source type, found ${render_ty(source_ty)}"
+            );
+            IntegerI64
+        },
     };
     let mode = if name == "try_from" { IntegerConvertChecked }
-        else if name == "truncating_from" { IntegerConvertTruncating }
-        else { IntegerConvertPreserving };
+    else if name == "truncating_from" { IntegerConvertTruncating }
+    else { IntegerConvertPreserving };
     if mode == IntegerConvertPreserving && !integer_range_fits(source, destination) {
-        fail_tc("conversion from ${render_ty(source_ty)} to ${render_ty(dest_ty)} is not range-preserving; use ${namespace}.try_from")
+        fail_tc(
+            "conversion from ${render_ty(source_ty)} to ${render_ty(dest_ty)} is not range-preserving; use ${namespace}.try_from"
+        )
     };
     let result_ty = if mode == IntegerConvertChecked {
-        ITEnum(parser.qualify_type(parser.PRELUDE_MODULE(), "Result"),
-            [dest_ty, ITStruct(parser.qualify_type(parser.PRELUDE_MODULE(), "IntegerConversionError"), [])])
+        ITEnum(
+            parser.qualify_type(parser.PRELUDE_MODULE(), "Result"),
+            [
+                dest_ty,
+                ITStruct(parser.qualify_type(parser.PRELUDE_MODULE(), "IntegerConversionError"), [])
+            ]
+        )
     } else { dest_ty };
     ir_leaf(result_ty, value.subst, value.state, TIntegerConvert(destination, mode, value.texpr))
 }
@@ -41,12 +69,27 @@ let infer_integer_conversion (p2: Program2) (state: FreshState) (env: TyEnv) (ac
 pub let integer_conversion_builtins (): Array[BuiltinFn] = {
     let mut items: Array[BuiltinFn] = [];
     for name in ["Int", "I64", "I8", "I16", "I32", "U8", "U16", "U32", "U64"] {
-        items = items.push(BuiltinFn { name: "${name}.from", detail: "let ${name}.from[S] (value: S): ${name}",
-            doc: "Converts an integer whose entire source type range fits the destination. The source type must be known; signed-to-unsigned conversions require try_from. Evaluates value once. Does not introduce general function overloading or numeric generic constraints." });
-        items = items.push(BuiltinFn { name: "${name}.try_from", detail: "let ${name}.try_from[S] (value: S): Result[${name}, IntegerConversionError]",
-            doc: "Converts an integer when its value fits the destination range. Otherwise returns source and destination IntegerKind tags, without retaining the rejected value or allocating an error message. Evaluates value once. Result and error storage may allocate." });
-        items = items.push(BuiltinFn { name: "${name}.truncating_from", detail: "let ${name}.truncating_from[S] (value: S): ${name}",
-            doc: "Reduces an integer's mathematical value modulo 2^N, where N is the destination width, then interprets those bits using the destination signedness. Signed negative sources sign-extend when widening; unsigned sources zero-extend. Accepts any known integer source type and evaluates it once. Does not allocate conversion storage or check the destination range." });
+        items = items.push(
+            BuiltinFn {
+                name: "${name}.from",
+                detail: "let ${name}.from[S] (value: S): ${name}",
+                doc: "Converts an integer whose entire source type range fits the destination. The source type must be known; signed-to-unsigned conversions require try_from. Evaluates value once. Does not introduce general function overloading or numeric generic constraints."
+            }
+        );
+        items = items.push(
+            BuiltinFn {
+                name: "${name}.try_from",
+                detail: "let ${name}.try_from[S] (value: S): Result[${name}, IntegerConversionError]",
+                doc: "Converts an integer when its value fits the destination range. Otherwise returns source and destination IntegerKind tags, without retaining the rejected value or allocating an error message. Evaluates value once. Result and error storage may allocate."
+            }
+        );
+        items = items.push(
+            BuiltinFn {
+                name: "${name}.truncating_from",
+                detail: "let ${name}.truncating_from[S] (value: S): ${name}",
+                doc: "Reduces an integer's mathematical value modulo 2^N, where N is the destination width, then interprets those bits using the destination signedness. Signed negative sources sign-extend when widening; unsigned sources zero-extend. Accepts any known integer source type and evaluates it once. Does not allocate conversion storage or check the destination range."
+            }
+        );
     };
     items
 }
@@ -54,4 +97,8 @@ pub let integer_conversion_builtins (): Array[BuiltinFn] = {
 pub let integer_conversion_detail (namespace: String) (name: String): Option[String] =
     if !integer_conversion_call(namespace, name) { None }
     else if name != "try_from" { Some("let ${namespace}.${name}[S] (value: S): ${namespace}") }
-    else { Some("let ${namespace}.try_from[S] (value: S): Result[${namespace}, IntegerConversionError]") }
+    else {
+        Some(
+            "let ${namespace}.try_from[S] (value: S): Result[${namespace}, IntegerConversionError]"
+        )
+    }

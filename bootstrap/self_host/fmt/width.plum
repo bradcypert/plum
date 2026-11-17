@@ -1,0 +1,340 @@
+// Width layout uses the lossless delimiter tree. A group either fits on the
+// current line or opens a four-space continuation; trivia never becomes code.
+struct WidthLayout {
+    source: Source,
+    lexed: lexer.LexedSource,
+    closes: Map[Int, Int],
+    headers: Map[Int, Int],
+    newline: String,
+    out: Ref[String],
+    column: Ref[Int],
+    indent: Ref[Int],
+}
+
+let format_width (path: String) (src: String): String = {
+    let lexed = lexer.tokenize_spanned_at(src, path);
+    let source = source_of(src, lexed.starts);
+    let empty: Map[Int, Int] = Map.new(());
+    let closes = matching_groups(lexed, 0, [], empty);
+    let headers: Map[Int, Int] = Map.new(());
+    let x = WidthLayout {
+        source: source,
+        lexed: lexed,
+        closes: closes,
+        headers: signature_breaks(source, lexed, closes, 0, headers),
+        newline: if src.contains("\r\n") { "\r\n" } else { "\n" },
+        out: ref(""),
+        column: ref(0),
+        indent: ref(0)
+    };
+    width_range(x, 0, lexed.tokens.len(), -1, false, 0);
+    x.out.get()
+}
+
+// Only inspect root-level tokens: local lets live inside delimiter groups.
+// This avoids reparsing the program merely to find signature boundaries.
+let signature_breaks
+    (source: Source)
+    (lexed: lexer.LexedSource)
+    (closes: Map[Int, Int])
+    (i: Int)
+    (acc: Map[Int, Int]): Map[Int, Int]
+=
+    if i >= lexed.tokens.len() { acc }
+    else {
+        let next = if lexed.tokens[i] != TokLet { acc }
+        else {
+            let start = if i > 0 && lexed.tokens[i - 1] == TokPub { i - 1 } else { i };
+            let eq = header_equals(lexed, closes, i, source.text.len());
+            if eq < 0 { acc }
+            else if lexed.starts[eq] - lexed.starts[start] > 100 {
+                let params = header_parameters(
+                    lexed,
+                    closes,
+                    signature_params_start(lexed, closes, i + 2),
+                    eq,
+                    -1,
+                    acc
+                );
+                Map.insert(params, eq, 0)
+            } else if eq + 1 < lexed.tokens.len() && lexed.tokens[eq + 1] != TokLBrace
+                && line_start_of(source, lexed.starts[eq])
+                == line_start_of(source, lexed.starts[eq + 1])
+                && line_end_no_nl(source, lexed.starts[eq])
+                - line_start_of(source, lexed.starts[eq]) > 100 {
+                    Map.insert(acc, eq + 1, 4)
+                } else { acc }
+        };
+        signature_breaks(
+            source,
+            lexed,
+            closes,
+            match Map.get(closes, i) {
+                Some(e) => e + 1,
+                None => i + 1
+            },
+            next
+        )
+    }
+
+let header_equals (lexed: lexer.LexedSource) (closes: Map[Int, Int]) (i: Int) (end: Int): Int =
+    if i >= lexed.tokens.len() || lexed.starts[i] >= end { -1 }
+    else if lexed.tokens[i] == TokEq { i }
+    else {
+        header_equals(
+            lexed,
+            closes,
+            match Map.get(closes, i) {
+                Some(e) => e + 1,
+                None => i + 1
+            },
+            end
+        )
+    }
+
+let signature_params_start (lexed: lexer.LexedSource) (closes: Map[Int, Int]) (i: Int): Int = {
+    let after_name = if lexed.tokens[i] == TokDot { i + 2 } else { i };
+    if lexed.tokens[after_name] == TokLBracket {
+        Map.get(closes, after_name).unwrap_or(after_name) + 1
+    } else { after_name }
+}
+
+let header_parameters
+    (lexed: lexer.LexedSource)
+    (closes: Map[Int, Int])
+    (i: Int)
+    (eq: Int)
+    (last: Int)
+    (acc: Map[Int, Int]): Map[Int, Int]
+=
+    if i >= eq { acc }
+    else if lexed.tokens[i] == TokColon {
+        if last >= 0 && lexed.starts[eq] - lexed.starts[last] + 4 > 100 { Map.insert(acc, i, 4) } else {
+            acc
+        }
+    } else {
+        match lexed.tokens[i] {
+            TokIdent("require") => acc,
+            TokIdent("ensure") => acc,
+            TokIdent(_) => header_parameters(lexed, closes, i + 1, eq, i, Map.insert(acc, i, 4)),
+            _ => match Map.get(closes, i) {
+                Some(e) => header_parameters(lexed, closes, e + 1, eq, i, Map.insert(acc, i, 4)),
+                None => header_parameters(lexed, closes, i + 1, eq, last, acc),
+            },
+        }
+    }
+
+let width_emit (x: WidthLayout) (text: String): Unit = {
+    x.out.set(x.out.get().concat(text));
+    if text.contains("\n") {
+        let lines = text.split("\n");
+        let last = lines[lines.len() - 1];
+        x.column.set(String.char_len(last));
+        x.indent.set(trailing_columns(chars_of(last), 0, 0));
+    } else {
+        x.column.set(x.column.get() + String.char_len(text));
+    };
+}
+
+// Token text can contain newlines in a literal. Its final line is not source
+// indentation, so it must not supply an anchor for following continuations.
+let width_token (x: WidthLayout) (i: Int): Unit = {
+    let indent = x.indent.get();
+    width_emit(x, lexer.token_text_at(x.source.text, x.lexed, i));
+    x.indent.set(indent)
+}
+
+let width_gap (x: WidthLayout) (i: Int) (forced: Int) (closing: Bool) (shift: Int): Unit = {
+    let gap = lexer.trivia_before_at(x.source.text, x.lexed, i);
+    let header = Map.get(x.headers, i);
+    let col = match header {
+        Some(c) => c,
+        None => forced
+    };
+    width_emit(
+        x,
+        if col >= 0 { expanded_gap(gap, col, false, closing, x.newline) }
+        else if shift != 0 && gap.contains("\n") {
+            expanded_gap(gap, Int.max(0, trailing_indent(gap) + shift), false, closing, x.newline)
+        }
+        else { gap }
+    );
+}
+
+// A closure's parameter commas are not argument separators. A pipe following
+// an operand is bitwise OR; only a pipe in operand position opens a closure.
+let closure_end (lexed: lexer.LexedSource) (closes: Map[Int, Int]) (i: Int) (end: Int): Int =
+    if i >= end { end }
+    else if lexed.tokens[i] == TokPipe { i }
+    else {
+        closure_end(
+            lexed,
+            closes,
+            match Map.get(closes, i) {
+                Some(e) => e + 1,
+                None => i + 1
+            },
+            end
+        )
+    }
+
+let starts_closure (x: WidthLayout) (i: Int) (start: Int): Bool =
+    (x.lexed.tokens[i] == TokPipe || x.lexed.tokens[i] == TokOrOr) && operand_position(x, i, start)
+
+let operand_position (x: WidthLayout) (i: Int) (start: Int): Bool =
+    i == start || match x.lexed.tokens[i - 1] {
+        TokComma => true,
+        TokEq => true,
+        TokFatArrow => true,
+        TokLParen => true,
+        TokLBracket => true,
+        TokLBrace => true,
+        TokColon => true,
+        TokPipeGt => true,
+        TokSemicolon => true,
+        _ => false,
+    }
+
+let method_dot (x: WidthLayout) (i: Int) (end: Int): Bool =
+    i > 0 && i + 2 < end && x.lexed.tokens[i] == TokDot
+        && (
+            x.lexed.tokens[i - 1] == TokRParen || x.lexed.tokens[i - 1] == TokRBracket
+                || lexer.trivia_before_at(x.source.text, x.lexed, i).contains("\n")
+        ) && match x.lexed.tokens[i + 1] {
+            TokIdent(_) => x.lexed.tokens[i + 2] == TokLParen,
+            _ => false,
+        }
+
+let chain_operator (tok: lexer.Token): Bool =
+    tok == TokPipeGt || tok == TokAndAnd || tok == TokOrOr
+        || tok == TokPlus || tok == TokMinus || tok == TokStar || tok == TokSlash
+        || tok == TokPercent || tok == TokEqEq || tok == TokNotEq || tok == TokLt
+        || tok == TokGt || tok == TokLtEq || tok == TokGtEq || tok == TokAmp
+        || tok == TokPipe || tok == TokCaret || tok == TokShl || tok == TokShr
+
+// Measure one link, skipping its nested calls/types. No prefix rescanning is
+// needed, even for thousands of chained calls on one physical source line.
+let link_end (x: WidthLayout) (i: Int) (end: Int): Int =
+    if i >= end { end }
+    else if method_dot(x, i, end) || chain_operator(x.lexed.tokens[i]) || x.lexed.tokens[i]
+        == TokSemicolon || x.lexed.tokens[i] == TokComma
+        || x.lexed.tokens[i] == TokLBrace || x.lexed.tokens[i] == TokFatArrow { i }
+    else if i > 0 && line_start_of(x.source, x.lexed.starts[i])
+        != line_start_of(x.source, x.lexed.ends[i - 1]) { i }
+    else {
+        link_end(
+            x,
+            match Map.get(x.closes, i) {
+                Some(e) => e + 1,
+                None => i + 1
+            },
+            end
+        )
+    }
+
+let width_range
+    (x: WidthLayout)
+    (start: Int)
+    (end: Int)
+    (base: Int)
+    (separate: Bool)
+    (shift: Int): Unit
+= {
+    let at = start;
+    let next_indent = if separate { base } else { -1 };
+    let chain_indent = -1;
+    let expression_shift = shift;
+    let if_indents: Array[Int] = [];
+    for step in start..end {
+        if at < end {
+            let i = at;
+            let tok = x.lexed.tokens[i];
+            let chain = method_dot(x, i, end)
+                || (chain_operator(tok) && !operand_position(x, i, start));
+            let gap = lexer.trivia_before_at(x.source.text, x.lexed, i);
+            if chain && chain_indent < 0 {
+                chain_indent = x.indent.get() + 4;
+            };
+            let link = if chain { link_end(x, i + 1, end) } else { i };
+            let size = if link > i { x.lexed.ends[link - 1] - x.lexed.starts[i] } else { 0 };
+            let multiline_link = link > i && line_start_of(x.source, x.lexed.starts[i])
+                != line_start_of(x.source, x.lexed.ends[link - 1] - 1);
+            let break_chain = chain
+                && (gap.contains("\n") || multiline_link || x.column.get() + gap.len() + size > 100);
+            width_gap(
+                x,
+                i,
+                if next_indent >= 0 { next_indent }
+                else if tok == TokElse && !if_indents.is_empty() && gap.contains("\n") {
+                    if_indents[if_indents.len() - 1]
+                }
+                else if break_chain { chain_indent } else { -1 },
+                false,
+                expression_shift
+            );
+            next_indent = -1;
+            if tok == TokIf {
+                if_indents = if_indents.push(x.indent.get());
+            };
+            if tok == TokElse && !if_indents.is_empty() {
+                if_indents = if_indents.slice(0, if_indents.len() - 1);
+            };
+            match Map.get(x.closes, i) {
+                Some(close) => {
+                    let anchor = x.indent.get();
+                    let nonempty = close > i + 1;
+                    let multiline = line_start_of(x.source, x.lexed.starts[i])
+                        != line_start_of(x.source, x.lexed.starts[close]);
+                    let size = x.lexed.ends[close] - x.lexed.starts[i];
+                    let wrap = nonempty && (multiline || x.column.get() + size > 100);
+                    width_token(x, i);
+                    let old_anchor = indent_columns(
+                        x.source,
+                        line_start_of(x.source, x.lexed.starts[i]),
+                        0
+                    );
+                    width_range(x, i + 1, close, anchor + 4, wrap, anchor - old_anchor);
+                    width_gap(x, close, if wrap { anchor } else { -1 }, true, expression_shift);
+                    width_token(x, close);
+                    at = close + 1;
+                },
+                None => if starts_closure(x, i, start) {
+                    let close = if tok == TokOrOr { i } else {
+                        closure_end(x.lexed, x.closes, i + 1, end)
+                    };
+                    for p in i..(Int.min(close + 1, end)) {
+                        if p != i {
+                            width_gap(x, p, -1, false, shift);
+                        };
+                        width_token(x, p);
+                    };
+                    at = Int.min(close + 1, end);
+                    if at < end {
+                        let body_gap = lexer.trivia_before_at(x.source.text, x.lexed, at);
+                        if body_gap.contains("\n") {
+                            next_indent = x.indent.get() + 4;
+                            expression_shift = next_indent - trailing_indent(body_gap);
+                        };
+                    };
+                } else {
+                    width_token(x, i);
+                    at = i + 1;
+                    if separate && tok == TokComma {
+                        next_indent = base;
+                    };
+                    if tok == TokComma {
+                        expression_shift = shift;
+                    };
+                    if chain && at < end && lexer.trivia_before_at(x.source.text, x.lexed, at)
+                        .contains("\n") {
+                            next_indent = chain_indent;
+                        };
+                    if tok == TokSemicolon || tok == TokComma || tok == TokEq || tok == TokFatArrow {
+                        chain_indent = -1;
+                        if_indents = [];
+                    };
+                },
+            };
+        };
+    };
+}

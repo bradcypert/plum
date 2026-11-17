@@ -7,4 +7,5 @@ pub struct P { pub y: String }
 pub enum Shade { Light, Dark }
 
 pub let make (): P = P { y: "from inner" }
+
 pub let shade (): Shade = Dark

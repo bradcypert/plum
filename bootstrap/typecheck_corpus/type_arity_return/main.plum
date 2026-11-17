@@ -1,2 +1,3 @@
 let unused (): Array = []
+
 let main (): Unit = ()

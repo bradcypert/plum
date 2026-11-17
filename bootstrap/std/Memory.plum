@@ -44,9 +44,16 @@ pub let snapshot (): Option[Snapshot] = unsafe {
         let live_bytes = plum_heap_snapshot_field(token, 3);
         let peak_allocations = plum_heap_snapshot_field(token, 4);
         let peak_bytes = plum_heap_snapshot_field(token, 5);
-        Some(Snapshot { allocations: allocations, allocated_bytes: allocated_bytes,
-            live_allocations: live_allocations, live_bytes: live_bytes,
-            peak_allocations: peak_allocations, peak_bytes: peak_bytes })
+        Some(
+            Snapshot {
+                allocations: allocations,
+                allocated_bytes: allocated_bytes,
+                live_allocations: live_allocations,
+                live_bytes: live_bytes,
+                peak_allocations: peak_allocations,
+                peak_bytes: peak_bytes
+            }
+        )
     }
 }
 
@@ -63,7 +70,16 @@ pub let delta (before: Snapshot) (after: Snapshot): Delta = Delta {
 /// by String/Bytes/CStr views; Record includes tuples, Variant includes
 /// Option/Result, and HandleCell includes task/channel endpoint cells.
 /// Unspecified covers native producers using the unannotated cell allocator.
-pub enum Origin { Unspecified, ByteStorage, ArrayStorage, Record, Variant, Closure, RefCell, HandleCell }
+pub enum Origin {
+    Unspecified,
+    ByteStorage,
+    ArrayStorage,
+    Record,
+    Variant,
+    Closure,
+    RefCell,
+    HandleCell
+}
 
 /// Traffic, live requested storage and independent lifetime peaks for one
 /// original construction family. Reuse/reset never changes this origin.
@@ -81,11 +97,17 @@ let origin_stats (token: Int) (index: Int) (origin: Origin): OriginStats = unsaf
     let live_bytes = plum_heap_origin_field(token, index, 3);
     let peak_allocations = plum_heap_origin_field(token, index, 4);
     let peak_bytes = plum_heap_origin_field(token, index, 5);
-    OriginStats { origin: origin, stats: Snapshot {
-        allocations: allocations, allocated_bytes: allocated_bytes,
-        live_allocations: live_allocations, live_bytes: live_bytes,
-        peak_allocations: peak_allocations, peak_bytes: peak_bytes,
-    } }
+    OriginStats {
+        origin: origin,
+        stats: Snapshot {
+            allocations: allocations,
+            allocated_bytes: allocated_bytes,
+            live_allocations: live_allocations,
+            live_bytes: live_bytes,
+            peak_allocations: peak_allocations,
+            peak_bytes: peak_bytes,
+        }
+    }
 }
 
 /// Capture attribution by original construction family under --memory-stats,
@@ -111,10 +133,14 @@ pub let by_origin (): Option[OriginSnapshot] = unsafe {
             peak_bytes: plum_heap_snapshot_field(token, 5),
         };
         let rows = [
-            origin_stats(token, 0, Unspecified), origin_stats(token, 1, ByteStorage),
-            origin_stats(token, 2, ArrayStorage), origin_stats(token, 3, Record),
-            origin_stats(token, 4, Variant), origin_stats(token, 5, Closure),
-            origin_stats(token, 6, RefCell), origin_stats(token, 7, HandleCell),
+            origin_stats(token, 0, Unspecified),
+            origin_stats(token, 1, ByteStorage),
+            origin_stats(token, 2, ArrayStorage),
+            origin_stats(token, 3, Record),
+            origin_stats(token, 4, Variant),
+            origin_stats(token, 5, Closure),
+            origin_stats(token, 6, RefCell),
+            origin_stats(token, 7, HandleCell),
         ];
         Some(OriginSnapshot { total: total, rows: rows })
     }

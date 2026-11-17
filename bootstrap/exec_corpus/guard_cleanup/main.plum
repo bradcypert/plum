@@ -3,8 +3,11 @@ extern "C" {
     fn guard_close(h: Int);
     fn guard_live() -> Int;
 }
+
 handle Resource { on_drop: guard_close }
+
 let acquire (): Resource = unsafe { Resource.from_raw(guard_open()) }
+
 let live (): Int = unsafe { guard_live() }
 
 // The guard binds an ordinary closure, whose captured handle lets us observe
@@ -23,7 +26,10 @@ let exercise (accept: Bool): Unit = {
     for i in 0..100 {
         let input = if i % 2 == 0 { Left(owner) } else { Right(owner) };
         let result = match input {
-            Empty if { panic_raw("unmatched guard ran"); true } => "wrong",
+            Empty if {
+                panic_raw("unmatched guard ran");
+                true
+            } => "wrong",
             Left(r) | Right(r) if {
                 let text = "guard-".concat(i.to_string());
                 let values = [text, text];

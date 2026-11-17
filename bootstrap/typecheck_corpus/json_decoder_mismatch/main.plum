@@ -14,10 +14,13 @@ let repo (): Json.Decoder[Repo] =
     Json.map2(
         Json.field("name", Json.int()),
         Json.field("stars", Json.int()),
-        |n, s| Repo { name: n, stars: s })
+        |n, s| Repo { name: n, stars: s }
+    )
 
 let main (): Unit =
-    println(match Json.decode_string(repo(), "{\"name\":\"plum\",\"stars\":1}") {
-        Ok(r) => r.name,
-        Err(e) => e,
-    })
+    println(
+        match Json.decode_string(repo(), "{\"name\":\"plum\",\"stars\":1}") {
+            Ok(r) => r.name,
+            Err(e) => e,
+        }
+    )

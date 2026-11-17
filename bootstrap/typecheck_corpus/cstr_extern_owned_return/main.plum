@@ -1,2 +1,3 @@
 extern "C" { fn invalid() -> CStr; }
+
 let main (): Unit = ()

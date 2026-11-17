@@ -10,8 +10,11 @@
 // and `0.0 / 0.0` at runtime, matching `float_notation`.
 
 let z (): Float = 0.0
+
 let ten (): Float = 10.0
+
 let up (b: Float) (n: Int): Float = if n <= 0 { 1.0 } else { b * up(b, n - 1) }
+
 let pair (a: String) (b: String): String = a.concat("/").concat(b)
 
 let main (): Unit = {

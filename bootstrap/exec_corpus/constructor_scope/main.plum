@@ -1,39 +1,77 @@
 extern "C" { fn scope_close(n: Int) -> Unit; fn scope_total() -> Int; fn scope_value() -> Int; }
+
 handle Resource { on_drop: scope_close }
+
 struct Owner { resource: Resource }
+
 struct Callable { run: () -> Int }
+
 enum Owned { Value(Resource) }
+
 struct Output { value: Int }
+
 let make (n: Int): Resource = unsafe { Resource.from_raw(n) }
+
 let total (): Int = unsafe { scope_total() }
+
 let value (): Int = unsafe { scope_value() }
+
 let inspect_owner (o: Owner): Unit = assert_eq(unsafe { o.resource.raw() }, 0)
+
 let inspect_enum (o: Owned): Unit = match o { Value(r) => assert_eq(unsafe { r.raw() }, 1) }
+
 let inspect_array (xs: Array[Resource]): Unit = assert_eq(unsafe { xs[0].raw() }, 2)
+
 let inspect_callable (c: Callable): Unit = assert_eq(c.run(), 3)
+
 // Nest constructors in an argument so a destination-slot candidate cannot
 // mask reuse of the closure parameter being tested.
 let pass[T] (x: T): T = x
+
 let main (): Unit = {
     let record = |o: Owner| {
         inspect_owner(o);
         // The external call prevents constructor hoisting. Even a fitting
         // unique cell must keep its scoped child alive until this call ends.
-        let out = pass(Output { value: value() }); assert_eq(total(), 0); out
+        let out = pass(Output { value: value() });
+        assert_eq(total(), 0);
+        out
     };
-    assert_eq(record(Owner { resource: make(0) }).value, 7); assert_eq(total(), 1);
+    assert_eq(record(Owner { resource: make(0) }).value, 7);
+    assert_eq(total(), 1);
     let variant = |o: Owned| {
-        inspect_enum(o); let out = pass(Some(value())); assert_eq(total(), 1); out
+        inspect_enum(o);
+        let out = pass(Some(value()));
+        assert_eq(total(), 1);
+        out
     };
-    assert_eq(variant(Value(make(1))), Some(7)); assert_eq(total(), 2);
+    assert_eq(variant(Value(make(1))), Some(7));
+    assert_eq(total(), 2);
     let array = |xs: Array[Resource]| {
-        inspect_array(xs); let out = pass([value()]); assert_eq(total(), 2); out
+        inspect_array(xs);
+        let out = pass([value()]);
+        assert_eq(total(), 2);
+        out
     };
-    assert_eq(array([make(2)]), [7]); assert_eq(total(), 3);
+    assert_eq(array([make(2)]), [7]);
+    assert_eq(total(), 3);
     let callable = |c: Callable| {
-        inspect_callable(c); let out = pass(Output { value: value() }); assert_eq(total(), 3); out
+        inspect_callable(c);
+        let out = pass(Output { value: value() });
+        assert_eq(total(), 3);
+        out
     };
-    assert_eq(callable(Callable { run: { let r = make(3); || unsafe { r.raw() } } }).value, 7);
+    assert_eq(
+        callable(
+            Callable {
+                run: {
+                    let r = make(3);
+                    || unsafe { r.raw() }
+                }
+            }
+        ).value,
+        7
+    );
     assert_eq(total(), 4);
     println("Constructor reuse preserves scoped closure parameter lifetimes")
 }

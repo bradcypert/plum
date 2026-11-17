@@ -8,6 +8,7 @@ let weekdays (n: Int): Unit = if n > 6 { () } else {
     println(Time.weekday_name(n));
     weekdays(n + 1)
 }
+
 let months (n: Int): Unit = if n > 12 { () } else {
     println(Time.month_name(n));
     months(n + 1)
