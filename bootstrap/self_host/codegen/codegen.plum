@@ -2643,10 +2643,8 @@ let lv_node (ctx: LvCtx) (node: typecheck.TNode): typecheck.TNode =
         TStructLit(sname, fs, sp) => {
             let fs2 = lv_fields(ctx, fs, 0, [], lv_opt_list(sp));
             match sp {
-                // A spread base is itself released after its fields are
-                // copied out. Reusing it as the cell would mean moving
-                // and releasing the same reference; left alone until
-                // that is expressed properly.
+                // The spread emitter owns its base and offers that reference
+                // to the common reuse path after retaining the kept fields.
                 Some(b) => TStructLit(sname, fs2, Some(lv_expr(ctx, b))),
                 None => {
                     let cands = lv_candidates(ctx, ctx.scope.len() - 1, lv_tokens(ctx.scope, ctx.scope.len() - 1, []));
@@ -4668,22 +4666,30 @@ let cg_struct_lit (p: CgProgram) (env: Array[CgSlot]) (n: Int) (name: String) (f
                 allocas: ev.allocas, releases: ev.releases, globals: ev.globals,
                 val: cell, ty: CgStruct(name), n: st.n }
         },
-        // `..base` fills in every position the literal did not mention.
-        // The base is evaluated ONCE, each copied field is incremented
-        // as it is stored -- the new cell owns its own reference to a
-        // shared field, exactly as if it had been written out -- and the
-        // base is then released.
+        // Retain every kept field before handing the owned base to reuse.
+        // Explicit fields still run first, followed by the base exactly once.
         Some(base) => {
             let b = cg_expr(p, env, ev.n, base);
             let ity = cg_concrete(p, typecheck.texpr_ty(p.subst, base));
-            let cell = cg_reg(b.n);
-            let st = cg_store_evald(cell, ev.vals, 0, b.n + 1, "");
-            let copies = cg_copy_missing_fields(p, field_names, cg_struct_field_itys(p, ity, name), fields, cell, b.val, 0, st.n, "");
+            let kept = cg_load_missing_fields(field_names, cg_struct_field_itys(p, ity, name), fields, b.val, 0,
+                EvalFields { code: "", allocas: "", releases: "", globals: "", vals: ev.vals, n: b.n });
+            let slot = CgSlot { name: "<spread>", ptr: cg_reg(kept.n), ty: b.ty, ity: ity };
+            let want = 8 + 8 * field_names.len();
+            let cand = if cg_rc_enabled(()) { cg_reuse_of_ity(p, slot, ity, want) } else { None };
+            let r = match cand {
+                Some(c) => cg_reuse_cell(p, c, want, cg_origin_record(()), kept.n + 1),
+                None => ReuseEmit { code: cg_cell_alloc(slot.ptr, field_names.len()), cell: slot.ptr, n: kept.n + 1 },
+            };
+            let st = cg_store_evald(r.cell, kept.vals, 0, r.n, "");
             Emit {
-                code: ev.code.concat(b.code).concat(cg_cell_alloc(cell, field_names.len())).concat(st.code)
-                    .concat(copies.code).concat(cg_dec(ity, b.val)),
-                allocas: ev.allocas.concat(b.allocas), releases: ev.releases.concat(b.releases), globals: ev.globals.concat(b.globals),
-                val: cell, ty: CgStruct(name), n: copies.n,
+                code: ev.code.concat(b.code).concat(kept.code)
+                    .concat(match cand { Some(_) => "  store ptr ${b.val}, ptr ${slot.ptr}\n", None => "" })
+                    .concat(r.code).concat(st.code)
+                    .concat(match cand { Some(_) => "", None => cg_dec(ity, b.val) }),
+                allocas: ev.allocas.concat(b.allocas)
+                    .concat(match cand { Some(_) => "  ${slot.ptr} = alloca ptr\n", None => "" }),
+                releases: ev.releases.concat(b.releases), globals: ev.globals.concat(b.globals),
+                val: r.cell, ty: CgStruct(name), n: st.n,
             }
         },
     }
@@ -5009,24 +5015,20 @@ let cg_variant_build_reuse (p: CgProgram) (v: CgVariant) (a: ArgVals) (c: ReuseC
 
 struct CopyEmit { code: String, n: Int }
 
-// Every declared field the literal did not mention, loaded from the
-// spread base and stored into the new cell -- with an increment for any
-// heap-shaped one, because both cells now point at it.
-let cg_copy_missing_fields (p: CgProgram) (field_names: Array[String]) (field_itys: Array[typecheck.ITy]) (given: Array[typecheck.TFieldInit]) (cell: String) (base: String) (i: Int) (n: Int) (acc: String): CopyEmit =
-    if i >= field_names.len() { CopyEmit { code: acc, n: n } }
-    else if cg_field_given(given, field_names[i], 0) { cg_copy_missing_fields(p, field_names, field_itys, given, cell, base, i + 1, n, acc) }
+// Hold the spread's kept children in owned registers before the common
+// reuse path drops the old edges. The fresh path uses the same field list.
+let cg_load_missing_fields (field_names: Array[String]) (field_itys: Array[typecheck.ITy]) (given: Array[typecheck.TFieldInit]) (base: String) (i: Int) (acc: EvalFields): EvalFields =
+    if i >= field_names.len() { acc }
+    else if cg_field_given(given, field_names[i], 0) { cg_load_missing_fields(field_names, field_itys, given, base, i + 1, acc) }
     else {
         let fty = if i < field_itys.len() { field_itys[i] } else { ITUnit };
         let lty = cg_llvm_ty(cg_of_ity(fty));
-        let sp = cg_reg(n);
-        let v = cg_reg(n + 1);
-        let dp = cg_reg(n + 2);
+        let sp = cg_reg(acc.n);
+        let v = cg_reg(acc.n + 1);
         let line = "  ${sp} = getelementptr i8, ptr ${base}, i64 ${cg_field_offset(i)}\n"
-            .concat("  ").concat(v).concat(" = load ").concat(lty).concat(", ptr ").concat(sp).concat("\n")
-            .concat(cg_inc(cg_of_ity(fty), v))
-            .concat("  ").concat(dp).concat(" = getelementptr i8, ptr ").concat(cell).concat(", i64 ").concat(cg_field_offset(i).to_string()).concat("\n")
-            .concat("  store ").concat(lty).concat(" ").concat(v).concat(", ptr ").concat(dp).concat("\n");
-        cg_copy_missing_fields(p, field_names, field_itys, given, cell, base, i + 1, n + 3, acc.concat(line))
+            .concat("  ${v} = load ${lty}, ptr ${sp}\n").concat(cg_inc(cg_of_ity(fty), v));
+        cg_load_missing_fields(field_names, field_itys, given, base, i + 1,
+            EvalFields { code: acc.code.concat(line), vals: acc.vals.push(EvaldField { idx: i, lty: lty, val: v }), n: acc.n + 2, ..acc })
     }
 
 let cg_field_given (given: Array[typecheck.TFieldInit]) (name: String) (i: Int): Bool =
@@ -5125,7 +5127,16 @@ let cg_ref_set (p: CgProgram) (env: Array[CgSlot]) (n: Int) (base: typecheck.TEx
 }
 
 let cg_field_read (p: CgProgram) (env: Array[CgSlot]) (n: Int) (base: typecheck.TExpr) (name: String) (fty: CgTy): Emit = {
-    let b = cg_borrow(p, env, n, base);
+    // A proven single-read parameter can surrender its parent reference.
+    // Retain the projected child before dropping that parent, so a consuming
+    // operation sees the child's true ownership. Candidate reads still count
+    // against movability, and scoped cleanup must keep its original lifetime.
+    let b = match base.node {
+        TIdent(name) => if cg_is_movable(p, name) && cg_can_release_early(p, cg_concrete(p, typecheck.texpr_ty(p.subst, base))) {
+            cg_borrow_owned(p, env, n, base)
+        } else { cg_borrow(p, env, n, base) },
+        _ => cg_borrow(p, env, n, base),
+    };
     match b.ty {
         CgStruct(sname) => {
             let base_ity = cg_concrete(p, typecheck.texpr_ty(p.subst, base));

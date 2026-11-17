@@ -1,0 +1,12 @@
+extern "C" { fn record_zero() -> Int; }
+struct State[T] { value: T, count: Int }
+let next[T] (s: State[T]) (n: Int): State[T] =
+    if n <= 0 { s } else { next(State { count: s.count + 1, ..s }, n - 1) }
+let main (): Unit = {
+    let initial = unsafe { record_zero() };
+    let scalar = next(State { value: initial, count: initial }, 4096);
+    assert_eq(scalar.value, 0); assert_eq(scalar.count, 4096);
+    let heap = next(State { value: "aé\x00🙂".repeat(1024), count: initial }, 4096);
+    assert_eq(heap.value.len(), 8192); assert_eq(heap.count, 4096);
+    assert_eq(heap.value, "aé\x00🙂".repeat(1024));
+}
