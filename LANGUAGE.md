@@ -122,8 +122,8 @@ for every integer type. Both operands must have that type. Results wrap modulo
 2^N, where N is the type width; signed results use two's-complement
 interpretation. These named operations support checksums, hashes, and binary
 protocols without changing ordinary checked arithmetic. Existing `Int`/`I64`
-wrapping behavior is unchanged. Truncating conversions and new-width bit
-operations remain tracked in #525. New-width C extern signatures,
+wrapping behavior is unchanged. New-width bit operations remain tracked in
+#525. New-width C extern signatures,
 including aggregates containing these types, are rejected until the scalar ABI
 work in #526. `Int`/`I64` retain the existing C ABI.
 
@@ -133,17 +133,31 @@ work in #526. `Int`/`I64` retain the existing C ABI.
 source type's **entire range**. Identity conversions work. For example, `U8`
 to `I16` and `I8` to `Int` are safe; `U8` to `I8`, `Int` to `I32`, and every
 signed-to-unsigned conversion require `try_from`, regardless of the particular
-value. No conversion silently truncates or reinterprets bits.
+value. Neither `from` nor `try_from` truncates or reinterprets bits.
 
 `Destination.try_from(value)` accepts any known integer source type and returns
 `Result[Destination, IntegerConversionError]`. It returns `Ok` when the value
-fits, or `Err` when it does not. Both conversion forms evaluate the source
+fits, or `Err` when it does not. All conversion forms evaluate the source
 expression exactly once.
+
+`Destination.truncating_from(value)` explicitly reduces the source's
+mathematical value modulo 2^N, where N is the destination width. The result
+uses the destination's unsigned or signed two's-complement interpretation.
+This rule also applies when widening: negative signed sources sign-extend,
+and unsigned sources zero-extend. For example, converting `-1: I8` to `U16`
+gives `65535`, while converting `255: U8` to `I16` gives `255`. Identity
+conversions work, and equal-width signedness changes preserve the bits.
+Truncation returns the destination value directly and allocates no conversion
+storage; evaluating its argument can still allocate or panic. Use it for
+explicit low-bit extraction in binary formats, network protocols, hashes,
+checksums and native interop. It does not establish a new C ABI or record layout.
 
 ```plum
 let byte: U8 = 255
 let wider: I16 = I16.from(byte)
 let checked: Result[I8, IntegerConversionError] = I8.try_from(byte)
+let signed: I8 = I8.truncating_from(byte) // -1
+let low_byte: U8 = U8.truncating_from(511) // 255
 // I8.from(byte) is a type error: U8's full range does not fit I8.
 ```
 

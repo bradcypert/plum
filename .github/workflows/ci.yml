@@ -79,6 +79,8 @@ jobs:
         run: python3 ./bootstrap/integer-wrapping-check.py ./sh.real
       - name: integer conversions, range checks and error metadata
         run: python3 ./bootstrap/integer-conversion-check.py ./sh.real
+      - name: truncating integer conversions and widening semantics
+        run: python3 ./bootstrap/integer-truncating-check.py ./sh.real
 
   bootstrap_proofs:
     name: Linux compiler self-hosting and memory checks

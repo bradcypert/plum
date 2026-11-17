@@ -41,6 +41,17 @@ let main (): Unit = {
     let identity_result = U8.try_from(get_byte());
     assert_eq(identity_result, Ok(byte));
     assert_eq(calls.get(), 4);
+    assert_eq(I8.truncating_from(byte), -1);
+    assert_eq(U8.truncating_from(511), byte);
+    let negative: I8 = -1;
+    assert_eq(U16.truncating_from(negative), 65535);
+    assert_eq(I16.truncating_from(negative), -1);
+    assert_eq(I16.truncating_from(byte), 255);
+    assert_eq(Int.truncating_from(full), -1);
+    assert_eq(I64.truncating_from(full), -1);
+    assert_eq(U64.truncating_from(-1), full);
+    assert_eq(U8.truncating_from(next(511)), 255);
+    assert_eq(calls.get(), 5);
     let converted: Array[U8] = [U8.from(byte), match U8.try_from(1) { Ok(value) => value, Err(_) => 0 }];
     assert_eq(converted[1], 1);
     println("integer conversions ok")

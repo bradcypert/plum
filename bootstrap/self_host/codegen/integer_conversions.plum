@@ -1,7 +1,7 @@
 use parser;
 use typecheck;
 
-let cg_integer_convert (p: CgProgram) (env: Array[CgSlot]) (n: Int) (destination: typecheck.IntegerKind) (fallible: Bool) (source: typecheck.TExpr): Emit = {
+let cg_integer_convert (p: CgProgram) (env: Array[CgSlot]) (n: Int) (destination: typecheck.IntegerKind) (mode: typecheck.IntegerConversionMode) (source: typecheck.TExpr): Emit = {
     // Evaluate the source once, before any bounds check or Result allocation.
     let value = cg_expr(p, env, n, source);
     let source_kind = match cg_concrete(p, typecheck.texpr_ty(p.subst, source)) {
@@ -9,7 +9,23 @@ let cg_integer_convert (p: CgProgram) (env: Array[CgSlot]) (n: Int) (destination
         ITInteger(k) => k,
         _ => { cg_fail("internal: non-integer conversion source"); IntegerI64 },
     };
-    if !fallible {
+    if mode == IntegerConvertTruncating {
+        let spec = typecheck.integer_spec(destination);
+        let dest_ty = if destination == IntegerI64 { CgInt } else { CgInteger(destination) };
+        // Sources already occupy canonical sign- or zero-extended i64 slots.
+        // Keeping the low destination bits therefore implements mathematical
+        // modulo even when a negative signed source widens to an unsigned type.
+        if spec.bits == 64 { Emit { ty: dest_ty, ..value } }
+        else {
+            let narrow = cg_reg(value.n);
+            let out = cg_reg(value.n + 1);
+            let extension = if spec.signed { "sext" } else { "zext" };
+            Emit { code: value.code
+                .concat("  ${narrow} = trunc i64 ${value.val} to i${spec.bits}\n")
+                .concat("  ${out} = ${extension} i${spec.bits} ${narrow} to i64\n"),
+                val: out, ty: dest_ty, n: value.n + 2, ..value }
+        }
+    } else if mode == IntegerConvertPreserving {
         let dest_ty = if destination == IntegerI64 { CgInt } else { CgInteger(destination) };
         Emit { ty: dest_ty, ..value }
     } else {
