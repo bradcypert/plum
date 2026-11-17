@@ -1,0 +1,102 @@
+use Memory;
+extern "C" { fn record_open() -> Int; fn record_close(n: Int) -> Unit; fn record_live() -> Int; fn record_closed() -> Int; fn record_zero() -> Int; }
+handle Resource { on_drop: record_close }
+struct Box[T] { value: T }
+struct Pair[T] { left: T, right: T, count: Int }
+struct Scoped { resource: Resource, text: String }
+struct Callable { run: () -> Int, text: String }
+struct Link { child: Option[Link], value: Int }
+struct Empty {}
+let make (): String = "aé\x00🙂".repeat(32)
+let resource (): Resource = unsafe { Resource.from_raw(record_open()) }
+let live (): Int = unsafe { record_live() }
+let closed (): Int = unsafe { record_closed() }
+let take[T] (b: Box[T]): T = b.value
+let reverse (b: Box[String]): String = String.reverse(b.value)
+let apply (b: Box[String]) (f: (Box[String]) -> String): String = f(b)
+let nested (b: Box[Box[String]]): String = String.reverse(b.value.value)
+let branch (b: Box[String]) (yes: Bool): String = if yes { String.reverse(b.value) } else { b.value.to_upper() }
+let guarded (b: Box[String]): String = match 0 {
+    _ if b.value.starts_with("missing") => "bad",
+    _ if b.value.starts_with("absent") => "bad",
+    _ => String.reverse(b.value),
+}
+let shadow (b: Box[String]): String = {
+    let b = Box { value: make() }; let out = String.reverse(b.value);
+    assert_eq(b.value, make()); out
+}
+let increment[T] (p: Pair[T]): Pair[T] = Pair { count: p.count + 1, ..p }
+let replace[T] (p: Pair[T]) (value: T): Pair[T] = Pair { left: value, ..p }
+let copy[T] (p: Pair[T]): Pair[T] = Pair { ..p }
+let scoped_projection (s: Scoped): String = {
+    let out = String.reverse(s.text); assert_eq(live(), 1); out
+}
+let scoped_spread (s: Scoped): Scoped = {
+    let before = closed(); let out = Scoped { resource: resource(), ..s };
+    assert_eq(closed(), before); assert_eq(live(), 2); out
+}
+let callable_projection (s: Callable): String = {
+    let out = String.reverse(s.text); assert_eq(live(), 1); out
+}
+let callable_spread (s: Callable): Callable = {
+    let out = Callable { run: || 7, ..s }; assert_eq(live(), 1); out
+}
+let projections (): Unit = {
+    assert_eq(reverse(Box { value: make() }), "🙂\x00éa".repeat(32));
+    assert_eq(nested(Box { value: Box { value: make() } }), "🙂\x00éa".repeat(32));
+    assert_eq(take(Box { value: [make()] }), [make()]);
+    for yes in [true, false] { assert_eq(branch(Box { value: "ab".repeat(32) }, yes), if yes { "ba".repeat(32) } else { "AB".repeat(32) }); };
+    assert_eq(guarded(Box { value: make() }), "🙂\x00éa".repeat(32));
+    assert_eq(shadow(Box { value: "outer" }), "🙂\x00éa".repeat(32));
+    let source = Box { value: make() }; let snapshot = source;
+    assert_eq(reverse(source), "🙂\x00éa".repeat(32)); assert_eq(snapshot.value, make());
+    let captured = Box { value: make() }; let f = || String.reverse(captured.value);
+    assert_eq(f(), "🙂\x00éa".repeat(32)); assert_eq(f(), "🙂\x00éa".repeat(32)); assert_eq(captured.value, make());
+    assert_eq(apply(Box { value: make() }, |b| String.reverse(b.value)), "🙂\x00éa".repeat(32));
+    let source = Box { value: make() }; let left = spawn { reverse(source) }; let right = spawn { reverse(source) };
+    assert_eq(left.join(), "🙂\x00éa".repeat(32)); assert_eq(right.join(), "🙂\x00éa".repeat(32)); assert_eq(source.value, make());
+}
+let spreads (): Unit = {
+    let shared = make(); let mut p = Pair { left: shared, right: shared, count: unsafe { record_zero() } };
+    let original = p;
+    for i in 0..64 {
+        p = increment(p); assert_eq(p.count, i + 1); assert_eq(p.left, shared); assert_eq(p.right, shared);
+        p = replace(p, "later".repeat(16)); assert_eq(p.left, "later".repeat(16)); assert_eq(p.right, shared);
+        p = Pair { left: shared, ..p };
+    };
+    assert_eq(original.count, 0); assert_eq(original.left, shared); assert_eq(original.right, shared);
+    let cloned = copy(p); assert_eq(cloned, p);
+    let fresh = copy(Pair { left: make(), right: make(), count: 7 }); assert_eq(fresh.count, 7); assert_eq(fresh.left, fresh.right);
+    // Explicit fields run in source order, then evaluate the spread once.
+    let events = ref(0); let mut base = Pair { left: "old", right: "old", count: 1 };
+    let ordered = Pair {
+        count: { events.set(events.get() * 10 + 1); base = Pair { left: "new", right: "new", count: 2 }; 9 },
+        left: { events.set(events.get() * 10 + 2); "explicit" },
+        ..{ events.set(events.get() * 10 + 3); base }
+    };
+    assert_eq(events.get(), 123); assert_eq(ordered.left, "explicit"); assert_eq(ordered.right, "new"); assert_eq(ordered.count, 9);
+    let aliased = Pair { left: "ab".repeat(32), right: "cd".repeat(32), count: 0 };
+    let out = Pair { left: aliased.right, right: aliased.left, count: 7, ..aliased };
+    assert_eq(out.left, aliased.right); assert_eq(out.right, aliased.left); assert_eq(aliased.count, 0);
+    let root = Link { child: None, value: unsafe { record_zero() } };
+    let child = Link { child: Some(root), ..root }; assert_eq(root.child, None);
+    assert_eq(match child.child { Some(r) => r.value, None => -1 }, 0);
+    let empty = Empty {}; assert_eq(Empty { ..empty }, empty);
+    let bits = Pair { left: 1.5, right: -2.5, count: 0 }; assert_eq(increment(bits).right, -2.5);
+    assert_eq(copy(Pair { left: true, right: false, count: 0 }).left, true);
+}
+let apply_scoped (s: Scoped) (f: (Scoped) -> String): String = f(s)
+let scopes (): Unit = {
+    assert_eq(scoped_projection(Scoped { resource: resource(), text: make() }), "🙂\x00éa".repeat(32)); assert_eq(live(), 0);
+    assert_eq(apply_scoped(Scoped { resource: resource(), text: make() }, |s| { let out = String.reverse(s.text); assert_eq(live(), 1); out }), "🙂\x00éa".repeat(32)); assert_eq(live(), 0);
+    { let out = scoped_spread(Scoped { resource: resource(), text: make() }); assert_eq(live(), 1); assert_eq(out.text, make()); }; assert_eq(live(), 0);
+    assert_eq(callable_projection(Callable { run: { let r = resource(); || unsafe { r.raw() } }, text: make() }), "🙂\x00éa".repeat(32)); assert_eq(live(), 0);
+    { let out = callable_spread(Callable { run: { let r = resource(); || unsafe { r.raw() } }, text: make() }); assert_eq(live(), 0); assert_eq(out.run(), 7); assert_eq(out.text, make()); };
+}
+let heap_live (): Int = match Memory.snapshot() { Some(s) => s.live_bytes, None => -1 }
+let main (): Unit = {
+    let before = heap_live();
+    projections(); spreads(); scopes(); assert_eq(live(), 0);
+    if before >= 0 { assert_eq(heap_live(), before); };
+    println("Records: projected ownership, spread reuse, immutable aliases, operand order and scoped cleanup")
+}
