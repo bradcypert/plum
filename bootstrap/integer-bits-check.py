@@ -150,6 +150,17 @@ def main():
                'let main (): Unit = ()\n', 'to be an integer')
         reject('let bits[T] (x: T): T = x & x\n'
                'let main (): Unit = { let f: (Bool) -> Bool = bits; f(true); () }\n', 'to be an integer')
+        # Globals have one initialized representation, not a specialization
+        # for each reference. A later use cannot supply a global alias's type.
+        for use in ('let f: (Bool) -> Bool = alias; f(true);',
+                    'let f: (Int) -> Int = alias; f(1);',
+                    'let f: (U8) -> U8 = alias; f(255);', ''):
+            reject('let bits[T] (x: T): T = x & x\nlet alias = bits\n'
+                   f'let main (): Unit = {{ {use} () }}\n', 'to be an integer')
+        reject('let flip[T] (x: T): T = ~x\nlet first = flip\nlet second = first\n'
+               'let main (): Unit = { let f: (Bool) -> Bool = second; f(true); () }\n', 'to be an integer')
+        reject('let bits[T] (x: T): T = x & x\nlet alias: (Bool) -> Bool = bits\n'
+               'let main (): Unit = ()\n', 'to be an integer')
         reject('let main (): Unit = { let a: U8 = 1; let n: U8 = a << 1; let bad: Int = n; () }\n', 'Int')
 
         behavior = work / 'behavior'
@@ -205,6 +216,12 @@ def main():
             for mode in ([], ['--release']):
                 for core in (False, True):
                     assert run(build(project, mode, core)).stdout == expected
+
+        # Global closures intentionally own storage for the process
+        # lifetime, so test their monomorphic aliases in hosted builds.
+        aliases = ROOT / 'bootstrap/exec_corpus/integer_global_aliases'
+        for mode in ([], ['--release']):
+            assert run(build(aliases, mode)).stdout == (aliases / 'expected.txt').read_text()
 
         # Negative operator counts panic at every width, in both backends and
         # modes. The method's intentionally different rule was checked above.

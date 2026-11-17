@@ -733,7 +733,11 @@ let violates_bound (ctx: TyContext) (kind: String) (t: ITy): Bool =
     else if kind == "Show" { is_unrenderable(ctx, t) }
     else if kind == "Hash" { Option.is_some(first_unhashable(ctx, t, [])) }
     else if kind == "Integer" { match t {
-        ITParam(_) => false, ITVar(_) => false,
+        // Named parameters carry the inferred requirement to their callers.
+        // A fresh variable still unresolved at this final check has no proven
+        // integer representation. In particular a global alias is initialized
+        // once; later references cannot specialize its initializer per use.
+        ITParam(_) => false, ITVar(_) => true,
         _ => Option.is_none(integer_kind(t)),
     } }
     else { false }
@@ -782,7 +786,11 @@ let check_call_targs (ctx: TyContext) (fns: Array[TFn]) (reqs: Array[OrdReq]) (s
             if idx >= 0 && idx < targs.len() && violates_bound(ctx, reqs[i].kind, got) {
                 fail_tc("call to ${n}: ${reqs[i].param} is "
                     .concat(render_ty(got)).concat(", but ").concat(n).concat(" requires ")
-                    .concat(reqs[i].param).concat(bound_needs(reqs[i].kind)))
+                    .concat(reqs[i].param).concat(bound_needs(reqs[i].kind))
+                    .concat(if reqs[i].kind == "Integer" { match got {
+                        ITVar(_) => "; add a concrete type annotation to the function value",
+                        _ => "",
+                    } } else { "" }))
             } else { () }
         } else { () };
         check_call_targs(ctx, fns, reqs, sub, m, n, targs, i + 1)

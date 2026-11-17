@@ -1,0 +1,26 @@
+let bits[T] (x: T): T = x & x
+let keep[T] (mask: T) (x: T): T = mask & x
+let concrete (x: Int): Int = x << 1
+
+// Each global has one concrete initialized representation.
+let integer_alias: (Int) -> Int = bits
+let byte_alias: (U8) -> U8 = bits
+let unsigned_alias: (U64) -> U64 = bits
+let byte_chain = byte_alias
+let mask: U8 = 14
+let partial = keep(mask)
+let concrete_alias = concrete
+
+let main (): Unit = {
+    let integer = integer_alias;
+    let byte = byte_chain;
+    let unsigned = unsigned_alias;
+    let masked = partial;
+    let doubled = concrete_alias;
+    assert_eq(integer(3), 3);
+    assert_eq(byte(255), 255);
+    assert_eq(unsigned(18446744073709551615), 18446744073709551615);
+    assert_eq(masked(12), 12);
+    assert_eq(doubled(3), 6);
+    println("integer global aliases ok")
+}

@@ -46,6 +46,15 @@ bindings. Logical shifts mask off source sign extension; population counts
 clear one low set bit per step without libc or target-specific intrinsics.
 Int's existing helpers stay in place, and I64 resolves to them as before.
 
+Global function values have one initialized representation, not a separate
+specialization at each reference. An integer requirement must therefore have
+a known integer argument at initialization. An alias such as `let alias = bits`
+for an integer-generic function needs a concrete annotation, for example
+`let alias: (U8) -> U8 = bits`. No annotation is needed when the initializer
+already fixes the type, such as a partial call with a typed U8 argument.
+Unresolved integer requirement arguments are rejected at the final call check;
+named generic parameters continue to propagate their requirements to callers.
+
 Validation compares against Python's unbounded integer/bit models in hosted
 and freestanding debug/release builds. It includes width edges, negative
 values and counts, high-half U64, contextual literals, type mixing rejection,
