@@ -1,12 +1,14 @@
 let main (): Unit = {
-    println("before
+    println(
+        "before
 
 
     
 	
 // literal comment
 }
-    after");
+    after"
+    );
 
     println("done")
 }

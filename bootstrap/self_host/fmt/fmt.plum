@@ -1,82 +1,32 @@
 use Os;
 
-// `plum fmt` -- the formatter.
+// `plum fmt` uses structural layout and a soft target of 100 columns.
+// Blocks, records and arms get room to breathe; long signatures, calls and
+// chains wrap at token boundaries. Comments and literal contents survive.
 //
-// It is `lexer.relex` with opinions. They are:
-//   * the line a statement, item or match arm begins on is indented
-//     four spaces per enclosing block, and a closing brace one level
-//     out from what it closes;
-//   * a run of comment lines is indented with what it documents;
-//   * a run of blank lines collapses to one;
-//   * a comma has no space before it and one space after, and so does
-//     a colon -- except that a colon's LEADING space is left alone,
-//     because `require c : "msg"` spells it that way and nothing at the
-//     token level separates that from `x: Int`;
-//   * nothing sits just inside a bracket: `f( a )` becomes `f(a)`;
-//   * a binary operator gets one space on each side, and a UNARY minus
-//     does not -- `a-b` becomes `a - b` while `-n` is left alone;
-//   * a line that CONTINUES a construct begun on an earlier line is
-//     indented four past the line that construct started on.
+// `layout.plum` plans structural breaks; `width.plum` lays out delimiter
+// groups and chains. The indentation kernel below resolves parser-owned
+// anchors in source order, including continuation lines and nested braces.
 //
-// Everything else in the file is passed through byte for byte.
-//
-// Every one of those was MEASURED against the corpus before being
-// written, not imported from another language. The comma rule, for
-// instance: 20,585 commas, and the only ones not already followed by a
-// space were inside string literals but for a single `[1,2,3]`.
-//
-// It also places CLOSING BRACES, and `} else {` with them: a `}` sits
-// one level out from the statements it closes, which is exact rather
-// than guessed because `PBlock` records where its own braces are.
-//
-// Match and `select` arms are placed by the SAME rule and the same
-// function. An arm sits inside braces exactly as a statement does, so
-// once `MatchArmNode` carried a start offset and `EMatch` carried its
-// closing brace, arms needed no rule of their own -- they call
-// `resolve_candidate` and inherit its refusals too.
-//
-// The last of those rules is newer than the rest, and for most of this
-// file's life the header said the opposite: that a line belonging to a
-// construct with no braces of its own -- the `=` continuation of a long
-// `let`, a `|>` chain broken across lines, a multi-line call's
-// arguments -- could not be placed, because statements and items carried
-// source ranges and EXPRESSIONS DID NOT. That was true, and it was the
-// right restraint while it held: a formatter that reflows inside an
-// expression it cannot see the shape of will move code it has
-// mis-attributed.
-//
-// `parser.ExprSpan` is what changed. The parser now records where every
-// expression begins and ends, so the construct a continuation line
-// belongs to has a name, and the line can be placed by measuring rather
-// than guessed at.
-//
-// What did NOT change is the stance. This still only moves lines it can
-// name, and it still refuses four kinds it cannot: a line inside a
-// multi-line string token, a line whose anchor construct starts partway
-// along its own line, a hand-aligned line sitting deeper than the grid
-// answer, and an item's `require`/`ensure`/`=` header lines. Each
-// refusal is there because the corpus either said nothing or disagreed
-// with itself, and each is written down where it happens.
-//
-// It still REFLOWS nothing: no line is ever split or joined. Every rule
-// here changes leading whitespace and the gaps between tokens on a
-// line, and that is the whole of it.
-//
-// The rule is not invented. Across the 242 `.plum` files in this repo,
-// indentation is already a multiple of four everywhere, there is not one
-// tab, not one line with trailing whitespace, and not one file missing
-// its final newline. The corpus IS the style guide; this encodes what it
-// already does. The test of that is `bootstrap/fmt-check`: formatting
-// every file in the repo must change nothing.
+// `bootstrap/fmt-check` checks fixed points, token preservation and idempotence
+// across repository sources and deliberately cramped formatting fixtures.
 
 // Source positions are codepoint offsets, matching lexer/parser spans. Keep
 // one offset per line, rather than a table entry per character. All offset
 // lookups use binary search; dense lines never rescan their growing prefix.
-struct Source { text: Array[String], lines: Array[Int], token_starts: Array[Int] }
+struct Source {
+    text: Array[String],
+    lines: Array[Int],
+    token_starts: Array[Int]
+}
 
 let source_of (src: String) (token_starts: Array[Int]): Source = {
     let text = chars_of(src);
-    Source { text: text, lines: collect_lines(text, 0, [0]), token_starts: token_starts }
+    Source {
+        text: text,
+        lines: collect_lines(text, 0, [0]),
+        token_starts: token_starts
+    }
 }
 
 let collect_lines (text: Array[String]) (at: Int) (acc: Array[Int]): Array[Int] =
@@ -93,14 +43,22 @@ let collect_lines (text: Array[String]) (at: Int) (acc: Array[Int]): Array[Int] 
 // follow, and pulling them out to the brace's level moves them out of
 // the body they belong to. That is a regression this had before the
 // flag existed, and five files in the repo caught it.
-struct Edit { line_start: Int, anchor: Int, indent: Int, owns_comments: Bool, continuation: Bool }
+struct Edit {
+    line_start: Int,
+    anchor: Int,
+    indent: Int,
+    owns_comments: Bool,
+    continuation: Bool
+}
 
 // Collect structural indentation dependencies, outer constructs first.
 // An item owns column zero; block bodies depend on their brace line.
 let item_edits (chars: Source) (it: parser.ItemNode) (acc: Array[Edit]): Array[Edit] =
     if it.start < 0 { acc }
     else {
-        let a = if first_on_line(chars, it.start) { acc.push(edit_at(chars, it.start, 0)) } else { acc };
+        let a = if first_on_line(chars, it.start) { acc.push(edit_at(chars, it.start, 0)) } else {
+            acc
+        };
         match it.kind {
             IKLet(def) => expr_edits(chars, def.body, a),
             _ => a,
@@ -113,10 +71,23 @@ let expr_edits (chars: Source) (e: parser.PExpr) (acc: Array[Edit]): Array[Edit]
         EIf(c, t, els) => {
             let a1 = expr_edits(chars, c, acc);
             let a2 = block_edits(chars, t, a1);
-            match els { Some(x) => expr_edits(chars, x, a2), None => a2 }
+            match els {
+                Some(x) => expr_edits(chars, x, a2),
+                None => a2
+            }
         },
-        EMatch(sc, arms, close) => arm_edits(chars, arms, 0, arm_line_edits(chars, arm_starts(arms, 0, []), close, expr_edits(chars, sc, acc))),
-        ESelect(arms, close) => select_edits(chars, arms, 0, arm_line_edits(chars, select_arm_starts(arms, 0, []), close, acc)),
+        EMatch(sc, arms, close) => arm_edits(
+            chars,
+            arms,
+            0,
+            arm_line_edits(chars, arm_starts(arms, 0, []), close, expr_edits(chars, sc, acc))
+        ),
+        ESelect(arms, close) => select_edits(
+            chars,
+            arms,
+            0,
+            arm_line_edits(chars, select_arm_starts(arms, 0, []), close, acc)
+        ),
         EFor(_, iter, body) => block_edits(chars, body, expr_edits(chars, iter, acc)),
         EUnsafe(b) => block_edits(chars, b, acc),
         ESpawn(b) => block_edits(chars, b, acc),
@@ -131,7 +102,10 @@ let expr_edits (chars: Source) (e: parser.PExpr) (acc: Array[Edit]): Array[Edit]
         EArray(xs) => list_edits(chars, xs, 0, acc),
         EStructLit(_, fields, spread) => {
             let a = field_edits(chars, fields, 0, acc);
-            match spread { Some(x) => expr_edits(chars, x, a), None => a }
+            match spread {
+                Some(x) => expr_edits(chars, x, a),
+                None => a
+            }
         },
         EInt(_, _) => acc,
         EFloat(_) => acc,
@@ -146,10 +120,18 @@ let expr_edits (chars: Source) (e: parser.PExpr) (acc: Array[Edit]): Array[Edit]
 let block_edits (chars: Source) (b: parser.PBlock) (acc: Array[Edit]): Array[Edit] = {
     let a = match block_anchor(chars, b.starts) {
         None => acc,
-        Some(anchor) => close_brace_edit(chars, b.close, anchor, stmt_line_edits(chars, b.starts, 0, anchor, acc)),
+        Some(anchor) => close_brace_edit(
+            chars,
+            b.close,
+            anchor,
+            stmt_line_edits(chars, b.starts, 0, anchor, acc)
+        ),
     };
     let a2 = stmt_body_edits(chars, b.stmts, 0, a);
-    match b.tail { Some(t) => expr_edits(chars, t, a2), None => a2 }
+    match b.tail {
+        Some(t) => expr_edits(chars, t, a2),
+        None => a2
+    }
 }
 
 // Only a closing brace that begins its line owns that line's indent.
@@ -172,20 +154,39 @@ let block_anchor (chars: Source) (starts: Array[Int]): Option[Int] =
         }
     }
 
-let stmt_line_edits (chars: Source) (starts: Array[Int]) (i: Int) (anchor: Int) (acc: Array[Edit]): Array[Edit] =
+let stmt_line_edits
+    (chars: Source)
+    (starts: Array[Int])
+    (i: Int)
+    (anchor: Int)
+    (acc: Array[Edit]): Array[Edit]
+=
     if i >= starts.len() { acc }
     // Synthetic statements have no source. A statement sharing a line
     // with its brace does not own that line's indentation either.
     else if starts[i] < 0 { stmt_line_edits(chars, starts, i + 1, anchor, acc) }
     else if !first_on_line(chars, starts[i]) { stmt_line_edits(chars, starts, i + 1, anchor, acc) }
-    else { stmt_line_edits(chars, starts, i + 1, anchor, acc.push(relative_edit(chars, starts[i], anchor, 4, true, false))) }
+    else {
+        stmt_line_edits(
+            chars,
+            starts,
+            i + 1,
+            anchor,
+            acc.push(relative_edit(chars, starts[i], anchor, 4, true, false))
+        )
+    }
 
 let first_on_line (chars: Source) (offset: Int): Bool = {
     let ls = line_start_of(chars, offset);
     ls + indent_length(chars, ls, 0) == offset
 }
 
-let stmt_body_edits (chars: Source) (stmts: Array[parser.PStmt]) (i: Int) (acc: Array[Edit]): Array[Edit] =
+let stmt_body_edits
+    (chars: Source)
+    (stmts: Array[parser.PStmt])
+    (i: Int)
+    (acc: Array[Edit]): Array[Edit]
+=
     if i >= stmts.len() { acc }
     else {
         let a = match stmts[i] {
@@ -199,14 +200,31 @@ let stmt_body_edits (chars: Source) (stmts: Array[parser.PStmt]) (i: Int) (acc: 
 let list_edits (chars: Source) (xs: Array[parser.PExpr]) (i: Int) (acc: Array[Edit]): Array[Edit] =
     if i >= xs.len() { acc } else { list_edits(chars, xs, i + 1, expr_edits(chars, xs[i], acc)) }
 
-let field_edits (chars: Source) (fs: Array[parser.FieldInitNode]) (i: Int) (acc: Array[Edit]): Array[Edit] =
-    if i >= fs.len() { acc } else { field_edits(chars, fs, i + 1, expr_edits(chars, fs[i].value, acc)) }
+let field_edits
+    (chars: Source)
+    (fs: Array[parser.FieldInitNode])
+    (i: Int)
+    (acc: Array[Edit]): Array[Edit]
+=
+    if i >= fs.len() { acc } else {
+        field_edits(chars, fs, i + 1, expr_edits(chars, fs[i].value, acc))
+    }
 
 // Match/select arms use the same brace dependency as block statements.
-let arm_line_edits (chars: Source) (starts: Array[Int]) (close: Int) (acc: Array[Edit]): Array[Edit] =
+let arm_line_edits
+    (chars: Source)
+    (starts: Array[Int])
+    (close: Int)
+    (acc: Array[Edit]): Array[Edit]
+=
     match block_anchor(chars, starts) {
         None => acc,
-        Some(anchor) => close_brace_edit(chars, close, anchor, stmt_line_edits(chars, starts, 0, anchor, acc)),
+        Some(anchor) => close_brace_edit(
+            chars,
+            close,
+            anchor,
+            stmt_line_edits(chars, starts, 0, anchor, acc)
+        ),
     }
 
 let arm_starts (arms: Array[parser.MatchArmNode]) (i: Int) (acc: Array[Int]): Array[Int] =
@@ -215,14 +233,27 @@ let arm_starts (arms: Array[parser.MatchArmNode]) (i: Int) (acc: Array[Int]): Ar
 let select_arm_starts (arms: Array[parser.SelectArmNode]) (i: Int) (acc: Array[Int]): Array[Int] =
     if i >= arms.len() { acc } else { select_arm_starts(arms, i + 1, acc.push(arms[i].start)) }
 
-let arm_edits (chars: Source) (arms: Array[parser.MatchArmNode]) (i: Int) (acc: Array[Edit]): Array[Edit] =
+let arm_edits
+    (chars: Source)
+    (arms: Array[parser.MatchArmNode])
+    (i: Int)
+    (acc: Array[Edit]): Array[Edit]
+=
     if i >= arms.len() { acc }
     else {
-        let a = match arms[i].guard { Some(g) => expr_edits(chars, g, acc), None => acc };
+        let a = match arms[i].guard {
+            Some(g) => expr_edits(chars, g, acc),
+            None => acc
+        };
         arm_edits(chars, arms, i + 1, expr_edits(chars, arms[i].body, a))
     }
 
-let select_edits (chars: Source) (arms: Array[parser.SelectArmNode]) (i: Int) (acc: Array[Edit]): Array[Edit] =
+let select_edits
+    (chars: Source)
+    (arms: Array[parser.SelectArmNode])
+    (i: Int)
+    (acc: Array[Edit]): Array[Edit]
+=
     if i >= arms.len() { acc }
     else {
         let a = match arms[i].kind {
@@ -236,10 +267,29 @@ let select_edits (chars: Source) (arms: Array[parser.SelectArmNode]) (i: Int) (a
 // --- Applying edits ---
 
 let edit_at (chars: Source) (offset: Int) (indent: Int): Edit =
-    Edit { line_start: line_start_of(chars, offset), anchor: -1, indent: indent, owns_comments: true, continuation: false }
+    Edit {
+        line_start: line_start_of(chars, offset),
+        anchor: -1,
+        indent: indent,
+        owns_comments: true,
+        continuation: false
+    }
 
-let relative_edit (chars: Source) (offset: Int) (anchor: Int) (delta: Int) (owns: Bool) (cont: Bool): Edit =
-    Edit { line_start: line_start_of(chars, offset), anchor: anchor, indent: delta, owns_comments: owns, continuation: cont }
+let relative_edit
+    (chars: Source)
+    (offset: Int)
+    (anchor: Int)
+    (delta: Int)
+    (owns: Bool)
+    (cont: Bool): Edit
+=
+    Edit {
+        line_start: line_start_of(chars, offset),
+        anchor: anchor,
+        indent: delta,
+        owns_comments: owns,
+        continuation: cont
+    }
 
 let line_start_of (chars: Source) (offset: Int): Int =
     chars.lines[offset_index(chars.lines, offset, 0, chars.lines.len())]
@@ -255,7 +305,8 @@ let offset_index (lines: Array[Int]) (offset: Int) (lo: Int) (hi: Int): Int =
     }
 
 let indent_length (chars: Source) (at: Int) (n: Int): Int =
-    if at + n >= chars.text.len() { n } else if chars.text[at + n] == " " || chars.text[at + n] == "\t" { indent_length(chars, at, n + 1) } else { n }
+    if at + n >= chars.text.len() { n } else if chars.text[at + n] == " " || chars.text[at + n]
+        == "\t" { indent_length(chars, at, n + 1) } else { n }
 
 // Prefix length is a source offset; columns are layout. Tabs advance to
 // the next four-column stop, matching the formatter's indentation grid.
@@ -296,10 +347,17 @@ let is_comment_line (chars: Source) (ls: Int): Bool = {
 // Retain candidate order so an outer structural rule owns its line.
 // A structural rule whose anchor remains hand-aligned may refuse; only
 // then can a continuation rule place that line.
-let index_candidates (edits: Array[Edit]) (i: Int) (m: Map[Int, Array[Edit]]): Map[Int, Array[Edit]] =
+let index_candidates
+    (edits: Array[Edit])
+    (i: Int)
+    (m: Map[Int, Array[Edit]]): Map[Int, Array[Edit]]
+=
     if i >= edits.len() { m }
     else {
-        let prior = match Map.get(m, edits[i].line_start) { Some(xs) => xs, None => [] };
+        let prior = match Map.get(m, edits[i].line_start) {
+            Some(xs) => xs,
+            None => []
+        };
         index_candidates(edits, i + 1, Map.insert(m, edits[i].line_start, prior.push(edits[i])))
     }
 
@@ -313,7 +371,12 @@ let assigned_indent (chars: Source) (assigned: Map[Int, Int]) (ls: Int): Int =
 // topological order, including braces on continuation and `else` lines.
 // Attach comments only once their owner's indentation is known; comment
 // lines are never anchors for code, so these forward references are safe.
-let resolve_lines (chars: Source) (candidates: Map[Int, Array[Edit]]) (i: Int) (assigned: Map[Int, Int]): Map[Int, Int] =
+let resolve_lines
+    (chars: Source)
+    (candidates: Map[Int, Array[Edit]])
+    (i: Int)
+    (assigned: Map[Int, Int]): Map[Int, Int]
+=
     if i >= chars.lines.len() { assigned }
     else {
         let ls = chars.lines[i];
@@ -325,13 +388,20 @@ let resolve_lines (chars: Source) (candidates: Map[Int, Array[Edit]]) (i: Int) (
             None => resolve_lines(chars, candidates, i + 1, assigned),
             Some(edit) => {
                 let next = Map.insert(assigned, ls, edit.indent);
-                let comments = if edit.owns_comments { run_above(chars, ls, edit.indent, next) } else { next };
+                let comments = if edit.owns_comments { run_above(chars, ls, edit.indent, next) } else {
+                    next
+                };
                 resolve_lines(chars, candidates, i + 1, comments)
             },
         }
     }
 
-let resolve_candidate (chars: Source) (assigned: Map[Int, Int]) (xs: Array[Edit]) (i: Int): Option[Edit] =
+let resolve_candidate
+    (chars: Source)
+    (assigned: Map[Int, Int])
+    (xs: Array[Edit])
+    (i: Int): Option[Edit]
+=
     if i >= xs.len() { None }
     else {
         let e = xs[i];
@@ -346,7 +416,15 @@ let resolve_candidate (chars: Source) (assigned: Map[Int, Int]) (xs: Array[Edit]
             if col % 4 != 0 || (e.continuation && old % 4 != 0 && old > want) {
                 resolve_candidate(chars, assigned, xs, i + 1)
             } else {
-                Some(Edit { line_start: e.line_start, anchor: -1, indent: want, owns_comments: e.owns_comments, continuation: false })
+                Some(
+                    Edit {
+                        line_start: e.line_start,
+                        anchor: -1,
+                        indent: want,
+                        owns_comments: e.owns_comments,
+                        continuation: false
+                    }
+                )
             }
         }
     }
@@ -362,7 +440,14 @@ let resolve_candidate (chars: Source) (assigned: Map[Int, Int]) (xs: Array[Edit]
 // rather than a preference. It is also the first rule here that changes
 // something other than leading whitespace, which is why `fmt-check`
 // checks the TOKEN sequence rather than comparing stripped lines.
-let walk_lines (chars: Source) (by_line: Map[Int, Int]) (toks: Array[parser.ExprSpan]) (at: Int) (prev_blank: Bool) (acc: String): String =
+let walk_lines
+    (chars: Source)
+    (by_line: Map[Int, Int])
+    (toks: Array[parser.ExprSpan])
+    (at: Int)
+    (prev_blank: Bool)
+    (acc: String): String
+=
     if at >= chars.text.len() { acc }
     // Literal contents must bypass every whitespace rule, including blank
     // line collapse. They also break runs of blank source lines.
@@ -373,7 +458,9 @@ let walk_lines (chars: Source) (by_line: Map[Int, Int]) (toks: Array[parser.Expr
     else if is_blank_line(chars, at) {
         let e = line_end(chars, at);
         // Strip indentation while retaining the source line ending.
-        let nl = if e >= at + 2 && chars.text[e - 2] == "\r" && chars.text[e - 1] == "\n" { e - 2 } else { line_end_no_nl(chars, at) };
+        let nl = if e >= at + 2 && chars.text[e - 2] == "\r" && chars.text[e - 1] == "\n" { e - 2 } else {
+            line_end_no_nl(chars, at)
+        };
         if prev_blank { walk_lines(chars, by_line, toks, e, true, acc) }
         else { walk_lines(chars, by_line, toks, e, true, acc.concat(slice(chars, nl, e))) }
     }
@@ -386,13 +473,21 @@ let walk_lines (chars: Source) (by_line: Map[Int, Int]) (toks: Array[parser.Expr
             Some(indent) => {
                 let sp = indent_length(chars, at, 0);
                 let e = line_end(chars, at);
-                walk_lines(chars, by_line, toks, e, false, acc.concat(spaces(indent)).concat(slice(chars, at + sp, e)))
+                walk_lines(
+                    chars,
+                    by_line,
+                    toks,
+                    e,
+                    false,
+                    acc.concat(spaces(indent)).concat(slice(chars, at + sp, e))
+                )
             },
         }
     }
 
 // Whitespace to the end of the line, and nothing else.
-let is_blank_line (chars: Source) (at: Int): Bool = at + count_spaces_ws(chars, at, 0) >= line_end_no_nl(chars, at)
+let is_blank_line (chars: Source) (at: Int): Bool =
+    at + count_spaces_ws(chars, at, 0) >= line_end_no_nl(chars, at)
 
 let count_spaces_ws (chars: Source) (at: Int) (n: Int): Int =
     if at + n >= chars.text.len() { n }
@@ -401,22 +496,26 @@ let count_spaces_ws (chars: Source) (at: Int) (n: Int): Int =
     else { n }
 
 let line_end_no_nl (chars: Source) (at: Int): Int =
-    if at >= chars.text.len() { at } else if chars.text[at] == "\n" { at } else { line_end_no_nl(chars, at + 1) }
+    if at >= chars.text.len() { at } else if chars.text[at] == "\n" { at } else {
+        line_end_no_nl(chars, at + 1)
+    }
 
 // Through the newline, so the caller always resumes at a line start.
 let line_end (chars: Source) (at: Int): Int =
-    if at >= chars.text.len() { at } else if chars.text[at] == "\n" { at + 1 } else { line_end(chars, at + 1) }
+    if at >= chars.text.len() { at } else if chars.text[at] == "\n" { at + 1 } else {
+        line_end(chars, at + 1)
+    }
 
 let slice (chars: Source) (from: Int) (to: Int): String = text_slice(chars.text, from, to)
 
 let text_slice (chars: Array[String]) (from: Int) (to: Int): String =
     Array.concat_all(Array.slice(chars, from, to))
 
-// Normalize token gaps once, then parse and resolve layout once. Every
-// relative rule points backward in source order, so there is no fixed
-// point iteration, pass budget, or successful partially formatted result.
+// Plan structural breaks, resolve indentation, then lay out width groups.
+// Each stage runs in source order; formatting does not repeat passes until
+// the output stops changing.
 pub let format (path: String) (src: String): String =
-    format_once(path, normalize_gaps(path, src))
+    format_layout(path, src)
 
 // --- Spacing between tokens, on one line ---
 //
@@ -447,12 +546,21 @@ let gaps_acc (chars: Array[String]) (lexed: lexer.LexedSource) (i: Int) (acc: St
         let text = text_slice(chars, lexed.starts[i], lexed.ends[i]);
         let from = if i == 0 { 0 } else { lexed.ends[i - 1] };
         let gap = text_slice(chars, from, lexed.starts[i]);
-        let prev = if i == 0 { "" } else { text_slice(chars, lexed.starts[i - 1], lexed.ends[i - 1]) };
+        let prev = if i == 0 { "" } else {
+            text_slice(chars, lexed.starts[i - 1], lexed.ends[i - 1])
+        };
         // Two tokens back, because deciding whether `prev` was a BINARY
         // operator needs what came before IT -- `a - 1` and `(-1)`
         // differ only there.
-        let prev2 = if i < 2 { "" } else { text_slice(chars, lexed.starts[i - 2], lexed.ends[i - 2]) };
-        gaps_acc(chars, lexed, i + 1, acc.concat(canonical_gap(gap, prev, text, prev2)).concat(text))
+        let prev2 = if i < 2 { "" } else {
+            text_slice(chars, lexed.starts[i - 2], lexed.ends[i - 2])
+        };
+        gaps_acc(
+            chars,
+            lexed,
+            i + 1,
+            acc.concat(canonical_gap(gap, prev, text, prev2)).concat(text)
+        )
     }
 
 let canonical_gap (gap: String) (prev: String) (next: String) (prev2: String): String =
@@ -490,10 +598,12 @@ let canonical_gap (gap: String) (prev: String) (next: String) (prev2: String): S
 // with operands, it is a name.
 let is_binary_op (tok: String) (before: String): Bool =
     if tok == "-" { ends_an_operand(before) }
-    else { tok == "+" || tok == "*" || tok == "/" || tok == "%"
-        || tok == "==" || tok == "!=" || tok == "<" || tok == ">"
-        || tok == "<=" || tok == ">=" || tok == "&&" || tok == "||"
-        || tok == "|>" }
+    else {
+        tok == "+" || tok == "*" || tok == "/" || tok == "%"
+            || tok == "==" || tok == "!=" || tok == "<" || tok == ">"
+            || tok == "<=" || tok == ">=" || tok == "&&" || tok == "||"
+            || tok == "|>"
+    }
 
 // Can this token END an operand? Only then is a following `-` binary.
 let ends_an_operand (tok: String): Bool =
@@ -521,7 +631,11 @@ let format_once (path: String) (src: String): String = {
     // a block or an arm can place is placed by that, and the
     // continuation rule only ever speaks for lines nothing else claims.
     let toks = spanning_tokens(chars, lexed, 0, []);
-    apply_edits(chars, continuation_edits(chars, toks, spans, all_item_edits(chars, items, 0, [])), toks)
+    apply_edits(
+        chars,
+        continuation_edits(chars, toks, spans, all_item_edits(chars, items, 0, [])),
+        toks
+    )
 }
 
 // --- Continuation lines ---
@@ -567,7 +681,12 @@ let format_once (path: String) (src: String): String = {
 //     aligned line, and `resolve_candidate` already refuses those for the
 //     same reason. Whatever a construct is doing under such a line, it
 //     was not put there by counting.
-let continuation_edits (chars: Source) (toks: Array[parser.ExprSpan]) (spans: Array[parser.ExprSpan]) (acc: Array[Edit]): Array[Edit] =
+let continuation_edits
+    (chars: Source)
+    (toks: Array[parser.ExprSpan])
+    (spans: Array[parser.ExprSpan])
+    (acc: Array[Edit]): Array[Edit]
+=
     cont_acc(chars, multiline_only(chars, spans, 0, []), toks, 0, acc)
 
 // Tokens that themselves cross a line -- which in Plum means one thing,
@@ -586,11 +705,22 @@ let continuation_edits (chars: Source) (toks: Array[parser.ExprSpan]) (spans: Ar
 // Every rule before this one worked from AST offsets, which are always
 // at token boundaries; this is the first that walks raw lines, so it is
 // the first that has to know a line start can be inside a token.
-let spanning_tokens (chars: Source) (lexed: lexer.LexedSource) (i: Int) (acc: Array[parser.ExprSpan]): Array[parser.ExprSpan] =
+let spanning_tokens
+    (chars: Source)
+    (lexed: lexer.LexedSource)
+    (i: Int)
+    (acc: Array[parser.ExprSpan]): Array[parser.ExprSpan]
+=
     if i >= lexed.tokens.len() || i >= lexed.starts.len() { acc }
-    else if lexed.ends[i] > lexed.starts[i] && line_start_of(chars, lexed.starts[i]) != line_start_of(chars, lexed.ends[i] - 1) {
-        spanning_tokens(chars, lexed, i + 1, acc.push(parser.ExprSpan { start: lexed.starts[i], end: lexed.ends[i] }))
-    } else { spanning_tokens(chars, lexed, i + 1, acc) }
+    else if lexed.ends[i] > lexed.starts[i] && line_start_of(chars, lexed.starts[i])
+        != line_start_of(chars, lexed.ends[i] - 1) {
+            spanning_tokens(
+                chars,
+                lexed,
+                i + 1,
+                acc.push(parser.ExprSpan { start: lexed.starts[i], end: lexed.ends[i] })
+            )
+        } else { spanning_tokens(chars, lexed, i + 1, acc) }
 
 let inside_token (toks: Array[parser.ExprSpan]) (i: Int) (ls: Int): Bool =
     if i >= toks.len() { false }
@@ -601,20 +731,42 @@ let inside_token (toks: Array[parser.ExprSpan]) (i: Int) (ls: Int): Bool =
 // span that opens and closes on one line has nothing below it. Almost
 // every recorded span is single-line, so dropping them here is what
 // keeps the per-line scan short.
-let multiline_only (chars: Source) (spans: Array[parser.ExprSpan]) (i: Int) (acc: Array[parser.ExprSpan]): Array[parser.ExprSpan] =
+let multiline_only
+    (chars: Source)
+    (spans: Array[parser.ExprSpan])
+    (i: Int)
+    (acc: Array[parser.ExprSpan]): Array[parser.ExprSpan]
+=
     if i >= spans.len() { acc }
     else {
-        let last = if spans[i].end >= chars.text.len() { chars.text.len() - 1 } else { spans[i].end };
-        if last <= spans[i].start || line_start_of(chars, spans[i].start) == line_start_of(chars, last) {
-            multiline_only(chars, spans, i + 1, acc)
-        } else { multiline_only(chars, spans, i + 1, acc.push(spans[i])) }
+        let last = if spans[i].end >= chars.text.len() { chars.text.len() - 1 } else {
+            spans[i].end
+        };
+        if last <= spans[i].start || line_start_of(chars, spans[i].start)
+            == line_start_of(chars, last) {
+                multiline_only(chars, spans, i + 1, acc)
+            } else { multiline_only(chars, spans, i + 1, acc.push(spans[i])) }
     }
 
-let cont_acc (chars: Source) (spans: Array[parser.ExprSpan]) (toks: Array[parser.ExprSpan]) (at: Int) (acc: Array[Edit]): Array[Edit] =
+let cont_acc
+    (chars: Source)
+    (spans: Array[parser.ExprSpan])
+    (toks: Array[parser.ExprSpan])
+    (at: Int)
+    (acc: Array[Edit]): Array[Edit]
+=
     if at >= chars.text.len() { acc }
-    else { cont_acc(chars, spans, toks, line_end(chars, at), cont_line(chars, spans, toks, at, acc)) }
+    else {
+        cont_acc(chars, spans, toks, line_end(chars, at), cont_line(chars, spans, toks, at, acc))
+    }
 
-let cont_line (chars: Source) (spans: Array[parser.ExprSpan]) (toks: Array[parser.ExprSpan]) (ls: Int) (acc: Array[Edit]): Array[Edit] = {
+let cont_line
+    (chars: Source)
+    (spans: Array[parser.ExprSpan])
+    (toks: Array[parser.ExprSpan])
+    (ls: Int)
+    (acc: Array[Edit]): Array[Edit]
+= {
     let ind = indent_length(chars, ls, 0);
     let first = ls + ind;
     if is_blank_line(chars, ls) { acc }
@@ -626,7 +778,18 @@ let cont_line (chars: Source) (spans: Array[parser.ExprSpan]) (toks: Array[parse
         let anchor = innermost_start(spans, 0, ls, first, -1);
         // Mid-line expressions have no independent indent to anchor to.
         if anchor < 0 || !first_on_line(chars, anchor) { acc }
-        else { acc.push(relative_edit(chars, ls, line_start_of(chars, anchor), continues_level(chars, first), true, true)) }
+        else {
+            acc.push(
+                relative_edit(
+                    chars,
+                    ls,
+                    line_start_of(chars, anchor),
+                    continues_level(chars, first),
+                    true,
+                    true
+                )
+            )
+        }
     }
 }
 
@@ -657,11 +820,18 @@ let continues_level (chars: Source) (at: Int): Int = if word_at(chars, at, "else
 // with a closing bracket, so it said nothing about them, and a rule the
 // corpus did not dictate is not one to guess at.
 let is_closer_line (chars: Source) (at: Int): Bool =
-    at < chars.text.len() && (chars.text[at] == "}" || chars.text[at] == ")" || chars.text[at] == "]")
+    at < chars.text.len()
+        && (chars.text[at] == "}" || chars.text[at] == ")" || chars.text[at] == "]")
 
 // The enclosing extent that begins latest: it started before this line
 // and has not ended by this line's first character.
-let innermost_start (spans: Array[parser.ExprSpan]) (i: Int) (ls: Int) (first: Int) (best: Int): Int =
+let innermost_start
+    (spans: Array[parser.ExprSpan])
+    (i: Int)
+    (ls: Int)
+    (first: Int)
+    (best: Int): Int
+=
     if i >= spans.len() { best }
     else if spans[i].start < ls && spans[i].end > first && spans[i].start > best {
         innermost_start(spans, i + 1, ls, first, spans[i].start)
@@ -672,7 +842,8 @@ let innermost_start (spans: Array[parser.ExprSpan]) (i: Int) (ls: Int) (first: I
 // at all -- so nothing would place them anyway were it not for the
 // item's own extent, which covers them.
 let is_header_line (chars: Source) (at: Int): Bool =
-    at < chars.text.len() && (chars.text[at] == "=" || word_at(chars, at, "require") || word_at(chars, at, "ensure"))
+    at < chars.text.len()
+        && (chars.text[at] == "=" || word_at(chars, at, "require") || word_at(chars, at, "ensure"))
 
 let word_at (chars: Source) (at: Int) (w: String): Bool = word_eq(chars, at, chars_of(w), 0)
 
@@ -682,5 +853,12 @@ let word_eq (chars: Source) (at: Int) (w: Array[String]) (i: Int): Bool =
     else if chars.text[at + i] != w[i] { false }
     else { word_eq(chars, at, w, i + 1) }
 
-let all_item_edits (chars: Source) (items: Array[parser.ItemNode]) (i: Int) (acc: Array[Edit]): Array[Edit] =
-    if i >= items.len() { acc } else { all_item_edits(chars, items, i + 1, item_edits(chars, items[i], acc)) }
+let all_item_edits
+    (chars: Source)
+    (items: Array[parser.ItemNode])
+    (i: Int)
+    (acc: Array[Edit]): Array[Edit]
+=
+    if i >= items.len() { acc } else {
+        all_item_edits(chars, items, i + 1, item_edits(chars, items[i], acc))
+    }

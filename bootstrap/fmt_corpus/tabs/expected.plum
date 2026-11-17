@@ -24,7 +24,7 @@ let literal (): String = "start
 // Off-grid alignment and contract headers retain their existing policy.
 let aligned (n: Int): Bool =
     n > 0
-	     && n < 10
+        && n < 10
 
 let divide (a: Int) (b: Int): Int
 	require b != 0 : "nonzero"
