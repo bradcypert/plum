@@ -1,4 +1,7 @@
 use left;
 use right;
 
-let main (): Unit = { let s = Shade.On; println("unreachable") }
+let main (): Unit = {
+    let s = Shade.On;
+    println("unreachable")
+}

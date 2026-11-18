@@ -106,12 +106,34 @@ The full 391-fixture sanitizer corpus, 43 compiler units, 50 properties,
 pass. A tracked ASan/LSan compiler also emits the entire compiler without
 findings; its IR matches ordinary emission byte for byte.
 
+## Specialization-budget follow-up
+
+The formatter-directive work exposed a limit in the preserved occurrence policy:
+the compiler itself grew from 9,962 call occurrences / 2,300 specializations to
+10,041 occurrences / 2,319 specializations. The old seed and current compiler
+both rejected that finite program, although type checking and a focused module
+build passed. A temporary compiler with a larger occurrence budget measured
+these counts; no profiling hooks remain in production.
+
+Discovery now spends its 10,000 budget only on newly visited concrete
+specializations. Runtime calls and already visited instances are skipped before
+the guard. FIFO order, generated instances, and the separate 400-step bounded
+cycle search keep their existing behavior. The historical occurrence-boundary
+assertions above describe the storage optimization's original policy; current
+checks accept 10,001 repeated calls to a shared function and reject more than
+10,000 distinct specializations with the existing diagnostic.
+
+The checked-in seed is refreshed for this change: its old occurrence guard
+cannot compile the enlarged source. A temporary compiler from the preceding
+source, with only an increased occurrence limit, bridges the refresh. The
+refreshed seed must independently build the final source and pass the seed gate.
+
 ## Measurements
 
 Medians use decimal GB of requested bytes and MiB of peak RSS.
 [Raw samples and input/binary hashes](compiler-callgraph-worklists-measurements.json)
 include three measured rounds and the wide-graph comparison. Debug and release
-output hashes match across both compilers and all rounds on the same current
+output hashes match across both compilers and all rounds on the same measured
 source, including the new traversal and its unit.
 
 | Whole-compiler workload | Allocated GB before → after | Allocations before → after | Wall seconds before → after | Peak RSS MiB before → after |
@@ -134,14 +156,31 @@ visited/lookup/body scans and branch/text composition remain separate costs.
 
 ## Reproduction
 
-Build main da13a511e30d30d207d6df12a8b7221c39cdb001 and this branch through their
-own checked-in seed-to-source paths. Run ordinary executables on identical
-current source:
+To reproduce the historical comparison above, build baseline
+da13a511e30d30d207d6df12a8b7221c39cdb001 and measured revision
+d931346d1f3b15f10af59097b97c5daa905dbde9 through their own checked-in
+seed-to-source paths. Use the measured revision as the shared input source:
+both compilers accept it without a budget patch. Today's compiler source
+exceeds the baseline's occurrence budget, so do not run this comparison from
+the current checkout. The profiling script selects inputs relative to its own
+location, regardless of the shell's working directory.
 
 ```sh
-python3 bootstrap/reachability-memory-check.py /path/to/changed-compiler
-python3 bootstrap/compiler-profile.py --before /path/to/main-compiler \
-  --after /path/to/changed-compiler --samples 3 \
+git worktree add --detach /tmp/plum-callgraph-before da13a511e30d30d207d6df12a8b7221c39cdb001
+git worktree add --detach /tmp/plum-callgraph-after d931346d1f3b15f10af59097b97c5daa905dbde9
+for variant in before after; do
+  (
+    cd "/tmp/plum-callgraph-$variant"
+    ./bootstrap/from-seed -o "/tmp/plum-callgraph-$variant-seed" || exit 1
+    "/tmp/plum-callgraph-$variant-seed" build bootstrap/self_host \
+      -o "/tmp/plum-callgraph-$variant-compiler"
+  ) || exit 1
+done
+python3 /tmp/plum-callgraph-after/bootstrap/reachability-memory-check.py \
+  /tmp/plum-callgraph-after-compiler
+python3 /tmp/plum-callgraph-after/bootstrap/compiler-profile.py \
+  --before /tmp/plum-callgraph-before-compiler \
+  --after /tmp/plum-callgraph-after-compiler --samples 3 \
   --case check-compiler --case emit-compiler --case emit-compiler-debug \
   --out /tmp/plum-reachability-profile
 ```

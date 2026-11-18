@@ -30,7 +30,9 @@ with tempfile.TemporaryDirectory(prefix="plum-format-layout-") as temp:
     expected = ("let nested (): Int = {\n"
                 + "".join(" " * (4 * (i + 1)) + "if true {\n" for i in range(depth))
                 + " " * (4 * (depth + 1)) + "1\n"
-                + "".join(" " * (4 * (i + 1)) + "} else { 0 }\n"
+                + "".join(" " * (4 * (i + 1)) + "} else {\n"
+                          + " " * (4 * (i + 2)) + "0\n"
+                          + " " * (4 * (i + 1)) + "}\n"
                           for i in reversed(range(depth))) + "}\n")
     bare = "\n".join(line.lstrip() for line in expected.splitlines()) + "\n"
     for source in [bare, "\n".join("\t\t\t" + line for line in bare.splitlines()) + "\n"]:
@@ -38,17 +40,22 @@ with tempfile.TemporaryDirectory(prefix="plum-format-layout-") as temp:
         assert actual == expected, "deep blocks did not reach their assigned indentation"
         assert format_source(root, actual)[0] == actual, "deep layout is not idempotent"
         # A generous volume ceiling catches reintroducing repeated parses.
+        # Structural and width layout measured 35 MB on this deep fixture.
         # This counts cumulative allocated bytes, not peak/live memory.
-        assert allocated < 16_000_000, f"deep formatting allocated {allocated} bytes"
+        assert allocated < 48_000_000, f"deep formatting allocated {allocated} bytes"
 
     # Many nodes on one line exercise indexed source/token lookups. Keep
     # a broad timeout above; timing ratios would be noisy across CI hosts.
     for count in [1000, 4000]:
         source = "let dense (): Int = { " + "let x = 1; " * count + "x }\n"
-        assert format_source(root, source)[0] == source
+        expected_dense = "let dense (): Int = {\n" + "    let x = 1;\n" * count + "    x\n}\n"
+        assert format_source(root, source)[0] == expected_dense
         source = " ".join(f'let f{i} (): Int = {{ let s = "// {{"; 1 }}'
                           for i in range(count)) + "\n"
-        assert format_source(root, source)[0] == source
+        expected_items = "\n\n".join(
+            f'let f{i} (): Int = {{\n    let s = "// {{";\n    1\n}}'
+            for i in range(count)) + "\n"
+        assert format_source(root, source)[0] == expected_items
 
     # A comment marker INSIDE a token must not hide the following brace.
     source = 'let literal (): Int = {\nmatch "//" {\n_ => {\n1\n},\n}\n}\n'
@@ -59,7 +66,7 @@ with tempfile.TemporaryDirectory(prefix="plum-format-layout-") as temp:
     # Lexer offsets count codepoints, not UTF-8 bytes. Also exercise CRLF,
     # a trailing comment before a block body, and EOF without a newline.
     source = 'let prefix (): String = "λ🙂"\r\n\tlet text (): String = { // {\r\n// owner\r\n"λ🙂"\r\n}'
-    expected = 'let prefix (): String = "λ🙂"\r\nlet text (): String = { // {\r\n    // owner\r\n    "λ🙂"\r\n}'
+    expected = 'let prefix (): String = "λ🙂"\r\n\r\nlet text (): String = { // {\r\n    // owner\r\n    "λ🙂"\r\n}'
     actual, _ = format_source(root, source)
     assert actual == expected
     assert format_source(root, actual)[0] == actual

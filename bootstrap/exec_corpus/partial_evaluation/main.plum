@@ -2,22 +2,33 @@ let next (counter: Ref[Int]): Int = {
     counter.set(counter.get() + 1);
     counter.get()
 }
+
 let add (a: Int) (b: Int): Int = a + b
+
 let digits (a: Int) (b: Int) (c: Int): Int = a * 100 + b * 10 + c
+
 let make_adder (counter: Ref[Int]): (Int, Int) -> Int = {
     let base = next(counter) * 100;
     |a: Int, b: Int| base + a + b
 }
+
 struct Ops { apply: (Int, Int) -> Int }
+
 let make_ops (counter: Ref[Int]): Ops = Ops { apply: make_adder(counter) }
+
 struct Number { value: Int }
+
 let Number.plus (self: Number) (a: Int) (b: Int): Int = self.value + a + b
+
 let make_number (counter: Ref[Int]): Number = Number { value: next(counter) * 100 }
+
 let first [T] (a: T) (b: Int) (c: Int): T = a
+
 let escaped (): (Int) -> String = {
     let source = ["left", "right"];
     first(source[0].concat(source[1]), 0)
 }
+
 let main (): Unit = {
     let counter = ref(0);
     let inc = add(next(counter));

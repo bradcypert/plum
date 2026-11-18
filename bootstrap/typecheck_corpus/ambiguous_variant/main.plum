@@ -5,6 +5,7 @@
 // Picking the first-declared one is what this did before, and it is
 // how a program could mean one enum and be compiled as the other.
 enum Weight { Light, Heavy }
+
 enum Shade { Light, Dark }
 
 let main (): Unit = {

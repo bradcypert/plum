@@ -1,7 +1,10 @@
 use Os;
 
 let main (): Unit = match Os.temp_dir() {
-    Err(e) => { println(e); assert(false) },
+    Err(e) => {
+        println(e);
+        assert(false)
+    },
     Ok(root) => {
         let path = root.concat("/data");
         assert(Result.is_ok(Os.write_file(path, "old")));

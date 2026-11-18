@@ -14,4 +14,9 @@ use dark;
 
 let mix (s: dark.Shade): light.Shade = s
 
-let main (): Unit = println(match mix(dark.Shade.On) { light.Shade.On => "on", light.Shade.Off => "off" })
+let main (): Unit = println(
+    match mix(dark.Shade.On) {
+        light.Shade.On => "on",
+        light.Shade.Off => "off"
+    }
+)

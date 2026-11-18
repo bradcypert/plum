@@ -22,7 +22,9 @@ let show (label: String) (v: Int): Unit =
     println(String.pad_right(label, 16, " ").concat(v.to_string()))
 
 let flag_a: Int = 1
+
 let flag_b: Int = 2
+
 let flag_c: Int = 4
 
 let has (flags: Int) (f: Int): Bool = flags & f != 0

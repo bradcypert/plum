@@ -1,9 +1,13 @@
 let combine[T] (a: T) (b: T): T = (a & b) | (a ^ b)
+
 let shift[T] (a: T) (n: Int): T = a << n
+
 let inverse[T] (a: T): T = ~a
 
 let BYTE: U8 = ~0
+
 let SIGNED: I8 = 127 << 1
+
 let COMBINED: U8 = combine(BYTE, 1)
 
 let main (): Unit = {

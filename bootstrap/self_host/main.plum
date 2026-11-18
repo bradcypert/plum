@@ -67,6 +67,7 @@ use Encoding;
 use buildcache;
 use buildmode;
 use freestanding;
+use compiler_metadata;
 
 // `query <project> <path> <line> <col>` -- what is the type of the
 // identifier at that position?
@@ -106,7 +107,12 @@ let cmd_query (dir: String) (path: String) (line: Int) (col: Int): Unit = {
 // `None` for everything else, which falls through to the ordinary
 // identifier lookup -- including for the BASE of an access, so
 // hovering `p` in `p.x` still answers about `p`.
-let member_answer (items: Array[parser.ItemNode]) (cs: Array[String]) (path: String) (off: Int): Option[String] =
+let member_answer
+    (items: Array[parser.ItemNode])
+    (cs: Array[String])
+    (path: String)
+    (off: Int): Option[String]
+=
     if off < 0 || off >= cs.len() || !is_ident_char(cs[off]) { None }
     else {
         let start = ident_start(cs, off);
@@ -138,15 +144,26 @@ let ident_text (cs: Array[String]) (i: Int) (acc: String): String =
     else { ident_text(cs, i + 1, acc.concat(cs[i])) }
 
 // A struct field's DECLARED TYPE, or a namespaced function's signature.
-let member_detail (items: Array[parser.ItemNode]) (ns: String) (name: String) (i: Int): Option[String] =
+let member_detail
+    (items: Array[parser.ItemNode])
+    (ns: String)
+    (name: String)
+    (i: Int): Option[String]
+=
     if i >= items.len() { typecheck.integer_conversion_detail(ns, name) }
     else {
         let here = match items[i].kind {
             IKStruct(decl) => if decl.name == ns { field_type_named(decl, name, 0) } else { None },
-            IKLet(def) => if typecheck.canonical_associated_name(def.name) == typecheck.canonical_primitive_name(ns).concat(".").concat(name) { Some(def_signature(def)) } else { None },
+            IKLet(def) => if typecheck.canonical_associated_name(def.name)
+                == typecheck.canonical_primitive_name(ns).concat(".").concat(name) {
+                    Some(def_signature(def))
+                } else { None },
             _ => None,
         };
-        match here { Some(d) => Some(d), None => member_detail(items, ns, name, i + 1) }
+        match here {
+            Some(d) => Some(d),
+            None => member_detail(items, ns, name, i + 1)
+        }
     }
 
 let field_type_named (decl: parser.StructDeclNode) (name: String) (i: Int): Option[String] =
@@ -158,17 +175,21 @@ let field_type_named (decl: parser.StructDeclNode) (name: String) (i: Int): Opti
 // entries store the identifier's start; its length is its own name.
 let query_answer (nodes: Array[typecheck.NodeType]) (path: String) (off: Int) (i: Int): String =
     if i >= nodes.len() { "{}" }
-    else if nodes[i].path == path && off >= nodes[i].offset && off < nodes[i].offset + nodes[i].name.len() {
-        lsp.encode_json(JsonObject(Array.concat(
-            [
-                JsonEntry { key: "name", value: JsonString(nodes[i].name) },
-                JsonEntry { key: "type", value: JsonString(nodes[i].ty) },
-            ],
-            // The BINDING's position, when the checker knows one. A
-            // top-level name has none here -- the name index answers
-            // for those, and it knows which file they live in.
-            if nodes[i].def_offset >= 0 { def_position_fields(path, nodes[i].def_offset) } else { [] })))
-    }
+    else if nodes[i].path == path && off >= nodes[i].offset && off < nodes[i].offset
+        + nodes[i].name.len() {
+            lsp.encode_json(JsonObject(Array.concat(
+                [
+                    JsonEntry { key: "name", value: JsonString(nodes[i].name) },
+                    JsonEntry { key: "type", value: JsonString(nodes[i].ty) },
+                ],
+                // The BINDING's position, when the checker knows one. A
+                // top-level name has none here -- the name index answers
+                // for those, and it knows which file they live in.
+                if nodes[i].def_offset >= 0 {
+                    def_position_fields(path, nodes[i].def_offset)
+                } else { [] }
+            )))
+        }
     else { query_answer(nodes, path, off, i + 1) }
 
 let def_position_fields (path: String) (off: Int): Array[JsonEntry] =
@@ -230,10 +251,17 @@ let cmd_members (dir: String) (path: String) (line: Int) (col: Int): Unit = {
                 else {
                     match recorded_type_at(typecheck.recorded_types(()), path, start, 0) {
                         None => println("[]"),
-                        Some(ty) => println(lsp.encode_json(JsonArray(
-                            members_of(items, type_namespace(ty), 0,
-                                builtin_members(typecheck.builtin_methods(), type_namespace(ty), 0,
-                                    integer_conversion_members(type_namespace(ty), 0, [])))))),
+                        Some(ty) => println(lsp.encode_json(JsonArray(members_of(
+                            items,
+                            type_namespace(ty),
+                            0,
+                            builtin_members(
+                                typecheck.builtin_methods(),
+                                type_namespace(ty),
+                                0,
+                                integer_conversion_members(type_namespace(ty), 0, [])
+                            )
+                        )))),
                     }
                 }
             }
@@ -253,7 +281,12 @@ let is_ident_char (c: String): Bool =
 
 // The recorded entry that BEGINS at this offset. `query_answer` looks
 // for one that contains an offset; here the start is known exactly.
-let recorded_type_at (nodes: Array[typecheck.NodeType]) (path: String) (off: Int) (i: Int): Option[String] =
+let recorded_type_at
+    (nodes: Array[typecheck.NodeType])
+    (path: String)
+    (off: Int)
+    (i: Int): Option[String]
+=
     if i >= nodes.len() { None }
     else if nodes[i].path == path && nodes[i].offset == off { Some(nodes[i].ty) }
     else { recorded_type_at(nodes, path, off, i + 1) }
@@ -267,16 +300,24 @@ let type_namespace (ty: String): String =
         None => ty,
     }
 
-let members_of (items: Array[parser.ItemNode]) (ns: String) (i: Int) (acc: Array[JsonValue]): Array[JsonValue] =
+let members_of
+    (items: Array[parser.ItemNode])
+    (ns: String)
+    (i: Int)
+    (acc: Array[JsonValue]): Array[JsonValue]
+=
     if i >= items.len() { acc }
     else {
         let next = match items[i].kind {
             // A field is offered as a field, with its declared type as
             // the detail -- `x: Int`, not a signature.
             IKStruct(decl) => if decl.name == ns { fields_of(decl, 0, acc) } else { acc },
-            IKLet(def) => if typecheck.canonical_associated_name(def.name).starts_with(typecheck.canonical_primitive_name(ns).concat(".")) {
-                acc.push(completion_json(method_name_of(def.name), "function", def_signature(def)))
-            } else { acc },
+            IKLet(def) => if typecheck.canonical_associated_name(def.name)
+                .starts_with(typecheck.canonical_primitive_name(ns).concat(".")) {
+                    acc.push(
+                        completion_json(method_name_of(def.name), "function", def_signature(def))
+                    )
+                } else { acc },
             _ => acc,
         };
         members_of(items, ns, i + 1, next)
@@ -285,10 +326,20 @@ let members_of (items: Array[parser.ItemNode]) (ns: String) (i: Int) (acc: Array
 // The compiler's own methods for this receiver, which no source item
 // declares. Without these, typing `xs.` offered twenty-three prelude
 // functions and not `map`.
-let builtin_members (ms: Array[typecheck.BuiltinMethod]) (ns: String) (i: Int) (acc: Array[JsonValue]): Array[JsonValue] =
+let builtin_members
+    (ms: Array[typecheck.BuiltinMethod])
+    (ns: String)
+    (i: Int)
+    (acc: Array[JsonValue]): Array[JsonValue]
+=
     if i >= ms.len() { acc }
     else if ms[i].recv == ns || ms[i].recv == "" {
-        builtin_members(ms, ns, i + 1, acc.push(completion_json(ms[i].name, "function", ms[i].detail)))
+        builtin_members(
+            ms,
+            ns,
+            i + 1,
+            acc.push(completion_json(ms[i].name, "function", ms[i].detail))
+        )
     } else { builtin_members(ms, ns, i + 1, acc) }
 
 let integer_conversion_members (ns: String) (i: Int) (acc: Array[JsonValue]): Array[JsonValue] = {
@@ -305,8 +356,12 @@ let integer_conversion_members (ns: String) (i: Int) (acc: Array[JsonValue]): Ar
 let fields_of (decl: parser.StructDeclNode) (i: Int) (acc: Array[JsonValue]): Array[JsonValue] =
     if i >= decl.fields.len() { acc }
     else {
-        fields_of(decl, i + 1, acc.push(completion_json(decl.fields[i].name, "field",
-            decl.fields[i].name.concat(": ").concat(parser.render_type_source(decl.fields[i].ty)))))
+        fields_of(decl, i + 1, acc.push(completion_json(
+            decl.fields[i].name,
+            "field",
+            decl.fields[i].name.concat(": ")
+                .concat(parser.render_type_source(decl.fields[i].ty))
+        )))
     }
 
 // `String.trim_end` is offered as `trim_end`: the receiver is already
@@ -335,9 +390,31 @@ let method_name_of (full: String): String = {
 // edited, so there is nothing to derive them from. Kept in the lexer's
 // own order so the two can be diffed by eye.
 let keyword_completions (ignored: Unit): Array[JsonValue] =
-    keyword_items(["true", "false", "let", "mut", "fn", "struct", "enum",
-                   "match", "if", "else", "for", "in", "pub", "use", "mod",
-                   "extern", "unsafe", "spawn", "select"], 0, [])
+    keyword_items(
+        [
+            "true",
+            "false",
+            "let",
+            "mut",
+            "fn",
+            "struct",
+            "enum",
+            "match",
+            "if",
+            "else",
+            "for",
+            "in",
+            "pub",
+            "use",
+            "mod",
+            "extern",
+            "unsafe",
+            "spawn",
+            "select"
+        ],
+        0,
+        []
+    )
 
 let keyword_items (ks: Array[String]) (i: Int) (acc: Array[JsonValue]): Array[JsonValue] =
     if i >= ks.len() { acc }
@@ -359,7 +436,12 @@ let keyword_items (ks: Array[String]) (i: Int) (acc: Array[JsonValue]): Array[Js
 // they are skipped here rather than offered twice.
 struct Span { start: Int, end: Int }
 
-let locals_in_scope (items: Array[parser.ItemNode]) (nodes: Array[typecheck.NodeType]) (path: String) (off: Int): Array[JsonValue] = {
+let locals_in_scope
+    (items: Array[parser.ItemNode])
+    (nodes: Array[typecheck.NodeType])
+    (path: String)
+    (off: Int): Array[JsonValue]
+= {
     let span = enclosing_span(items, path, off, Span { start: 0, end: 0 });
     locals_acc(nodes, path, off, span, 0, [], [])
 }
@@ -369,7 +451,13 @@ let locals_in_scope (items: Array[parser.ItemNode]) (nodes: Array[typecheck.Node
 let enclosing_span (items: Array[parser.ItemNode]) (path: String) (off: Int) (best: Span): Span =
     enclosing_acc(items, path, off, 0, Span { start: 0 - 1, end: 2147483647 })
 
-let enclosing_acc (items: Array[parser.ItemNode]) (path: String) (off: Int) (i: Int) (best: Span): Span =
+let enclosing_acc
+    (items: Array[parser.ItemNode])
+    (path: String)
+    (off: Int)
+    (i: Int)
+    (best: Span): Span
+=
     if i >= items.len() { best }
     else if items[i].path != path { enclosing_acc(items, path, off, i + 1, best) }
     else if items[i].start <= off && items[i].start > best.start {
@@ -380,14 +468,27 @@ let enclosing_acc (items: Array[parser.ItemNode]) (path: String) (off: Int) (i: 
     }
     else { enclosing_acc(items, path, off, i + 1, best) }
 
-let locals_acc (nodes: Array[typecheck.NodeType]) (path: String) (off: Int) (span: Span) (i: Int) (seen: Array[String]) (acc: Array[JsonValue]): Array[JsonValue] =
+let locals_acc
+    (nodes: Array[typecheck.NodeType])
+    (path: String)
+    (off: Int)
+    (span: Span)
+    (i: Int)
+    (seen: Array[String])
+    (acc: Array[JsonValue]): Array[JsonValue]
+=
     if i >= nodes.len() { acc }
     else if nodes[i].path == path && nodes[i].def_offset >= 0
-         && nodes[i].def_offset >= span.start && nodes[i].def_offset < span.end
-         && nodes[i].def_offset <= off && !seen.contains(nodes[i].name) {
-        locals_acc(nodes, path, off, span, i + 1, seen.push(nodes[i].name),
-            acc.push(completion_json(nodes[i].name, "variable", nodes[i].name.concat(": ").concat(nodes[i].ty))))
-    }
+        && nodes[i].def_offset >= span.start && nodes[i].def_offset < span.end
+        && nodes[i].def_offset <= off && !seen.contains(nodes[i].name) {
+            locals_acc(nodes, path, off, span, i + 1, seen.push(nodes[i].name), acc.push(
+                completion_json(
+                    nodes[i].name,
+                    "variable",
+                    nodes[i].name.concat(": ").concat(nodes[i].ty)
+                )
+            ))
+        }
     else { locals_acc(nodes, path, off, span, i + 1, seen, acc) }
 
 // --- `plum doc` ---
@@ -455,7 +556,11 @@ let doc_home_link (spec: String): String =
             Some(i) => {
                 let label = doc_html_escape(String.slice(spec, 0, i));
                 let raw_url = String.slice(spec, i + 1, String.char_len(spec));
-                if !doc_home_url_safe(raw_url) { doc_fail("--home requires an http(s) or relative URL without whitespace, controls, or backslashes") }
+                if !doc_home_url_safe(raw_url) {
+                    doc_fail(
+                        "--home requires an http(s) or relative URL without whitespace, controls, or backslashes"
+                    )
+                }
                 else { () };
                 let url = doc_html_attr(raw_url);
                 "<p class=\"home\"><a href=\"${url}\">&larr; ${label}</a></p>\n"
@@ -470,8 +575,10 @@ let doc_home_url_safe (url: String): Bool = {
     let lower = url.to_lower();
     !String.is_empty(url) && doc_home_bytes_safe(url.as_bytes(), 0)
         && !url.starts_with("//")
-        && (lower.starts_with("https://") || lower.starts_with("http://")
-            || doc_home_relative(url.as_bytes(), 0))
+        && (
+            lower.starts_with("https://") || lower.starts_with("http://")
+                || doc_home_relative(url.as_bytes(), 0)
+        )
 }
 
 let doc_home_bytes_safe (bytes: Bytes) (i: Int): Bool =
@@ -488,8 +595,8 @@ let doc_home_relative (bytes: Bytes) (i: Int): Bool =
     else {
         match bytes.at(i) {
             Some(c) => if c == 58 { false }
-                else if c == 47 || c == 63 || c == 35 { true }
-                else { doc_home_relative(bytes, i + 1) },
+            else if c == 47 || c == 63 || c == 35 { true }
+            else { doc_home_relative(bytes, i + 1) },
             None => false,
         }
     }
@@ -526,13 +633,20 @@ let cmd_doc (dir: String) (out: String) (html: Bool) (home: String) (with_deps: 
     // case where there is something the flag would have shown. Printing
     // it whenever a project has dependencies would nag every run.
     if !with_deps && doc_modules(items, 0, []).len() == 0 && dep_count(dir) > 0 {
-        println("note: no `pub` items outside dependencies; `--with-deps` documents the ${dep_count(dir).to_string()} package(s) this one depends on")
+        println(
+            "note: no `pub` items outside dependencies; `--with-deps` documents the ${dep_count(dir).to_string()} package(s) this one depends on"
+        )
     } else { () }
 }
 
 let dep_count (dir: String): Int =
     if source_is_directory(dir) {
-        dep_closure(dir, DepScan { root: Path.clean(dir), visited: [Path.clean(dir)], found: [], fetch: false }).found.len()
+        dep_closure(dir, DepScan {
+            root: Path.clean(dir),
+            visited: [Path.clean(dir)],
+            found: [],
+            fetch: false
+        }).found.len()
     } else { 0 }
 
 // The standard library documents itself through the SAME generator.
@@ -547,7 +661,10 @@ let dep_count (dir: String): Int =
 // without asking, so leaving it out would document everything except
 // the part nobody has to opt into.
 let cmd_doc_stdlib (out: String) (html: Bool) (home: String): Unit = {
-    let prelude = parser.with_module(codegen.cg_with_prelude(parser.ProgramNode { items: [] }).items, "prelude");
+    let prelude = parser.with_module(
+        codegen.cg_with_prelude(parser.ProgramNode { items: [] }).items,
+        "prelude"
+    );
     let std = codegen.cg_std_items(all_std_uses(()));
     let declared = Array.concat(prelude, std);
     cmd_doc_render(Array.concat(declared, builtin_items(declared)), out, html, home)
@@ -566,7 +683,11 @@ let cmd_doc_stdlib (out: String) (html: Bool) (home: String): Unit = {
 // the checked-in file, which would therefore have agreed that nothing
 // was missing. Found when `Encoding` landed and silently did not appear.
 let all_std_uses (unit: Unit): Array[parser.ItemNode] = {
-    let src = Array.fold(parser.std_module_names(()), "", |acc, m| acc.concat("use ").concat(m).concat(";\n"))
+    let src = Array.fold(
+        parser.std_module_names(()),
+        "",
+        |acc, m| acc.concat("use ").concat(m).concat(";\n")
+    )
         .concat("let main (): Unit = ()");
     let lexed = lexer.tokenize_spanned(src);
     parser.set_source_context("<stdlib-modules>", src, lexed.starts, lexed.ends);
@@ -610,12 +731,30 @@ let all_std_uses (unit: Unit): Array[parser.ItemNode] = {
 // of a file that was only ever appended to.
 let builtin_items (declared: Array[parser.ItemNode]): Array[parser.ItemNode] = {
     let names = declared_names(declared, 0, []);
-    let src = builtin_src(Array.filter(typecheck.builtin_methods(), |m|
-            !Array.contains(names, builtin_qualified(m.recv, m.name))), 0, "")
-        .concat(builtin_fn_src(Array.filter(typecheck.builtin_functions(), |f|
-            !Array.contains(names, f.name)), 0, ""))
-        .concat(Array.join(Array.map(typecheck.integer_conversion_builtins(), |f|
-            "/// ${f.doc}\n${BUILTIN_NOTE(())}\npub ${f.detail} = ()\n"), "\n"));
+    let src = builtin_src(
+        Array.filter(
+            typecheck.builtin_methods(),
+            |m|
+                !Array.contains(names, builtin_qualified(m.recv, m.name))
+        ),
+        0,
+        ""
+    )
+        .concat(
+            builtin_fn_src(
+                Array.filter(typecheck.builtin_functions(), |f| !Array.contains(names, f.name)),
+                0,
+                ""
+            )
+        )
+        .concat(Array.join(
+            Array.map(
+                typecheck.integer_conversion_builtins(),
+                |f|
+                    "/// ${f.doc}\n${BUILTIN_NOTE(())}\npub ${f.detail} = ()\n"
+            ),
+            "\n"
+        ));
     let lexed = lexer.tokenize_spanned(src);
     parser.set_source_context("<builtins>", src, lexed.starts, lexed.ends);
     let items = parser.parse_program(lexed.tokens).items;
@@ -649,7 +788,7 @@ let declared_names (items: Array[parser.ItemNode]) (i: Int) (acc: Array[String])
     else {
         let next = match items[i].kind {
             IKLet(def) => if !prelude_level(items[i]) || Array.contains(acc, def.name) { acc }
-                else { acc.push(def.name) },
+            else { acc.push(def.name) },
             _ => acc,
         };
         declared_names(items, i + 1, next)
@@ -661,7 +800,10 @@ let declared_names (items: Array[parser.ItemNode]) (i: Int) (acc: Array[String])
 // `Array.reverse` sit on one page.
 let prelude_level (item: parser.ItemNode): Bool =
     item.module == parser.PRELUDE_MODULE(()) || String.is_empty(item.module)
-        || match item.kind { IKLet(def) => Option.is_some(String.index_of(def.name, ".")), _ => false }
+        || match item.kind {
+            IKLet(def) => Option.is_some(String.index_of(def.name, ".")),
+            _ => false
+        }
 
 let builtin_src (ms: Array[typecheck.BuiltinMethod]) (i: Int) (acc: String): String =
     if i >= ms.len() { acc }
@@ -678,15 +820,18 @@ let builtin_src (ms: Array[typecheck.BuiltinMethod]) (i: Int) (acc: String): Str
         // `let Ref.get (self: Ref[T]) (): T`, which parses but reads as
         // a function of two argument lists, one of them empty.
         let rest = if String.is_empty(ms[i].recv_ty) { params }
-            else if params == "()" { "" }
-            else { " ".concat(params) };
+        else if params == "()" { "" }
+        else { " ".concat(params) };
         let recv = if String.is_empty(ms[i].recv_ty) { "" }
-            else { "(self: ".concat(ms[i].recv_ty).concat(")") };
-        builtin_src(ms, i + 1,
+        else { "(self: ".concat(ms[i].recv_ty).concat(")") };
+        builtin_src(
+            ms,
+            i + 1,
             acc.concat("/// ").concat(ms[i].doc).concat("\n")
                 .concat(BUILTIN_NOTE(())).concat("\n")
                 .concat("pub let ").concat(head).concat(builtin_name(ms[i].detail)).concat(" ")
-                .concat(recv).concat(rest).concat(builtin_ret(ms[i].detail)).concat(" = ()\n\n"))
+                .concat(recv).concat(rest).concat(builtin_ret(ms[i].detail)).concat(" = ()\n\n")
+        )
     }
 
 // A dotted `BuiltinFn` is skipped: it is the same thing as a method of
@@ -697,11 +842,14 @@ let builtin_fn_src (fs: Array[typecheck.BuiltinFn]) (i: Int) (acc: String): Stri
     if i >= fs.len() { acc }
     else if Option.is_some(String.index_of(fs[i].name, ".")) { builtin_fn_src(fs, i + 1, acc) }
     else {
-        builtin_fn_src(fs, i + 1,
+        builtin_fn_src(
+            fs,
+            i + 1,
             acc.concat("/// ").concat(fs[i].doc).concat("\n")
                 .concat(BUILTIN_NOTE(())).concat("\n")
                 // `BuiltinFn.detail` is already a whole declaration.
-                .concat("pub ").concat(fs[i].detail).concat(" = ()\n\n"))
+                .concat("pub ").concat(fs[i].detail).concat(" = ()\n\n")
+        )
     }
 
 // Said on every one of them, in the reader's own words rather than as a
@@ -780,7 +928,13 @@ let doc_check_pages (items: Array[parser.ItemNode]) (mods: Array[String]) (ext: 
     doc_check_mod_pages(items, mods, ext, seen, 0)
 }
 
-let doc_check_mod_pages (items: Array[parser.ItemNode]) (mods: Array[String]) (ext: String) (seen: Ref[Map[String, Bool]]) (i: Int): Unit =
+let doc_check_mod_pages
+    (items: Array[parser.ItemNode])
+    (mods: Array[String])
+    (ext: String)
+    (seen: Ref[Map[String, Bool]])
+    (i: Int): Unit
+=
     if i >= mods.len() { () }
     else {
         doc_reserve_page(seen, doc_page_file(mods[i], "", ext));
@@ -788,7 +942,13 @@ let doc_check_mod_pages (items: Array[parser.ItemNode]) (mods: Array[String]) (e
         doc_check_mod_pages(items, mods, ext, seen, i + 1)
     }
 
-let doc_check_ns_pages (m: String) (nss: Array[String]) (ext: String) (seen: Ref[Map[String, Bool]]) (i: Int): Unit =
+let doc_check_ns_pages
+    (m: String)
+    (nss: Array[String])
+    (ext: String)
+    (seen: Ref[Map[String, Bool]])
+    (i: Int): Unit
+=
     if i >= nss.len() { () }
     else {
         doc_reserve_page(seen, doc_page_file(m, nss[i], ext));
@@ -818,11 +978,19 @@ let doc_modules (items: Array[parser.ItemNode]) (i: Int) (acc: Array[String]): A
         else { doc_modules(items, i + 1, acc.push(m)) }
     }
 
-let doc_write_modules (items: Array[parser.ItemNode]) (mods: Array[String]) (out: String) (i: Int): Unit =
+let doc_write_modules
+    (items: Array[parser.ItemNode])
+    (mods: Array[String])
+    (out: String)
+    (i: Int): Unit
+=
     if i >= mods.len() { () }
     else {
         let nss = sorted_namespaces(doc_namespaces(items, mods[i], 0, []), 0);
-        doc_write("${out}/${doc_page_file(mods[i], "", "md")}", doc_module_page(items, mods[i], nss));
+        doc_write(
+            "${out}/${doc_page_file(mods[i], "", "md")}",
+            doc_module_page(items, mods[i], nss)
+        );
         doc_write_ns_pages(items, mods[i], nss, out, 0);
         doc_write_modules(items, mods, out, i + 1)
     }
@@ -857,14 +1025,23 @@ let doc_fail (message: String): Unit = {
 //
 // The prelude is what forced this: 160 declarations on one page is a
 // list to scroll, not a reference to consult.
-let doc_namespaces (items: Array[parser.ItemNode]) (m: String) (i: Int) (acc: Array[String]): Array[String] =
+let doc_namespaces
+    (items: Array[parser.ItemNode])
+    (m: String)
+    (i: Int)
+    (acc: Array[String]): Array[String]
+=
     if i >= items.len() { acc }
     else {
         let mine = if String.is_empty(items[i].module) { "root" } else { items[i].module };
-        if !items[i].is_pub || mine != m || doc_is_internal(items[i]) { doc_namespaces(items, m, i + 1, acc) }
+        if !items[i].is_pub || mine != m || doc_is_internal(items[i]) {
+            doc_namespaces(items, m, i + 1, acc)
+        }
         else {
             let ns = doc_ns_of(items[i]);
-            if String.is_empty(ns) || Array.contains(acc, ns) { doc_namespaces(items, m, i + 1, acc) }
+            if String.is_empty(ns) || Array.contains(acc, ns) {
+                doc_namespaces(items, m, i + 1, acc)
+            }
             else { doc_namespaces(items, m, i + 1, acc.push(ns)) }
         }
     }
@@ -901,7 +1078,13 @@ let doc_ns_of (item: parser.ItemNode): String =
         _ => "",
     }
 
-let doc_write_ns_pages (items: Array[parser.ItemNode]) (m: String) (nss: Array[String]) (out: String) (i: Int): Unit =
+let doc_write_ns_pages
+    (items: Array[parser.ItemNode])
+    (m: String)
+    (nss: Array[String])
+    (out: String)
+    (i: Int): Unit
+=
     if i >= nss.len() { () }
     else {
         let body = "# ${m}.${nss[i]}\n\nGenerated by `plum doc` from the source. Do not edit by hand.\n\n"
@@ -932,44 +1115,89 @@ let doc_index_page (items: Array[parser.ItemNode]) (mods: Array[String]): String
     "# API reference\n\nGenerated by `plum doc` from the source. Do not edit by hand.\n\nEvery declaration, linked to the page that documents it.\n"
         .concat(doc_index_mod_sections(items, mods, 0, ""))
 
-let doc_index_mod_sections (items: Array[parser.ItemNode]) (mods: Array[String]) (i: Int) (acc: String): String =
+let doc_index_mod_sections
+    (items: Array[parser.ItemNode])
+    (mods: Array[String])
+    (i: Int)
+    (acc: String): String
+=
     if i >= mods.len() { acc }
     else {
         let nss = sorted_namespaces(doc_namespaces(items, mods[i], 0, []), 0);
-        doc_index_mod_sections(items, mods, i + 1,
+        doc_index_mod_sections(
+            items,
+            mods,
+            i + 1,
             acc.concat("\n## [${mods[i]}](${doc_page_url(mods[i], "", "md")})\n\n")
                 .concat(doc_index_links(items, mods[i], "", doc_page_url(mods[i], "", "md"), 0, ""))
-                .concat(doc_index_ns_sections(items, mods[i], nss, 0, "")))
+                .concat(doc_index_ns_sections(items, mods[i], nss, 0, ""))
+        )
     }
 
-let doc_index_ns_sections (items: Array[parser.ItemNode]) (m: String) (nss: Array[String]) (i: Int) (acc: String): String =
+let doc_index_ns_sections
+    (items: Array[parser.ItemNode])
+    (m: String)
+    (nss: Array[String])
+    (i: Int)
+    (acc: String): String
+=
     if i >= nss.len() { acc }
     else {
-        doc_index_ns_sections(items, m, nss, i + 1,
+        doc_index_ns_sections(
+            items,
+            m,
+            nss,
+            i + 1,
             acc.concat("\n### [${m}.${nss[i]}](${doc_page_url(m, nss[i], "md")})\n\n")
-                .concat(doc_index_links(items, m, nss[i], doc_page_url(m, nss[i], "md"), 0, "")))
+                .concat(doc_index_links(items, m, nss[i], doc_page_url(m, nss[i], "md"), 0, ""))
+        )
     }
 
 // One line per declaration: the signature, linked to its anchor on the
 // page it lives on. The anchor is `doc_anchor`'s, the same one the HTML
 // pages and the search index use, so all three agree by construction
 // rather than by three functions being kept in step.
-let doc_index_links (items: Array[parser.ItemNode]) (m: String) (ns: String) (page: String) (i: Int) (acc: String): String =
-    doc_index_links_in(items, m, sorted_namespaces(doc_namespaces(items, m, 0, []), 0), ns, page, i, acc)
+let doc_index_links
+    (items: Array[parser.ItemNode])
+    (m: String)
+    (ns: String)
+    (page: String)
+    (i: Int)
+    (acc: String): String
+=
+    doc_index_links_in(
+        items,
+        m,
+        sorted_namespaces(doc_namespaces(items, m, 0, []), 0),
+        ns,
+        page,
+        i,
+        acc
+    )
 
-let doc_index_links_in (items: Array[parser.ItemNode]) (m: String) (nss: Array[String]) (ns: String) (page: String) (i: Int) (acc: String): String =
+let doc_index_links_in
+    (items: Array[parser.ItemNode])
+    (m: String)
+    (nss: Array[String])
+    (ns: String)
+    (page: String)
+    (i: Int)
+    (acc: String): String
+=
     if i >= items.len() { acc }
     else {
         let mine = if String.is_empty(items[i].module) { "root" } else { items[i].module };
-        if !items[i].is_pub || mine != m || doc_is_internal(items[i]) || doc_ns_of_in(nss, items[i]) != ns {
-            doc_index_links_in(items, m, nss, ns, page, i + 1, acc)
-        } else {
-            match doc_entry_signature(items[i]) {
-                None => doc_index_links_in(items, m, nss, ns, page, i + 1, acc),
-                Some(sig) => doc_index_links_in(items, m, nss, ns, page, i + 1,
-                    acc.concat("- [`${sig}`](${page}#${Encoding.percent_encode(doc_anchor(sig).as_bytes())})\n")),
+        if !items[i].is_pub || mine != m || doc_is_internal(items[i]) || doc_ns_of_in(nss, items[i])
+            != ns {
+                doc_index_links_in(items, m, nss, ns, page, i + 1, acc)
+            } else {
+                match doc_entry_signature(items[i]) {
+                    None => doc_index_links_in(items, m, nss, ns, page, i + 1, acc),
+                    Some(sig) => doc_index_links_in(items, m, nss, ns, page, i + 1, acc.concat(
+                        "- [`${sig}`](${page}#${Encoding.percent_encode(doc_anchor(sig).as_bytes())})\n"
+                    )),
+                }
             }
-        }
     }
 
 // The signature alone, without the documentation `doc_entry` renders
@@ -995,8 +1223,16 @@ let doc_ns_index (m: String) (nss: Array[String]) (i: Int): String =
     // declaration to anything parsing this file, and an HTML renderer
     // or a search index is exactly such a thing. `##` means "a
     // declaration" here and nothing else.
-    else if i == 0 { "\n**Namespaces:**\n\n- [`${m}.${nss[i]}`](${doc_page_url(m, nss[i], "md")})\n".concat(doc_ns_index(m, nss, i + 1)) }
-    else { "- [`${m}.${nss[i]}`](${doc_page_url(m, nss[i], "md")})\n".concat(doc_ns_index(m, nss, i + 1)) }
+    else if i == 0 {
+        "\n**Namespaces:**\n\n- [`${m}.${nss[i]}`](${doc_page_url(m, nss[i], "md")})\n".concat(
+            doc_ns_index(m, nss, i + 1)
+        )
+    }
+    else {
+        "- [`${m}.${nss[i]}`](${doc_page_url(m, nss[i], "md")})\n".concat(
+            doc_ns_index(m, nss, i + 1)
+        )
+    }
 
 // A module's OWN description: the `///` block at the top of its source.
 //
@@ -1033,21 +1269,35 @@ let doc_module_blurb_text (items: Array[parser.ItemNode]) (m: String) (i: Int): 
         }
     }
 
-let doc_entries_ns (items: Array[parser.ItemNode]) (m: String) (ns: String) (i: Int) (acc: String): String =
+let doc_entries_ns
+    (items: Array[parser.ItemNode])
+    (m: String)
+    (ns: String)
+    (i: Int)
+    (acc: String): String
+=
     doc_entries_in(items, m, sorted_namespaces(doc_namespaces(items, m, 0, []), 0), ns, i, acc)
 
-let doc_entries_in (items: Array[parser.ItemNode]) (m: String) (nss: Array[String]) (ns: String) (i: Int) (acc: String): String =
+let doc_entries_in
+    (items: Array[parser.ItemNode])
+    (m: String)
+    (nss: Array[String])
+    (ns: String)
+    (i: Int)
+    (acc: String): String
+=
     if i >= items.len() { acc }
     else {
         let mine = if String.is_empty(items[i].module) { "root" } else { items[i].module };
-        if !items[i].is_pub || mine != m || doc_is_internal(items[i]) || doc_ns_of_in(nss, items[i]) != ns {
-            doc_entries_in(items, m, nss, ns, i + 1, acc)
-        } else {
-            match doc_entry(items[i]) {
-                None => doc_entries_in(items, m, nss, ns, i + 1, acc),
-                Some(text) => doc_entries_in(items, m, nss, ns, i + 1, acc.concat(text)),
+        if !items[i].is_pub || mine != m || doc_is_internal(items[i]) || doc_ns_of_in(nss, items[i])
+            != ns {
+                doc_entries_in(items, m, nss, ns, i + 1, acc)
+            } else {
+                match doc_entry(items[i]) {
+                    None => doc_entries_in(items, m, nss, ns, i + 1, acc),
+                    Some(text) => doc_entries_in(items, m, nss, ns, i + 1, acc.concat(text)),
+                }
             }
-        }
     }
 
 // A name the COMPILER generates, not one anybody may write.
@@ -1102,7 +1352,12 @@ let doc_html_attr (s: String): String =
 // Backticks become `<code>`, `**` becomes `<strong>`. Escaping happens
 // FIRST, so a `<` inside a doc comment is text rather than markup.
 let doc_inline (s: String): String =
-    doc_pairs(doc_pairs(doc_html_escape(s), "`", "<code>", "</code>"), "**", "<strong>", "</strong>")
+    doc_pairs(
+        doc_pairs(doc_html_escape(s), "`", "<code>", "</code>"),
+        "**",
+        "<strong>",
+        "</strong>"
+    )
 
 // Replaces matched pairs of `mark`, leaving an unmatched one alone --
 // an odd number of backticks in a sentence is prose, not broken markup.
@@ -1113,13 +1368,27 @@ let doc_inline (s: String): String =
 let doc_pairs (s: String) (mark: String) (open_tag: String) (close_tag: String): String =
     doc_pairs_acc(String.split(s, mark), mark, open_tag, close_tag, 0, "")
 
-let doc_pairs_acc (parts: Array[String]) (mark: String) (open_tag: String) (close_tag: String) (i: Int) (acc: String): String =
+let doc_pairs_acc
+    (parts: Array[String])
+    (mark: String)
+    (open_tag: String)
+    (close_tag: String)
+    (i: Int)
+    (acc: String): String
+=
     if i >= parts.len() { acc }
     else if i == parts.len() - 1 {
         if i - (i / 2) * 2 == 1 { acc.concat(mark).concat(parts[i]) } else { acc.concat(parts[i]) }
     }
     else if i - (i / 2) * 2 == 1 {
-        doc_pairs_acc(parts, mark, open_tag, close_tag, i + 1, acc.concat(open_tag).concat(parts[i]).concat(close_tag))
+        doc_pairs_acc(
+            parts,
+            mark,
+            open_tag,
+            close_tag,
+            i + 1,
+            acc.concat(open_tag).concat(parts[i]).concat(close_tag)
+        )
     }
     else { doc_pairs_acc(parts, mark, open_tag, close_tag, i + 1, acc.concat(parts[i])) }
 
@@ -1130,7 +1399,9 @@ let doc_html_prose (text: String): String =
 
 let doc_para_acc (lines: Array[String]) (i: Int) (cur: String) (acc: String): String =
     if i >= lines.len() { acc.concat(doc_para_flush(cur)) }
-    else if String.is_empty(String.trim(lines[i])) { doc_para_acc(lines, i + 1, "", acc.concat(doc_para_flush(cur))) }
+    else if String.is_empty(String.trim(lines[i])) {
+        doc_para_acc(lines, i + 1, "", acc.concat(doc_para_flush(cur)))
+    }
     else if String.is_empty(cur) { doc_para_acc(lines, i + 1, String.trim(lines[i]), acc) }
     else { doc_para_acc(lines, i + 1, cur.concat(" ").concat(String.trim(lines[i])), acc) }
 
@@ -1149,7 +1420,13 @@ let doc_html_page (title: String) (nav: String) (body: String): String =
         .concat("<script src=\"search-index.js\"></script>\n<script src=\"search.js\"></script>\n")
         .concat("</body>\n</html>\n")
 
-let doc_html_nav (home: String) (mods: Array[String]) (items: Array[parser.ItemNode]) (i: Int) (acc: String): String =
+let doc_html_nav
+    (home: String)
+    (mods: Array[String])
+    (items: Array[parser.ItemNode])
+    (i: Int)
+    (acc: String): String
+=
     if i >= mods.len() {
         home.concat("<p class=\"brand\"><a href=\"index.html\">API reference</a></p>\n")
             .concat(doc_search_box(()))
@@ -1158,14 +1435,19 @@ let doc_html_nav (home: String) (mods: Array[String]) (items: Array[parser.ItemN
     else {
         let nss = sorted_namespaces(doc_namespaces(items, mods[i], 0, []), 0);
         let subs = doc_html_nav_ns(mods[i], nss, 0, "");
-        doc_html_nav(home, mods, items, i + 1,
-            acc.concat("<li><a href=\"${doc_page_url(mods[i], "", "html")}\">${doc_html_escape(mods[i])}</a>${subs}</li>\n"))
+        doc_html_nav(home, mods, items, i + 1, acc.concat(
+            "<li><a href=\"${doc_page_url(mods[i], "", "html")}\">${doc_html_escape(mods[i])}</a>${subs}</li>\n"
+        ))
     }
 
 let doc_html_nav_ns (m: String) (nss: Array[String]) (i: Int) (acc: String): String =
     if Array.is_empty(nss) { "" }
     else if i >= nss.len() { "<ul class=\"ns\">\n".concat(acc).concat("</ul>\n") }
-    else { doc_html_nav_ns(m, nss, i + 1, acc.concat("<li><a href=\"${doc_page_url(m, nss[i], "html")}\">${doc_html_escape(nss[i])}</a></li>\n")) }
+    else {
+        doc_html_nav_ns(m, nss, i + 1, acc.concat(
+            "<li><a href=\"${doc_page_url(m, nss[i], "html")}\">${doc_html_escape(nss[i])}</a></li>\n"
+        ))
+    }
 
 // A declaration: its signature as code, its prose beneath. The `id` is
 // the signature's own name, so a link can point at one entry.
@@ -1201,128 +1483,141 @@ let doc_after_keyword (sig: String): String =
 // Light and dark both defined, switched by the reader's own setting
 // rather than a control this generator would have to carry JavaScript
 // for.
-let doc_css (): String = Array.join([
-    ":root {",
-    "  --bg: #fcfafb; --fg: #1c1620; --muted: #6d6270;",
-    "  --rule: #e6dce3; --accent: #8a3a67; --surface: #f4eef2;",
-    "}",
-    "@media (prefers-color-scheme: dark) {",
-    "  :root {",
-    "    --bg: #15111a; --fg: #ece5ee; --muted: #9c90a2;",
-    "    --rule: #2e2636; --accent: #dd91bb; --surface: #1f1927;",
-    "  }",
-    "}",
-    // Syntax highlighting. The classes are emitted by `plum highlight`,
-    // which is the compiler's OWN lexer -- see highlight/highlight.plum.
-    // These same names and values are in site/static/style.css; the
-    // reference has to stand alone with no network, so it cannot import
-    // them from anywhere.
-    ":root {",
-    "  --hl-k: #8a3a67; --hl-t: #1f6f6b; --hl-s: #3f6b2b; --hl-n: #8a5a1a;",
-    "  --hl-c: #8a8290; --hl-d: #6d6270; --hl-o: #7a7280;",
-    "}",
-    "@media (prefers-color-scheme: dark) {",
-    "  :root {",
-    "    --hl-k: #dd91bb; --hl-t: #6fc7c0; --hl-s: #9ccf7a; --hl-n: #e0b170;",
-    "    --hl-c: #7d7386; --hl-d: #9c90a2; --hl-o: #9b93a4;",
-    "  }",
-    "}",
-    ".k { color: var(--hl-k); }",
-    ".t { color: var(--hl-t); }",
-    ".s { color: var(--hl-s); }",
-    ".n { color: var(--hl-n); }",
-    ".c { color: var(--hl-c); font-style: italic; }",
-    ".d { color: var(--hl-d); font-style: italic; }",
-    ".o { color: var(--hl-o); }",
-    ".f { color: inherit; font-weight: 600; }",
-    "* { box-sizing: border-box; }",
-    "body {",
-    "  margin: 0; background: var(--bg); color: var(--fg);",
-    "  font-family: ui-serif, Georgia, 'Times New Roman', serif;",
-    "  line-height: 1.6;",
-    "  display: grid; grid-template-columns: 16rem minmax(0, 1fr);",
-    "  gap: 3rem; max-width: 72rem; margin: 0 auto; padding: 0 1.5rem;",
-    "}",
-    "nav {",
-    "  position: sticky; top: 0; align-self: start; max-height: 100vh;",
-    "  overflow-y: auto; padding: 2.5rem 0 3rem;",
-    "  font-family: ui-sans-serif, system-ui, -apple-system, 'Segoe UI', sans-serif;",
-    "  font-size: 0.88rem;",
-    "}",
-    ".brand { font-weight: 600; margin: 0 0 1.25rem; }",
-    ".brand a { color: var(--accent); text-decoration: none; }",
-    "nav ul { list-style: none; margin: 0; padding: 0; }",
-    "nav ul.ns { margin: 0.15rem 0 0.5rem 0.85rem; font-size: 0.94em; }",
-    "nav li { margin: 0.1rem 0; }",
-    "nav a {",
-    "  color: var(--fg); text-decoration: none; display: block;",
-    "  padding: 0.15rem 0.4rem; border-left: 2px solid transparent; border-radius: 2px;",
-    "}",
-    "nav a:hover { background: var(--surface); border-left-color: var(--accent); }",
-    "nav a:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }",
-    "main { padding: 2.5rem 0 6rem; min-width: 0; }",
-    "h1 {",
-    "  font-family: ui-sans-serif, system-ui, -apple-system, 'Segoe UI', sans-serif;",
-    "  font-size: 1.7rem; letter-spacing: -0.02em; margin: 0 0 0.75rem;",
-    "  color: var(--accent);",
-    "}",
-    ".sub { color: var(--muted); font-size: 0.9rem; margin: 0 0 2rem; }",
-    ".blurb { max-width: 66ch; }",
-    ".decl {",
-    "  border-top: 1px solid var(--rule); padding: 1.3rem 0 0.4rem;",
-    "  max-width: 66ch;",
-    "}",
-    ".decl h2 { margin: 0 0 0.65rem; font-weight: 400; font-size: 1rem; }",
-    ".decl h2 code {",
-    "  background: var(--surface); padding: 0.35rem 0.55rem; border-radius: 3px;",
-    "  border-left: 2px solid var(--accent); display: inline-block;",
-    "  overflow-wrap: anywhere;",
-    "}",
-    "p { margin: 0 0 0.8rem; }",
-    "code {",
-    "  font-family: ui-monospace, SFMono-Regular, 'SF Mono', Menlo, Consolas, monospace;",
-    "  font-size: 0.87em;",
-    "}",
-    "p code { background: var(--surface); padding: 0.08em 0.3em; border-radius: 2px; }",
-    "a { color: var(--accent); }",
-    "nav .home { margin: 0 0 0.75rem; font-size: 0.85rem; }",
-    "nav .home a { color: var(--muted); text-decoration: none; }",
-    "nav .home a:hover { color: var(--accent); }",
-    ".search { position: relative; margin: 0 0 1.25rem; }",
-    "#q {",
-    "  width: 100%; padding: 0.4rem 0.55rem; border-radius: 3px;",
-    "  border: 1px solid var(--rule); background: var(--bg); color: var(--fg);",
-    "  font: inherit;",
-    "}",
-    "#q:focus { outline: 2px solid var(--accent); outline-offset: -1px; border-color: transparent; }",
-    "#results {",
-    "  list-style: none; margin: 0.3rem 0 0; padding: 0.25rem;",
-    "  position: absolute; z-index: 5; left: 0; right: 0; max-height: 60vh; overflow-y: auto;",
-    "  background: var(--bg); border: 1px solid var(--rule); border-radius: 3px;",
-    "}",
-    "#results li { margin: 0; }",
-    "#results a { display: flex; justify-content: space-between; gap: 0.5rem; align-items: baseline; }",
-    "#results a span { color: var(--muted); font-size: 0.85em; }",
-    "#results .none { color: var(--muted); padding: 0.2rem 0.4rem; }",
-    "@media (max-width: 800px) {",
-    "  body { grid-template-columns: 1fr; gap: 0; }",
-    "  nav { position: static; max-height: none; border-bottom: 1px solid var(--rule); }",
-    "}",
-], "\n")
+let doc_css (): String = Array.join(
+    [
+        ":root {",
+        "  --bg: #fcfafb; --fg: #1c1620; --muted: #6d6270;",
+        "  --rule: #e6dce3; --accent: #8a3a67; --surface: #f4eef2;",
+        "}",
+        "@media (prefers-color-scheme: dark) {",
+        "  :root {",
+        "    --bg: #15111a; --fg: #ece5ee; --muted: #9c90a2;",
+        "    --rule: #2e2636; --accent: #dd91bb; --surface: #1f1927;",
+        "  }",
+        "}",
+        // Syntax highlighting. The classes are emitted by `plum highlight`,
+        // which is the compiler's OWN lexer -- see highlight/highlight.plum.
+        // These same names and values are in site/static/style.css; the
+        // reference has to stand alone with no network, so it cannot import
+        // them from anywhere.
+        ":root {",
+        "  --hl-k: #8a3a67; --hl-t: #1f6f6b; --hl-s: #3f6b2b; --hl-n: #8a5a1a;",
+        "  --hl-c: #8a8290; --hl-d: #6d6270; --hl-o: #7a7280;",
+        "}",
+        "@media (prefers-color-scheme: dark) {",
+        "  :root {",
+        "    --hl-k: #dd91bb; --hl-t: #6fc7c0; --hl-s: #9ccf7a; --hl-n: #e0b170;",
+        "    --hl-c: #7d7386; --hl-d: #9c90a2; --hl-o: #9b93a4;",
+        "  }",
+        "}",
+        ".k { color: var(--hl-k); }",
+        ".t { color: var(--hl-t); }",
+        ".s { color: var(--hl-s); }",
+        ".n { color: var(--hl-n); }",
+        ".c { color: var(--hl-c); font-style: italic; }",
+        ".d { color: var(--hl-d); font-style: italic; }",
+        ".o { color: var(--hl-o); }",
+        ".f { color: inherit; font-weight: 600; }",
+        "* { box-sizing: border-box; }",
+        "body {",
+        "  margin: 0; background: var(--bg); color: var(--fg);",
+        "  font-family: ui-serif, Georgia, 'Times New Roman', serif;",
+        "  line-height: 1.6;",
+        "  display: grid; grid-template-columns: 16rem minmax(0, 1fr);",
+        "  gap: 3rem; max-width: 72rem; margin: 0 auto; padding: 0 1.5rem;",
+        "}",
+        "nav {",
+        "  position: sticky; top: 0; align-self: start; max-height: 100vh;",
+        "  overflow-y: auto; padding: 2.5rem 0 3rem;",
+        "  font-family: ui-sans-serif, system-ui, -apple-system, 'Segoe UI', sans-serif;",
+        "  font-size: 0.88rem;",
+        "}",
+        ".brand { font-weight: 600; margin: 0 0 1.25rem; }",
+        ".brand a { color: var(--accent); text-decoration: none; }",
+        "nav ul { list-style: none; margin: 0; padding: 0; }",
+        "nav ul.ns { margin: 0.15rem 0 0.5rem 0.85rem; font-size: 0.94em; }",
+        "nav li { margin: 0.1rem 0; }",
+        "nav a {",
+        "  color: var(--fg); text-decoration: none; display: block;",
+        "  padding: 0.15rem 0.4rem; border-left: 2px solid transparent; border-radius: 2px;",
+        "}",
+        "nav a:hover { background: var(--surface); border-left-color: var(--accent); }",
+        "nav a:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }",
+        "main { padding: 2.5rem 0 6rem; min-width: 0; }",
+        "h1 {",
+        "  font-family: ui-sans-serif, system-ui, -apple-system, 'Segoe UI', sans-serif;",
+        "  font-size: 1.7rem; letter-spacing: -0.02em; margin: 0 0 0.75rem;",
+        "  color: var(--accent);",
+        "}",
+        ".sub { color: var(--muted); font-size: 0.9rem; margin: 0 0 2rem; }",
+        ".blurb { max-width: 66ch; }",
+        ".decl {",
+        "  border-top: 1px solid var(--rule); padding: 1.3rem 0 0.4rem;",
+        "  max-width: 66ch;",
+        "}",
+        ".decl h2 { margin: 0 0 0.65rem; font-weight: 400; font-size: 1rem; }",
+        ".decl h2 code {",
+        "  background: var(--surface); padding: 0.35rem 0.55rem; border-radius: 3px;",
+        "  border-left: 2px solid var(--accent); display: inline-block;",
+        "  overflow-wrap: anywhere;",
+        "}",
+        "p { margin: 0 0 0.8rem; }",
+        "code {",
+        "  font-family: ui-monospace, SFMono-Regular, 'SF Mono', Menlo, Consolas, monospace;",
+        "  font-size: 0.87em;",
+        "}",
+        "p code { background: var(--surface); padding: 0.08em 0.3em; border-radius: 2px; }",
+        "a { color: var(--accent); }",
+        "nav .home { margin: 0 0 0.75rem; font-size: 0.85rem; }",
+        "nav .home a { color: var(--muted); text-decoration: none; }",
+        "nav .home a:hover { color: var(--accent); }",
+        ".search { position: relative; margin: 0 0 1.25rem; }",
+        "#q {",
+        "  width: 100%; padding: 0.4rem 0.55rem; border-radius: 3px;",
+        "  border: 1px solid var(--rule); background: var(--bg); color: var(--fg);",
+        "  font: inherit;",
+        "}",
+        "#q:focus { outline: 2px solid var(--accent); outline-offset: -1px; border-color: transparent; }",
+        "#results {",
+        "  list-style: none; margin: 0.3rem 0 0; padding: 0.25rem;",
+        "  position: absolute; z-index: 5; left: 0; right: 0; max-height: 60vh; overflow-y: auto;",
+        "  background: var(--bg); border: 1px solid var(--rule); border-radius: 3px;",
+        "}",
+        "#results li { margin: 0; }",
+        "#results a { display: flex; justify-content: space-between; gap: 0.5rem; align-items: baseline; }",
+        "#results a span { color: var(--muted); font-size: 0.85em; }",
+        "#results .none { color: var(--muted); padding: 0.2rem 0.4rem; }",
+        "@media (max-width: 800px) {",
+        "  body { grid-template-columns: 1fr; gap: 0; }",
+        "  nav { position: static; max-height: none; border-bottom: 1px solid var(--rule); }",
+        "}",
+    ],
+    "\n"
+)
 
 // Every page of the reference, plus the stylesheet and a front door.
-let doc_write_html (items: Array[parser.ItemNode]) (mods: Array[String]) (out: String) (home: String): Unit = {
+let doc_write_html
+    (items: Array[parser.ItemNode])
+    (mods: Array[String])
+    (out: String)
+    (home: String): Unit
+= {
     let nav = doc_html_nav(doc_home_link(home), mods, items, 0, "");
     doc_write("${out}/style.css", doc_css(()));
     doc_write("${out}/search-index.js", doc_search_index(items, mods));
     doc_write("${out}/search.js", doc_search_js(()));
-    doc_write("${out}/index.html", doc_html_page("API reference", nav,
+    doc_write("${out}/index.html", doc_html_page(
+        "API reference",
+        nav,
         "  <h1>API reference</h1>\n  <p class=\"sub\">Generated by <code>plum doc</code> from the source.</p>\n"
-            .concat(doc_html_index(mods, 0, ""))));
+            .concat(doc_html_index(mods, 0, ""))
+    ));
     doc_write_html_mods(items, mods, nav, out, 0);
     // Pages, not modules: a module with namespaces writes several, and
     // reporting the module count made the tool understate its own work.
-    println("wrote ${(doc_page_count(items, mods, 0) + 1).to_string()} HTML page(s) and a stylesheet to ${out}")
+    println(
+        "wrote ${(doc_page_count(items, mods, 0) + 1).to_string()} HTML page(s) and a stylesheet to ${out}"
+    )
 }
 
 let doc_page_count (items: Array[parser.ItemNode]) (mods: Array[String]) (i: Int): Int =
@@ -1331,45 +1626,92 @@ let doc_page_count (items: Array[parser.ItemNode]) (mods: Array[String]) (i: Int
 
 let doc_html_index (mods: Array[String]) (i: Int) (acc: String): String =
     if i >= mods.len() { "  <ul>\n".concat(acc).concat("  </ul>\n") }
-    else { doc_html_index(mods, i + 1, acc.concat("    <li><a href=\"${doc_page_url(mods[i], "", "html")}\">${doc_html_escape(mods[i])}</a></li>\n")) }
+    else {
+        doc_html_index(mods, i + 1, acc.concat(
+            "    <li><a href=\"${doc_page_url(mods[i], "", "html")}\">${doc_html_escape(mods[i])}</a></li>\n"
+        ))
+    }
 
-let doc_write_html_mods (items: Array[parser.ItemNode]) (mods: Array[String]) (nav: String) (out: String) (i: Int): Unit =
+let doc_write_html_mods
+    (items: Array[parser.ItemNode])
+    (mods: Array[String])
+    (nav: String)
+    (out: String)
+    (i: Int): Unit
+=
     if i >= mods.len() { () }
     else {
         let nss = sorted_namespaces(doc_namespaces(items, mods[i], 0, []), 0);
         let body = "  <h1>${doc_html_escape(mods[i])}</h1>\n"
-            .concat("  <div class=\"blurb\">\n").concat(doc_html_prose(doc_module_blurb_text(items, mods[i], 0))).concat("  </div>\n")
+            .concat("  <div class=\"blurb\">\n")
+            .concat(doc_html_prose(doc_module_blurb_text(items, mods[i], 0))).concat("  </div>\n")
             .concat(doc_html_entries(items, mods[i], "", 0, ""));
-        doc_write("${out}/${doc_page_file(mods[i], "", "html")}", doc_html_page(mods[i], nav, body));
+        doc_write(
+            "${out}/${doc_page_file(mods[i], "", "html")}",
+            doc_html_page(mods[i], nav, body)
+        );
         doc_write_html_ns(items, mods[i], nss, nav, out, 0);
         doc_write_html_mods(items, mods, nav, out, i + 1)
     }
 
-let doc_write_html_ns (items: Array[parser.ItemNode]) (m: String) (nss: Array[String]) (nav: String) (out: String) (i: Int): Unit =
+let doc_write_html_ns
+    (items: Array[parser.ItemNode])
+    (m: String)
+    (nss: Array[String])
+    (nav: String)
+    (out: String)
+    (i: Int): Unit
+=
     if i >= nss.len() { () }
     else {
         let body = "  <h1>${doc_html_escape(m)}.${doc_html_escape(nss[i])}</h1>\n"
-            .concat("  <p class=\"sub\">Part of <a href=\"${doc_page_url(m, "", "html")}\">${doc_html_escape(m)}</a>.</p>\n")
+            .concat(
+                "  <p class=\"sub\">Part of <a href=\"${doc_page_url(m, "", "html")}\">${doc_html_escape(m)}</a>.</p>\n"
+            )
             .concat(doc_html_entries(items, m, nss[i], 0, ""));
-        doc_write("${out}/${doc_page_file(m, nss[i], "html")}", doc_html_page("${m}.${nss[i]}", nav, body));
+        doc_write(
+            "${out}/${doc_page_file(m, nss[i], "html")}",
+            doc_html_page("${m}.${nss[i]}", nav, body)
+        );
         doc_write_html_ns(items, m, nss, nav, out, i + 1)
     }
 
-let doc_html_entries (items: Array[parser.ItemNode]) (m: String) (ns: String) (i: Int) (acc: String): String =
+let doc_html_entries
+    (items: Array[parser.ItemNode])
+    (m: String)
+    (ns: String)
+    (i: Int)
+    (acc: String): String
+=
     doc_html_entries_in(items, m, sorted_namespaces(doc_namespaces(items, m, 0, []), 0), ns, i, acc)
 
-let doc_html_entries_in (items: Array[parser.ItemNode]) (m: String) (nss: Array[String]) (ns: String) (i: Int) (acc: String): String =
+let doc_html_entries_in
+    (items: Array[parser.ItemNode])
+    (m: String)
+    (nss: Array[String])
+    (ns: String)
+    (i: Int)
+    (acc: String): String
+=
     if i >= items.len() { acc }
     else {
         let mine = if String.is_empty(items[i].module) { "root" } else { items[i].module };
-        if !items[i].is_pub || mine != m || doc_is_internal(items[i]) || doc_ns_of_in(nss, items[i]) != ns {
-            doc_html_entries_in(items, m, nss, ns, i + 1, acc)
-        } else {
-            match doc_signature_of(items[i]) {
-                None => doc_html_entries_in(items, m, nss, ns, i + 1, acc),
-                Some(sig) => doc_html_entries_in(items, m, nss, ns, i + 1, acc.concat(doc_html_entry(sig, items[i].doc))),
+        if !items[i].is_pub || mine != m || doc_is_internal(items[i]) || doc_ns_of_in(nss, items[i])
+            != ns {
+                doc_html_entries_in(items, m, nss, ns, i + 1, acc)
+            } else {
+                match doc_signature_of(items[i]) {
+                    None => doc_html_entries_in(items, m, nss, ns, i + 1, acc),
+                    Some(sig) => doc_html_entries_in(
+                        items,
+                        m,
+                        nss,
+                        ns,
+                        i + 1,
+                        acc.concat(doc_html_entry(sig, items[i].doc))
+                    ),
+                }
             }
-        }
     }
 
 // The signature alone, without the Markdown wrapper `doc_entry` adds --
@@ -1400,20 +1742,34 @@ let doc_signature_of (item: parser.ItemNode): Option[String] =
 // backslashes, and hand-rolled escaping is how a search index becomes a
 // syntax error.
 let doc_search_index (items: Array[parser.ItemNode]) (mods: Array[String]): String =
-    "window.PLUM_DOCS = ".concat(lsp.encode_json(JsonArray(doc_index_mods(items, mods, 0, [])))).concat(";\n")
+    "window.PLUM_DOCS = ".concat(lsp.encode_json(JsonArray(doc_index_mods(items, mods, 0, []))))
+        .concat(";\n")
 
-let doc_index_mods (items: Array[parser.ItemNode]) (mods: Array[String]) (i: Int) (acc: Array[JsonValue]): Array[JsonValue] =
+let doc_index_mods
+    (items: Array[parser.ItemNode])
+    (mods: Array[String])
+    (i: Int)
+    (acc: Array[JsonValue]): Array[JsonValue]
+=
     if i >= mods.len() { acc }
     else {
         let nss = sorted_namespaces(doc_namespaces(items, mods[i], 0, []), 0);
         doc_index_mods(items, mods, i + 1, doc_index_items(items, mods[i], nss, 0, acc))
     }
 
-let doc_index_items (items: Array[parser.ItemNode]) (m: String) (nss: Array[String]) (i: Int) (acc: Array[JsonValue]): Array[JsonValue] =
+let doc_index_items
+    (items: Array[parser.ItemNode])
+    (m: String)
+    (nss: Array[String])
+    (i: Int)
+    (acc: Array[JsonValue]): Array[JsonValue]
+=
     if i >= items.len() { acc }
     else {
         let mine = if String.is_empty(items[i].module) { "root" } else { items[i].module };
-        if !items[i].is_pub || mine != m || doc_is_internal(items[i]) { doc_index_items(items, m, nss, i + 1, acc) }
+        if !items[i].is_pub || mine != m || doc_is_internal(items[i]) {
+            doc_index_items(items, m, nss, i + 1, acc)
+        }
         else {
             match doc_signature_of(items[i]) {
                 None => doc_index_items(items, m, nss, i + 1, acc),
@@ -1423,8 +1779,16 @@ let doc_index_items (items: Array[parser.ItemNode]) (m: String) (nss: Array[Stri
                     doc_index_items(items, m, nss, i + 1, acc.push(JsonObject([
                         JsonEntry { key: "n", value: JsonString(doc_anchor(sig)) },
                         JsonEntry { key: "s", value: JsonString(sig) },
-                        JsonEntry { key: "u", value: JsonString("${page}#${Encoding.percent_encode(doc_anchor(sig).as_bytes())}") },
-                        JsonEntry { key: "m", value: JsonString(if String.is_empty(ns) { m } else { "${m}.${ns}" }) },
+                        JsonEntry {
+                            key: "u",
+                            value: JsonString(
+                                "${page}#${Encoding.percent_encode(doc_anchor(sig).as_bytes())}"
+                            )
+                        },
+                        JsonEntry {
+                            key: "m",
+                            value: JsonString(if String.is_empty(ns) { m } else { "${m}.${ns}" })
+                        },
                     ])))
                 },
             }
@@ -1439,54 +1803,58 @@ let doc_index_items (items: Array[parser.ItemNode]) (m: String) (nss: Array[Stri
 // Ranked so a name that STARTS with the query comes first. Keep at most
 // one display limit in each rank; scanning a large index needs no unbounded
 // temporary match list, and rendering never constructs an HTML string.
-let doc_search_js (): String = Array.join([
-    "(function () {",
-    "  var box = document.getElementById('q');",
-    "  var out = document.getElementById('results');",
-    "  if (!box || !out || !window.PLUM_DOCS) { return; }",
-    "  var limit = 40;",
-    "  function render(rows) {",
-    "    out.replaceChildren();",
-    "    if (!rows.length) {",
-    "      var empty = document.createElement('li');",
-    "      empty.className = 'none'; empty.textContent = 'No match'; out.appendChild(empty); return;",
-    "    }",
-    "    rows.slice(0, limit).forEach(function (r) {",
-    "      var li = document.createElement('li'), a = document.createElement('a');",
-    "      var code = document.createElement('code'), module = document.createElement('span');",
-    "      a.setAttribute('href', r.u); code.textContent = r.n; module.textContent = r.m;",
-    "      a.appendChild(code); a.appendChild(module); li.appendChild(a); out.appendChild(li);",
-    "    });",
-    "  }",
-    "  box.addEventListener('input', function () {",
-    "    var q = box.value.trim().toLowerCase();",
-    "    if (!q) { out.replaceChildren(); out.hidden = true; return; }",
-    "    out.hidden = false;",
-    "    var starts = [], contains = [];",
-    "    for (var i = 0; i < window.PLUM_DOCS.length; i++) {",
-    "      var r = window.PLUM_DOCS[i], n = r.n.toLowerCase();",
-    "      if (n.indexOf(q) === 0) { if (starts.length < limit) { starts.push(r); } }",
-    "      else if (n.indexOf(q) > 0 || r.s.toLowerCase().indexOf(q) >= 0) { if (contains.length < limit) { contains.push(r); } }",
-    "    }",
-    "    render(starts.concat(contains));",
-    "  });",
-    "  box.addEventListener('keydown', function (e) {",
-    "    if (e.key === 'Escape') { box.value = ''; out.replaceChildren(); out.hidden = true; box.blur(); }",
-    "  });",
-    "  document.addEventListener('keydown', function (e) {",
-    "    if (e.key === '/' && document.activeElement !== box) { e.preventDefault(); box.focus(); }",
-    "  });",
-    "})();",
-], "\n")
+let doc_search_js (): String = Array.join(
+    [
+        "(function () {",
+        "  var box = document.getElementById('q');",
+        "  var out = document.getElementById('results');",
+        "  if (!box || !out || !window.PLUM_DOCS) { return; }",
+        "  var limit = 40;",
+        "  function render(rows) {",
+        "    out.replaceChildren();",
+        "    if (!rows.length) {",
+        "      var empty = document.createElement('li');",
+        "      empty.className = 'none'; empty.textContent = 'No match'; out.appendChild(empty); return;",
+        "    }",
+        "    rows.slice(0, limit).forEach(function (r) {",
+        "      var li = document.createElement('li'), a = document.createElement('a');",
+        "      var code = document.createElement('code'), module = document.createElement('span');",
+        "      a.setAttribute('href', r.u); code.textContent = r.n; module.textContent = r.m;",
+        "      a.appendChild(code); a.appendChild(module); li.appendChild(a); out.appendChild(li);",
+        "    });",
+        "  }",
+        "  box.addEventListener('input', function () {",
+        "    var q = box.value.trim().toLowerCase();",
+        "    if (!q) { out.replaceChildren(); out.hidden = true; return; }",
+        "    out.hidden = false;",
+        "    var starts = [], contains = [];",
+        "    for (var i = 0; i < window.PLUM_DOCS.length; i++) {",
+        "      var r = window.PLUM_DOCS[i], n = r.n.toLowerCase();",
+        "      if (n.indexOf(q) === 0) { if (starts.length < limit) { starts.push(r); } }",
+        "      else if (n.indexOf(q) > 0 || r.s.toLowerCase().indexOf(q) >= 0) { if (contains.length < limit) { contains.push(r); } }",
+        "    }",
+        "    render(starts.concat(contains));",
+        "  });",
+        "  box.addEventListener('keydown', function (e) {",
+        "    if (e.key === 'Escape') { box.value = ''; out.replaceChildren(); out.hidden = true; box.blur(); }",
+        "  });",
+        "  document.addEventListener('keydown', function (e) {",
+        "    if (e.key === '/' && document.activeElement !== box) { e.preventDefault(); box.focus(); }",
+        "  });",
+        "})();",
+    ],
+    "\n"
+)
 
 // The box itself, on every page — a reference is entered from a link
 // far more often than from its front door, so search has to be wherever
 // the reader lands.
 let doc_search_box (): String =
     "<form class=\"search\" onsubmit=\"return false;\">\n"
-        .concat("<input id=\"q\" type=\"search\" placeholder=\"Search (/)\" autocomplete=\"off\" spellcheck=\"false\">\n")
-        .concat("<ul id=\"results\" hidden></ul>\n</form>\n"
-)
+        .concat(
+            "<input id=\"q\" type=\"search\" placeholder=\"Search (/)\" autocomplete=\"off\" spellcheck=\"false\">\n"
+        )
+        .concat("<ul id=\"results\" hidden></ul>\n</form>\n")
 
 let sorted_namespaces (nss: Array[String]) (i: Int): Array[String] =
     if i >= nss.len() { nss } else { sorted_namespaces(bubble_ns(nss, 0), i + 1) }
@@ -1541,7 +1909,13 @@ let cmd_locals (dir: String) (path: String) (line: Int) (col: Int): Unit =
             let all = codegen.cg_with_prelude(parser.ProgramNode { items: collect_project(dir) }).items;
             typecheck.check_program(parser.ProgramNode { items: all });
             println(lsp.encode_json(JsonArray(
-                locals_in_scope(all, typecheck.recorded_types(()), path, lexer.offset_of(src, line, col)))))
+                locals_in_scope(
+                    all,
+                    typecheck.recorded_types(()),
+                    path,
+                    lexer.offset_of(src, line, col)
+                )
+            )))
         },
     }
 
@@ -1557,32 +1931,50 @@ let cmd_locals (dir: String) (path: String) (line: Int) (col: Int): Unit =
 // miscompile, which is why this is an acceptable trade rather than a
 // good one. Sorted to match the order they appear in the checker.
 let builtin_completions (ignored: Unit): Array[JsonValue] =
-    Array.concat([
-        completion_json("println", "function", "println(value: T): Unit"),
-        completion_json("args", "function", "args(): Array[String]"),
-        completion_json("panic_raw", "function", "panic_raw(message: String): Unit"),
-        completion_json("chars_of", "function", "chars_of(s: String): Array[String]"),
-        completion_json("ref", "function", "ref(value: T): Ref[T]"),
-        completion_json("channel", "function", "channel(): (Sender[T], Receiver[T])"),
-    ], Array.concat(builtin_method_items(typecheck.builtin_methods(), 0, []),
-        Array.map(typecheck.integer_conversion_builtins(), |f| completion_json(f.name, "function", f.detail))))
+    Array.concat(
+        [
+            completion_json("println", "function", "println(value: T): Unit"),
+            completion_json("args", "function", "args(): Array[String]"),
+            completion_json("panic_raw", "function", "panic_raw(message: String): Unit"),
+            completion_json("chars_of", "function", "chars_of(s: String): Array[String]"),
+            completion_json("ref", "function", "ref(value: T): Ref[T]"),
+            completion_json("channel", "function", "channel(): (Sender[T], Receiver[T])"),
+        ],
+        Array.concat(builtin_method_items(typecheck.builtin_methods(), 0, []), Array.map(
+            typecheck.integer_conversion_builtins(),
+            |f| completion_json(f.name, "function", f.detail)
+        ))
+    )
 
 // The compiler's own methods, offered under the type they belong to:
 // `Array.map`, `String.split`. A method with no receiver type -- only
 // `to_string` -- belongs to every type and to no namespace, so it is
 // offered bare.
-let builtin_method_items (ms: Array[typecheck.BuiltinMethod]) (i: Int) (acc: Array[JsonValue]): Array[JsonValue] =
+let builtin_method_items
+    (ms: Array[typecheck.BuiltinMethod])
+    (i: Int)
+    (acc: Array[JsonValue]): Array[JsonValue]
+=
     if i >= ms.len() { acc }
     else {
-        let label = if ms[i].recv == "" { ms[i].name } else { ms[i].recv.concat(".").concat(ms[i].name) };
-        let detail = if ms[i].recv == "" { ms[i].detail } else { ms[i].recv.concat(".").concat(ms[i].detail) };
+        let label = if ms[i].recv == "" { ms[i].name } else {
+            ms[i].recv.concat(".").concat(ms[i].name)
+        };
+        let detail = if ms[i].recv == "" { ms[i].detail } else {
+            ms[i].recv.concat(".").concat(ms[i].detail)
+        };
         builtin_method_items(ms, i + 1, acc.push(completion_json(label, "function", detail)))
     }
 
 // `pub_only` is true for the prelude: a non-`pub` prelude item is an
 // implementation detail no user program may name. Everything in the
 // user's OWN project is offered, `pub` or not.
-let completions_of (items: Array[parser.ItemNode]) (i: Int) (acc: Array[JsonValue]) (pub_only: Bool): Array[JsonValue] =
+let completions_of
+    (items: Array[parser.ItemNode])
+    (i: Int)
+    (acc: Array[JsonValue])
+    (pub_only: Bool): Array[JsonValue]
+=
     if i >= items.len() { acc }
     else if pub_only && !items[i].is_pub { completions_of(items, i + 1, acc, pub_only) }
     else { completions_of(items, i + 1, push_completion(items[i], acc), pub_only) }
@@ -1600,21 +1992,43 @@ let completion_label (item: parser.ItemNode) (name: String): String =
 
 let push_completion (item: parser.ItemNode) (acc: Array[JsonValue]): Array[JsonValue] =
     match item.kind {
-        IKLet(def) => acc.push(completion_json(completion_label(item, def.name), "function", def_signature(def))),
-        IKStruct(decl) => acc.push(completion_json(completion_label(item, decl.name), "struct", "struct ".concat(decl.name))),
+        IKLet(def) => acc.push(
+            completion_json(completion_label(item, def.name), "function", def_signature(def))
+        ),
+        IKStruct(decl) => acc.push(
+            completion_json(
+                completion_label(item, decl.name),
+                "struct",
+                "struct ".concat(decl.name)
+            )
+        ),
         // An enum offers its own name AND each variant. Without the
         // variants you can complete `Shape` and then have to remember
         // `Circle` yourself, which is the half you actually write.
-        IKEnum(decl) => variants_of(decl, 0, acc.push(completion_json(completion_label(item, decl.name), "enum", "enum ".concat(decl.name)))),
+        IKEnum(decl) => variants_of(
+            decl,
+            0,
+            acc.push(
+                completion_json(
+                    completion_label(item, decl.name),
+                    "enum",
+                    "enum ".concat(decl.name)
+                )
+            )
+        ),
         _ => acc,
     }
 
 let variants_of (decl: parser.EnumDeclNode) (i: Int) (acc: Array[JsonValue]): Array[JsonValue] =
     if i >= decl.variants.len() { acc }
     else {
-        variants_of(decl, i + 1,
-            acc.push(completion_json(decl.variants[i].name, "variant",
-                variant_detail(decl.name, decl.variants[i]))))
+        variants_of(decl, i + 1, acc.push(
+            completion_json(
+                decl.variants[i].name,
+                "variant",
+                variant_detail(decl.name, decl.variants[i])
+            )
+        ))
     }
 
 let variant_detail (ename: String) (v: parser.EnumVariantNode): String = {
@@ -1628,7 +2042,9 @@ let variant_detail (ename: String) (v: parser.EnumVariantNode): String = {
 let payload_list (v: parser.EnumVariantNode) (i: Int) (acc: String): String =
     if i >= v.payload.len() { acc }
     else if i == 0 { payload_list(v, i + 1, parser.render_type_source(v.payload[i])) }
-    else { payload_list(v, i + 1, acc.concat(", ").concat(parser.render_type_source(v.payload[i]))) }
+    else {
+        payload_list(v, i + 1, acc.concat(", ").concat(parser.render_type_source(v.payload[i])))
+    }
 
 let completion_json (name: String) (kind: String) (detail: String): JsonValue =
     JsonObject([
@@ -1696,7 +2112,12 @@ let name_offset (src: String) (from: Int) (to: Int) (name: String): Int =
 // recognisable without re-rendering the whole AST.
 let def_signature (def: parser.LetDefNode): String =
     "let ${def.name} ".concat(param_list(def.params, 0, ""))
-        .concat(match def.ret_ty { Some(t) => ": ".concat(parser.render_type_source(t)), None => "" })
+        .concat(
+            match def.ret_ty {
+                Some(t) => ": ".concat(parser.render_type_source(t)),
+                None => ""
+            }
+        )
 
 // `parser.render_pattern` produces S-EXPRESSIONS. That is correct for
 // what it was written for -- `dump-ast` -- and wrong for a signature
@@ -1758,14 +2179,20 @@ extern "C" {
 // see `native_stdlib/io_shim.c` for why caller-owned buffers are not
 // portable across the two compilers.
 let lsp_read_line (): String = unsafe { stdin_read_line().as_string() }
+
 let lsp_read_bytes (n: Int): String = unsafe { stdin_read_n(n).as_string() }
+
 let lsp_write (s: String): Unit = unsafe { stdout_write(s.as_cstr()) }
+
 // stdout is block-buffered when it is a pipe; a server that never
 // flushes deadlocks against a client waiting for a reply it has
 // already written.
 let lsp_flush (): Unit = unsafe { stdout_flush() }
 
-let lsp_send (body: String): Unit = { lsp_write(lsp.frame(body)); lsp_flush(()) }
+let lsp_send (body: String): Unit = {
+    lsp_write(lsp.frame(body));
+    lsp_flush(())
+}
 
 // Headers until the blank line; the body is length-prefixed.
 let lsp_read_message (): String = {
@@ -1820,7 +2247,9 @@ let run_process (program: String) (args: Array[String]): Result[Process.ProcessR
 let lsp_check (dir: String): Option[lsp.Diagnostic] =
     match lsp_run(["check", dir]) {
         Err(_) => None,
-        Ok(r) => if r.exit_code == 0 { None } else { lsp.parse_diagnostic(r.stdout.concat(r.stderr)) },
+        Ok(r) => if r.exit_code == 0 { None } else {
+            lsp.parse_diagnostic(r.stdout.concat(r.stderr))
+        },
     }
 
 // A request gets the declared project and dependency roots with live source
@@ -1829,37 +2258,68 @@ let lsp_check (dir: String): Option[lsp.Diagnostic] =
 // No source/index cache or edit history is retained between requests.
 let lsp_snapshot (path: String): Option[LspSnapshot] =
     if path == "" { None }
-    else { match Os.temp_dir() {
-        Err(_) => None,
-        Ok(raw) => {
-            let container = Path.clean(raw);
-            let buffers = BUFFERS.get();
-            let payload = JsonObject([
-                JsonEntry { key: "path", value: JsonString(lsp.path_to_uri(path)) },
-                JsonEntry { key: "container", value: JsonString(lsp.path_to_uri(container)) },
-                JsonEntry { key: "buffers", value: JsonArray(Array.map(Array.sort_string(Map.keys(buffers)), |uri| JsonObject([
-                    JsonEntry { key: "uri", value: JsonString(uri) },
-                    JsonEntry { key: "text", value: JsonString(Option.unwrap_or(Map.get(buffers, uri), "")) },
-                ]))) },
-            ]);
-            let prepared = match Process.run(Process.Options { program: self_exe(), args: ["__lsp_snapshot"], env: [], stdin: Some(lsp.frame(lsp.encode_json(payload))) }) {
-                Err(_) => None,
-                Ok(result) => if result.exit_code != 0 { None }
-                    else { match json_parse(result.stdout) { Ok(value) => snapshot_decode(container, value), Err(_) => None } },
-            };
-            match prepared {
-                None => { let removed = Os.remove_tree(container); None },
-                Some(snapshot) => Some(snapshot),
-            }
-        },
-    } }
+    else {
+        match Os.temp_dir() {
+            Err(_) => None,
+            Ok(raw) => {
+                let container = Path.clean(raw);
+                let buffers = BUFFERS.get();
+                let payload = JsonObject([
+                    JsonEntry { key: "path", value: JsonString(lsp.path_to_uri(path)) },
+                    JsonEntry {
+                        key: "container",
+                        value: JsonString(lsp.path_to_uri(container))
+                    },
+                    JsonEntry {
+                        key: "buffers",
+                        value: JsonArray(Array.map(
+                            Array.sort_string(Map.keys(buffers)),
+                            |uri| JsonObject([
+                                JsonEntry { key: "uri", value: JsonString(uri) },
+                                JsonEntry {
+                                    key: "text",
+                                    value: JsonString(Option.unwrap_or(Map.get(buffers, uri), ""))
+                                },
+                            ])
+                        ))
+                    },
+                ]);
+                let prepared = match Process.run(Process.Options {
+                    program: self_exe(),
+                    args: ["__lsp_snapshot"],
+                    env: [],
+                    stdin: Some(lsp.frame(lsp.encode_json(payload)))
+                }) {
+                    Err(_) => None,
+                    Ok(result) => if result.exit_code != 0 { None }
+                    else {
+                        match json_parse(result.stdout) {
+                            Ok(value) => snapshot_decode(container, value),
+                            Err(_) => None
+                        }
+                    },
+                };
+                match prepared {
+                    None => {
+                        let removed = Os.remove_tree(container);
+                        None
+                    },
+                    Some(snapshot) => Some(snapshot),
+                }
+            },
+        }
+    }
 
 let lsp_directory_prefix (dir: String): String = {
     let child = Path.join(dir, "_");
     treefs.path_slice(child, 0, child.len() - 1)
 }
 
-let lsp_with_snapshot (path: String) (unavailable: JsonValue) (answer: (LspSnapshot) -> JsonValue): JsonValue =
+let lsp_with_snapshot
+    (path: String)
+    (unavailable: JsonValue)
+    (answer: (LspSnapshot) -> JsonValue): JsonValue
+=
     match lsp_snapshot(path) {
         None => unavailable,
         Some(snapshot) => {
@@ -1912,21 +2372,37 @@ let line_width (src: String) (line: Int): Int = {
 // Attribute the check to the original project, not its temporary root or
 // whichever open document happened to initiate this check.
 let lsp_publish (uri: String) (d0: Option[lsp.Diagnostic]) (snapshot: LspSnapshot): Unit = {
-    let d = match d0 { Some(x) => Some(widen(x, snapshot)), None => None };
+    let d = match d0 {
+        Some(x) => Some(widen(x, snapshot)),
+        None => None
+    };
     let roots = Array.map(snapshot.roots, |root| root.original);
     let result = match d {
-        None => LspDiagnostics { roots: roots, target: uri, items: [] },
+        None => LspDiagnostics {
+            roots: roots,
+            target: uri,
+            items: []
+        },
         Some(diag) => {
             let real = snapshot_restore(snapshot, diag.path);
             let target = if real == "" { uri } else { lsp.path_to_uri(real) };
-            LspDiagnostics { roots: roots, target: target, items: [lsp.diagnostic_json(diag)] }
+            LspDiagnostics {
+                roots: roots,
+                target: target,
+                items: [lsp.diagnostic_json(diag)]
+            }
         },
     };
     lsp_replace_diagnostics(snapshot_restore(snapshot, snapshot.root), result);
     if result.target != uri { lsp_publish_target(uri) }
 }
 
-enum LspState { LspNew, LspReady, LspShutdown, LspExited(Int) }
+enum LspState {
+    LspNew,
+    LspReady,
+    LspShutdown,
+    LspExited(Int)
+}
 
 let lsp_serve (): Unit = {
     let status = lsp_loop(LspNew);
@@ -1947,11 +2423,17 @@ let lsp_loop (state: LspState): Int =
     }
 
 let lsp_error (id: Option[JsonValue]) (code: Int) (message: String): Unit =
-    match id { Some(i) => lsp_send(lsp.error_response(i, code, message)), None => () }
+    match id {
+        Some(i) => lsp_send(lsp.error_response(i, code, message)),
+        None => ()
+    }
 
 let lsp_handle (body: String) (state: LspState): LspState =
     match lsp.parse_request(body) {
-        Err(e) => { lsp_send(lsp.error_response(e.id, e.code, e.message)); state },
+        Err(e) => {
+            lsp_send(lsp.error_response(e.id, e.code, e.message));
+            state
+        },
         Ok(req) =>
             if req.method == "exit" && req.id == None {
                 LspExited(if state == LspShutdown { 0 } else { 1 })
@@ -1993,113 +2475,146 @@ let lsp_dispatch (req: lsp.Request): Unit =
                 Some(context) => match lsp.json_field(context, "includeDeclaration") {
                     Some(JsonBool(include)) => {
                         let path = lsp.uri_to_path(lsp.document_uri(req.params));
-                        lsp_reply(req.id, if path == "" { JsonArray([]) } else {
-                            lsp_with_snapshot(path, JsonArray([]), |snapshot| lsp_answer_references(snapshot, position, include))
-                        })
+                        lsp_reply(
+                            req.id,
+                            if path == "" { JsonArray([]) } else {
+                                lsp_with_snapshot(
+                                    path,
+                                    JsonArray([]),
+                                    |snapshot| lsp_answer_references(snapshot, position, include)
+                                )
+                            }
+                        )
                     },
-                    _ => lsp_error(req.id, 0 - 32602, "Expected context.includeDeclaration boolean"),
+                    _ => lsp_error(
+                        req.id,
+                        0 - 32602,
+                        "Expected context.includeDeclaration boolean"
+                    ),
                 },
                 None => lsp_error(req.id, 0 - 32602, "Expected reference context"),
             },
         };
         ()
-    } else if req.method == "textDocument/completion" || req.method == "textDocument/hover" || req.method == "textDocument/definition" {
-        match lsp.params_position(req.params) {
-            None => lsp_error(req.id, 0 - 32602, "Invalid position: expected line and character uintegers"),
-            Some(position) => {
-                if req.method == "textDocument/completion" {
-                    let path = lsp.uri_to_path(lsp.document_uri(req.params));
-                    lsp_reply(req.id, lsp_with_snapshot(path, JsonArray([]), |snapshot| lsp_answer_completion(snapshot, position)))
-                } else { lsp_reply(req.id, lsp_answer_query(req.method, req.params, position)) }
-            },
-        };
-        ()
-    } else if req.method == "textDocument/formatting" {
-        let uri = lsp.document_uri(req.params);
-        let path = lsp.uri_to_path(uri);
-        match buffer_text(uri, path) {
-            // No text and no file: answer with no edits rather
-            // than an error. A client that asked about a
-            // document nobody can see gets "nothing to change",
-            // which is true.
-            None => lsp_reply(req.id, JsonArray([])),
-            Some(text) => {
-                // Formatted by a CHILD process, not here. `fmt`
-                // parses, and a parse error is a `panic_raw`
-                // that would take the server down -- which it
-                // did: a format request on a buffer with a
-                // syntax error exited the process mid-session,
-                // after printing a compiler error onto the
-                // JSON-RPC stream. Format-on-save runs while you
-                // are still typing, so that is not a rare state.
-                //
-                // An unformattable buffer now answers "no
-                // edits", which is what a formatter should say
-                // about a file it cannot read.
-                let out = lsp_fmt(path, text);
-                // The same guarantee `plum fmt --write` gives,
-                // for the same reason: this hands the editor a
-                // replacement for the WHOLE file, so a rule
-                // that changed the tokens would silently
-                // rewrite the user's program. Refuse instead.
-                if out == text { lsp_reply(req.id, JsonArray([])) }
-                else if lexer.token_texts(out) != lexer.token_texts(text) { lsp_reply(req.id, JsonArray([])) }
-                else { lsp_reply(req.id, lsp.format_result(out, text)) }
-            },
-        };
-        ()
-    } else if req.method == "textDocument/selectionRange" {
-        match lsp.params_positions(req.params) {
-            None => lsp_error(req.id, 0 - 32602, "Invalid positions: expected an array of positions with line and character uintegers"),
-            Some(positions) => lsp_reply(req.id, lsp_selection_ranges(req.params, positions)),
-        };
-        ()
-    } else if req.method == "textDocument/didOpen" || req.method == "textDocument/didSave" {
-        let uri = lsp.document_uri(req.params);
-        if uri == "" { () }
-        else {
-            let text = if req.method == "textDocument/didSave" {
-                match lsp.json_field(req.params, "text") { Some(JsonString(t)) => Some(t), _ => None }
-            } else { lsp.open_text(req.params) };
-            match text { Some(t) => remember_buffer(uri, t), None => () };
-            lsp_diagnose_document(uri)
-        };
-        ()
-    } else if req.method == "textDocument/didChange" {
-        // Errors AS YOU TYPE. The buffer is unsaved, so the
-        // check runs against a snapshot of the project with
-        // this file's text substituted -- see
-        // `lsp_snapshot`.
-        let uri = lsp.document_uri(req.params);
-        if uri == "" { () }
-        else {
-            match lsp.change_text(req.params) {
-                // No full text means the client negotiated
-                // incremental sync despite this server asking
-                // for full. Checking the stale file on disk
-                // would report the wrong lines, which is worse
-                // than reporting nothing.
-                None => (),
-                Some(text) => {
-                    remember_buffer(uri, text);
-                    lsp_diagnose_document(uri)
+    } else if req.method == "textDocument/completion" || req.method == "textDocument/hover"
+        || req.method == "textDocument/definition" {
+            match lsp.params_position(req.params) {
+                None => lsp_error(
+                    req.id,
+                    0 - 32602,
+                    "Invalid position: expected line and character uintegers"
+                ),
+                Some(position) => {
+                    if req.method == "textDocument/completion" {
+                        let path = lsp.uri_to_path(lsp.document_uri(req.params));
+                        lsp_reply(req.id, lsp_with_snapshot(
+                            path,
+                            JsonArray([]),
+                            |snapshot| lsp_answer_completion(snapshot, position)
+                        ))
+                    } else { lsp_reply(req.id, lsp_answer_query(req.method, req.params, position)) }
                 },
-            }
-        };
-        ()
-    } else if req.method == "textDocument/didClose" {
-        let uri = lsp.document_uri(req.params);
-        forget_buffer(uri);
-        if uri == "" { () } else { lsp_close_diagnostics(uri) };
-        ()
-    } else {
-        lsp_error(req.id, 0 - 32601, "Method not found")
-    }
+            };
+            ()
+        } else if req.method == "textDocument/formatting" {
+            let uri = lsp.document_uri(req.params);
+            let path = lsp.uri_to_path(uri);
+            match buffer_text(uri, path) {
+                // No text and no file: answer with no edits rather
+                // than an error. A client that asked about a
+                // document nobody can see gets "nothing to change",
+                // which is true.
+                None => lsp_reply(req.id, JsonArray([])),
+                Some(text) => {
+                    // Formatted by a CHILD process, not here. `fmt`
+                    // parses, and a parse error is a `panic_raw`
+                    // that would take the server down -- which it
+                    // did: a format request on a buffer with a
+                    // syntax error exited the process mid-session,
+                    // after printing a compiler error onto the
+                    // JSON-RPC stream. Format-on-save runs while you
+                    // are still typing, so that is not a rare state.
+                    //
+                    // An unformattable buffer now answers "no
+                    // edits", which is what a formatter should say
+                    // about a file it cannot read.
+                    let out = lsp_fmt(path, text);
+                    // The same guarantee `plum fmt --write` gives,
+                    // for the same reason: this hands the editor a
+                    // replacement for the WHOLE file, so a rule
+                    // that changed the tokens would silently
+                    // rewrite the user's program. Refuse instead.
+                    if out == text { lsp_reply(req.id, JsonArray([])) }
+                    else if lexer.token_texts(out) != lexer.token_texts(text) {
+                        lsp_reply(req.id, JsonArray([]))
+                    }
+                    else { lsp_reply(req.id, lsp.format_result(out, text)) }
+                },
+            };
+            ()
+        } else if req.method == "textDocument/selectionRange" {
+            match lsp.params_positions(req.params) {
+                None => lsp_error(
+                    req.id,
+                    0 - 32602,
+                    "Invalid positions: expected an array of positions with line and character uintegers"
+                ),
+                Some(positions) => lsp_reply(req.id, lsp_selection_ranges(req.params, positions)),
+            };
+            ()
+        } else if req.method == "textDocument/didOpen" || req.method == "textDocument/didSave" {
+            let uri = lsp.document_uri(req.params);
+            if uri == "" { () }
+            else {
+                let text = if req.method == "textDocument/didSave" {
+                    match lsp.json_field(req.params, "text") {
+                        Some(JsonString(t)) => Some(t),
+                        _ => None
+                    }
+                } else { lsp.open_text(req.params) };
+                match text {
+                    Some(t) => remember_buffer(uri, t),
+                    None => ()
+                };
+                lsp_diagnose_document(uri)
+            };
+            ()
+        } else if req.method == "textDocument/didChange" {
+            // Errors AS YOU TYPE. The buffer is unsaved, so the
+            // check runs against a snapshot of the project with
+            // this file's text substituted -- see
+            // `lsp_snapshot`.
+            let uri = lsp.document_uri(req.params);
+            if uri == "" { () }
+            else {
+                match lsp.change_text(req.params) {
+                    // No full text means the client negotiated
+                    // incremental sync despite this server asking
+                    // for full. Checking the stale file on disk
+                    // would report the wrong lines, which is worse
+                    // than reporting nothing.
+                    None => (),
+                    Some(text) => {
+                        remember_buffer(uri, text);
+                        lsp_diagnose_document(uri)
+                    },
+                }
+            };
+            ()
+        } else if req.method == "textDocument/didClose" {
+            let uri = lsp.document_uri(req.params);
+            forget_buffer(uri);
+            if uri == "" { () } else { lsp_close_diagnostics(uri) };
+            ()
+        } else {
+            lsp_error(req.id, 0 - 32601, "Method not found")
+        }
 
 // One current text per open URI. Replacing or closing a buffer drops
 // the old map and its text through ordinary reference counting; no edit
 // history is retained. This store is also used by selection ranges.
 let BUFFERS: Ref[Map[String, String]] = ref(empty_buffers(()))
+
 let empty_buffers (): Map[String, String] = Map.new(())
 
 let remember_buffer (uri: String) (text: String): Unit =
@@ -2158,10 +2673,21 @@ let lsp_answer_query (method: String) (params: JsonValue) (position: lsp.Positio
     let uri = lsp.document_uri(params);
     let path = lsp.uri_to_path(uri);
     if uri == "" { JsonNull }
-    else { lsp_with_snapshot(path, JsonNull, |snapshot| lsp_answer_query_in(method, position, path, snapshot)) }
+    else {
+        lsp_with_snapshot(
+            path,
+            JsonNull,
+            |snapshot| lsp_answer_query_in(method, position, path, snapshot)
+        )
+    }
 }
 
-let lsp_answer_query_in (method: String) (position: lsp.Position) (real: String) (snapshot: LspSnapshot): JsonValue = {
+let lsp_answer_query_in
+    (method: String)
+    (position: lsp.Position)
+    (real: String)
+    (snapshot: LspSnapshot): JsonValue
+= {
     let path = snapshot.target;
     match snapshot_read(snapshot, path) {
         Err(_) => JsonNull,
@@ -2185,7 +2711,9 @@ let lsp_answer_query_in (method: String) (position: lsp.Position) (real: String)
                 // is the cursor's line and the name's own length --
                 // no span table needed for this one, and no parse.
                 let here = ident_range(src, off, name);
-                if method == "textDocument/hover" && inferred != "" { lsp.hover_text(name.concat(": ").concat(inferred), here) }
+                if method == "textDocument/hover" && inferred != "" {
+                    lsp.hover_text(name.concat(": ").concat(inferred), here)
+                }
                 // A LOCAL's binding site, which the name index does
                 // not have: it only knows top-level definitions, so
                 // without this a local jumps to whatever top-level
@@ -2196,7 +2724,14 @@ let lsp_answer_query_in (method: String) (position: lsp.Position) (real: String)
                 else {
                     match lsp.find_def(lsp_defs(snapshot.root), name, 0) {
                         None => JsonNull,
-                        Some(d) => if method == "textDocument/hover" { lsp.hover_result(d, here) } else { lsp.location_at(snapshot_restore(snapshot, d.path), d.line, d.col, d.name.len()) },
+                        Some(d) => if method == "textDocument/hover" { lsp.hover_result(d, here) } else {
+                            lsp.location_at(
+                                snapshot_restore(snapshot, d.path),
+                                d.line,
+                                d.col,
+                                d.name.len()
+                            )
+                        },
                     }
                 }
             }
@@ -2222,9 +2757,7 @@ let lsp_answer_completion_at (snapshot: LspSnapshot) (at: lexer.LineCol): JsonVa
     else {
         let names = lsp_completions(snapshot.root);
         // Half-written buffers retain static keywords and builtin names.
-        lsp.completion_result(Array.concat(
-            names,
-            lsp_locals(snapshot.root, path, at.line, at.col)))
+        lsp.completion_result(Array.concat(names, lsp_locals(snapshot.root, path, at.line, at.col)))
     }
 }
 
@@ -2235,14 +2768,20 @@ let lsp_answer_completion_at (snapshot: LspSnapshot) (at: lexer.LineCol): JsonVa
 let ident_range (src: String) (off: Int) (name: String): lsp.Rng = {
     let start = name_start(src, off, name);
     let a = lexer.line_col(src, start);
-    lsp.Rng { sl: a.line, sc: a.col, el: a.line, ec: a.col + name.len() }
+    lsp.Rng {
+        sl: a.line,
+        sc: a.col,
+        el: a.line,
+        ec: a.col + name.len()
+    }
 }
 
 let name_start (src: String) (off: Int) (name: String): Int = name_start_acc(src, off, name, 0)
 
 let name_start_acc (src: String) (off: Int) (name: String) (back: Int): Int =
     if back >= name.len() || off - back < 0 { off }
-    else if lexer.ident_at(src, off - back) == name && (off - back == 0 || lexer.ident_at(src, off - back - 1) != name) { off - back }
+    else if lexer.ident_at(src, off - back) == name
+        && (off - back == 0 || lexer.ident_at(src, off - back - 1) != name) { off - back }
     else { name_start_acc(src, off, name, back + 1) }
 
 let lsp_locals (root: String) (path: String) (line: Int) (col: Int): Array[lsp.Completion] =
@@ -2261,12 +2800,16 @@ let lsp_members (root: String) (path: String) (line: Int) (col: Int): Array[lsp.
 
 // Names and keywords from the supplied project view.
 let lsp_static_completions (unit: Unit): Array[lsp.Completion] =
-    lsp.parse_completions(lsp.encode_json(JsonArray(Array.concat(builtin_completions(()), keyword_completions(())))))
+    lsp.parse_completions(
+        lsp.encode_json(JsonArray(Array.concat(builtin_completions(()), keyword_completions(()))))
+    )
 
 let lsp_completions (root: String): Array[lsp.Completion] =
     match lsp_run(["complete", root]) {
         Err(_) => lsp_static_completions(()),
-        Ok(r) => if r.exit_code == 0 { lsp.parse_completions(r.stdout) } else { lsp_static_completions(()) },
+        Ok(r) => if r.exit_code == 0 { lsp.parse_completions(r.stdout) } else {
+            lsp_static_completions(())
+        },
     }
 
 // --- Construct spans, for the LSP ---
@@ -2300,7 +2843,14 @@ pub let cmd_spans (path: String): Unit =
 
 let spans_text (sp: Array[parser.ExprSpan]) (i: Int) (acc: String): String =
     if i >= sp.len() { acc }
-    else { spans_text(sp, i + 1, acc.concat(sp[i].start.to_string()).concat(",").concat(sp[i].end.to_string()).concat("\n")) }
+    else {
+        spans_text(
+            sp,
+            i + 1,
+            acc.concat(sp[i].start.to_string()).concat(",").concat(sp[i].end.to_string())
+                .concat("\n")
+        )
+    }
 
 pub struct OffSpan { pub start: Int, pub end: Int }
 
@@ -2318,7 +2868,9 @@ let lsp_spans (path: String) (text: String): Array[OffSpan] =
                 Err(_) => [],
                 Ok(_) => match lsp_run(["spans", target]) {
                     Err(_) => [],
-                    Ok(r) => if r.exit_code == 0 { parse_off_spans(String.lines(r.stdout), 0, []) } else { [] },
+                    Ok(r) => if r.exit_code == 0 { parse_off_spans(String.lines(r.stdout), 0, []) } else {
+                        []
+                    },
                 },
             };
             let c = Os.remove_tree(scratch);
@@ -2347,7 +2899,12 @@ let parse_off_spans (lines: Array[String]) (i: Int) (acc: Array[OffSpan]): Array
 // taken, rather than by sorting: the list is short (one entry per level
 // of nesting), and this drops the duplicates that the precedence chain
 // records for free.
-let span_chain (spans: Array[OffSpan]) (off: Int) (last_w: Int) (acc: Array[OffSpan]): Array[OffSpan] = {
+let span_chain
+    (spans: Array[OffSpan])
+    (off: Int)
+    (last_w: Int)
+    (acc: Array[OffSpan]): Array[OffSpan]
+= {
     let best = narrowest_wider(spans, off, last_w, 0, 0 - 1);
     if best < 0 { acc }
     else { span_chain(spans, off, spans[best].end - spans[best].start, acc.push(spans[best])) }
@@ -2358,7 +2915,9 @@ let narrowest_wider (spans: Array[OffSpan]) (off: Int) (last_w: Int) (i: Int) (b
     else {
         let w = spans[i].end - spans[i].start;
         let holds = spans[i].start <= off && spans[i].end > off && w > last_w;
-        if holds && (best < 0 || w < spans[best].end - spans[best].start) { narrowest_wider(spans, off, last_w, i + 1, i) }
+        if holds && (best < 0 || w < spans[best].end - spans[best].start) {
+            narrowest_wider(spans, off, last_w, i + 1, i)
+        }
         else { narrowest_wider(spans, off, last_w, i + 1, best) }
     }
 
@@ -2397,11 +2956,23 @@ let lsp_selection_ranges (params: JsonValue) (positions: Array[lsp.Position]): J
     }
 }
 
-let selection_acc (text: String) (spans: Array[OffSpan]) (ps: Array[lsp.Position]) (i: Int) (acc: Array[JsonValue]): Array[JsonValue] =
+let selection_acc
+    (text: String)
+    (spans: Array[OffSpan])
+    (ps: Array[lsp.Position])
+    (i: Int)
+    (acc: Array[JsonValue]): Array[JsonValue]
+=
     if i >= ps.len() { acc }
     else {
         let off = lexer.offset_of(text, ps[i].line, ps[i].col);
-        selection_acc(text, spans, ps, i + 1, acc.push(lsp.selection_range_json(chain_rngs(text, spans, off), 0)))
+        selection_acc(
+            text,
+            spans,
+            ps,
+            i + 1,
+            acc.push(lsp.selection_range_json(chain_rngs(text, spans, off), 0))
+        )
     }
 
 // The word under the cursor is the innermost step, ahead of any
@@ -2422,7 +2993,12 @@ let rngs_of (text: String) (sp: Array[OffSpan]) (i: Int) (acc: Array[lsp.Rng]): 
     else {
         let a = lexer.line_col(text, sp[i].start);
         let b = lexer.line_col(text, sp[i].end);
-        rngs_of(text, sp, i + 1, acc.push(lsp.Rng { sl: a.line, sc: a.col, el: b.line, ec: b.col }))
+        rngs_of(text, sp, i + 1, acc.push(lsp.Rng {
+            sl: a.line,
+            sc: a.col,
+            el: b.line,
+            ec: b.col
+        }))
     }
 
 let lsp_defs (root: String): Array[lsp.Def] =
@@ -2432,17 +3008,22 @@ let lsp_defs (root: String): Array[lsp.Def] =
     }
 
 let lsp_reply (id: Option[JsonValue]) (result: JsonValue): Unit =
-    match id { Some(i) => lsp_send(lsp.response(i, result)), None => () }
+    match id {
+        Some(i) => lsp_send(lsp.response(i, result)),
+        None => ()
+    }
 
-// THE version string, and the only one. `bootstrap/check-version`
+// The version comes from bootstrap/compiler-metadata.json. `bootstrap/check-version`
 // fails if a release tag disagrees with it, so a `v0.0.2` tag can
 // never ship a binary that says 0.0.1 -- the same class of drift this
 // project has been closing everywhere else.
-pub let plum_version (): String = "0.0.41"
+pub let plum_version (): String = compiler_metadata.version()
 
 let usage (): Unit = {
     println("plum ".concat(plum_version()));
-    println("usage: plum (tokens|dump-tokens|ast|dump-ast|run|emit-llvm) <file> | check <file-or-project-dir> | build <project-dir> [-o <out>] [--release] [--trace] [--target <triple>] | test <project-dir> [--release] | highlight <file> | check-manifest <file> | fetch [<project-dir>] | vendor [<project-dir>] | cache (list|clean) | doc (<project-dir>|--stdlib) [-o <out>] [--html] [--with-deps] [--home \"Label=url\"] | new <name> | version | help | lsp | complete <project-dir>");
+    println(
+        "usage: plum (tokens|dump-tokens|ast|dump-ast|run|emit-llvm) <file> | check <file-or-project-dir> | build <project-dir> [-o <out>] [--release] [--trace] [--target <triple>] | test <project-dir> [--release] | highlight <file> | check-manifest <file> | fetch [<project-dir>] | vendor [<project-dir>] | cache (list|clean) | doc (<project-dir>|--stdlib) [-o <out>] [--html] [--with-deps] [--home \"Label=url\"] | new <name> | version | help | lsp | complete <project-dir>"
+    );
     println("");
     println("  --trace             a stack trace on stderr when the program dies.");
     println("                      Tail recursion still runs in constant stack space.");
@@ -2452,8 +3033,12 @@ let usage (): Unit = {
     println("  --sanitize address  ASan instrumentation and symbols (native Linux/macOS).");
     println("                      Supported by build, run, test and emit-llvm; -- ends options.");
     println("  build <dir> --target x86_64-unknown-none --emit-object [-o kernel.o]");
-    println("  build <dir> --target x86_64-unknown-none --linker-script <file> [--link-object <file>] [--link-asm <file>]");
-    println("  link --target x86_64-unknown-none --linker-script <file> --link-object <file> [-o kernel.elf]");
+    println(
+        "  build <dir> --target x86_64-unknown-none --linker-script <file> [--link-object <file>] [--link-asm <file>]"
+    );
+    println(
+        "  link --target x86_64-unknown-none --linker-script <file> --link-object <file> [-o kernel.elf]"
+    );
     println("  --target <triple>   build for another platform, e.g. aarch64-linux-musl.");
     println("                      Needs a C compiler that can link for it: set PLUM_CC,");
     println("                      e.g. PLUM_CC=\"zig cc\". Plum ships no sysroot.");
@@ -2497,9 +3082,10 @@ let discover_tests (items: Array[parser.ItemNode]) (i: Int) (acc: Array[String])
                 // dispatcher is a `Unit` main: collecting it produced
                 // `Int != Unit` pointed at some other function
                 // (issue #57).
-                if last.starts_with("test_") && takes_no_args(def.params) && returns_unit(def.ret_ty) {
-                    acc.push(qualify_test(items[i].module, def.name))
-                } else { acc }
+                if last.starts_with("test_") && takes_no_args(def.params)
+                    && returns_unit(def.ret_ty) {
+                        acc.push(qualify_test(items[i].module, def.name))
+                    } else { acc }
             },
             _ => acc,
         };
@@ -2519,7 +3105,10 @@ let takes_no_args (params: Array[parser.ParamNode]): Bool =
     else if params.len() > 1 { false }
     else {
         match params[0] {
-            ParamPatternTy(pat, _) => match pat { PTuple(elems) => Array.is_empty(elems), _ => false },
+            ParamPatternTy(pat, _) => match pat {
+                PTuple(elems) => Array.is_empty(elems),
+                _ => false
+            },
             _ => false,
         }
     }
@@ -2561,7 +3150,9 @@ let run_tests (bin: String) (names: Array[String]) (i: Int) (acc: TestRun): Test
         let outcome = match r {
             Err(e) => TestRun { failed: 1, detail: e },
             Ok(pr) => if pr.exit_code == 0 { TestRun { failed: 0, detail: "" } }
-                      else { TestRun { failed: 1, detail: if pr.stderr == "" { pr.stdout } else { pr.stderr } } },
+            else {
+                TestRun { failed: 1, detail: if pr.stderr == "" { pr.stdout } else { pr.stderr } }
+            },
         };
         if outcome.failed == 0 {
             println("test ${names[i]} ... ok");
@@ -2574,7 +3165,8 @@ let run_tests (bin: String) (names: Array[String]) (i: Int) (acc: TestRun): Test
             // with the progress lines.
             run_tests(bin, names, i + 1, TestRun {
                 failed: acc.failed + 1,
-                detail: acc.detail.concat("---- ").concat(names[i]).concat(" ----\n").concat(outcome.detail).concat("\n"),
+                detail: acc.detail.concat("---- ").concat(names[i]).concat(" ----\n")
+                    .concat(outcome.detail).concat("\n"),
             })
         }
     }
@@ -2595,7 +3187,12 @@ let run_tests (bin: String) (names: Array[String]) (i: Int) (acc: TestRun): Test
 // failure and cannot report the rest. That was the original reason for
 // the design and it is unchanged -- only the child is different, an
 // argument to a compiled binary rather than an interpreter invocation.
-let compile_and_run_tests (dir: String) (program: parser.ProgramNode) (names: Array[String]) (mode: buildmode.Options): TestRun =
+let compile_and_run_tests
+    (dir: String)
+    (program: parser.ProgramNode)
+    (names: Array[String])
+    (mode: buildmode.Options): TestRun
+=
     match Os.temp_dir() {
         Err(e) => TestRun { failed: 1, detail: "could not create a scratch directory: ".concat(e) },
         Ok(scratch) => {
@@ -2610,9 +3207,19 @@ let compile_and_run_tests (dir: String) (program: parser.ProgramNode) (names: Ar
                     let written = write_shims(scratch, needs_tls(ir, native.tls));
                     if written.err != "" { TestRun { failed: 1, detail: written.err } } else {
                         let cfiles = written.files;
-                        let err = link_ir_uncached(ll, cfiles, bin, extra, scratch, native_target(), mode);
+                        let err = link_ir_uncached(
+                            ll,
+                            cfiles,
+                            bin,
+                            extra,
+                            scratch,
+                            native_target(),
+                            mode
+                        );
                         if err == "" { run_tests(bin, names, 0, TestRun { failed: 0, detail: "" }) }
-                        else { TestRun { failed: 1, detail: "could not link tests:\n".concat(err) } }
+                        else {
+                            TestRun { failed: 1, detail: "could not link tests:\n".concat(err) }
+                        }
                     }
                 },
             };
@@ -2671,8 +3278,12 @@ let test_dispatcher_src (names: Array[String]): String =
 let test_dispatch_arms (names: Array[String]) (i: Int) (acc: String): String =
     if i >= names.len() { acc }
     else {
-        test_dispatch_arms(names, i + 1,
-            acc.concat("    if which == \"").concat(names[i]).concat("\" { ").concat(names[i]).concat("(()) } else { () };\n"))
+        test_dispatch_arms(
+            names,
+            i + 1,
+            acc.concat("    if which == \"").concat(names[i]).concat("\" { ").concat(names[i])
+                .concat("(()) } else { () };\n")
+        )
     }
 
 // A project's own C sources, selected for the target being built.
@@ -2700,25 +3311,47 @@ let test_dispatch_arms (names: Array[String]) (i: Int) (acc: String): String =
 // `posix` earns its place: the case that prompted this is a terminal
 // shim that is POSIX-only, and writing it twice under `linux/` and
 // `macos/` would be two copies of one file.
-struct NativeFrame { relative: String, entries: Array[treefs.EntryInfo], index: Int }
+struct NativeFrame {
+    relative: String,
+    entries: Array[treefs.EntryInfo],
+    index: Int
+}
 
 let native_c_files (project: String) (os: String) (builder: SourceBuilder): Array[String] =
     native_c_files_policy(project, os, builder, true)
 
-let native_c_files_policy (project: String) (os: String) (builder: SourceBuilder) (inherit: Bool): Array[String] =
+let native_c_files_policy
+    (project: String)
+    (os: String)
+    (builder: SourceBuilder)
+    (inherit: Bool): Array[String]
+=
     if !source_is_directory(project) { [] }
     else {
         let scope = source_selected_scope(project, "", "", inherit);
         let children = match treefs.children(scope.root, scope.selection, scope.reject_links) {
-            Ok(xs) => xs, Err(e) => { panic_raw(e); [] },
+            Ok(xs) => xs,
+            Err(e) => {
+                panic_raw(e);
+                []
+            },
         };
         let mut present = false;
-        for info in children { if info.name == "native" { present = true; () }; };
+        for info in children {
+            if info.name == "native" {
+                present = true;
+                ()
+            };
+        };
         if !present { [] }
         else {
-            let relative = if scope.selection == "." { "native" } else { Path.join(scope.selection, "native") };
+            let relative = if scope.selection == "." { "native" } else {
+                Path.join(scope.selection, "native")
+            };
             let entry = source_entry(scope, relative);
-            if treefs.kind(entry) != 2 { panic_raw("native source path is not a directory: ${project}/native") };
+            if treefs.kind(entry) != 2 {
+                panic_raw("native source path is not a directory: ${project}/native")
+            };
             source_record(builder, entry, "${project}/native");
             native_c_walk(scope, os, builder, [native_frame(scope, relative)], ref([]))
         }
@@ -2726,14 +3359,28 @@ let native_c_files_policy (project: String) (os: String) (builder: SourceBuilder
 
 let native_frame (scope: SourceScope) (relative: String): NativeFrame = {
     let entries = match treefs.children(scope.root, relative, scope.reject_links) {
-        Ok(xs) => xs, Err(e) => { panic_raw(e); [] },
+        Ok(xs) => xs,
+        Err(e) => {
+            panic_raw(e);
+            []
+        },
     };
-    NativeFrame { relative: relative, entries: entries, index: 0 }
+    NativeFrame {
+        relative: relative,
+        entries: entries,
+        index: 0
+    }
 }
 
 // Discovery is confined; invoking the user's native compiler remains a
 // trusted operation, including its own header/include and assembly behavior.
-let native_c_walk (scope: SourceScope) (os: String) (builder: SourceBuilder) (stack: Array[NativeFrame]) (found: Ref[Array[String]]): Array[String] =
+let native_c_walk
+    (scope: SourceScope)
+    (os: String)
+    (builder: SourceBuilder)
+    (stack: Array[NativeFrame])
+    (found: Ref[Array[String]]): Array[String]
+=
     if stack.len() == 0 { found.get() }
     else {
         let frame = stack[stack.len() - 1];
@@ -2743,7 +3390,11 @@ let native_c_walk (scope: SourceScope) (os: String) (builder: SourceBuilder) (st
             let info = frame.entries[frame.index];
             let relative = Path.join(frame.relative, info.name);
             let full = source_logical(scope, relative);
-            let pending = rest.push(NativeFrame { relative: frame.relative, entries: frame.entries, index: frame.index + 1 });
+            let pending = rest.push(NativeFrame {
+                relative: frame.relative,
+                entries: frame.entries,
+                index: frame.index + 1
+            });
             // Named target exclusions apply before resolving a directory link.
             if native_known_dir(info.name) && !native_applies(info.name, os) && info.kind != 1 {
                 native_c_walk(scope, os, builder, pending, found)
@@ -2752,19 +3403,34 @@ let native_c_walk (scope: SourceScope) (os: String) (builder: SourceBuilder) (st
                 let kind = treefs.kind(entry);
                 if kind == 2 {
                     if !native_known_dir(info.name) {
-                        panic_raw("native/${info.name}: not a target directory.\n  Plum understands linux, macos, windows and posix. A `.c` file directly under `native/` is compiled for every target.")
+                        panic_raw(
+                            "native/${info.name}: not a target directory.\n  Plum understands linux, macos, windows and posix. A `.c` file directly under `native/` is compiled for every target."
+                        )
                     };
-                    if stack.len() >= 127 { panic_raw("native source directory depth exceeds 128 at ${full}") };
+                    if stack.len() >= 127 {
+                        panic_raw("native source directory depth exceeds 128 at ${full}")
+                    };
                     source_record(builder, entry, full);
-                    native_c_walk(scope, os, builder, pending.push(native_frame(scope, relative)), found)
+                    native_c_walk(
+                        scope,
+                        os,
+                        builder,
+                        pending.push(native_frame(scope, relative)),
+                        found
+                    )
                 } else if kind == 1 {
                     if info.name.ends_with(".c") {
                         source_record(builder, entry, full);
-                        let mut files = found.get(); found.set([]);
-                        files = files.push(full); found.set(files);
+                        let mut files = found.get();
+                        found.set([]);
+                        files = files.push(full);
+                        found.set(files);
                     };
                     native_c_walk(scope, os, builder, pending, found)
-                } else { panic_raw("unsupported native source entry: ${full}"); [] }
+                } else {
+                    panic_raw("unsupported native source entry: ${full}");
+                    []
+                }
             }
         }
     }
@@ -2817,7 +3483,9 @@ let output_path (argv: Array[String]) (target: String): String =
                 Ok(cwd) => default_output_name(argv[1], cwd),
                 Err(_) => default_output_name(argv[1], "."),
             };
-            if target_os(target) == "windows" && !base.ends_with(".exe") { base.concat(".exe") } else { base }
+            if target_os(target) == "windows" && !base.ends_with(".exe") { base.concat(".exe") } else {
+                base
+            }
         },
     }
 
@@ -2833,9 +3501,13 @@ let default_output_name (project: String) (cwd: String): String =
     default_output_name_in(Os.platform() == "windows", project, cwd)
 
 let default_output_name_in (windows: Bool) (project: String) (cwd: String): String = {
-    let joined = if Path.is_absolute_in(windows, project) { project } else { Path.join_in(windows, cwd, project) };
+    let joined = if Path.is_absolute_in(windows, project) { project } else {
+        Path.join_in(windows, cwd, project)
+    };
     let base = Path.basename_in(windows, Path.clean_in(windows, joined));
-    if base == "." || base == ".." || base == "" || base == Path.separator_in(windows) { "a.out" } else { base }
+    if base == "." || base == ".." || base == "" || base == Path.separator_in(windows) { "a.out" } else {
+        base
+    }
 }
 
 // `build` = `emit-llvm` + `clang`. The IR was already being produced
@@ -2878,7 +3550,8 @@ let target_os_components (parts: Array[String]) (i: Int): String =
         let part = parts[i];
         if part == "linux" { "linux" }
         else if part == "windows" { "windows" }
-        else if part == "macos" || part.starts_with("macosx") || part == "darwin" || part.starts_with("darwin") { "macos" }
+        else if part == "macos" || part.starts_with("macosx") || part == "darwin"
+            || part.starts_with("darwin") { "macos" }
         else { target_os_components(parts, i + 1) }
     }
 
@@ -2948,22 +3621,51 @@ let target_os_components (parts: Array[String]) (i: Int): String =
 // executable and wants the single faster invocation.
 struct ObjBuild { err: String, objs: Array[String] }
 
-let compile_objs (srcs: Array[String]) (i: Int) (scratch: String) (flags: Array[String]) (acc: Array[String]): ObjBuild =
+let compile_objs
+    (srcs: Array[String])
+    (i: Int)
+    (scratch: String)
+    (flags: Array[String])
+    (acc: Array[String]): ObjBuild
+=
     if i >= srcs.len() { ObjBuild { err: "", objs: acc } }
     else {
         let obj = scratch.concat("/obj").concat(i.to_string()).concat(".o");
         let argv = Array.concat(Array.concat(cc_prefix_args(), flags), ["-c", srcs[i], "-o", obj]);
         match run_process(cc_program(), argv) {
             Err(e) => ObjBuild { err: "build failed: ".concat(e), objs: acc },
-            Ok(r) => if r.exit_code == 0 { compile_objs(srcs, i + 1, scratch, flags, acc.push(obj)) }
-                else { ObjBuild { err: Array.join(cc_words(), " ").concat(" failed on ").concat(srcs[i])
-                    .concat(" (exit ").concat(r.exit_code.to_string()).concat("):\n").concat(r.stderr), objs: acc } },
+            Ok(r) => if r.exit_code == 0 {
+                compile_objs(srcs, i + 1, scratch, flags, acc.push(obj))
+            }
+            else {
+                ObjBuild {
+                    err: Array.join(cc_words(), " ").concat(" failed on ").concat(srcs[i])
+                        .concat(" (exit ").concat(r.exit_code.to_string()).concat("):\n")
+                        .concat(r.stderr),
+                    objs: acc
+                }
+            },
         }
     }
 
-let compile_two_phase (srcs: Array[String]) (out: String) (extra: Array[String]) (scratch: String) (target: String) (mode: buildmode.Options): String = {
+let compile_two_phase
+    (srcs: Array[String])
+    (out: String)
+    (extra: Array[String])
+    (scratch: String)
+    (target: String)
+    (mode: buildmode.Options): String
+= {
     let shim_dir = if srcs.len() > 1 { Path.dirname(srcs[1]) } else { scratch };
-    let flags = Array.concat(target_args(target), Array.concat(buildmode.compile_flags(mode), ["-Wno-override-module", "-I", shim_dir, "-I", shim_dir.concat("/mbedtls/include"), "-I", shim_dir.concat("/mbedtls/library")]));
+    let flags = Array.concat(target_args(target), Array.concat(buildmode.compile_flags(mode), [
+        "-Wno-override-module",
+        "-I",
+        shim_dir,
+        "-I",
+        shim_dir.concat("/mbedtls/include"),
+        "-I",
+        shim_dir.concat("/mbedtls/library")
+    ]));
     // Project/dependency C inputs need the same includes and persistent
     // objects as embedded sources. Leaving C in the final link both loses
     // its header search paths and lets Clang delete its debug-map objects.
@@ -2972,12 +3674,24 @@ let compile_two_phase (srcs: Array[String]) (out: String) (extra: Array[String])
     let built = compile_objs(Array.concat(srcs, cs), 0, scratch, flags, []);
     if built.err != "" { built.err }
     else {
-        let argv = Array.concat(Array.concat(Array.concat(Array.concat(cc_prefix_args(), Array.concat(target_args(target), buildmode.link_flags(mode))), built.objs), linked),
-            Array.concat(platform_libs(target), ["-o", out]));
+        let argv = Array.concat(
+            Array.concat(
+                Array.concat(
+                    Array.concat(
+                        cc_prefix_args(),
+                        Array.concat(target_args(target), buildmode.link_flags(mode))
+                    ),
+                    built.objs
+                ),
+                linked
+            ),
+            Array.concat(platform_libs(target), ["-o", out])
+        );
         match run_process(cc_program(), argv) {
             Err(e) => "build failed: ".concat(e),
             Ok(r) => if r.exit_code != 0 {
-                Array.join(cc_words(), " ").concat(" failed to link (exit ").concat(r.exit_code.to_string()).concat("):\n").concat(r.stderr)
+                Array.join(cc_words(), " ").concat(" failed to link (exit ")
+                    .concat(r.exit_code.to_string()).concat("):\n").concat(r.stderr)
             } else {
                 // The objects are still in `scratch`, so the map resolves.
                 if target_os(target) == "macos" { run_dsymutil(out) } else { () };
@@ -3000,17 +3714,36 @@ pub let test_two_phase_native_headers (): Unit = {
     let header = Path.join(scratch, "mbedtls/include/native_fixture.h");
     assert(Result.is_ok(Os.write_file(header, "#define NATIVE_FIXTURE_RESULT 7\n")));
     let c = Path.join(scratch, "native/value.c");
-    assert(Result.is_ok(Os.write_file(c, "#include <native_fixture.h>\nint native_fixture(void) { return NATIVE_FIXTURE_RESULT; }\n")));
+    assert(Result.is_ok(Os.write_file(
+        c,
+        "#include <native_fixture.h>\nint native_fixture(void) { return NATIVE_FIXTURE_RESULT; }\n"
+    )));
     let ll = Path.join(scratch, "main.ll");
-    assert(Result.is_ok(Os.write_file(ll, "declare i32 @native_fixture()\ndefine i32 @main() {\n  %r = call i32 @native_fixture()\n  ret i32 %r\n}\n")));
+    assert(Result.is_ok(Os.write_file(
+        ll,
+        "declare i32 @native_fixture()\ndefine i32 @main() {\n  %r = call i32 @native_fixture()\n  ret i32 %r\n}\n"
+    )));
     let out = Path.join(scratch, "native-test.exe");
-    assert_eq(compile_two_phase([ll], out, [c, "-lm"], scratch, native_target(), buildmode.defaults(())), "");
+    assert_eq(
+        compile_two_phase([ll], out, [c, "-lm"], scratch, native_target(), buildmode.defaults(())),
+        ""
+    );
     let ran = run_process(out, []);
-    assert(match ran { Ok(r) => r.exit_code == 7, Err(_) => false });
+    assert(
+        match ran {
+            Ok(r) => r.exit_code == 7,
+            Err(_) => false
+        }
+    );
     if Os.platform(()) == "macos" {
         let dwarf = out.concat(".dSYM/Contents/Resources/DWARF/native-test.exe");
         let info = run_process("dwarfdump", ["--debug-line", dwarf]);
-        assert(match info { Ok(r) => r.exit_code == 0 && r.stdout.contains("value.c"), Err(_) => false });
+        assert(
+            match info {
+                Ok(r) => r.exit_code == 0 && r.stdout.contains("value.c"),
+                Err(_) => false
+            }
+        );
     };
     assert(Result.is_ok(Os.remove_tree(scratch)));
 }
@@ -3031,14 +3764,35 @@ let run_dsymutil (out: String): Unit =
 // every lookup: the captured input includes system headers, search-path
 // shadowing and time-dependent macros. Compile THAT snapshot, never reread
 // the original source after computing its key.
-let compile_cached_objects (ll: String) (cfiles: Array[String]) (out: String) (extra: Array[String]) (scratch: String) (target: String) (mode: buildmode.Options): String = {
+let compile_cached_objects
+    (ll: String)
+    (cfiles: Array[String])
+    (out: String)
+    (extra: Array[String])
+    (scratch: String)
+    (target: String)
+    (mode: buildmode.Options): String
+= {
     let tool_time = buildcache.start(());
     let fingerprint = buildcache.native_fingerprint(());
     buildcache.finish("native toolchain fingerprint", tool_time);
     let integrated = if Os.platform(()) == "windows" { ["-fintegrated-cc1"] } else { [] };
-    let flags = Array.concat(integrated, Array.concat(target_args(target), Array.concat(buildmode.compile_flags(mode), ["-Wno-override-module"])));
+    let flags = Array.concat(
+        integrated,
+        Array.concat(
+            target_args(target),
+            Array.concat(buildmode.compile_flags(mode), ["-Wno-override-module"])
+        )
+    );
     let shim_dir = if cfiles.len() == 0 { scratch } else { Path.dirname(cfiles[0]) };
-    let includes = ["-I", shim_dir, "-I", shim_dir.concat("/mbedtls/include"), "-I", shim_dir.concat("/mbedtls/library")];
+    let includes = [
+        "-I",
+        shim_dir,
+        "-I",
+        shim_dir.concat("/mbedtls/include"),
+        "-I",
+        shim_dir.concat("/mbedtls/library")
+    ];
     if fingerprint == "" {
         buildcache.diagnostic("objects bypass: unsupported driver or loader");
         link_ir_uncached(ll, cfiles, out, extra, scratch, target, mode)
@@ -3054,16 +3808,28 @@ let compile_cached_objects (ll: String) (cfiles: Array[String]) (out: String) (e
         } else if built.err != "" { built.err.concat("\nIR left at ${ll}") }
         else {
             let link_time = buildcache.start(());
-            let argv = Array.concat(Array.concat(Array.concat(cc_prefix_args(), Array.concat(target_args(target), buildmode.link_flags(mode))), built.objs),
-                Array.concat(linked, Array.concat(platform_libs(target), ["-o", out])));
+            let argv = Array.concat(
+                Array.concat(
+                    Array.concat(
+                        cc_prefix_args(),
+                        Array.concat(target_args(target), buildmode.link_flags(mode))
+                    ),
+                    built.objs
+                ),
+                Array.concat(linked, Array.concat(platform_libs(target), ["-o", out]))
+            );
             let result = match run_process(cc_program(), argv) {
                 Err(e) => "build failed: ${e}",
-                Ok(r) => if r.exit_code != 0 { "${cc_program()} failed to link (exit ${r.exit_code.to_string()}):\n${r.stderr}" }
-                    else {
-                        if buildmode.symbols(mode) && target_os(target) == "macos" { run_dsymutil(out) };
-                        let removed = Os.remove_file(ll);
-                        ""
-                    },
+                Ok(r) => if r.exit_code != 0 {
+                    "${cc_program()} failed to link (exit ${r.exit_code.to_string()}):\n${r.stderr}"
+                }
+                else {
+                    if buildmode.symbols(mode) && target_os(target) == "macos" {
+                        run_dsymutil(out)
+                    };
+                    let removed = Os.remove_file(ll);
+                    ""
+                },
             };
             buildcache.finish("link", link_time);
             result
@@ -3071,36 +3837,80 @@ let compile_cached_objects (ll: String) (cfiles: Array[String]) (out: String) (e
     }
 }
 
-let link_ir_uncached (ll: String) (cfiles: Array[String]) (out: String) (extra: Array[String]) (scratch: String) (target: String) (mode: buildmode.Options): String = {
-    if buildmode.symbols(mode) && target_os(target) == "macos" { compile_two_phase(Array.concat([ll], cfiles), out, extra, scratch, target, mode) }
+let link_ir_uncached
+    (ll: String)
+    (cfiles: Array[String])
+    (out: String)
+    (extra: Array[String])
+    (scratch: String)
+    (target: String)
+    (mode: buildmode.Options): String
+= {
+    if buildmode.symbols(mode) && target_os(target) == "macos" {
+        compile_two_phase(Array.concat([ll], cfiles), out, extra, scratch, target, mode)
+    }
     else {
         let shim_dir = if cfiles.len() == 0 { scratch } else { Path.dirname(cfiles[0]) };
-        let base = Array.concat(target_args(target), Array.concat(buildmode.compile_flags(mode), ["-Wno-override-module", ll, "-I", shim_dir, "-I", shim_dir.concat("/mbedtls/include"), "-I", shim_dir.concat("/mbedtls/library")]));
-        let argv = Array.concat(Array.concat(Array.concat(cc_prefix_args(), base), cfiles),
-            Array.concat(extra, Array.concat(platform_libs(target), ["-o", out])));
+        let base = Array.concat(target_args(target), Array.concat(buildmode.compile_flags(mode), [
+            "-Wno-override-module",
+            ll,
+            "-I",
+            shim_dir,
+            "-I",
+            shim_dir.concat("/mbedtls/include"),
+            "-I",
+            shim_dir.concat("/mbedtls/library")
+        ]));
+        let argv = Array.concat(
+            Array.concat(Array.concat(cc_prefix_args(), base), cfiles),
+            Array.concat(extra, Array.concat(platform_libs(target), ["-o", out]))
+        );
         let t = buildcache.start(());
         let result = match run_process(cc_program(), argv) {
             Err(e) => "build failed: ${e}",
-            Ok(r) => if r.exit_code != 0 { "${cc_program()} failed (exit ${r.exit_code.to_string()}):\n${r.stderr}\nIR left at ${ll}" }
-                else { let removed = Os.remove_file(ll); "" },
+            Ok(r) => if r.exit_code != 0 {
+                "${cc_program()} failed (exit ${r.exit_code.to_string()}):\n${r.stderr}\nIR left at ${ll}"
+            }
+            else {
+                let removed = Os.remove_file(ll);
+                ""
+            },
         };
         buildcache.finish("native compile/link", t);
         result
     }
 }
 
-let cached_object_loop (program: String) (srcs: Array[String]) (i: Int) (scratch: String) (flags: Array[String]) (includes: Array[String]) (fingerprint: String) (acc: Array[String]): ObjBuild =
+let cached_object_loop
+    (program: String)
+    (srcs: Array[String])
+    (i: Int)
+    (scratch: String)
+    (flags: Array[String])
+    (includes: Array[String])
+    (fingerprint: String)
+    (acc: Array[String]): ObjBuild
+=
     if i >= srcs.len() { ObjBuild { err: "", objs: acc } }
     else {
         let src = srcs[i];
         let obj = scratch.concat("/obj${i.to_string()}.o");
-        let input = if src.ends_with(".ll") { src } else { scratch.concat("/input${i.to_string()}.i") };
+        let input = if src.ends_with(".ll") { src } else {
+            scratch.concat("/input${i.to_string()}.i")
+        };
         let prep_time = buildcache.start(());
         let prep_err = if src.ends_with(".ll") { "" }
-            else { match run_process(program, Array.concat(Array.concat(flags, includes), ["-E", src, "-o", input])) {
+        else {
+            match run_process(
+                program,
+                Array.concat(Array.concat(flags, includes), ["-E", src, "-o", input])
+            ) {
                 Err(e) => "build failed: ${e}",
-                Ok(r) => if r.exit_code != 0 { "${cc_program()} preprocessing failed: ${r.stderr}" } else { "" },
-            } };
+                Ok(r) => if r.exit_code != 0 { "${cc_program()} preprocessing failed: ${r.stderr}" } else {
+                    ""
+                },
+            }
+        };
         buildcache.finish("preprocess", prep_time);
         if prep_err != "" { ObjBuild { err: prep_err, objs: acc } }
         else {
@@ -3118,35 +3928,69 @@ let cached_object_loop (program: String) (srcs: Array[String]) (i: Int) (scratch
                 // bypass any inline/module assembly even when encoded.
                 let llvm_asm = src.ends_with(".ll") && !buildcache.safe_ir(snapshot);
                 let key = if digest != "" && !llvm_asm {
-                    buildcache.hash("plum-native-object-v2".concat(buildcache.frame(fingerprint)).concat(buildcache.frame(spec)).concat(digest))
+                    buildcache.hash(
+                        "plum-native-object-v2".concat(buildcache.frame(fingerprint))
+                            .concat(buildcache.frame(spec)).concat(digest)
+                    )
                 } else { "" };
                 let hit = key != "" && buildcache.load_object(key, obj);
                 // Validate C assembly through Clang's parsed AST (Linux)
                 // or emitted LLVM IR (Windows) on misses.
                 // Text searches miss concatenated/escaped asm strings. A
                 // stored object already passed this check under the v2 key.
-                let reusable = hit || (key != "" && (src.ends_with(".ll") || buildcache.c_snapshot_safe(program, flags, input)));
+                let reusable = hit
+                    || (
+                        key != ""
+                            && (
+                                src.ends_with(".ll")
+                                    || buildcache.c_snapshot_safe(program, flags, input)
+                            )
+                    );
                 buildcache.finish("object lookup preparation", probe_time);
                 if hit { buildcache.diagnostic("object hit ${i.to_string()}") }
                 else {
-                    buildcache.diagnostic(if !reusable { "object bypass ${i.to_string()}" } else { "object miss ${i.to_string()}" })
+                    buildcache.diagnostic(
+                        if !reusable { "object bypass ${i.to_string()}" } else {
+                            "object miss ${i.to_string()}"
+                        }
+                    )
                 };
                 let compile_time = buildcache.start(());
-                let err = if hit { "" } else { match run_process(program, args) {
-                    Err(e) => "build failed: ${e}",
-                    Ok(r) => if r.exit_code != 0 { "${cc_program()} failed on ${src}: ${r.stderr}" }
-                    else { if reusable { buildcache.store("obj", key, obj, "") } else { () }; "" },
-                } };
+                let err = if hit { "" } else {
+                    match run_process(program, args) {
+                        Err(e) => "build failed: ${e}",
+                        Ok(r) => if r.exit_code != 0 {
+                            "${cc_program()} failed on ${src}: ${r.stderr}"
+                        }
+                        else {
+                            if reusable { buildcache.store("obj", key, obj, "") } else { () };
+                            ""
+                        },
+                    }
+                };
                 buildcache.finish("object compile", compile_time);
                 if err != "" { ObjBuild { err: err, objs: acc } }
-                else { cached_object_loop(program, srcs, i + 1, scratch, flags, includes, fingerprint, acc.push(obj)) }
+                else {
+                    cached_object_loop(
+                        program,
+                        srcs,
+                        i + 1,
+                        scratch,
+                        flags,
+                        includes,
+                        fingerprint,
+                        acc.push(obj)
+                    )
+                }
             }
         }
     }
 
 let platform_libs (target: String): Array[String] =
     if freestanding.enabled(target) { [] }
-    else if target_os(target) == "windows" { ["-lm", "-lpthread", "-lws2_32", "-lcrypt32", "-lbcrypt"] }
+    else if target_os(target) == "windows" {
+        ["-lm", "-lpthread", "-lws2_32", "-lcrypt32", "-lbcrypt"]
+    }
     else { ["-lm"] }
 
 // Every 64-bit architecture this compiler is willing to emit for.
@@ -3159,7 +4003,22 @@ let platform_libs (target: String): Array[String] =
 // about the width is unrecoverable, and being wrong about the name
 // costs one line here.
 let known_64_bit_arches (): Array[String] =
-    ["x86_64", "amd64", "aarch64", "arm64", "riscv64", "powerpc64", "powerpc64le", "ppc64", "ppc64le", "s390x", "loongarch64", "mips64", "mips64el", "sparc64"]
+    [
+        "x86_64",
+        "amd64",
+        "aarch64",
+        "arm64",
+        "riscv64",
+        "powerpc64",
+        "powerpc64le",
+        "ppc64",
+        "ppc64le",
+        "s390x",
+        "loongarch64",
+        "mips64",
+        "mips64el",
+        "sparc64"
+    ]
 
 // The architecture component of a triple: everything before the first
 // `-`, which is the one position that IS fixed across every spelling.
@@ -3243,7 +4102,12 @@ let link_args (argv: Array[String]) (dir: String) (target: String): NativeBuild 
     link_args_resolved(argv, dir, target, deps)
 }
 
-let link_args_resolved (argv: Array[String]) (dir: String) (target: String) (deps: Array[pkg.Dep]): NativeBuild = {
+let link_args_resolved
+    (argv: Array[String])
+    (dir: String)
+    (target: String)
+    (deps: Array[pkg.Dep]): NativeBuild
+= {
     let os = target_os(target);
     // Libraries come from three places, and only the first was ever
     // available: the command line, this project's own manifest, and
@@ -3257,7 +4121,8 @@ let link_args_resolved (argv: Array[String]) (dir: String) (target: String) (dep
     let own_libs = pkg.manifest_link_for(own, os);
     let mut cs = Array.concat(collect_flag(argv, "--link-c", 0, []), own_cs);
     let mut libs = Array.concat(collect_flag(argv, "--link-lib", 0, []), own_libs);
-    let mut tls = command_native_tls(argv) || pkg.native_needs_tls(own, own_cs.len() > 0 || own_libs.len() > 0);
+    let mut tls = command_native_tls(argv)
+        || pkg.native_needs_tls(own, own_cs.len() > 0 || own_libs.len() > 0);
     for dep in deps {
         let m = pkg.read(dep.path);
         let dep_cs = native_c_files_policy(dep.path, os, native_builder, false);
@@ -3278,10 +4143,14 @@ let command_native_tls (argv: Array[String]): Bool = {
         panic_raw("--native-deps requires one value: none or tls")
     };
     if values.len() == 0 {
-        collect_flag(argv, "--link-c", 0, []).len() > 0 || collect_flag(argv, "--link-lib", 0, []).len() > 0
+        collect_flag(argv, "--link-c", 0, []).len() > 0 || collect_flag(argv, "--link-lib", 0, [])
+            .len() > 0
     } else if values[0] == "tls" { true }
     else if values[0] == "none" { false }
-    else { panic_raw("--native-deps requires one value: none or tls"); true }
+    else {
+        panic_raw("--native-deps requires one value: none or tls");
+        true
+    }
 }
 
 // The resolved dependency paths, transitively, with cycles already
@@ -3291,7 +4160,12 @@ let command_native_tls (argv: Array[String]): Bool = {
 let project_deps (dir: String): Array[pkg.Dep] = {
     let root = source_project_root(dir);
     if source_is_directory(root) {
-        dep_closure(root, DepScan { root: Path.clean(root), visited: [Path.clean(root)], found: [], fetch: false }).found
+        dep_closure(root, DepScan {
+            root: Path.clean(root),
+            visited: [Path.clean(root)],
+            found: [],
+            fetch: false
+        }).found
     } else { [] }
 }
 
@@ -3302,19 +4176,25 @@ let project_deps (dir: String): Array[pkg.Dep] = {
 // Direct Plum calls always select TLS, independently of native metadata.
 let needs_tls (ir: String) (native_tls: Bool): Bool = {
     let tls = native_tls || declares_tls(ir.split("\n"), 0);
-    buildcache.diagnostic(if tls { "native dependencies: tls" } else { "native dependencies: none" });
+    buildcache.diagnostic(
+        if tls { "native dependencies: tls" } else { "native dependencies: none" }
+    );
     tls
 }
 
 let declares_tls (lines: Array[String]) (i: Int): Bool =
     if i >= lines.len() { false }
     else if lines[i].starts_with("declare ")
-        && (lines[i].contains("@tls_") || lines[i].contains("@mbedtls_") || lines[i].contains("@psa_")) { true }
+        && (
+            lines[i].contains("@tls_") || lines[i].contains("@mbedtls_") || lines[i]
+                .contains("@psa_")
+        ) { true }
     else { declares_tls(lines, i + 1) }
 
 // Writes the required embedded shims into `dir`, returning the paths
 // clang should compile. Headers accompany their library sources.
 struct ShimBuild { err: String, files: Array[String] }
+
 let write_shims (dir: String) (tls: Bool): ShimBuild =
     write_shims_acc(shims.shim_files(()), dir, tls, 0, [])
 
@@ -3337,9 +4217,11 @@ let shared_shims (dir: String) (tls: Bool): ShimBuild = {
                     // A cleaner/corrupt entry may leave an incomplete tree.
                     // Readers never compile while a writer fills this tree.
                     if verify_shims(files, dir, true, 0, []).err != "" {
-                        let removed = Os.remove_tree(dir); ()
+                        let removed = Os.remove_tree(dir);
+                        ()
                     } else { () };
-                    let published = Os.rename_file(stage, dir); ()
+                    let published = Os.rename_file(stage, dir);
+                    ()
                 } else { () };
                 let cleaned = Os.remove_tree(stage);
                 verify_shims(files, dir, tls, 0, [])
@@ -3348,7 +4230,13 @@ let shared_shims (dir: String) (tls: Bool): ShimBuild = {
     }
 }
 
-let verify_shims (files: Array[shims.ShimFile]) (dir: String) (tls: Bool) (i: Int) (acc: Array[String]): ShimBuild =
+let verify_shims
+    (files: Array[shims.ShimFile])
+    (dir: String)
+    (tls: Bool)
+    (i: Int)
+    (acc: Array[String]): ShimBuild
+=
     if i >= files.len() { ShimBuild { err: "", files: acc } }
     else if !tls && (files[i].name == "tls_shim.c" || files[i].name.starts_with("mbedtls/")) {
         verify_shims(files, dir, tls, i + 1, acc)
@@ -3356,20 +4244,42 @@ let verify_shims (files: Array[shims.ShimFile]) (dir: String) (tls: Bool) (i: In
         let path = Path.join(dir, files[i].name);
         if buildcache.file_hash(path) != buildcache.hash(files[i].source) {
             ShimBuild { err: "missing or corrupt embedded shim: ${path}", files: acc }
-        } else { verify_shims(files, dir, tls, i + 1, if files[i].compile { acc.push(path) } else { acc }) }
+        } else {
+            verify_shims(
+                files,
+                dir,
+                tls,
+                i + 1,
+                if files[i].compile { acc.push(path) } else { acc }
+            )
+        }
     }
 
-let write_shims_acc (files: Array[shims.ShimFile]) (dir: String) (tls: Bool) (i: Int) (acc: Array[String]): ShimBuild =
+let write_shims_acc
+    (files: Array[shims.ShimFile])
+    (dir: String)
+    (tls: Bool)
+    (i: Int)
+    (acc: Array[String]): ShimBuild
+=
     if i >= files.len() { ShimBuild { err: "", files: acc } }
     else if !tls && (files[i].name == "tls_shim.c" || files[i].name.starts_with("mbedtls/")) {
         write_shims_acc(files, dir, tls, i + 1, acc)
     } else {
         let path = Path.join(dir, files[i].name);
-        if !buildcache.make_dirs(Path.dirname(path)) { ShimBuild { err: "cannot create shim directory for ${path}", files: acc } }
+        if !buildcache.make_dirs(Path.dirname(path)) {
+            ShimBuild { err: "cannot create shim directory for ${path}", files: acc }
+        }
         else {
             match Os.write_file(path, files[i].source) {
                 Err(e) => ShimBuild { err: e, files: acc },
-                Ok(_) => write_shims_acc(files, dir, tls, i + 1, if files[i].compile { acc.push(path) } else { acc }),
+                Ok(_) => write_shims_acc(
+                    files,
+                    dir,
+                    tls,
+                    i + 1,
+                    if files[i].compile { acc.push(path) } else { acc }
+                ),
             }
         }
     }
@@ -3380,7 +4290,10 @@ let write_shims_acc (files: Array[shims.ShimFile]) (dir: String) (tls: Bool) (i:
 let build_options (argv: Array[String]) (target: String): buildmode.Options = {
     let mode = match buildmode.parse(argv) {
         Ok(mode) => mode,
-        Err(e) => { fail_cmd(e); buildmode.defaults(()) },
+        Err(e) => {
+            fail_cmd(e);
+            buildmode.defaults(())
+        },
     };
     let bad = buildmode.validate(mode, target_os(target), target == native_target());
     if bad != "" { fail_cmd(bad) };
@@ -3397,14 +4310,31 @@ let emit_program (program: parser.ProgramNode) (entry: String) (mode: buildmode.
     if mode.address { codegen.cg_sanitize_address(ir) } else { ir }
 }
 
-let compile_prepared (dir: String) (out: String) (native: NativeBuild) (target: String) (mode: buildmode.Options) (inputs: BuildInputs) (cached: Bool): String = {
+let compile_prepared
+    (dir: String)
+    (out: String)
+    (native: NativeBuild)
+    (target: String)
+    (mode: buildmode.Options)
+    (inputs: BuildInputs)
+    (cached: Bool): String
+= {
     let bad = target_error(target);
     if bad != "" { bad }
     else {
         match Os.temp_dir() {
             Err(e) => "build failed: ".concat(e),
             Ok(scratch) => {
-                let err = compile_with_scratch(dir, out, native, scratch, target, mode, inputs, cached);
+                let err = compile_with_scratch(
+                    dir,
+                    out,
+                    native,
+                    scratch,
+                    target,
+                    mode,
+                    inputs,
+                    cached
+                );
                 if cached && buildcache.enabled(()) { buildcache.prune(()) } else { () };
                 let cleaned = Os.remove_tree(scratch);
                 err
@@ -3413,7 +4343,16 @@ let compile_prepared (dir: String) (out: String) (native: NativeBuild) (target: 
     }
 }
 
-let compile_with_scratch (dir: String) (out: String) (native: NativeBuild) (scratch: String) (target: String) (mode: buildmode.Options) (inputs: BuildInputs) (cached: Bool): String = {
+let compile_with_scratch
+    (dir: String)
+    (out: String)
+    (native: NativeBuild)
+    (scratch: String)
+    (target: String)
+    (mode: buildmode.Options)
+    (inputs: BuildInputs)
+    (cached: Bool): String
+= {
     let extra = native.args;
     let ll = out.concat(".ll");
     let key_time = buildcache.start(());
@@ -3421,7 +4360,10 @@ let compile_with_scratch (dir: String) (out: String) (native: NativeBuild) (scra
     let hit = if key == "" { None } else { buildcache.load_ir(key) };
     buildcache.finish("IR lookup", key_time);
     let ir = match hit {
-        Some(text) => { buildcache.diagnostic("IR hit"); text },
+        Some(text) => {
+            buildcache.diagnostic("IR hit");
+            text
+        },
         None => {
             buildcache.diagnostic(if key == "" { "IR bypass" } else { "IR miss" });
             buildcache.begin_reads(key != "");
@@ -3439,9 +4381,10 @@ let compile_with_scratch (dir: String) (out: String) (native: NativeBuild) (scra
                 // Check captured bytes against the live tree and rediscover
                 // file membership before publishing. Concurrent edits yield
                 // an uncached build, never an artifact under the old key.
-                if buildcache.sources_unchanged(()) && buildcache.unchanged(reads) && ir_input_key(dir, prepare_inputs(dir), mode) == key {
-                    buildcache.store("ir", key, ll, reads)
-                } else { buildcache.diagnostic("inputs changed; IR not stored") }
+                if buildcache.sources_unchanged(()) && buildcache.unchanged(reads)
+                    && ir_input_key(dir, prepare_inputs(dir), mode) == key {
+                        buildcache.store("ir", key, ll, reads)
+                    } else { buildcache.diagnostic("inputs changed; IR not stored") }
             } else { () };
             buildcache.begin_reads(false);
             // The shims are EMBEDDED and written out per build, not read
@@ -3449,11 +4392,16 @@ let compile_with_scratch (dir: String) (out: String) (native: NativeBuild) (scra
             // the current directory, so this compiler only worked when
             // run from the repo root. See `shims/shims.plum`.
             let shim_time = buildcache.start(());
-            let stable_shims = Path.join(Path.join(buildcache.root(()), "shims"), buildcache.compiler_hash(()));
+            let stable_shims = Path.join(
+                Path.join(buildcache.root(()), "shims"),
+                buildcache.compiler_hash(())
+            );
             let shim_dir = if cached && key != "" { stable_shims } else { scratch };
             let first = if shim_dir == scratch { write_shims(scratch, needs_tls(ir, native.tls)) }
-                else { shared_shims(shim_dir, needs_tls(ir, native.tls)) };
-            let written = if first.err != "" && shim_dir != scratch { write_shims(scratch, needs_tls(ir, native.tls)) } else { first };
+            else { shared_shims(shim_dir, needs_tls(ir, native.tls)) };
+            let written = if first.err != "" && shim_dir != scratch {
+                write_shims(scratch, needs_tls(ir, native.tls))
+            } else { first };
             buildcache.finish("shim extraction", shim_time);
             if written.err != "" { "build failed: ${written.err}" }
             else {
@@ -3487,9 +4435,16 @@ let fail_cmd (err: String): Unit = {
 }
 
 let build_project (argv: Array[String]): Unit = {
-    let target = match find_flag_value(argv, "--target", 0) { Some(t) => t, None => native_target() };
+    let target = match find_flag_value(argv, "--target", 0) {
+        Some(t) => t,
+        None => native_target()
+    };
     if freestanding.enabled(target) { build_freestanding(argv) }
-    else if Array.any(argv, |v| v == "--emit-object" || v == "--linker-script" || v == "--link-object" || v == "--link-asm") {
+    else if Array.any(
+        argv,
+        |v| v == "--emit-object" || v == "--linker-script" || v == "--link-object" || v
+            == "--link-asm"
+    ) {
         fail_cmd("object/script/assembly options currently require --target x86_64-unknown-none")
     } else { build_hosted(argv, target) }
 }
@@ -3497,7 +4452,15 @@ let build_project (argv: Array[String]): Unit = {
 let build_hosted (argv: Array[String]) (target: String): Unit = {
     let out = output_path(argv, target);
     let inputs = prepare_inputs(argv[1]);
-    let err = compile_prepared(argv[1], out, link_args_resolved(argv, argv[1], target, inputs.deps), target, build_options(argv, target), inputs, false);
+    let err = compile_prepared(
+        argv[1],
+        out,
+        link_args_resolved(argv, argv[1], target, inputs.deps),
+        target,
+        build_options(argv, target),
+        inputs,
+        false
+    );
     if err == "" { println("wrote ".concat(out)) } else { fail_cmd(err) }
 }
 
@@ -3536,7 +4499,15 @@ let run_project (argv: Array[String]): Unit = {
             // looks like `--target` after the project directory is one
             // of the PROGRAM's own arguments, not ours.
             let inputs = prepare_inputs(argv[1]);
-            let err = compile_prepared(argv[1], out, link_args_resolved(argv, argv[1], native_target(), inputs.deps), native_target(), build_options(argv, native_target()), inputs, true);
+            let err = compile_prepared(
+                argv[1],
+                out,
+                link_args_resolved(argv, argv[1], native_target(), inputs.deps),
+                native_target(),
+                build_options(argv, native_target()),
+                inputs,
+                true
+            );
             if err != "" { fail_cmd(err) }
             else {
                 let args = buildmode.run_arguments(argv);
@@ -3601,7 +4572,10 @@ let parse_source_file (file: SourceFile): Array[parser.ItemNode] = {
             parser.set_source_context(path, src, lexed.starts, lexed.ends);
             parser.with_module(parser.parse_program(lexed.tokens).items, module_name)
         },
-        Err(e) => { panic_raw("failed to read ${path}: ${e}"); [] },
+        Err(e) => {
+            panic_raw("failed to read ${path}: ${e}");
+            []
+        },
     }
 
 }
@@ -3625,7 +4599,13 @@ let relex_items (path: String) (src: String): String = {
     relex_items_acc(chars, items, 0, 0, "")
 }
 
-let relex_items_acc (chars: Array[String]) (items: Array[parser.ItemNode]) (i: Int) (at: Int) (acc: String): String =
+let relex_items_acc
+    (chars: Array[String])
+    (items: Array[parser.ItemNode])
+    (i: Int)
+    (at: Int)
+    (acc: String): String
+=
     if i >= items.len() { acc.concat(Array.concat_all(Array.slice(chars, at, chars.len()))) }
     else {
         let it = items[i];
@@ -3633,8 +4613,13 @@ let relex_items_acc (chars: Array[String]) (items: Array[parser.ItemNode]) (i: I
         if !lexer.gap_is_trivia(chars, at, it.start) {
             panic_raw("item ${i} has non-trivia before it: an item boundary is wrong")
         } else { () };
-        relex_items_acc(chars, items, i + 1, it.end,
-            acc.concat(Array.concat_all(Array.slice(chars, at, it.end))))
+        relex_items_acc(
+            chars,
+            items,
+            i + 1,
+            it.end,
+            acc.concat(Array.concat_all(Array.slice(chars, at, it.end)))
+        )
     }
 
 // `plum fmt` -- to stdout by default, `--write` in place, `--check` to
@@ -3648,16 +4633,28 @@ let cmd_fmt (argv: Array[String]): Unit = {
     let write = fmt_has_flag(argv, "--write", 1);
     let check = fmt_has_flag(argv, "--check", 1);
     let target = fmt_target(argv, 1);
-    if target == "" { { println("usage: plum fmt [--write|--check] <file-or-directory>"); Os.exit_with(1) } }
+    if target == "" {
+        {
+            println("usage: plum fmt [--write|--check] <file-or-directory>");
+            Os.exit_with(1)
+        }
+    }
     else {
         let files = fmt_files(target);
-        if Array.is_empty(files) { { println("fmt: no .plum files under ".concat(target)); Os.exit_with(1) } }
+        if Array.is_empty(files) {
+            {
+                println("fmt: no .plum files under ".concat(target));
+                Os.exit_with(1)
+            }
+        }
         else { fmt_each(files, 0, write, check, 0) }
     }
 }
 
 let fmt_has_flag (argv: Array[String]) (flag: String) (i: Int): Bool =
-    if i >= argv.len() { false } else if argv[i] == flag { true } else { fmt_has_flag(argv, flag, i + 1) }
+    if i >= argv.len() { false } else if argv[i] == flag { true } else {
+        fmt_has_flag(argv, flag, i + 1)
+    }
 
 let fmt_target (argv: Array[String]) (i: Int): String =
     if i >= argv.len() { "" }
@@ -3673,7 +4670,13 @@ let fmt_files (target: String): Array[SourceFile] = {
     builder.files.get()
 }
 
-let fmt_each (files: Array[SourceFile]) (i: Int) (write: Bool) (check: Bool) (unformatted: Int): Unit =
+let fmt_each
+    (files: Array[SourceFile])
+    (i: Int)
+    (write: Bool)
+    (check: Bool)
+    (unformatted: Int): Unit
+=
     if i >= files.len() {
         if check && unformatted > 0 {
             println(unformatted.to_string().concat(" file(s) need formatting"));
@@ -3695,22 +4698,48 @@ let fmt_each (files: Array[SourceFile]) (i: Int) (write: Bool) (check: Bool) (un
 let fmt_one (file: SourceFile) (write: Bool) (check: Bool): Int = {
     let path = file.path;
     match treefs.read_text(file.root, file.relative, file.reject_links, file.identity) {
-        Err(e) => { println("fmt: ".concat(e)); Os.exit_with(1); 0 },
+        Err(e) => {
+            println("fmt: ".concat(e));
+            Os.exit_with(1);
+            0
+        },
         Ok(src) => {
             let out = fmt.format(path, src);
             // An already-formatted file still gets PRINTED in stdout
             // mode. Returning early here skipped that, so `plum fmt f`
             // on a tidy file emitted nothing at all -- which anything
             // piping the output reads as an empty file.
-            if out == src { { if !write && !check { print(out) } else { () }; 0 } }
+            if out == src {
+                {
+                    if !write && !check { print(out) } else { () };
+                    0
+                }
+            }
             else if lexer.token_texts(out) != lexer.token_texts(src) {
-                println("fmt: refusing to write ${path}: formatting changed the token stream, which is a bug in a rule");
+                println(
+                    "fmt: refusing to write ${path}: formatting changed the token stream, which is a bug in a rule"
+                );
                 Os.exit_with(1);
                 0
             }
-            else if check { { println(path); 1 } }
-            else if write { { fmt_write(file, out); 1 } }
-            else { { print(out); 1 } }
+            else if check {
+                {
+                    println(path);
+                    1
+                }
+            }
+            else if write {
+                {
+                    fmt_write(file, out);
+                    1
+                }
+            }
+            else {
+                {
+                    print(out);
+                    1
+                }
+            }
         },
     }
 
@@ -3722,7 +4751,10 @@ let fmt_one (file: SourceFile) (write: Bool) (check: Bool): Int = {
 let fmt_write (file: SourceFile) (out: String): Unit = {
     let path = file.path;
     match treefs.write_text(file.root, file.relative, file.reject_links, file.identity, out) {
-        Err(e) => { println("fmt: ".concat(e)); Os.exit_with(1) },
+        Err(e) => {
+            println("fmt: ".concat(e));
+            Os.exit_with(1)
+        },
         Ok(_) => println("formatted ".concat(path)),
     }
 }
@@ -3737,13 +4769,38 @@ let collect_path_items (path: String) (module_name: String): Array[parser.ItemNo
     parse_source_files(source_path_files(path, module_name), 0, [])
 
 struct SourceFile {
-    path: String, module_name: String, owner: String, dep_name: String,
-    root: treefs.TreeRoot, relative: String, identity: String, reject_links: Bool
+    path: String,
+    module_name: String,
+    owner: String,
+    dep_name: String,
+    root: treefs.TreeRoot,
+    relative: String,
+    identity: String,
+    reject_links: Bool
 }
+
 struct BuildInputs { files: Array[SourceFile], deps: Array[pkg.Dep] }
+
 struct SourceBuilder { files: Ref[Array[SourceFile]], seen: treefs.TreeSeen }
-struct SourceFrame { entries: Array[treefs.EntryInfo], index: Int, relative: String, module_name: String, assign_modules: Bool }
-struct SourceScope { root: treefs.TreeRoot, path: String, selection: String, display: String, owner: String, dep_name: String, reject_links: Bool, include_hidden: Bool }
+
+struct SourceFrame {
+    entries: Array[treefs.EntryInfo],
+    index: Int,
+    relative: String,
+    module_name: String,
+    assign_modules: Bool
+}
+
+struct SourceScope {
+    root: treefs.TreeRoot,
+    path: String,
+    selection: String,
+    display: String,
+    owner: String,
+    dep_name: String,
+    reject_links: Bool,
+    include_hidden: Bool
+}
 
 let source_builder (): SourceBuilder = {
     let seen = match treefs.seen() {
@@ -3764,12 +4821,18 @@ let source_push (builder: SourceBuilder) (file: SourceFile): Unit = {
 // policy. Without a manifest, their containing directory is the boundary.
 let source_declared_root (directory: String): String = {
     let absolute = if Path.is_absolute(directory) { Path.clean(directory) }
-        else { Path.clean(Path.join(Result.unwrap_or(Os.cwd(()), "."), directory)) };
-    match source_find_manifest(absolute, 0) { Some(root) => root, None => directory }
+    else { Path.clean(Path.join(Result.unwrap_or(Os.cwd(()), "."), directory)) };
+    match source_find_manifest(absolute, 0) {
+        Some(root) => root,
+        None => directory
+    }
 }
 
 let source_find_manifest (directory: String) (depth: Int): Option[String] =
-    if depth >= 128 { panic_raw("manifest lookup exceeds 128 parent directories at ${directory}"); None }
+    if depth >= 128 {
+        panic_raw("manifest lookup exceeds 128 parent directories at ${directory}");
+        None
+    }
     else if source_has_manifest(directory) { Some(directory) }
     else {
         let parent = Path.dirname(directory);
@@ -3779,7 +4842,10 @@ let source_find_manifest (directory: String) (depth: Int): Option[String] =
 let source_relative (root: String) (path: String): String =
     match source_relative_option(source_absolute(root), source_absolute(path)) {
         Some(relative) => relative,
-        None => { panic_raw("path ${path} is outside project root ${root}"); "" },
+        None => {
+            panic_raw("path ${path} is outside project root ${root}");
+            ""
+        },
     }
 
 let source_scope (dir: String) (owner: String) (dep_name: String): SourceScope = {
@@ -3787,22 +4853,49 @@ let source_scope (dir: String) (owner: String) (dep_name: String): SourceScope =
         Ok(r) => r,
         Err(e) => treefs.fail_root(e),
     };
-    SourceScope { root: root, path: dir, selection: ".", display: dir, owner: owner, dep_name: dep_name, reject_links: pkg.read_held(dir, root).symlinks == "reject", include_hidden: false }
+    SourceScope {
+        root: root,
+        path: dir,
+        selection: ".",
+        display: dir,
+        owner: owner,
+        dep_name: dep_name,
+        reject_links: pkg.read_held(dir, root).symlinks == "reject",
+        include_hidden: false
+    }
 }
 
 // A selected subtree keeps its logical spelling and module layout, while
 // resolution and policy remain anchored at the nearest declared project.
 // Dependencies acquire their own root and never inherit an ancestor policy.
-let source_selected_scope (dir: String) (owner: String) (dep_name: String) (inherit: Bool): SourceScope = {
+let source_selected_scope
+    (dir: String)
+    (owner: String)
+    (dep_name: String)
+    (inherit: Bool): SourceScope
+= {
     let base = source_scope(if inherit { source_declared_root(dir) } else { dir }, owner, dep_name);
-    SourceScope { root: base.root, path: base.path, selection: source_relative(base.path, dir), display: dir,
-        owner: owner, dep_name: dep_name, reject_links: base.reject_links, include_hidden: false }
+    SourceScope {
+        root: base.root,
+        path: base.path,
+        selection: source_relative(base.path, dir),
+        display: dir,
+        owner: owner,
+        dep_name: dep_name,
+        reject_links: base.reject_links,
+        include_hidden: false
+    }
 }
 
 let source_logical (scope: SourceScope) (relative: String): String =
     if scope.selection == "." { Path.join(scope.display, relative) }
     else if relative == scope.selection { scope.display }
-    else { Path.join(scope.display, treefs.path_slice(relative, scope.selection.len() + 1, relative.len())) }
+    else {
+        Path.join(
+            scope.display,
+            treefs.path_slice(relative, scope.selection.len() + 1, relative.len())
+        )
+    }
 
 let source_project_root (path: String): String =
     source_declared_root(if source_is_directory(path) { path } else { Path.dirname(path) })
@@ -3815,15 +4908,30 @@ let source_entry (scope: SourceScope) (relative: String): treefs.TreeEntry =
 
 let source_record (builder: SourceBuilder) (entry: treefs.TreeEntry) (path: String): Unit =
     match treefs.record(builder.seen, treefs.identity(entry), path) {
-        Ok(_) => (), Err(e) => panic_raw(e),
+        Ok(_) => (),
+        Err(e) => panic_raw(e),
     }
 
-let source_frame (scope: SourceScope) (relative: String) (module_name: String) (assign_modules: Bool): SourceFrame = {
+let source_frame
+    (scope: SourceScope)
+    (relative: String)
+    (module_name: String)
+    (assign_modules: Bool): SourceFrame
+= {
     let entries = match treefs.children(scope.root, relative, scope.reject_links) {
         Ok(xs) => xs,
-        Err(e) => { panic_raw("cannot discover sources at ${scope.path}/${relative}: ${e}"); [] },
+        Err(e) => {
+            panic_raw("cannot discover sources at ${scope.path}/${relative}: ${e}");
+            []
+        },
     };
-    SourceFrame { entries: entries, index: 0, relative: relative, module_name: module_name, assign_modules: assign_modules }
+    SourceFrame {
+        entries: entries,
+        index: 0,
+        relative: relative,
+        module_name: module_name,
+        assign_modules: assign_modules
+    }
 }
 
 // An explicit bounded stack preserves native directory order and the existing
@@ -3836,32 +4944,60 @@ let source_walk (scope: SourceScope) (builder: SourceBuilder) (stack: Array[Sour
         if frame.index >= frame.entries.len() { source_walk(scope, builder, rest) }
         else {
             let info = frame.entries[frame.index];
-            let next = SourceFrame { entries: frame.entries, index: frame.index + 1, relative: frame.relative, module_name: frame.module_name, assign_modules: frame.assign_modules };
+            let next = SourceFrame {
+                entries: frame.entries,
+                index: frame.index + 1,
+                relative: frame.relative,
+                module_name: frame.module_name,
+                assign_modules: frame.assign_modules
+            };
             let pending = rest.push(next);
-            if (!scope.include_hidden && info.name.starts_with(".")) || (frame.assign_modules && scope.dep_name == "" && info.name == "vendor") {
-                source_walk(scope, builder, pending)
-            } else {
-                let relative = if frame.relative == "." { info.name } else { Path.join(frame.relative, info.name) };
-                let full = source_logical(scope, relative);
-                let entry = source_entry(scope, relative);
-                let kind = treefs.kind(entry);
-                let module_name = if !frame.assign_modules || kind != 2 { frame.module_name }
-                    else if scope.dep_name == "" { info.name } else { dep_module_name(scope.dep_name, info.name) };
-                if kind == 2 {
-                    if stack.len() >= 128 { panic_raw("source directory depth exceeds 128 at ${full}") };
-                    source_record(builder, entry, full);
-                    source_walk(scope, builder, pending.push(source_frame(scope, relative, module_name, false)))
-                } else if kind == 1 {
-                    if info.name.ends_with(".plum") {
-                        if frame.assign_modules && scope.dep_name != "" {
-                            panic_raw("dependency `${scope.dep_name}` has Plum source at its root: ${full}\n  Move it into a directory named for the module it should be.")
+            if (!scope.include_hidden && info.name.starts_with("."))
+                || (frame.assign_modules && scope.dep_name == "" && info.name == "vendor") {
+                    source_walk(scope, builder, pending)
+                } else {
+                    let relative = if frame.relative == "." { info.name } else {
+                        Path.join(frame.relative, info.name)
+                    };
+                    let full = source_logical(scope, relative);
+                    let entry = source_entry(scope, relative);
+                    let kind = treefs.kind(entry);
+                    let module_name = if !frame.assign_modules || kind != 2 { frame.module_name }
+                    else if scope.dep_name == "" { info.name } else {
+                        dep_module_name(scope.dep_name, info.name)
+                    };
+                    if kind == 2 {
+                        if stack.len() >= 128 {
+                            panic_raw("source directory depth exceeds 128 at ${full}")
                         };
                         source_record(builder, entry, full);
-                        source_push(builder, SourceFile { path: full, module_name: module_name, owner: scope.owner, dep_name: scope.dep_name, root: scope.root, relative: relative, identity: treefs.identity(entry), reject_links: scope.reject_links });
-                    };
-                    source_walk(scope, builder, pending)
-                } else { panic_raw("unsupported source tree entry: ${full}") }
-            }
+                        source_walk(
+                            scope,
+                            builder,
+                            pending.push(source_frame(scope, relative, module_name, false))
+                        )
+                    } else if kind == 1 {
+                        if info.name.ends_with(".plum") {
+                            if frame.assign_modules && scope.dep_name != "" {
+                                panic_raw(
+                                    "dependency `${scope.dep_name}` has Plum source at its root: ${full}\n  Move it into a directory named for the module it should be."
+                                )
+                            };
+                            source_record(builder, entry, full);
+                            source_push(builder, SourceFile {
+                                path: full,
+                                module_name: module_name,
+                                owner: scope.owner,
+                                dep_name: scope.dep_name,
+                                root: scope.root,
+                                relative: relative,
+                                identity: treefs.identity(entry),
+                                reject_links: scope.reject_links
+                            });
+                        };
+                        source_walk(scope, builder, pending)
+                    } else { panic_raw("unsupported source tree entry: ${full}") }
+                }
         }
     }
 
@@ -3871,13 +5007,40 @@ let source_path_files (path: String) (module_name: String): Array[SourceFile] = 
     builder.files.get()
 }
 
-let source_path_into (path: String) (module_name: String) (owner: String) (dep_name: String) (builder: SourceBuilder): Unit =
+let source_path_into
+    (path: String)
+    (module_name: String)
+    (owner: String)
+    (dep_name: String)
+    (builder: SourceBuilder): Unit
+=
     source_path_policy(path, module_name, owner, dep_name, builder, false)
 
-let source_path_policy (path: String) (module_name: String) (owner: String) (dep_name: String) (builder: SourceBuilder) (include_hidden: Bool): Unit = {
+let source_path_policy
+    (path: String)
+    (module_name: String)
+    (owner: String)
+    (dep_name: String)
+    (builder: SourceBuilder)
+    (include_hidden: Bool): Unit
+= {
     let is_dir = source_is_directory(path);
-    let base = source_selected_scope(if is_dir { path } else { Path.dirname(path) }, owner, dep_name, dep_name == "");
-    let scope = SourceScope { root: base.root, path: base.path, selection: base.selection, display: base.display, owner: base.owner, dep_name: base.dep_name, reject_links: base.reject_links, include_hidden: include_hidden };
+    let base = source_selected_scope(
+        if is_dir { path } else { Path.dirname(path) },
+        owner,
+        dep_name,
+        dep_name == ""
+    );
+    let scope = SourceScope {
+        root: base.root,
+        path: base.path,
+        selection: base.selection,
+        display: base.display,
+        owner: base.owner,
+        dep_name: base.dep_name,
+        reject_links: base.reject_links,
+        include_hidden: include_hidden
+    };
     let relative = source_relative(scope.path, path);
     let entry = source_entry(scope, relative);
     if is_dir {
@@ -3886,18 +5049,34 @@ let source_path_policy (path: String) (module_name: String) (owner: String) (dep
     } else if path.ends_with(".plum") {
         if treefs.kind(entry) != 1 { panic_raw("not a regular source file: ${path}") };
         source_record(builder, entry, path);
-        source_push(builder, SourceFile { path: path, module_name: module_name, owner: owner, dep_name: dep_name, root: scope.root, relative: relative, identity: treefs.identity(entry), reject_links: scope.reject_links })
+        source_push(builder, SourceFile {
+            path: path,
+            module_name: module_name,
+            owner: owner,
+            dep_name: dep_name,
+            root: scope.root,
+            relative: relative,
+            identity: treefs.identity(entry),
+            reject_links: scope.reject_links
+        })
     } else { () }
 }
 
 let source_root (dir: String) (dep_name: String) (builder: SourceBuilder): Unit = {
-    let scope = source_selected_scope(dir, if dep_name == "" { "" } else { dir }, dep_name, dep_name == "");
+    let scope = source_selected_scope(
+        dir,
+        if dep_name == "" { "" } else { dir },
+        dep_name,
+        dep_name == ""
+    );
     source_record(builder, source_entry(scope, scope.selection), dir);
     source_walk(scope, builder, [source_frame(scope, scope.selection, "", true)])
 }
 
 let source_deps (deps: Array[pkg.Dep]) (builder: SourceBuilder): Unit = {
-    for dep in deps { source_root(dep.path, dep.name, builder); }
+    for dep in deps {
+        source_root(dep.path, dep.name, builder);
+    }
 }
 
 let prepare_inputs (dir: String): BuildInputs = {
@@ -3914,14 +5093,23 @@ let prepare_inputs (dir: String): BuildInputs = {
     BuildInputs { files: files, deps: deps }
 }
 
-let parse_source_files (files: Array[SourceFile]) (i: Int) (acc: Array[parser.ItemNode]): Array[parser.ItemNode] = {
+let parse_source_files
+    (files: Array[SourceFile])
+    (i: Int)
+    (acc: Array[parser.ItemNode]): Array[parser.ItemNode]
+= {
     if i == 0 { treefs.clear_source_locations(()) } else { () };
     if i >= files.len() { acc }
     else {
         let end = source_group_end(files, i + 1, files[i].owner);
         let items = parse_source_group(files, i, end, []);
         if files[i].owner != "" {
-            reject_module_clash(module_names(acc, 0, []), module_names(items, 0, []), files[i].dep_name, 0)
+            reject_module_clash(
+                module_names(acc, 0, []),
+                module_names(items, 0, []),
+                files[i].dep_name,
+                0
+            )
         } else { () };
         parse_source_files(files, end, Array.concat(acc, items))
     }
@@ -3932,20 +5120,41 @@ let source_group_end (files: Array[SourceFile]) (i: Int) (owner: String): Int =
     else if files[i].owner != owner { i }
     else { source_group_end(files, i + 1, owner) }
 
-let parse_source_group (files: Array[SourceFile]) (i: Int) (end: Int) (acc: Array[parser.ItemNode]): Array[parser.ItemNode] =
+let parse_source_group
+    (files: Array[SourceFile])
+    (i: Int)
+    (end: Int)
+    (acc: Array[parser.ItemNode]): Array[parser.ItemNode]
+=
     if i >= end { acc }
     else { parse_source_group(files, i + 1, end, Array.concat(acc, parse_source_file(files[i]))) }
 
 let manifest_input (dir: String): String = {
     let path = Path.join(dir, "plum.pkg");
-    let root = match treefs.open_root(dir) { Ok(r) => r, Err(e) => treefs.fail_root(e) };
+    let root = match treefs.open_root(dir) {
+        Ok(r) => r,
+        Err(e) => treefs.fail_root(e)
+    };
     let present = match treefs.child_present(root, "plum.pkg") {
-        Ok(found) => found, Err(e) => { panic_raw(e); false },
+        Ok(found) => found,
+        Err(e) => {
+            panic_raw(e);
+            false
+        },
     };
     if !present { buildcache.frame(path).concat("absent") }
     else {
-        let entry = match treefs.open_entry(root, "plum.pkg", false) { Ok(e) => e, Err(e) => treefs.fail_entry(e) };
-        let hash = match treefs.file_hash(entry, "plum.pkg", 2) { Ok(h) => h, Err(e) => { panic_raw("manifest cache input ${path}: ${e}"); "" } };
+        let entry = match treefs.open_entry(root, "plum.pkg", false) {
+            Ok(e) => e,
+            Err(e) => treefs.fail_entry(e)
+        };
+        let hash = match treefs.file_hash(entry, "plum.pkg", 2) {
+            Ok(h) => h,
+            Err(e) => {
+                panic_raw("manifest cache input ${path}: ${e}");
+                ""
+            }
+        };
         buildcache.frame(path).concat(hash)
     }
 }
@@ -3955,7 +5164,14 @@ let ir_input_key (dir: String) (inputs: BuildInputs) (mode: buildmode.Options): 
     let cwd = Result.unwrap_or(Os.cwd(()), "");
     if compiler == "" || cwd == "" { "" }
     else {
-        let mut parts = ["plum-ir-v2", buildcache.frame(compiler), buildcache.frame(cwd), buildcache.frame(dir), buildmode.cache_key(mode), buildcache.frame(manifest_input(source_project_root(dir)))];
+        let mut parts = [
+            "plum-ir-v2",
+            buildcache.frame(compiler),
+            buildcache.frame(cwd),
+            buildcache.frame(dir),
+            buildmode.cache_key(mode),
+            buildcache.frame(manifest_input(source_project_root(dir)))
+        ];
         let mut valid = true;
         for d in inputs.deps {
             parts = parts.push("D");
@@ -3968,9 +5184,14 @@ let ir_input_key (dir: String) (inputs: BuildInputs) (mode: buildmode.Options): 
                 Ok(e) => e,
                 Err(e) => treefs.fail_entry(e),
             };
-            if treefs.identity(entry) != f.identity { panic_raw("source identity changed during discovery: ${f.path}") };
+            if treefs.identity(entry) != f.identity {
+                panic_raw("source identity changed during discovery: ${f.path}")
+            };
             let digest = Result.unwrap_or(treefs.file_hash(entry, f.relative, 2), "");
-            if digest == "" { valid = false; () } else { () };
+            if digest == "" {
+                valid = false;
+                ()
+            } else { () };
             parts = parts.push("S");
             parts = parts.push(buildcache.frame(f.module_name));
             parts = parts.push(buildcache.frame(f.path));
@@ -4029,7 +5250,12 @@ let cmd_fetch (dir: String): Unit = {
     if !source_is_directory(dir) {
         panic_raw("`plum fetch` takes a project directory; ${dir} is not one")
     };
-    let found = dep_closure(dir, DepScan { root: Path.clean(dir), visited: [Path.clean(dir)], found: [], fetch: true }).found;
+    let found = dep_closure(dir, DepScan {
+        root: Path.clean(dir),
+        visited: [Path.clean(dir)],
+        found: [],
+        fetch: true
+    }).found;
     report_fetched(found, 0);
     // A count, not a list, when there is nothing to say: a project with
     // only path dependencies is a perfectly ordinary thing to run this
@@ -4039,9 +5265,16 @@ let cmd_fetch (dir: String): Unit = {
 }
 
 let cmd_vendor (dir: String): Unit = {
-    if !source_is_directory(dir) { panic_raw("`plum vendor` takes a project directory; ${dir} is not one") };
+    if !source_is_directory(dir) {
+        panic_raw("`plum vendor` takes a project directory; ${dir} is not one")
+    };
     let root = Path.clean(dir);
-    let found = dep_closure(root, DepScan { root: root, visited: [root], found: [], fetch: true }).found;
+    let found = dep_closure(root, DepScan {
+        root: root,
+        visited: [root],
+        found: [],
+        fetch: true
+    }).found;
     vendor_deps(root, found, 0);
     println("vendor: ${found.len().to_string()} dependency(s) resolved for ${dir}")
 }
@@ -4061,7 +5294,9 @@ let cmd_cache_list (): Unit = {
     let entries = pkg.cached_packages(());
     println("cache: ${pkg.cache_root(())}");
     let usage = cached_usage(entries, true);
-    println("cache: ${entries.len().to_string()} package(s), ${usage.files.to_string()} file(s), ${usage.bytes.to_string()} bytes")
+    println(
+        "cache: ${entries.len().to_string()} package(s), ${usage.files.to_string()} file(s), ${usage.bytes.to_string()} bytes"
+    )
 }
 
 // Read each package once so its displayed row and the total use the same
@@ -4072,7 +5307,9 @@ let cached_usage (entries: Array[String]) (report: Bool): pkg.CacheUsage = {
     for path in entries {
         let usage = pkg.cached_package_usage(path);
         if report { println("  ${path}  ${usage.bytes.to_string()} bytes") };
-        if usage.files > 9223372036854775807 - files || usage.bytes > 9223372036854775807 - bytes { panic_raw("total cache usage exceeds integer range") };
+        if usage.files > 9223372036854775807 - files || usage.bytes > 9223372036854775807 - bytes {
+            panic_raw("total cache usage exceeds integer range")
+        };
         files = files + usage.files;
         bytes = bytes + usage.bytes;
         ()
@@ -4084,7 +5321,9 @@ let cmd_cache_clean (): Unit = {
     let entries = pkg.cached_packages(());
     let usage = cached_usage(entries, false);
     match pkg.clear_package_cache(()) {
-        Ok(_) => println("cache: removed ${entries.len().to_string()} package(s), ${usage.files.to_string()} file(s), ${usage.bytes.to_string()} bytes"),
+        Ok(_) => println(
+            "cache: removed ${entries.len().to_string()} package(s), ${usage.files.to_string()} file(s), ${usage.bytes.to_string()} bytes"
+        ),
         Err(e) => panic_raw("could not clean package cache: ${e}"),
     }
 }
@@ -4145,7 +5384,12 @@ let report_fetched (deps: Array[pkg.Dep]) (i: Int): Unit =
 // in the cache is downloaded or reported. Two walks would be two
 // chances to resolve a package differently, and the one that fetched
 // would be the one nothing else exercised.
-struct DepScan { root: String, visited: Array[String], found: Array[pkg.Dep], fetch: Bool }
+struct DepScan {
+    root: String,
+    visited: Array[String],
+    found: Array[pkg.Dep],
+    fetch: Bool
+}
 
 let dep_closure (dir: String) (scan: DepScan): DepScan =
     add_deps(dir, pkg.read(dir).deps, 0, scan)
@@ -4168,9 +5412,16 @@ let add_deps (dir: String) (deps: Array[pkg.Dep]) (i: Int) (scan: DepScan): DepS
             // path edited to point somewhere else keeps the old name and
             // the manifest describes a dependency that is not there.
             if manifest.name != "" && manifest.name != resolved.name {
-                panic_raw("dependency `${resolved.name}` at ${resolved.path} calls itself `${manifest.name}`.\n  A package's name belongs to the package, so the two have to agree.")
+                panic_raw(
+                    "dependency `${resolved.name}` at ${resolved.path} calls itself `${manifest.name}`.\n  A package's name belongs to the package, so the two have to agree."
+                )
             };
-            let next = DepScan { root: scan.root, visited: scan.visited.push(resolved.path), found: scan.found.push(resolved), fetch: scan.fetch };
+            let next = DepScan {
+                root: scan.root,
+                visited: scan.visited.push(resolved.path),
+                found: scan.found.push(resolved),
+                fetch: scan.fetch
+            };
             add_deps(dir, deps, i + 1, add_deps(resolved.path, manifest.deps, 0, next))
         }
     }
@@ -4181,7 +5432,9 @@ let reject_dep_namespace (found: Array[pkg.Dep]) (dep: pkg.Dep) (i: Int): Unit =
     if i >= found.len() { () }
     else {
         if found[i].name == dep.name && found[i].path != dep.path {
-            panic_raw("duplicate dependency namespace `${dep.name}`: ${found[i].path} and ${dep.path}\n  Each dependency namespace must refer to one package directory.")
+            panic_raw(
+                "duplicate dependency namespace `${dep.name}`: ${found[i].path} and ${dep.path}\n  Each dependency namespace must refer to one package directory."
+            )
         };
         reject_dep_namespace(found, dep, i + 1)
     }
@@ -4196,7 +5449,14 @@ let reject_dep_namespace (found: Array[pkg.Dep]) (dep: pkg.Dep) (i: Int): Unit =
 // change is small.
 let resolve_dep (dir: String) (d: pkg.Dep) (root: String) (fetch: Bool): pkg.Dep =
     if String.is_empty(d.git) {
-        pkg.Dep { name: d.name, path: dep_path(dir, d.path), git: "", rev: "", sha256: "", hash_version: d.hash_version }
+        pkg.Dep {
+            name: d.name,
+            path: dep_path(dir, d.path),
+            git: "",
+            rev: "",
+            sha256: "",
+            hash_version: d.hash_version
+        }
     } else {
         let vendored = pkg.vendor_dir(root, d.git, d.rev);
         let cached = pkg.cache_dir(d.git, d.rev);
@@ -4204,13 +5464,18 @@ let resolve_dep (dir: String) (d: pkg.Dep) (root: String) (fetch: Bool): pkg.Dep
             pkg.verify_cached(d, vendored);
             vendored
         } else {
-            if fetch { pkg.fetch_dep(d); () }
+            if fetch {
+                pkg.fetch_dep(d);
+                ()
+            }
             else if !Result.unwrap_or(Os.is_directory(cached), false) {
                 // The whole reason `plum build` does not fetch: this is an
                 // error a person can act on, rather than a download starting
                 // in the middle of a build they did not expect to touch the
                 // network.
-                panic_raw("dependency `${d.name}` has not been fetched.\n  ${d.git} at ${String.slice(d.rev, 0, 12)}\n  Run `plum fetch` to download it.")
+                panic_raw(
+                    "dependency `${d.name}` has not been fetched.\n  ${d.git} at ${String.slice(d.rev, 0, 12)}\n  Run `plum fetch` to download it."
+                )
             } else {
                 // Verified on every build, not only on the fetch that
                 // downloaded it. A cache entry is a directory other programs
@@ -4219,7 +5484,14 @@ let resolve_dep (dir: String) (d: pkg.Dep) (root: String) (fetch: Bool): pkg.Dep
             };
             cached
         };
-        pkg.Dep { name: d.name, path: chosen, git: d.git, rev: d.rev, sha256: d.sha256, hash_version: d.hash_version }
+        pkg.Dep {
+            name: d.name,
+            path: chosen,
+            git: d.git,
+            rev: d.rev,
+            sha256: d.sha256,
+            hash_version: d.hash_version
+        }
     }
 
 let dep_path (dir: String) (declared: String): String =
@@ -4263,18 +5535,27 @@ let dep_path (dir: String) (declared: String): String =
 // dependency is thousands of items and a handful of modules, and the
 // obvious nested scan over both item lists is quadratic in the size of
 // the source for an answer that depends only on the names.
-let reject_module_clash (existing: Array[String]) (incoming: Array[String]) (dep_name: String) (i: Int): Unit =
+let reject_module_clash
+    (existing: Array[String])
+    (incoming: Array[String])
+    (dep_name: String)
+    (i: Int): Unit
+=
     if i >= incoming.len() { () }
     else {
         if Array.contains(existing, incoming[i]) {
-            panic_raw("`${incoming[i]}` is both one of your modules and something dependency `${dep_name}` provides.\n  Your own modules are named bare, so rename yours: a directory called something else.")
+            panic_raw(
+                "`${incoming[i]}` is both one of your modules and something dependency `${dep_name}` provides.\n  Your own modules are named bare, so rename yours: a directory called something else."
+            )
         };
         reject_module_clash(existing, incoming, dep_name, i + 1)
     }
 
 let module_names (items: Array[parser.ItemNode]) (i: Int) (acc: Array[String]): Array[String] =
     if i >= items.len() { acc }
-    else if items[i].module == "" || Array.contains(acc, items[i].module) { module_names(items, i + 1, acc) }
+    else if items[i].module == "" || Array.contains(acc, items[i].module) {
+        module_names(items, i + 1, acc)
+    }
     else { module_names(items, i + 1, acc.push(items[i].module)) }
 
 // `new <name>` — scaffold a project, mirroring the real compiler's own
@@ -4293,7 +5574,8 @@ let module_names (items: Array[parser.ItemNode]) (i: Int) (acc: Array[String]): 
 // a function, a string method, and a TEST -- so `plum test` does
 // something on a fresh project instead of reporting zero tests, and so
 // the first file anyone reads shows what a test looks like.
-let new_template (unit: Unit): String = "// Generated by `plum new`.\n\nlet greet (who: String): String = \"hello, \".concat(who)\n\nlet main (): Unit = println(greet(\"plum\"))\n\n// `plum test` runs every zero-argument function whose name starts with\n// `test_`, each in its own process.\nlet test_greet (): Unit = assert_eq(greet(\"plum\"), \"hello, plum\")\n"
+let new_template (unit: Unit): String =
+    "// Generated by `plum new`.\n\nlet greet (who: String): String = \"hello, \".concat(who)\n\nlet main (): Unit = println(greet(\"plum\"))\n\n// `plum test` runs every zero-argument function whose name starts with\n// `test_`, each in its own process.\nlet test_greet (): Unit = assert_eq(greet(\"plum\"), \"hello, plum\")\n"
 
 let cmd_new (name: String): Unit =
     if Result.unwrap_or(Os.is_directory(name), false) {
@@ -4321,7 +5603,10 @@ let cmd_new (name: String): Unit =
 // `panic_raw` is the only non-zero exit this language exposes (see
 // `run_tests`), so the message is printed first and the panic carries
 // nothing -- otherwise the abort message would double-report it.
-let new_failed (msg: String): Unit = { println(msg); panic_raw("") }
+let new_failed (msg: String): Unit = {
+    println(msg);
+    panic_raw("")
+}
 
 let mkdir_ok (name: String): Bool =
     match Os.make_dir(name) {
@@ -4332,7 +5617,9 @@ let mkdir_ok (name: String): Bool =
 let main (): Unit = {
     buildcache.configure_profile(());
     let native_args = args();
-    let argv = if native_args.len() == 1 && native_args[0] == "__lsp_command" { lsp_command_args(()) } else { native_args };
+    let argv = if native_args.len() == 1 && native_args[0] == "__lsp_command" {
+        lsp_command_args(())
+    } else { native_args };
     // Before the `argv.len() < 2` guard below, alongside `lsp`: both
     // are complete with no second argument. Placed after it at first,
     // where it was unreachable -- `version` fell into the usage branch
@@ -4352,7 +5639,10 @@ let main (): Unit = {
         // is one such caller; `plum doc --html` calls the same code
         // directly.
         match source_read_path(argv[1]) {
-            Err(e) => { println("highlight: ${argv[1]}: ${e}"); Os.exit_with(1) },
+            Err(e) => {
+                println("highlight: ${argv[1]}: ${e}");
+                Os.exit_with(1)
+            },
             Ok(src) => print(highlight.hl_html(src)),
         }
     } else if argv.len() >= 2 && argv[0] == "check-manifest" {
@@ -4367,8 +5657,14 @@ let main (): Unit = {
         // and never will, and what they claim is that the FORM is right.
         // This checks that claim and nothing else. See issue #45.
         match source_read_path(argv[1]) {
-            Err(e) => { println("check-manifest: ${argv[1]}: ${e}"); Os.exit_with(1) },
-            Ok(src) => { pkg.parse(argv[1], src); println("ok") },
+            Err(e) => {
+                println("check-manifest: ${argv[1]}: ${e}");
+                Os.exit_with(1)
+            },
+            Ok(src) => {
+                pkg.parse(argv[1], src);
+                println("ok")
+            },
         }
     } else if argv.len() >= 1 && argv[0] == "fetch" {
         // The directory is optional and defaults to `.`, because
@@ -4394,7 +5690,10 @@ let main (): Unit = {
     } else if argv.len() == 1 && argv[0] == "__lsp_snapshot" {
         lsp_snapshot_worker(())
     } else if argv.len() == 2 && argv[0] == "__lsp_read" {
-        match source_read_path(argv[1]) { Ok(text) => print(lsp.encode_json(JsonString(text))), Err(e) => panic_raw(e) }
+        match source_read_path(argv[1]) {
+            Ok(text) => print(lsp.encode_json(JsonString(text))),
+            Err(e) => panic_raw(e)
+        }
     } else if argv.len() >= 1 && argv[0] == "lsp" {
         // No file argument: the server talks over stdin/stdout.
         lsp_serve(())
@@ -4416,25 +5715,38 @@ let main (): Unit = {
     } else if argv.len() < 2 {
         usage(());
     } else if argv[0] == "references" && argv.len() >= 6 {
-        cmd_references(argv[1], argv[2],
+        cmd_references(
+            argv[1],
+            argv[2],
             Result.unwrap_or(String.parse_int(argv[3]), 1),
-            Result.unwrap_or(String.parse_int(argv[4]), 1), argv[5] == "true");
+            Result.unwrap_or(String.parse_int(argv[4]), 1),
+            argv[5] == "true"
+        );
     } else if argv[0] == "query" && argv.len() >= 5 {
-        cmd_query(argv[1], argv[2],
+        cmd_query(
+            argv[1],
+            argv[2],
             Result.unwrap_or(String.parse_int(argv[3]), 1),
-            Result.unwrap_or(String.parse_int(argv[4]), 1));
+            Result.unwrap_or(String.parse_int(argv[4]), 1)
+        );
     } else if argv[0] == "defs" {
         cmd_defs(argv[1]);
     } else if argv[0] == "complete" {
         cmd_complete(argv[1]);
     } else if argv[0] == "locals" && argv.len() >= 5 {
-        cmd_locals(argv[1], argv[2],
+        cmd_locals(
+            argv[1],
+            argv[2],
             Result.unwrap_or(String.parse_int(argv[3]), 1),
-            Result.unwrap_or(String.parse_int(argv[4]), 1));
+            Result.unwrap_or(String.parse_int(argv[4]), 1)
+        );
     } else if argv[0] == "members" && argv.len() >= 5 {
-        cmd_members(argv[1], argv[2],
+        cmd_members(
+            argv[1],
+            argv[2],
             Result.unwrap_or(String.parse_int(argv[3]), 1),
-            Result.unwrap_or(String.parse_int(argv[4]), 1));
+            Result.unwrap_or(String.parse_int(argv[4]), 1)
+        );
     } else if argv[0] == "new" {
         cmd_new(argv[1]);
     } else if argv[0] == "check" {
@@ -4453,7 +5765,9 @@ let main (): Unit = {
         //
         // Reading the real thing costs ~20ms. The table cost four
         // wrong answers.
-        typecheck.check_program(codegen.cg_with_prelude(parser.ProgramNode { items: collect_project(argv[1]) }));
+        typecheck.check_program(
+            codegen.cg_with_prelude(parser.ProgramNode { items: collect_project(argv[1]) })
+        );
         println("ok");
     } else if argv[0] == "test" && Result.unwrap_or(Os.is_directory(argv[1]), false) {
         cmd_test(argv[1], build_options(argv, native_target()));
@@ -4463,7 +5777,11 @@ let main (): Unit = {
         // Same directory loading `check` and `run` use. A real Plum
         // project is several modules, so a backend that only accepted
         // one file could never compile one.
-        println(emit_program(parser.ProgramNode { items: collect_project(argv[1]) }, "main", build_options(argv, native_target())));
+        println(emit_program(
+            parser.ProgramNode { items: collect_project(argv[1]) },
+            "main",
+            build_options(argv, native_target())
+        ));
     } else if argv[0] == "fmt" {
         cmd_fmt(argv);
     } else if argv[0] == "spans" {
@@ -4493,9 +5811,14 @@ let main (): Unit = {
                 // more than leading whitespace checkable: two files
                 // whose token texts agree, in order, are the same
                 // program however the whitespace between them differs.
-                else if argv.len() > 2 && argv[2] == "--tokens" { print(lexer.token_texts_at(src, argv[1])) }
+                else if argv.len() > 2 && argv[2] == "--tokens" {
+                    print(lexer.token_texts_at(src, argv[1]))
+                }
                 else { print(lexer.relex_at(src, argv[1])) },
-            Err(e) => { println("relex: ".concat(e)); Os.exit_with(1) },
+            Err(e) => {
+                println("relex: ".concat(e));
+                Os.exit_with(1)
+            },
         };
     } else if argv[0] == "run" {
         run_project(argv);
@@ -4526,7 +5849,11 @@ let main (): Unit = {
                     // `builtin_sig` table. That hazard is gone: `check`
                     // prepends the prelude too now, and the table with
                     // it. See DESIGN.md's "One prelude, not two".
-                    println(emit_program(parser.parse_program(lexed0.tokens), "main", build_options(argv, native_target())));
+                    println(emit_program(
+                        parser.parse_program(lexed0.tokens),
+                        "main",
+                        build_options(argv, native_target())
+                    ));
                 } else if argv[0] == "run" {
                     // A single FILE runs the same way a project does --
                     // compiled. `collect_project` accepts either, so
@@ -4654,9 +5981,11 @@ pub let test_path_split_recombines_windows (): Unit = {
 }
 
 let recombines (p: String): Unit =
-    eq("recombine ${p}",
+    eq(
+        "recombine ${p}",
         Path.join_in(true, Path.dirname_in(true, p), Path.basename_in(true, p)),
-        Path.clean_in(true, p))
+        Path.clean_in(true, p)
+    )
 
 pub let test_output_name_unix (): Unit = {
     eq("dot", default_output_name_in(false, ".", "/tmp/myapp"), "myapp");

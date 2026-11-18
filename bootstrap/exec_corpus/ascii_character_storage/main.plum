@@ -1,50 +1,102 @@
 use Memory;
-let raw_string (bytes: Array[Int]): String = unsafe { Bytes.from_array(bytes).as_cstr().as_string() }
+
+let raw_string (bytes: Array[Int]): String =
+    unsafe { Bytes.from_array(bytes).as_cstr().as_string() }
+
 let ascii (): String = {
     let mut bytes: Array[Int] = [];
-    for i in 0..128 { bytes = bytes.push(i); };
+    for i in 0..128 {
+        bytes = bytes.push(i);
+    };
     Bytes.from_array(bytes).as_string().unwrap_or("")
 }
-let live (): Int = match Memory.snapshot() { Some(s) => s.live_bytes, None => -1 }
+
+let live (): Int = match Memory.snapshot() {
+    Some(s) => s.live_bytes,
+    None => -1
+}
+
 let memory_round (): Unit = {
-    let source = ascii(); let before = live(); let chars = chars_of(source);
-    if before >= 0 { assert_eq(live() - before, 1040); };
+    let source = ascii();
+    let before = live();
+    let chars = chars_of(source);
+    if before >= 0 {
+        assert_eq(live() - before, 1040);
+    };
     let pieces = source.split("");
-    if before >= 0 { assert_eq(live() - before, 2096); };
-    assert_eq(chars.len(), 128); assert_eq(pieces.len(), 130);
-    assert_eq(pieces[0], ""); assert_eq(pieces[129], "");
+    if before >= 0 {
+        assert_eq(live() - before, 2096);
+    };
+    assert_eq(chars.len(), 128);
+    assert_eq(pieces.len(), 130);
+    assert_eq(pieces[0], "");
+    assert_eq(pieces[129], "");
     for i in 0..128 {
-        assert_eq(chars[i].len(), 1); assert_eq(chars[i].as_bytes().at(0), Some(i));
+        assert_eq(chars[i].len(), 1);
+        assert_eq(chars[i].as_bytes().at(0), Some(i));
         assert_eq(pieces[i + 1], chars[i]);
     };
     assert_eq(source.as_bytes().len(), 128);
 }
+
 let escaped (): String = chars_of("abcdefghijklmnopqrstuvwxyz".repeat(32))[65]
+
 let mutate (ch: String): String = ch.concat("!")
+
 let main (): Unit = {
-    let baseline = live(); memory_round();
-    if baseline >= 0 { assert_eq(live(), baseline); };
+    let baseline = live();
+    memory_round();
+    if baseline >= 0 {
+        assert_eq(live(), baseline);
+    };
     assert_eq(escaped(), "n");
-    let source = ascii(); let chars = chars_of(source); let alias = chars;
-    let mut selected = chars[65]; let view = selected.as_cstr(); let bytes = selected.as_bytes();
+    let source = ascii();
+    let chars = chars_of(source);
+    let alias = chars;
+    let mut selected = chars[65];
+    let view = selected.as_cstr();
+    let bytes = selected.as_bytes();
     selected = selected.concat("!");
-    assert_eq(selected, "A!"); assert_eq(chars[65], "A"); assert_eq(alias[65], "A");
-    assert_eq(unsafe { view.as_string() }, "A"); assert_eq(bytes.to_array(), [65]);
-    let changed = chars.set(65, "changed"); assert_eq(changed[65], "changed"); assert_eq(chars[65], "A");
+    assert_eq(selected, "A!");
+    assert_eq(chars[65], "A");
+    assert_eq(alias[65], "A");
+    assert_eq(unsafe { view.as_string() }, "A");
+    assert_eq(bytes.to_array(), [65]);
+    let changed = chars.set(65, "changed");
+    assert_eq(changed[65], "changed");
+    assert_eq(chars[65], "A");
     assert_eq(Array.join(chars, ""), source);
-    let nul = chars[0]; assert_eq(nul.len(), 1); assert_eq(nul.as_bytes().to_array(), [0]);
+    let nul = chars[0];
+    assert_eq(nul.len(), 1);
+    assert_eq(nul.as_bytes().to_array(), [0]);
     assert_eq(unsafe { nul.as_cstr().as_string() }, "");
     assert_eq(mutate(chars[127]).as_bytes().to_array(), [127, 33]);
     assert_eq(chars_of("aé中🙂\x00"), ["a", "é", "中", "🙂", "\x00"]);
-    for raw in [raw_string([128]), raw_string([128, 191]), raw_string([65, 128, 191, 66]),
-                raw_string([255, 128]), raw_string([226]), raw_string([240, 159])] {
-                    let units = chars_of(raw); assert_eq(Array.join(units, ""), raw);
-                    let split = raw.split(""); assert_eq(split.len(), units.len() + 2);
-                    for i in 0..units.len() { assert_eq(split[i + 1], units[i]); };
-                };
+    for raw in [
+        raw_string([128]),
+        raw_string([128, 191]),
+        raw_string([65, 128, 191, 66]),
+        raw_string([255, 128]),
+        raw_string([226]),
+        raw_string([240, 159])
+    ] {
+        let units = chars_of(raw);
+        assert_eq(Array.join(units, ""), raw);
+        let split = raw.split("");
+        assert_eq(split.len(), units.len() + 2);
+        for i in 0..units.len() {
+            assert_eq(split[i + 1], units[i]);
+        };
+    };
     let grouped = chars_of(raw_string([65, 128, 191, 66]));
-    assert_eq(grouped.len(), 2); assert_eq(grouped[0].as_bytes().to_array(), [65, 128, 191]); assert_eq(grouped[1], "B");
-    let left = spawn { chars_of(source) }; let right = spawn { source.split("") };
-    assert_eq(left.join(), chars); assert_eq(right.join().len(), 130);
-    println("ASCII characters: immutable pooled cells, Unicode/raw grouping, aliases and bounded heap")
+    assert_eq(grouped.len(), 2);
+    assert_eq(grouped[0].as_bytes().to_array(), [65, 128, 191]);
+    assert_eq(grouped[1], "B");
+    let left = spawn { chars_of(source) };
+    let right = spawn { source.split("") };
+    assert_eq(left.join(), chars);
+    assert_eq(right.join().len(), 130);
+    println(
+        "ASCII characters: immutable pooled cells, Unicode/raw grouping, aliases and bounded heap"
+    )
 }

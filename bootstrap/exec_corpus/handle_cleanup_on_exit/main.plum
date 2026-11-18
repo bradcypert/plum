@@ -12,6 +12,7 @@ use Os;
 // cleaned up ONCE, there, and is gone from the live list by the time
 // the program exits.
 extern "C" { fn cleanup_probe(h: Int); }
+
 handle Probe { on_drop: cleanup_probe }
 
 let use_and_release (): Unit = {
@@ -21,7 +22,10 @@ let use_and_release (): Unit = {
 
 let main (): Unit = {
     // Released at the end of its block.
-    { let inner = unsafe { Probe.from_raw(1) }; println("in block") };
+    {
+        let inner = unsafe { Probe.from_raw(1) };
+        println("in block")
+    };
     // Released when the function returns.
     use_and_release();
     // Still live when the program exits, and released LIFO.

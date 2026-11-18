@@ -26,7 +26,12 @@ extern "C" {
 /// language will not catch.
 pub let connect_to (host: String) (port: Int): Result[Int, String] = unsafe {
     let fd = tcp_connect(host.as_cstr(), port);
-    if fd < 0 { Err("Net.connect_to: could not connect to ".concat(host).concat(":").concat(port.to_string())) } else { Ok(fd) }
+    if fd < 0 {
+        Err(
+            "Net.connect_to: could not connect to ".concat(host).concat(":")
+                .concat(port.to_string())
+        )
+    } else { Ok(fd) }
 }
 
 /// Binds and listens on a port, returning a socket to `accept` on.
@@ -35,7 +40,9 @@ pub let connect_to (host: String) (port: Int): Result[Int, String] = unsafe {
 /// one this process may not have — under 1024 usually needs privilege.
 pub let listen_on (port: Int): Result[Int, String] = unsafe {
     let fd = tcp_listen(port);
-    if fd < 0 { Err("Net.listen_on: could not listen on port ".concat(port.to_string())) } else { Ok(fd) }
+    if fd < 0 { Err("Net.listen_on: could not listen on port ".concat(port.to_string())) } else {
+        Ok(fd)
+    }
 }
 
 /// Waits for a connection and returns a socket for it.
@@ -63,7 +70,11 @@ pub let write (fd: Int) (data: String): Result[Int, String] = unsafe {
 /// UTF-8; invalid text also returns empty. max_len must be positive.
 pub let read (fd: Int) (max_len: Int): String =
     match read_bytes(fd, max_len) {
-        Err(_) => "", Ok(bytes) => match bytes.as_string() { Ok(text) => text, Err(_) => "" },
+        Err(_) => "",
+        Ok(bytes) => match bytes.as_string() {
+            Ok(text) => text,
+            Err(_) => ""
+        },
     }
 
 // --- Binary-safe TCP ---
@@ -95,12 +106,15 @@ pub let read (fd: Int) (max_len: Int): String =
 /// Use read_into with a retained NativeBuffer to reuse receive capacity.
 pub let read_bytes (fd: Int) (max_len: Int): Result[Bytes, String] =
     if max_len <= 0 { Err("Net.read_bytes: max_len must be positive") }
-    else { match NativeBuffer.create(max_len) {
-        Err(e) => Err(e),
-        Ok(buffer) => match read_into(fd, buffer) {
-            Err(_) => Err("Net.read_bytes: recv failed"), Ok(_) => NativeBuffer.copy_out(buffer),
-        },
-    } }
+    else {
+        match NativeBuffer.create(max_len) {
+            Err(e) => Err(e),
+            Ok(buffer) => match read_into(fd, buffer) {
+                Err(_) => Err("Net.read_bytes: recv failed"),
+                Ok(_) => NativeBuffer.copy_out(buffer),
+            },
+        }
+    }
 
 /// Receive into a reusable owned native buffer and return the committed count.
 /// Positive capacity is required. Ok(0) means peer EOF; Err discards contents.
@@ -108,7 +122,9 @@ pub let read_bytes (fd: Int) (max_len: Int): Result[Bytes, String] =
 pub let read_into (fd: Int) (buffer: NativeBuffer.Buffer): Result[Int, String] = unsafe {
     NativeBuffer.with_mut(buffer, |pointer, cap| {
         let n = unsafe { tcp_recv_into(fd, pointer, cap) };
-        if n < 0 { Err("Net.read_into: recv failed or capacity is not positive") } else { Ok(n) }
+        if n < 0 { Err("Net.read_into: recv failed or capacity is not positive") } else {
+            Ok(n)
+        }
     })
 }
 
@@ -122,5 +138,8 @@ pub let write_bytes (fd: Int) (data: Bytes): Result[Int, String] = unsafe {
 
 /// Closes a socket. Closing one twice, or closing a number that was
 /// never a socket, does nothing rather than failing.
-pub let close (fd: Int): Unit = unsafe { tcp_close(fd); () }
+pub let close (fd: Int): Unit = unsafe {
+    tcp_close(fd);
+    ()
+}
 

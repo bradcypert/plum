@@ -3,23 +3,46 @@ use NativeBuffer;
 /// One header. `name` is as it appeared on the wire; header names are
 /// case-insensitive in HTTP, so compare with care.
 pub struct Header { pub name: String, pub value: String }
+
 /// A complete response: status, headers, and the whole body as raw bytes.
 /// Use Response.text to decode UTF-8 explicitly.
-pub struct Response { pub status: Int, pub headers: Array[Header], pub body: Bytes }
+pub struct Response {
+    pub status: Int,
+    pub headers: Array[Header],
+    pub body: Bytes
+}
+
 /// A response's head, before the body has been read.
 ///
 /// `leftover_body` is whatever arrived in the same read as the headers
 /// — a body does not begin on a tidy packet boundary, so those bytes
 /// have to be handed on rather than dropped.
-pub struct Head { pub status: Int, pub headers: Array[Header], pub leftover_body: Bytes }
+pub struct Head {
+    pub status: Int,
+    pub headers: Array[Header],
+    pub leftover_body: Bytes
+}
+
 /// An incoming request, with its body preserved as raw bytes.
 /// Use Request.text to decode UTF-8 explicitly.
-pub struct Request { pub method: String, pub path: String, pub headers: Array[Header], pub body: Bytes }
+pub struct Request {
+    pub method: String,
+    pub path: String,
+    pub headers: Array[Header],
+    pub body: Bytes
+}
+
 /// A request's first line, split.
 pub struct RequestLine { pub method: String, pub path: String }
+
 /// A request's head, before its body has been read. `leftover_body`
 /// carries the bytes that arrived alongside the headers.
-pub struct RequestHead { pub method: String, pub path: String, pub headers: Array[Header], pub leftover_body: Bytes }
+pub struct RequestHead {
+    pub method: String,
+    pub path: String,
+    pub headers: Array[Header],
+    pub leftover_body: Bytes
+}
 
 extern "C" {
     fn tls_connect(host: CStr, port: Int) -> Int;
@@ -33,23 +56,30 @@ extern "C" {
 let http_read (fd: Int) (secure: Int) (max_len: Int): Result[Bytes, String] =
     if secure == 0 { Net.read_bytes(fd, max_len) }
     else if max_len <= 0 { Err("https client: read capacity must be positive") }
-    else { match NativeBuffer.create(max_len) {
-        Err(e) => Err(e),
-        Ok(buffer) => match unsafe { NativeBuffer.with_mut(buffer, |pointer, cap| {
-            let n = unsafe { tls_recv_into(fd, pointer, cap) };
-            if n < 0 { Err("https client: read failed") } else { Ok(n) }
-        }) } {
-            Err(e) => Err(e), Ok(_) => NativeBuffer.copy_out(buffer),
-        },
-    } }
+    else {
+        match NativeBuffer.create(max_len) {
+            Err(e) => Err(e),
+            Ok(buffer) => match unsafe {
+                NativeBuffer.with_mut(buffer, |pointer, cap| {
+                    let n = unsafe { tls_recv_into(fd, pointer, cap) };
+                    if n < 0 { Err("https client: read failed") } else { Ok(n) }
+                })
+            } {
+                Err(e) => Err(e),
+                Ok(_) => NativeBuffer.copy_out(buffer),
+            },
+        }
+    }
 
 let http_write (fd: Int) (secure: Int) (data: Bytes): Result[Int, String] =
     if secure == 0 { Net.write_bytes(fd, data) }
-    else { unsafe {
-        let len = data.len();
-        let n = tls_send(fd, data.as_cstr(), len);
-        if n < 0 { Err("https client: write failed") } else { Ok(n) }
-    } }
+    else {
+        unsafe {
+            let len = data.len();
+            let n = tls_send(fd, data.as_cstr(), len);
+            if n < 0 { Err("https client: write failed") } else { Ok(n) }
+        }
+    }
 
 // Bytes.slice copies. Slice only a bounded chunk, never the whole unsent
 // suffix, so repeated short writes do not copy the body quadratically.
@@ -60,13 +90,14 @@ let http_write_all (fd: Int) (secure: Int) (data: Bytes) (offset: Int): Result[U
         match http_write(fd, secure, data.slice(offset, end)) {
             Err(e) => Err(e),
             Ok(n) => if n <= 0 || n > end - offset { Err("http: write made invalid progress") }
-                else { http_write_all(fd, secure, data, offset + n) },
+            else { http_write_all(fd, secure, data, offset + n) },
         }
     }
 
 // Serialize only the head. Keep the body as its existing RC buffer rather
 // than allocating another whole-body copy just to prepend HTTP metadata.
 struct HttpWire { head: Bytes, body: Bytes }
+
 let http_send (fd: Int) (secure: Int) (wire: HttpWire): Result[Unit, String] =
     http_write_all(fd, secure, wire.head, 0)
         |> Result.and_then(_, |ignored| http_write_all(fd, secure, wire.body, 0))
@@ -110,10 +141,12 @@ let http_token_byte (c: Int): Bool =
 
 let http_token_ok_acc (b: Bytes) (i: Int): Bool =
     if i >= b.len() { true }
-    else { match b.at(i) {
-        Some(c) => if http_token_byte(c) { http_token_ok_acc(b, i + 1) } else { false },
-        None => false,
-    } }
+    else {
+        match b.at(i) {
+            Some(c) => if http_token_byte(c) { http_token_ok_acc(b, i + 1) } else { false },
+            None => false,
+        }
+    }
 
 let http_token_ok (text: String): Bool =
     !String.is_empty(text) && http_token_ok_acc(text.as_bytes(), 0)
@@ -122,40 +155,66 @@ let http_token_ok (text: String): Bool =
 // Bytes above ASCII are preserved, including existing UTF-8 field values.
 let http_text_ok_acc (b: Bytes) (i: Int) (field_value: Bool): Bool =
     if i >= b.len() { true }
-    else { match b.at(i) {
-        Some(c) => {
-            let ok = if field_value { c == 9 || (c >= 32 && c != 127) } else { c > 32 && c != 127 };
-            if ok { http_text_ok_acc(b, i + 1, field_value) } else { false }
-        },
-        None => false,
-    } }
+    else {
+        match b.at(i) {
+            Some(c) => {
+                let ok = if field_value { c == 9 || (c >= 32 && c != 127) } else {
+                    c > 32 && c != 127
+                };
+                if ok { http_text_ok_acc(b, i + 1, field_value) } else { false }
+            },
+            None => false,
+        }
+    }
 
 let http_validate_headers (headers: Array[Header]) (i: Int): Result[Unit, String] =
     if i >= headers.len() { Ok(()) }
     else if !http_token_ok(headers[i].name) { Err("http: invalid header name") }
-    else if !http_text_ok_acc(headers[i].value.as_bytes(), 0, true) { Err("http: invalid header value") }
+    else if !http_text_ok_acc(headers[i].value.as_bytes(), 0, true) {
+        Err("http: invalid header value")
+    }
     else { http_validate_headers(headers, i + 1) }
 
 // Public structs are unchecked data. Validate the actual interpolated fields
 // here, even when a Url was constructed without going through Url.parse.
-let http_build_request (method: String) (parsed: Url.Url) (headers: Array[Header]) (body: Bytes): Result[HttpWire, String] = {
+let http_build_request
+    (method: String)
+    (parsed: Url.Url)
+    (headers: Array[Header])
+    (body: Bytes): Result[HttpWire, String]
+= {
     let target = Url.request_target(parsed);
     let authority = Url.authority(parsed);
     if !http_token_ok(method) { Err("http client: invalid method") }
-    else if String.is_empty(target) || !http_text_ok_acc(target.as_bytes(), 0, false) { Err("http client: invalid request target") }
-    else if String.is_empty(authority) || !http_text_ok_acc(authority.as_bytes(), 0, false) { Err("http client: invalid authority") }
-    else { Result.map(http_validate_headers(headers, 0)
-        |> Result.and_then(_, |ignored| http_request_headers(headers, 0)), |ignored| {
-            let extra_header_lines = Array.fold(headers, "", |acc, h| acc.concat(h.name).concat(": ").concat(h.value).concat("\r\n"));
-            let content_length_line = if body.is_empty() { "" } else { "Content-Length: ".concat(body.len().to_string()).concat("\r\n") };
-            let head = method.concat(" ").concat(target).concat(" HTTP/1.1\r\n")
-            .concat("Host: ").concat(authority).concat("\r\n")
-            .concat("Connection: close\r\n")
-            .concat(content_length_line)
-            .concat(extra_header_lines)
-            .concat("\r\n");
-            HttpWire { head: head.as_bytes(), body: body }
-        }) }
+    else if String.is_empty(target) || !http_text_ok_acc(target.as_bytes(), 0, false) {
+        Err("http client: invalid request target")
+    }
+    else if String.is_empty(authority) || !http_text_ok_acc(authority.as_bytes(), 0, false) {
+        Err("http client: invalid authority")
+    }
+    else {
+        Result.map(
+            http_validate_headers(headers, 0)
+                |> Result.and_then(_, |ignored| http_request_headers(headers, 0)),
+            |ignored| {
+                let extra_header_lines = Array.fold(
+                    headers,
+                    "",
+                    |acc, h| acc.concat(h.name).concat(": ").concat(h.value).concat("\r\n")
+                );
+                let content_length_line = if body.is_empty() { "" } else {
+                    "Content-Length: ".concat(body.len().to_string()).concat("\r\n")
+                };
+                let head = method.concat(" ").concat(target).concat(" HTTP/1.1\r\n")
+                    .concat("Host: ").concat(authority).concat("\r\n")
+                    .concat("Connection: close\r\n")
+                    .concat(content_length_line)
+                    .concat(extra_header_lines)
+                    .concat("\r\n");
+                HttpWire { head: head.as_bytes(), body: body }
+            }
+        )
+    }
 }
 
 // Search byte offsets, retaining the last three bytes as overlap after a
@@ -172,8 +231,12 @@ let http_recv_headers_from (fd: Int) (secure: Int) (acc: Bytes) (start: Int): Re
         Some(_) => Ok(acc),
         None => match http_read(fd, secure, 4096) {
             Err(e) => Err(e),
-            Ok(chunk) => if chunk.is_empty() { Err("http client: connection closed before the response headers were complete") }
-                else { http_recv_headers_from(fd, secure, acc.concat(chunk), Int.max(0, acc.len() - 3)) },
+            Ok(chunk) => if chunk.is_empty() {
+                Err("http client: connection closed before the response headers were complete")
+            }
+            else {
+                http_recv_headers_from(fd, secure, acc.concat(chunk), Int.max(0, acc.len() - 3))
+            },
         },
     }
 
@@ -181,6 +244,7 @@ let http_recv_headers_acc (fd: Int) (secure: Int) (acc: Bytes): Result[Bytes, St
     http_recv_headers_from(fd, secure, acc, 0)
 
 let http_status_valid (status: Int): Bool = status >= 100 && status <= 599
+
 let http_informational (status: Int): Bool = status >= 100 && status < 200
 
 // RFC 9112 section 6.3: these responses end at the header terminator,
@@ -198,19 +262,30 @@ let http_parse_status_line (line: String): Result[Int, String] = {
         Err("http client: unsupported HTTP version")
     } else {
         let code = parts[1].as_bytes();
-        if code.len() != 3 || !http_digit(http_byte(code, 0)) || !http_digit(http_byte(code, 1)) || !http_digit(http_byte(code, 2)) {
-            Err("http client: malformed status code")
-        } else { match String.parse_int(parts[1]) {
-            Err(e) => Err("http client: malformed status code: ".concat(e)),
-            Ok(status) => if http_status_valid(status) { Ok(status) } else { Err("http client: invalid response status") },
-        } }
+        if code.len() != 3 || !http_digit(http_byte(code, 0)) || !http_digit(http_byte(code, 1))
+            || !http_digit(http_byte(code, 2)) {
+                Err("http client: malformed status code")
+            } else {
+                match String.parse_int(parts[1]) {
+                    Err(e) => Err("http client: malformed status code: ".concat(e)),
+                    Ok(status) => if http_status_valid(status) { Ok(status) } else {
+                        Err("http client: invalid response status")
+                    },
+                }
+            }
     }
 }
 
-let http_byte (b: Bytes) (i: Int): Int = match b.at(i) { Some(c) => c, None => -1 }
+let http_byte (b: Bytes) (i: Int): Int = match b.at(i) {
+    Some(c) => c,
+    None => -1
+}
+
 let http_ows (c: Int): Bool = c == 32 || c == 9
+
 let http_ows_start (b: Bytes) (i: Int): Int =
     if http_ows(http_byte(b, i)) { http_ows_start(b, i + 1) } else { i }
+
 let http_ows_end (b: Bytes) (i: Int): Int =
     if http_ows(http_byte(b, i - 1)) { http_ows_end(b, i - 1) } else { i }
 
@@ -230,19 +305,27 @@ let http_parse_header_line (line: String): Result[Header, String] =
             let name = String.slice(line, 0, i);
             let value = http_trim_ows(String.slice(line, i + 1, String.char_len(line)));
             if !http_token_ok(name) { Err("http: invalid header name") }
-            else if !http_text_ok_acc(value.as_bytes(), 0, true) { Err("http: invalid header value") }
+            else if !http_text_ok_acc(value.as_bytes(), 0, true) {
+                Err("http: invalid header value")
+            }
             else { Ok(Header { name: name, value: value }) }
         },
     }
 
 // Tail recursion keeps the stack bounded and moves the accumulator into
 // push. Never silently discard a malformed field (including obs-fold).
-let http_parse_headers_acc (lines: Array[String]) (i: Int) (acc: Array[Header]): Result[Array[Header], String] =
+let http_parse_headers_acc
+    (lines: Array[String])
+    (i: Int)
+    (acc: Array[Header]): Result[Array[Header], String]
+=
     if i >= lines.len() { Ok(acc) }
-    else { match http_parse_header_line(lines[i]) {
-        Err(e) => Err(e),
-        Ok(h) => http_parse_headers_acc(lines, i + 1, acc.push(h)),
-    } }
+    else {
+        match http_parse_header_line(lines[i]) {
+            Err(e) => Err(e),
+            Ok(h) => http_parse_headers_acc(lines, i + 1, acc.push(h)),
+        }
+    }
 
 let http_parse_headers (lines: Array[String]): Result[Array[Header], String] =
     http_parse_headers_acc(lines, 0, [])
@@ -250,6 +333,7 @@ let http_parse_headers (lines: Array[String]): Result[Array[Header], String] =
 // Parsed names are ASCII tokens; folding never changes their spelling in
 // the public Header. The same comparison serves Host and body framing.
 let http_ascii_lower (c: Int): Int = if c >= 65 && c <= 90 { c + 32 } else { c }
+
 let http_ascii_equal (a: Bytes) (b: Bytes) (i: Int): Bool =
     if i >= a.len() { true }
     else if http_ascii_lower(http_byte(a, i)) != http_ascii_lower(http_byte(b, i)) { false }
@@ -314,72 +398,133 @@ let http_request_headers (headers: Array[Header]) (i: Int): Result[Unit, String]
 let http_parse_head (raw: Bytes): Result[Head, String] =
     match http_head_separator(raw, 0) {
         None => Err("http client: incomplete response head"),
-        Some(i) => raw.slice(0, i).as_string() |> Result.and_then(_, |text| {
-            let lines = text.split("\r\n");
-            http_parse_status_line(lines[0]) |> Result.and_then(_, |status|
-                Result.map(http_parse_headers(Array.drop(lines, 1)), |headers| Head {
-                    status: status, headers: headers, leftover_body: raw.slice(i + 4, raw.len()),
-                }))
-        }),
+        Some(i) => raw.slice(0, i).as_string()
+            |> Result.and_then(_, |text| {
+                let lines = text.split("\r\n");
+                http_parse_status_line(lines[0])
+                    |> Result.and_then(_, |status|
+                        Result.map(http_parse_headers(Array.drop(lines, 1)), |headers| Head {
+                            status: status,
+                            headers: headers,
+                            leftover_body: raw.slice(i + 4, raw.len()),
+                        }))
+            }),
     }
 
-let http_recv_body_by_length_acc (fd: Int) (secure: Int) (acc: Bytes) (remaining: Int): Result[Bytes, String] =
+let http_recv_body_by_length_acc
+    (fd: Int)
+    (secure: Int)
+    (acc: Bytes)
+    (remaining: Int): Result[Bytes, String]
+=
     if remaining <= 0 { Ok(acc) }
-    else { match http_read(fd, secure, Int.min(remaining, 16384)) {
-        Err(e) => Err(e),
-        Ok(chunk) => if chunk.is_empty() { Err("http client: connection closed before the full response body was received") }
-            else { http_recv_body_by_length_acc(fd, secure, acc.concat(chunk), remaining - chunk.len()) },
-    } }
+    else {
+        match http_read(fd, secure, Int.min(remaining, 16384)) {
+            Err(e) => Err(e),
+            Ok(chunk) => if chunk.is_empty() {
+                Err("http client: connection closed before the full response body was received")
+            }
+            else {
+                http_recv_body_by_length_acc(fd, secure, acc.concat(chunk), remaining - chunk.len())
+            },
+        }
+    }
 
 let http_recv_body_until_close_acc (fd: Int) (secure: Int) (acc: Bytes): Result[Bytes, String] =
     match http_read(fd, secure, 4096) {
         Err(e) => Err(e),
         Ok(chunk) => if chunk.is_empty() { Ok(acc) }
-            else { http_recv_body_until_close_acc(fd, secure, acc.concat(chunk)) },
+        else { http_recv_body_until_close_acc(fd, secure, acc.concat(chunk)) },
     }
 
 // Ignore bytes beyond the selected message boundary. This server closes
 // after one request; surplus bytes must never become handler body content.
-let http_read_fixed_body (fd: Int) (secure: Int) (length: Int) (pending: Bytes): Result[Bytes, String] =
+let http_read_fixed_body
+    (fd: Int)
+    (secure: Int)
+    (length: Int)
+    (pending: Bytes): Result[Bytes, String]
+=
     if length == 0 { Ok(Bytes.empty()) }
     else if pending.len() == length { Ok(pending) }
     else if pending.len() > length { Ok(pending.slice(0, length)) }
     else { http_recv_body_by_length_acc(fd, secure, pending, length - pending.len()) }
 
 // Method/status precedence comes before framing metadata (RFC 9112 6.3).
-let http_read_body (fd: Int) (secure: Int) (method: String) (status: Int) (headers: Array[Header]) (leftover_body: Bytes): Result[Bytes, String] =
+let http_read_body
+    (fd: Int)
+    (secure: Int)
+    (method: String)
+    (status: Int)
+    (headers: Array[Header])
+    (leftover_body: Bytes): Result[Bytes, String]
+=
     if http_response_bodyless(method, status) { Ok(Bytes.empty()) }
     else if http_tunnel(method, status) { Err("http client: CONNECT tunnels are not supported") }
-    else { http_framing(headers) |> Result.and_then(_, |length|
-        if length < 0 { http_recv_body_until_close_acc(fd, secure, leftover_body) }
-        else { http_read_fixed_body(fd, secure, length, leftover_body) }) }
+    else {
+        http_framing(headers)
+            |> Result.and_then(
+                _,
+                |length|
+                    if length < 0 { http_recv_body_until_close_acc(fd, secure, leftover_body) }
+                    else { http_read_fixed_body(fd, secure, length, leftover_body) }
+            )
+    }
 
 // Requests without framing have zero content, even if another request or
 // unsolicited bytes arrived in the same network read.
-let http_read_request_body (fd: Int) (headers: Array[Header]) (leftover_body: Bytes): Result[Bytes, String] =
-    http_framing(headers) |> Result.and_then(_, |length|
-        http_read_fixed_body(fd, 0, Int.max(0, length), leftover_body))
+let http_read_request_body
+    (fd: Int)
+    (headers: Array[Header])
+    (leftover_body: Bytes): Result[Bytes, String]
+=
+    http_framing(headers)
+        |> Result.and_then(
+            _,
+            |length|
+                http_read_fixed_body(fd, 0, Int.max(0, length), leftover_body)
+        )
 
 // Carry only unread bytes to the next head. A direct tail call releases
 // the previous head instead of retaining one continuation per interim
 // response. The count also bounds a peer's endless informational stream.
-let http_recv_final_head (fd: Int) (secure: Int) (pending: Bytes) (interim_count: Int): Result[Head, String] =
+let http_recv_final_head
+    (fd: Int)
+    (secure: Int)
+    (pending: Bytes)
+    (interim_count: Int): Result[Head, String]
+=
     match http_recv_headers_acc(fd, secure, pending) {
         Err(e) => Err(e),
         Ok(raw) => match http_parse_head(raw) {
             Err(e) => Err(e),
-            Ok(head) => if head.status == 101 { Err("http client: protocol upgrades are not supported") }
-                else if http_informational(head.status) {
-                    if interim_count >= 100 { Err("http client: too many informational responses") }
-                    else { http_recv_final_head(fd, secure, head.leftover_body, interim_count + 1) }
-                } else { Ok(head) },
+            Ok(head) => if head.status == 101 {
+                Err("http client: protocol upgrades are not supported")
+            }
+            else if http_informational(head.status) {
+                if interim_count >= 100 { Err("http client: too many informational responses") }
+                else { http_recv_final_head(fd, secure, head.leftover_body, interim_count + 1) }
+            } else { Ok(head) },
         },
     }
 
-let http_do_request (fd: Int) (secure: Int) (method: String) (wire: HttpWire): Result[Response, String] =
+let http_do_request
+    (fd: Int)
+    (secure: Int)
+    (method: String)
+    (wire: HttpWire): Result[Response, String]
+=
     http_send(fd, secure, wire)
         |> Result.and_then(_, |ignored| http_recv_final_head(fd, secure, Bytes.empty(), 0))
-        |> Result.and_then(_, |head| Result.map(http_read_body(fd, secure, method, head.status, head.headers, head.leftover_body), |response_body| Response { status: head.status, headers: head.headers, body: response_body }))
+        |> Result.and_then(_, |head|
+            Result.map(
+                http_read_body(fd, secure, method, head.status, head.headers, head.leftover_body),
+                |response_body| Response {
+                    status: head.status,
+                    headers: head.headers,
+                    body: response_body
+                }
+            ))
 
 /// Sends a request with a raw byte body over HTTP or HTTPS.
 /// Encode text with String.as_bytes(); decode the reply with Response.text.
@@ -400,20 +545,36 @@ let http_do_request (fd: Int) (secure: Int) (method: String) (wire: HttpWire): R
 /// HEAD, 204, and 304 responses have an empty body regardless of framing
 /// headers. Protocol upgrades (101) and successful CONNECT tunnels return
 /// Err and close the connection; this API cannot hand off a transport.
-pub let request (method: String) (url: String) (headers: Array[Header]) (body: Bytes): Result[Response, String] =
+pub let request
+    (method: String)
+    (url: String)
+    (headers: Array[Header])
+    (body: Bytes): Result[Response, String]
+=
     http_parse_url(url)
-        |> Result.and_then(_, |parsed| http_build_request(method, parsed, headers, body)
-            |> Result.and_then(_, |wire| if parsed.scheme == "https" {
-                let fd = unsafe { tls_connect(parsed.host.as_cstr(), parsed.port) };
-                if fd < 0 { Err("https client: TLS connection failed") }
-                else { let result = http_do_request(fd, 1, method, wire); unsafe { tls_close(fd) }; result }
-            } else {
-                Net.connect_to(parsed.host, parsed.port) |> Result.and_then(_, |fd| {
-                    let result = http_do_request(fd, 0, method, wire);
-                    Net.close(fd);
-                    result
-                })
-            }))
+        |> Result.and_then(
+            _,
+            |parsed| http_build_request(method, parsed, headers, body)
+                |> Result.and_then(
+                    _,
+                    |wire| if parsed.scheme == "https" {
+                        let fd = unsafe { tls_connect(parsed.host.as_cstr(), parsed.port) };
+                        if fd < 0 { Err("https client: TLS connection failed") }
+                        else {
+                            let result = http_do_request(fd, 1, method, wire);
+                            unsafe { tls_close(fd) };
+                            result
+                        }
+                    } else {
+                        Net.connect_to(parsed.host, parsed.port)
+                            |> Result.and_then(_, |fd| {
+                                let result = http_do_request(fd, 0, method, wire);
+                                Net.close(fd);
+                                result
+                            })
+                    }
+                )
+        )
 
 /// Fetches a URL and reads the whole response.
 ///
@@ -438,15 +599,18 @@ pub let post (url: String) (body: Bytes): Result[Response, String] = request("PO
 let http_parse_request_line (line: String): Result[RequestLine, String] = {
     let parts = line.split(" ");
     if parts.len() != 3 { Err("http server: malformed request line") }
-    else if !http_token_ok(parts[0]) || String.is_empty(parts[1]) || !http_text_ok_acc(parts[1].as_bytes(), 0, false) {
-        Err("http server: malformed request line")
-    } else if parts[2] != "HTTP/1.1" && parts[2] != "HTTP/1.0" {
-        Err("http server: unsupported HTTP version")
-    } else { Ok(RequestLine { method: parts[0], path: parts[1] }) }
+    else if !http_token_ok(parts[0]) || String.is_empty(parts[1])
+        || !http_text_ok_acc(parts[1].as_bytes(), 0, false) {
+            Err("http server: malformed request line")
+        } else if parts[2] != "HTTP/1.1" && parts[2] != "HTTP/1.0" {
+            Err("http server: unsupported HTTP version")
+        } else { Ok(RequestLine { method: parts[0], path: parts[1] }) }
 }
 
 let http_digit (c: Int): Bool = c >= 48 && c <= 57
+
 let http_hex (c: Int): Bool = http_digit(c) || (c >= 65 && c <= 70) || (c >= 97 && c <= 102)
+
 let http_reg_name_byte (c: Int): Bool =
     (c >= 65 && c <= 90) || (c >= 97 && c <= 122) || http_digit(c)
         || c == 45 || c == 46 || c == 95 || c == 126
@@ -461,7 +625,9 @@ let http_reg_name_ok (b: Bytes) (i: Int): Bool =
     if i >= b.len() { true }
     else if http_byte(b, i) == 58 { http_port_ok(b, i + 1) }
     else if http_byte(b, i) == 37 {
-        if http_hex(http_byte(b, i + 1)) && http_hex(http_byte(b, i + 2)) { http_reg_name_ok(b, i + 3) } else { false }
+        if http_hex(http_byte(b, i + 1)) && http_hex(http_byte(b, i + 2)) {
+            http_reg_name_ok(b, i + 3)
+        } else { false }
     } else if http_reg_name_byte(http_byte(b, i)) { http_reg_name_ok(b, i + 1) } else { false }
 
 let http_hex_ok (b: Bytes) (i: Int): Bool =
@@ -472,11 +638,15 @@ let http_hex_ok (b: Bytes) (i: Int): Bool =
 // no leading zeroes. Elsewhere dotted text can also be a reg-name.
 let http_ipv4_ok (s: String): Bool = {
     let parts = s.split(".");
-    parts.len() == 4 && Array.all(parts, |part| {
-        let b = part.as_bytes();
-        b.len() >= 1 && b.len() <= 3 && (b.len() == 1 || http_byte(b, 0) != 48)
-            && http_port_ok(b, 0) && match String.parse_int(part) { Ok(n) => n <= 255, Err(_) => false }
-    })
+    parts.len() == 4
+        && Array.all(parts, |part| {
+            let b = part.as_bytes();
+            b.len() >= 1 && b.len() <= 3 && (b.len() == 1 || http_byte(b, 0) != 48)
+                && http_port_ok(b, 0) && match String.parse_int(part) {
+                    Ok(n) => n <= 255,
+                    Err(_) => false
+                }
+        })
 }
 
 let http_ipv6_groups (parts: Array[String]) (i: Int) (allow_ipv4: Bool) (count: Int): Int =
@@ -495,18 +665,22 @@ let http_ipv6_side (s: String) (allow_ipv4: Bool): Int =
 
 let http_ipv6_ok (s: String): Bool =
     if s.len() > 45 { false }
-    else { match String.index_of(s, "::") {
-        None => http_ipv6_side(s, true) == 8,
-        Some(i) => {
-            let left = http_ipv6_side(String.slice(s, 0, i), false);
-            let right = http_ipv6_side(String.slice(s, i + 2, String.char_len(s)), true);
-            left >= 0 && right >= 0 && left + right < 8
-        },
-    } }
+    else {
+        match String.index_of(s, "::") {
+            None => http_ipv6_side(s, true) == 8,
+            Some(i) => {
+                let left = http_ipv6_side(String.slice(s, 0, i), false);
+                let right = http_ipv6_side(String.slice(s, i + 2, String.char_len(s)), true);
+                left >= 0 && right >= 0 && left + right < 8
+            },
+        }
+    }
 
 let http_ipvfuture_tail (b: Bytes) (i: Int): Bool =
     if i >= b.len() { true }
-    else if http_reg_name_byte(http_byte(b, i)) || http_byte(b, i) == 58 { http_ipvfuture_tail(b, i + 1) } else { false }
+    else if http_reg_name_byte(http_byte(b, i)) || http_byte(b, i) == 58 {
+        http_ipvfuture_tail(b, i + 1)
+    } else { false }
 
 let http_ip_literal_ok (s: String): Bool =
     if String.starts_with(s, "v") || String.starts_with(s, "V") {
@@ -522,16 +696,23 @@ let http_ip_literal_ok (s: String): Bool =
 // syntax validation, not DNS resolution or a socket port-range check.
 // Empty Host and empty port are legal grammar (RFC 9112 section 3.2).
 let http_host_ok (s: String): Bool =
-    if String.starts_with(s, "[") { match String.index_of(s, "]") {
-        None => false,
-        Some(i) => {
-            let b = s.as_bytes();
-            http_ip_literal_ok(String.slice(s, 1, i))
-                && (i + 1 == b.len() || (http_byte(b, i + 1) == 58 && http_port_ok(b, i + 2)))
-        },
-    } } else { http_reg_name_ok(s.as_bytes(), 0) }
+    if String.starts_with(s, "[") {
+        match String.index_of(s, "]") {
+            None => false,
+            Some(i) => {
+                let b = s.as_bytes();
+                http_ip_literal_ok(String.slice(s, 1, i))
+                    && (i + 1 == b.len() || (http_byte(b, i + 1) == 58 && http_port_ok(b, i + 2)))
+            },
+        }
+    } else { http_reg_name_ok(s.as_bytes(), 0) }
 
-let http_validate_host (headers: Array[Header]) (i: Int) (seen: Bool) (required: Bool): Result[Unit, String] =
+let http_validate_host
+    (headers: Array[Header])
+    (i: Int)
+    (seen: Bool)
+    (required: Bool): Result[Unit, String]
+=
     if i >= headers.len() {
         if required && !seen { Err("http server: missing Host header") } else { Ok(()) }
     } else if http_header_named(headers[i], "Host") {
@@ -545,16 +726,32 @@ let http_validate_host (headers: Array[Header]) (i: Int) (seen: Bool) (required:
 let http_parse_request_head (raw: Bytes): Result[RequestHead, String] =
     match http_head_separator(raw, 0) {
         None => Err("http server: incomplete request head"),
-        Some(i) => raw.slice(0, i).as_string() |> Result.and_then(_, |text| {
-            let lines = text.split("\r\n");
-            http_parse_request_line(lines[0]) |> Result.and_then(_, |rl|
-                http_parse_headers(Array.drop(lines, 1)) |> Result.and_then(_, |headers|
-                    http_validate_host(headers, 0, false, String.ends_with(lines[0], "HTTP/1.1"))
-                        |> Result.map(_, |ignored| RequestHead {
-                            method: rl.method, path: rl.path, headers: headers,
-                            leftover_body: raw.slice(i + 4, raw.len()),
-                        })))
-        }),
+        Some(i) => raw.slice(0, i).as_string()
+            |> Result.and_then(_, |text| {
+                let lines = text.split("\r\n");
+                http_parse_request_line(lines[0])
+                    |> Result.and_then(
+                        _,
+                        |rl|
+                            http_parse_headers(Array.drop(lines, 1))
+                                |> Result.and_then(
+                                    _,
+                                    |headers|
+                                        http_validate_host(
+                                            headers,
+                                            0,
+                                            false,
+                                            String.ends_with(lines[0], "HTTP/1.1")
+                                        )
+                                            |> Result.map(_, |ignored| RequestHead {
+                                                method: rl.method,
+                                                path: rl.path,
+                                                headers: headers,
+                                                leftover_body: raw.slice(i + 4, raw.len()),
+                                            })
+                                )
+                    )
+            }),
     }
 
 /// A small, fixed table covering the reason phrases any real client
@@ -564,10 +761,20 @@ let http_parse_request_head (raw: Bytes): Result[RequestHead, String] =
 /// itself (not its phrase) is what every real HTTP client actually acts
 /// on.
 let http_status_reason (code: Int): String = match code {
-    200 => "OK", 201 => "Created", 204 => "No Content",
-    301 => "Moved Permanently", 302 => "Found",
-    400 => "Bad Request", 401 => "Unauthorized", 403 => "Forbidden", 404 => "Not Found", 405 => "Method Not Allowed",
-    500 => "Internal Server Error", 501 => "Not Implemented", 502 => "Bad Gateway", 503 => "Service Unavailable",
+    200 => "OK",
+    201 => "Created",
+    204 => "No Content",
+    301 => "Moved Permanently",
+    302 => "Found",
+    400 => "Bad Request",
+    401 => "Unauthorized",
+    403 => "Forbidden",
+    404 => "Not Found",
+    405 => "Method Not Allowed",
+    500 => "Internal Server Error",
+    501 => "Not Implemented",
+    502 => "Bad Gateway",
+    503 => "Service Unavailable",
     _ => "Unknown",
 }
 
@@ -577,22 +784,36 @@ let http_status_reason (code: Int): String = match code {
 // HEAD may report the byte length of the handler's would-be GET body.
 let http_response_to_wire (method: String) (resp: Response): Result[HttpWire, String] =
     if !http_status_valid(resp.status) { Err("http server: invalid response status") }
-    else if http_informational(resp.status) { Err("http server: handler must return a final response") }
-    else if http_tunnel(method, resp.status) { Err("http server: CONNECT tunnels are not supported") }
-    else { Result.map(http_validate_headers(resp.headers, 0), |ignored| {
-        let extra_header_lines = Array.fold(resp.headers, "", |acc, h|
-            if http_header_named(h, "Content-Length") || http_header_named(h, "Transfer-Encoding") { acc }
-            else { acc.concat(h.name).concat(": ").concat(h.value).concat("\r\n") });
-        let length_line = if resp.status == 204 || resp.status == 304 { "" }
+    else if http_informational(resp.status) {
+        Err("http server: handler must return a final response")
+    }
+    else if http_tunnel(method, resp.status) {
+        Err("http server: CONNECT tunnels are not supported")
+    }
+    else {
+        Result.map(http_validate_headers(resp.headers, 0), |ignored| {
+            let extra_header_lines = Array.fold(
+                resp.headers,
+                "",
+                |acc, h|
+                    if http_header_named(h, "Content-Length")
+                        || http_header_named(h, "Transfer-Encoding") { acc }
+                    else { acc.concat(h.name).concat(": ").concat(h.value).concat("\r\n") }
+            );
+            let length_line = if resp.status == 204 || resp.status == 304 { "" }
             else { "Content-Length: ".concat(resp.body.len().to_string()).concat("\r\n") };
-        let body = if http_response_bodyless(method, resp.status) { Bytes.empty() } else { resp.body };
-        let head = "HTTP/1.1 ".concat(resp.status.to_string()).concat(" ").concat(http_status_reason(resp.status)).concat("\r\n")
-            .concat(length_line)
-            .concat("Connection: close\r\n")
-            .concat(extra_header_lines)
-            .concat("\r\n");
-        HttpWire { head: head.as_bytes(), body: body }
-    }) }
+            let body = if http_response_bodyless(method, resp.status) { Bytes.empty() } else {
+                resp.body
+            };
+            let head = "HTTP/1.1 ".concat(resp.status.to_string()).concat(" ")
+                .concat(http_status_reason(resp.status)).concat("\r\n")
+                .concat(length_line)
+                .concat("Connection: close\r\n")
+                .concat(extra_header_lines)
+                .concat("\r\n");
+            HttpWire { head: head.as_bytes(), body: body }
+        })
+    }
 
 // The public RequestHead omits version. Inspect the already validated
 // request line only when Expect is present, preserving that public shape.
@@ -613,7 +834,9 @@ let http_expectations_ok (headers: Array[Header]) (i: Int): Bool =
 let http_expectation_value (value: Bytes) (offset: Int): Bool = {
     let start = http_ows_start(value, offset);
     let end = start + 12;
-    if end > value.len() || !http_ascii_equal(value.slice(start, end), "100-continue".as_bytes(), 0) { false }
+    if end > value.len() || !http_ascii_equal(value.slice(start, end), "100-continue".as_bytes(), 0) {
+        false
+    }
     else {
         let next = http_ows_start(value, end);
         if next == value.len() { true }
@@ -623,15 +846,32 @@ let http_expectation_value (value: Bytes) (offset: Int): Bool = {
 }
 
 let http_reject_request (conn: Int) (status: String) (error: String): Result[Unit, String] =
-    http_write_all(conn, 0, "HTTP/1.1 ".concat(status).concat("\r\nContent-Length: 0\r\nConnection: close\r\n\r\n").as_bytes(), 0)
+    http_write_all(
+        conn,
+        0,
+        "HTTP/1.1 ".concat(status).concat("\r\nContent-Length: 0\r\nConnection: close\r\n\r\n")
+            .as_bytes(),
+        0
+    )
         |> Result.and_then(_, |ignored| Err(error))
 
-let http_dispatch_request (conn: Int) (head: RequestHead) (length: Int) (handler: (Request) -> Response): Result[Unit, String] =
-    http_read_fixed_body(conn, 0, Int.max(0, length), head.leftover_body) |> Result.and_then(_, |body| {
-        let request = Request { method: head.method, path: head.path, headers: head.headers, body: body };
-        http_response_to_wire(head.method, handler(request))
-            |> Result.and_then(_, |wire| http_send(conn, 0, wire))
-    })
+let http_dispatch_request
+    (conn: Int)
+    (head: RequestHead)
+    (length: Int)
+    (handler: (Request) -> Response): Result[Unit, String]
+=
+    http_read_fixed_body(conn, 0, Int.max(0, length), head.leftover_body)
+        |> Result.and_then(_, |body| {
+            let request = Request {
+                method: head.method,
+                path: head.path,
+                headers: head.headers,
+                body: body
+            };
+            http_response_to_wire(head.method, handler(request))
+                |> Result.and_then(_, |wire| http_send(conn, 0, wire))
+        })
 
 /// Reads exactly one request off `conn`, runs `handler`, writes exactly
 /// one response back — never touches `conn`'s own lifecycle (opening/
@@ -640,24 +880,47 @@ let http_dispatch_request (conn: Int) (head: RequestHead) (length: Int) (handler
 /// (any connected `fd` pair works, e.g. the SAME loopback-pair shape
 /// `tcp_round_trip`'s own test already uses).
 let http_handle_connection (conn: Int) (handler: (Request) -> Response): Result[Unit, String] =
-    http_recv_headers_acc(conn, 0, Bytes.empty()) |> Result.and_then(_, |raw|
-        match http_parse_request_head(raw) {
-            Err(e) => http_reject_request(conn, "400 Bad Request", e),
-            Ok(head) => match http_framing(head.headers) {
-                Err(e) => http_reject_request(conn, "400 Bad Request", e),
-                Ok(length) => {
-                    let expect = Option.is_some(http_find_header(head.headers, "Expect")) && http_request_http11(raw, 0);
-                    if expect && !http_expectations_ok(head.headers, 0) {
-                        http_reject_request(conn, "417 Expectation Failed", "http server: unsupported expectation")
-                    } else {
-                        let ready = if expect && length > head.leftover_body.len() {
-                            http_write_all(conn, 0, "HTTP/1.1 100 Continue\r\n\r\n".as_bytes(), 0)
-                        } else { Ok(()) };
-                        ready |> Result.and_then(_, |ignored| http_dispatch_request(conn, head, length, handler))
-                    }
-                },
-            },
-        })
+    http_recv_headers_acc(conn, 0, Bytes.empty())
+        |> Result.and_then(
+            _,
+            |raw|
+                match http_parse_request_head(raw) {
+                    Err(e) => http_reject_request(conn, "400 Bad Request", e),
+                    Ok(head) => match http_framing(head.headers) {
+                        Err(e) => http_reject_request(conn, "400 Bad Request", e),
+                        Ok(length) => {
+                            let expect = Option.is_some(http_find_header(head.headers, "Expect"))
+                                && http_request_http11(raw, 0);
+                            if expect && !http_expectations_ok(head.headers, 0) {
+                                http_reject_request(
+                                    conn,
+                                    "417 Expectation Failed",
+                                    "http server: unsupported expectation"
+                                )
+                            } else {
+                                let ready = if expect && length > head.leftover_body.len() {
+                                    http_write_all(
+                                        conn,
+                                        0,
+                                        "HTTP/1.1 100 Continue\r\n\r\n".as_bytes(),
+                                        0
+                                    )
+                                } else { Ok(()) };
+                                ready
+                                    |> Result.and_then(
+                                        _,
+                                        |ignored| http_dispatch_request(
+                                            conn,
+                                            head,
+                                            length,
+                                            handler
+                                        )
+                                    )
+                            }
+                        },
+                    },
+                }
+        )
 
 /// Handles exactly ONE connection then returns — listens, accepts once,
 /// closes both the connection and the listening socket, and gives back
@@ -687,7 +950,10 @@ pub let serve_once (port: Int) (handler: (Request) -> Response): Result[Unit, St
     match Net.listen_on(port) {
         Err(e) => Err(e),
         Ok(server) => match Net.accept(server) {
-            Err(e) => { Net.close(server); Err(e) },
+            Err(e) => {
+                Net.close(server);
+                Err(e)
+            },
             Ok(conn) => {
                 let result = http_handle_connection(conn, handler);
                 Net.close(conn);
@@ -732,7 +998,10 @@ let http_serve_loop (server: Int) (handler: (Request) -> Response): Result[Unit,
     match Net.accept(server) {
         Err(e) => Err(e),
         Ok(conn) => {
-            spawn { http_handle_connection(conn, handler); Net.close(conn) };
+            spawn {
+                http_handle_connection(conn, handler);
+                Net.close(conn)
+            };
             http_serve_loop(server, handler)
         },
     }

@@ -1,4 +1,7 @@
 use Encoding;
+
 let main (): Unit = {
-    for i in 0..1000 { assert(Result.is_err(Encoding.hex_decode("00AG"))); };
+    for i in 0..1000 {
+        assert(Result.is_err(Encoding.hex_decode("00AG")));
+    };
 }

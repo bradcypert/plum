@@ -1,64 +1,127 @@
 use Memory;
+
 extern "C" { fn reset_close(n: Int) -> Unit; fn reset_closed(n: Int) -> Int; }
+
 handle Resource { on_drop: reset_close }
+
 let make (n: Int): Resource = unsafe { Resource.from_raw(n) }
+
 let closed (n: Int): Int = unsafe { reset_closed(n) }
-let live (): Int = match Memory.snapshot() { Some(s) => s.live_bytes, None => -1 }
+
+let live (): Int = match Memory.snapshot() {
+    Some(s) => s.live_bytes,
+    None => -1
+}
+
 let repeated_static (n: Int): Array[String] = {
     let mut values = ["initial"];
     assert_eq(values, ["initial"]);
-    for i in 0..n { values = [i.to_string()]; };
+    for i in 0..n {
+        values = [i.to_string()];
+    };
     values
 }
+
 let replace[T] (xs: Array[T]) (value: T) (n: Int): Array[T] = {
     let mut values = xs;
-    for i in 0..n { values = [value]; };
+    for i in 0..n {
+        values = [value];
+    };
     values
 }
+
 let shared_resources (): Unit = {
-    let original = [make(1), make(2)]; let changed = replace(original, make(3), 1);
-    assert_eq(closed(1), 0); assert_eq(closed(2), 0); assert_eq(closed(3), 0);
-    assert_eq(original.len(), 2); assert_eq(unsafe { original[0].raw() }, 1);
-    assert_eq(unsafe { original[1].raw() }, 2); assert_eq(unsafe { changed[0].raw() }, 3);
+    let original = [make(1), make(2)];
+    let changed = replace(original, make(3), 1);
+    assert_eq(closed(1), 0);
+    assert_eq(closed(2), 0);
+    assert_eq(closed(3), 0);
+    assert_eq(original.len(), 2);
+    assert_eq(unsafe { original[0].raw() }, 1);
+    assert_eq(unsafe { original[1].raw() }, 2);
+    assert_eq(unsafe { changed[0].raw() }, 3);
 }
+
 let unique_resources (): Unit = {
     let mut values = [make(4), make(5)];
     for i in 0..1 {
         values = [values[1]];
-        assert_eq(closed(4), 1); assert_eq(closed(5), 0);
+        assert_eq(closed(4), 1);
+        assert_eq(closed(5), 0);
     };
-    assert_eq(values.len(), 1); assert_eq(unsafe { values[0].raw() }, 5);
+    assert_eq(values.len(), 1);
+    assert_eq(unsafe { values[0].raw() }, 5);
 }
+
 let growing_resources (): Unit = {
     let mut values = [make(6)];
-    for i in 0..1 { values = [values[0], values[0], values[0], values[0]]; };
-    assert_eq(closed(6), 0); assert_eq(values.len(), 4);
-    for value in values { assert_eq(unsafe { value.raw() }, 6); };
+    for i in 0..1 {
+        values = [values[0], values[0], values[0], values[0]];
+    };
+    assert_eq(closed(6), 0);
+    assert_eq(values.len(), 4);
+    for value in values {
+        assert_eq(unsafe { value.raw() }, 6);
+    };
 }
+
 let memory_round (): Unit = {
-    let source = ["x".repeat(128), "y".repeat(128)]; let before = live();
+    let source = ["x".repeat(128), "y".repeat(128)];
+    let before = live();
     let changed = replace(source, "replacement", 1);
-    if before >= 0 { assert_eq(live() - before, 24); };
-    assert_eq(source[0], "x".repeat(128)); assert_eq(source[1], "y".repeat(128));
+    if before >= 0 {
+        assert_eq(live() - before, 24);
+    };
+    assert_eq(source[0], "x".repeat(128));
+    assert_eq(source[1], "y".repeat(128));
     assert_eq(changed, ["replacement"]);
     let mut empty = ["a"].slice(1, 1);
-    for i in 0..3 { empty = [i.to_string()]; };
+    for i in 0..3 {
+        empty = [i.to_string()];
+    };
     assert_eq(empty, ["2"]);
 }
+
 let main (): Unit = {
-    let baseline = live(); memory_round();
-    if baseline >= 0 { assert_eq(live(), baseline); };
-    for n in [1, 2, 8, 32] { assert_eq(repeated_static(n), [(n - 1).to_string()]); };
-    let text = "saved".repeat(32); let original = [text];
-    assert_eq(replace(original, "new", 2), ["new"]); assert_eq(original, [text]);
+    let baseline = live();
+    memory_round();
+    if baseline >= 0 {
+        assert_eq(live(), baseline);
+    };
+    for n in [1, 2, 8, 32] {
+        assert_eq(repeated_static(n), [(n - 1).to_string()]);
+    };
+    let text = "saved".repeat(32);
+    let original = [text];
+    assert_eq(replace(original, "new", 2), ["new"]);
+    assert_eq(original, [text]);
     let mut total = 0;
-    for i in 0..64 { let values = [i.to_string(), "tail"]; total = total + values[0].parse_int().unwrap_or(-1); };
+    for i in 0..64 {
+        let values = [i.to_string(), "tail"];
+        total = total + values[0].parse_int().unwrap_or(-1);
+    };
     assert_eq(total, 2016);
-    let mut ints = [7, 8]; for i in 0..32 { ints = [i, i + 1]; }; assert_eq(ints, [31, 32]);
-    let mut flags = [true, false]; for i in 0..2 { flags = [i == 1, i == 0]; }; assert_eq(flags, [true, false]);
-    let shared = [text]; let left = spawn { replace(shared, "left", 2) }; let right = spawn { replace(shared, "right", 2) };
-    assert_eq(left.join(), ["left"]); assert_eq(right.join(), ["right"]); assert_eq(shared, [text]);
-    shared_resources(); unique_resources(); growing_resources();
-    for n in 1..7 { assert_eq(closed(n), 1); };
+    let mut ints = [7, 8];
+    for i in 0..32 {
+        ints = [i, i + 1];
+    };
+    assert_eq(ints, [31, 32]);
+    let mut flags = [true, false];
+    for i in 0..2 {
+        flags = [i == 1, i == 0];
+    };
+    assert_eq(flags, [true, false]);
+    let shared = [text];
+    let left = spawn { replace(shared, "left", 2) };
+    let right = spawn { replace(shared, "right", 2) };
+    assert_eq(left.join(), ["left"]);
+    assert_eq(right.join(), ["right"]);
+    assert_eq(shared, [text]);
+    shared_resources();
+    unique_resources();
+    growing_resources();
+    for n in 1..7 {
+        assert_eq(closed(n), 1);
+    };
     println("Array literal reset: unique reuse, shared/static owners, RHS reads and exact cleanup")
 }

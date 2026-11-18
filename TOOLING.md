@@ -117,53 +117,72 @@ plum fmt --write src/     # format in place
 plum fmt one.plum         # to stdout
 ```
 
-`plum fmt` has seven opinions:
+`plum fmt` uses a roomier layout by default, including when formatting in an
+editor. It puts statements on separate lines, expands records with more than
+two fields and enums with more than three variants, separates match/select
+arms, and leaves a blank line between definitions. Consecutive imports stay
+together, and comments stay attached to their code.
 
-* statements, items and match arms are indented four spaces per block,
-  and a closing brace sits one level out from what it closes;
-* a run of comment lines is indented with whatever it documents;
-* a run of blank lines collapses to one;
-* a comma has no space before it and one after, and so does a colon --
-  though a colon's LEADING space is left alone, because `require b != 0
-  : "message"` spells it that way;
-* nothing sits just inside a bracket, so `f( a )` becomes `f(a)`;
-* a binary operator gets one space on each side, while a unary minus
-  does not: `a-b` becomes `a - b` and `-n` is left alone;
-* a line that CONTINUES a construct begun on an earlier line is indented
-  four past the line that construct started on.
+The formatter uses a soft target of 100 columns. Long function signatures
+place each curried parameter group on a continuation line; `=` starts the body
+at the definition's indentation. Calls, arrays, tuples and type arguments that
+do not fit expand inside their delimiters, one argument per line. Long method
+and pipeline chains continue four spaces past their starting line.
 
-That last one covers the shapes the formatter used to leave alone: a
-`let` body written on the next line, a `|>` chain broken across lines, a
-multi-line call's arguments:
-
-```plum
-let bounds (xs: Array[String]): String =
-    xs
-        |> Array.map(_, String.trim)
-        |> Array.join(_, ", ")
-
-let main (): Unit = println(bounds([" a ", " b "]))
+```plum fragment
+let total (): Int = {
+    let a = 1;
+    let b = 2;
+    a + b
+}
 ```
 
+Short records and expression-only guards can stay compact. Comment-free short
+argument/type groups collapse when they fit; wrappers stay attached to multiline
+payloads. Other existing line breaks are retained. Indentation uses four spaces,
+and runs of blank lines
+collapse to one. Token spacing is normalized, including commas, colons and
+binary operators; a unary minus stays attached to its operand. Contract colons
+retain their leading space, as in `require b != 0 : "message"`.
+
+The width is a target rather than a hard limit. Literal contents and comment
+text are preserved, and an indivisible identifier, string or deeply nested
+construct can exceed it. Formatting never splits a token or rewrites an
+expression to make it fit.
+
+Preserve intentional layout with standalone comment directives:
+
+```plum fragment
+// fmt: skip
+let aligned (): Array[Int] = [1,   2,
+                             3,   4]
+
+// fmt: off
+let compact (): Int = { let n = 1;    n }
+// fmt: on
 ```
-a, b
-```
 
-Every link of the chain is inside the one expression that began at `xs`,
-so every link is indented from that line.
+`skip` preserves the next definition, statement, or expression, using the widest
+parsed construct that starts at the next token. It includes its leading trivia
+and text through its final token, plus following comments/newlines; indentation
+of the next code is formatted normally. Use `off/on` for fragments such as
+individual field declarations or match patterns.
 
-Everything else is passed through untouched, and it does not reflow: no
-line is ever joined or split.
+`off/on` regions can nest. Each `on` closes one `off`; an unmatched `off` extends
+to EOF. A stray `on`, or a `skip` with no following parsed construct, has no
+effect. Overlapping exclusions are combined. Directive lines and preserved text
+keep their original bytes, including tabs, literal contents and CRLF endings.
+The directives must occupy their own lines, with the exact comment body shown;
+leading/trailing whitespace is allowed. Text in strings, documentation comments,
+trailing comments, or comments with additional prose does not activate them.
+Place `skip` above any attached `///` documentation comments. The CLI and editor
+use the same rules.
 
-The rules were measured against this repository rather than chosen, and
-the test of that is `bootstrap/fmt-check`: every `.plum` file here is
-already formatted, so `plum fmt` changes none of them.
-
-It also declines to place lines it cannot name. A line inside a
-multi-line string literal, a hand-aligned line sitting deeper than the
-grid answer, an item's `require`/`ensure`/`=` header lines. Those are
-places where this repository either says nothing or disagrees with
-itself, and a formatter with no evidence should leave your code alone.
+`bootstrap/fmt-check` checks the repository's formatting, recorded input/output
+fixtures, token preservation, and stability on the next format-on-save.
+Deliberately unformatted inputs retain their original layout as test data.
+Highlighting fixtures with caret assertions use `fmt: off/on` directives and
+pass the same fixed-point check as other sources.
 
 **It cannot corrupt a file.** Before writing, `--write` re-lexes its own
 output and compares the token sequence to the original's; whitespace

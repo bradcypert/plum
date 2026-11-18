@@ -1,0 +1,384 @@
+// Structural layout plans breaks at parser-owned boundaries. Tokens and comment
+// text are copied from the source; this pass never pretty-prints an AST.
+struct LineBreak {
+    anchor: Int,
+    indent: Int,
+    blank: Bool,
+    closing: Bool
+}
+
+struct Expansion {
+    source: Source,
+    lexed: lexer.LexedSource,
+    closes: Map[Int, Int],
+    breaks: Ref[Map[Int, LineBreak]],
+    newline: String,
+    generation: Ref[Int],
+}
+
+let format_layout (path: String) (src: String): String = format_layout_kept(path, src, [])
+
+let format_layout_kept (path: String) (src: String) (kept: Array[KeptRange]): String = {
+    let normalized = restore_kept(path, src, normalize_gaps(path, src), kept);
+    let lexed = lexer.tokenize_spanned_at(normalized, path);
+    parser.set_source_context(path, normalized, lexed.starts, lexed.ends);
+    let items = parser.parse_program(lexed.tokens).items;
+    let source = source_of(normalized, lexed.starts);
+    let closes: Map[Int, Int] = Map.new(());
+    let breaks: Map[Int, LineBreak] = Map.new(());
+    let x = Expansion {
+        source: source,
+        lexed: lexed,
+        closes: matching_groups(lexed, 0, [], closes),
+        breaks: ref(breaks),
+        generation: ref(0),
+        newline: if normalized.contains("\r\n") { "\r\n" } else { "\n" }
+    };
+    expand_items(x, items, 0);
+    let anchors: Map[Int, Int] = Map.new(());
+    let expanded = restore_kept(path, src, render_expansion(x, 0, anchors, 0, ""), kept);
+    let indented = restore_kept(path, src, format_once(path, expanded), kept);
+    restore_kept(path, src, format_width_kept(path, indented, kept), kept)
+}
+
+// Source offsets are codepoints. Index braces, parentheses and brackets once
+// so nested records and types do not require repeated whole-file scans.
+let matching_groups
+    (lexed: lexer.LexedSource)
+    (i: Int)
+    (stack: Array[Int])
+    (acc: Map[Int, Int]): Map[Int, Int]
+=
+    if i >= lexed.tokens.len() { acc }
+    else {
+        let tok = lexed.tokens[i];
+        if tok == TokLBrace || tok == TokLParen || tok == TokLBracket {
+            matching_groups(lexed, i + 1, stack.push(i), acc)
+        } else if (tok == TokRBrace || tok == TokRParen || tok == TokRBracket) && !stack.is_empty() {
+            let open = stack[stack.len() - 1];
+            matching_groups(lexed, i + 1, stack.slice(0, stack.len() - 1), Map.insert(acc, open, i))
+        } else { matching_groups(lexed, i + 1, stack, acc) }
+    }
+
+let token_index (x: Expansion) (offset: Int): Int =
+    offset_index(x.lexed.starts, offset, 0, x.lexed.starts.len())
+
+let plan_break (x: Expansion) (offset: Int) (anchor: Int) (indent: Int) (blank: Bool): Unit =
+    if offset < 0 { () }
+    else {
+        x.generation.set(x.generation.get() + 1);
+        x.breaks.set(Map.insert(x.breaks.get(), offset, LineBreak {
+            anchor: anchor,
+            indent: indent,
+            blank: blank,
+            closing: false
+        }))
+    }
+
+// Keep imports together. Separate other definitions before their attached
+// comment run, rather than putting a blank between documentation and code.
+let expand_items (x: Expansion) (items: Array[parser.ItemNode]) (i: Int): Unit =
+    if i >= items.len() { () }
+    else {
+        let it = items[i];
+        if i > 0 {
+            let both_imports = match items[i - 1].kind {
+                IKUse(_) => match it.kind {
+                    IKUse(_) => true,
+                    _ => false
+                },
+                _ => false
+            };
+            plan_break(x, it.start, -1, 0, !both_imports);
+        };
+        match it.kind {
+            IKLet(def) => expand_expr(x, def.body, true),
+            IKStruct(_) => expand_decl(x, token_index(x, it.start), it.end, 2),
+            IKEnum(_) => expand_decl(x, token_index(x, it.start), it.end, 3),
+            _ => (),
+        };
+        expand_items(x, items, i + 1)
+    }
+
+let expand_decl (x: Expansion) (i: Int) (end: Int) (compact: Int): Unit =
+    if i >= x.lexed.tokens.len() || x.lexed.starts[i] >= end { () }
+    else if x.lexed.tokens[i] == TokLBrace { expand_record(x, i, compact) }
+    else { expand_decl(x, i + 1, end, compact) }
+
+let expand_expr (x: Expansion) (e: parser.PExpr) (top: Bool): Unit =
+    match e {
+        EBlock(b) => expand_block(x, b, top),
+        EIf(c, t, els) => {
+            expand_expr(x, c, false);
+            expand_block(x, t, false);
+            match els {
+                Some(v) => expand_expr(x, v, false),
+                None => ()
+            }
+        },
+        EMatch(sc, arms, close) => {
+            expand_expr(x, sc, false);
+            let before = x.generation.get();
+            for arm in arms {
+                match arm.guard {
+                    Some(g) => expand_expr(x, g, false),
+                    None => ()
+                };
+                expand_expr(x, arm.body, false);
+            };
+            expand_arms(x, arm_starts(arms, 0, []), close, before != x.generation.get())
+        },
+        ESelect(arms, close) => {
+            let before = x.generation.get();
+            for arm in arms {
+                match arm.kind {
+                    SARecv(_, c) => expand_expr(x, c, false),
+                    SAAfter(d) => expand_expr(x, d, false),
+                    _ => ()
+                };
+                expand_expr(x, arm.body, false);
+            };
+            expand_arms(x, select_arm_starts(arms, 0, []), close, before != x.generation.get())
+        },
+        EFor(_, iter, b) => {
+            expand_expr(x, iter, false);
+            expand_block(x, b, false);
+        },
+        EUnsafe(b) => expand_block(x, b, false),
+        ESpawn(b) => expand_block(x, b, false),
+        EClosure(_, body) => expand_expr(x, body, false),
+        EUnary(_, a) => expand_expr(x, a, false),
+        EBinary(_, l, r) => {
+            expand_expr(x, l, false);
+            expand_expr(x, r, false);
+        },
+        EField(b, _) => expand_expr(x, b, false),
+        ECall(callee, args) => {
+            expand_expr(x, callee, false);
+            expand_exprs(x, args);
+        },
+        EGenericInst(b, _) => expand_expr(x, b, false),
+        EIndex(b, i) => {
+            expand_expr(x, b, false);
+            expand_expr(x, i, false);
+        },
+        ETuple(xs) => expand_exprs(x, xs),
+        EArray(xs) => expand_exprs(x, xs),
+        EStructLit(_, fields, spread) => {
+            let before = x.generation.get();
+            for field in fields {
+                expand_expr(x, field.value, false);
+            };
+            match spread {
+                Some(v) => expand_expr(x, v, false),
+                None => ()
+            };
+            if !fields.is_empty() && fields[0].offset >= 0 {
+                let open = token_index(x, fields[0].offset) - 1;
+                match Map.get(x.closes, open) {
+                    Some(close) => {
+                        let starts = Array.map(fields, |f| f.offset);
+                        let all = match spread {
+                            None => starts,
+                            Some(_) => spread_start(x, open + 1, close, starts)
+                        };
+                        if before != x.generation.get() || all.len() > 2
+                            || needs_room(x, x.lexed.starts[open], x.lexed.starts[close]) {
+                                expand_boundaries(
+                                    x,
+                                    x.lexed.starts[open],
+                                    all,
+                                    x.lexed.starts[close]
+                                );
+                            };
+                    },
+                    None => (),
+                };
+            };
+        },
+        _ => (),
+    }
+
+let expand_exprs (x: Expansion) (xs: Array[parser.PExpr]): Unit =
+    for e in xs {
+        expand_expr(x, e, false);
+    }
+
+let expand_block (x: Expansion) (b: parser.PBlock) (top: Bool): Unit = {
+    let before = x.generation.get();
+    for stmt in b.stmts {
+        match stmt {
+            SLet(_, _, _, v) => expand_expr(x, v, false),
+            SAssign(_, v) => expand_expr(x, v, false),
+            SExpr(v) => expand_expr(x, v, false)
+        };
+    };
+    match b.tail {
+        Some(v) => expand_expr(x, v, false),
+        None => ()
+    };
+    if b.open >= 0 && !b.starts.is_empty() {
+        if top || before != x.generation.get() || !b.stmts.is_empty()
+            || needs_room(x, b.open, b.close) {
+                expand_boundaries(x, b.open, b.starts, b.close);
+            };
+    };
+}
+
+let expand_arms (x: Expansion) (starts: Array[Int]) (close: Int) (child_expanded: Bool): Unit =
+    if starts.is_empty() || close < 0 { () }
+    else {
+        let open = x.lexed.starts[token_index(x, starts[0]) - 1];
+        if child_expanded || starts.len() > 1 || needs_room(x, open, close) {
+            expand_boundaries(x, open, starts, close)
+        } else { () }
+    }
+
+let expand_boundaries (x: Expansion) (open: Int) (starts: Array[Int]) (close: Int): Unit = {
+    for start in starts {
+        plan_break(x, start, open, 4, false);
+    };
+    x.breaks.set(Map.insert(x.breaks.get(), close, LineBreak {
+        anchor: open,
+        indent: 0,
+        blank: false,
+        closing: true
+    }))
+}
+
+// Use group size rather than its current column: moving an enclosing arm or
+// field must not change the decision on the next format-on-save. Full line
+// width handling belongs to a future expression layout pass.
+let needs_room (x: Expansion) (open: Int) (close: Int): Bool =
+    line_start_of(x.source, open) != line_start_of(x.source, close)
+        || close + 1 - open > 100
+
+// Declaration commas separate fields/variants; nested type argument lists
+// and enum payloads are skipped as complete delimiter groups.
+let record_starts (x: Expansion) (i: Int) (close: Int) (acc: Array[Int]): Array[Int] =
+    if i >= close { acc }
+    else {
+        match Map.get(x.closes, i) {
+            Some(end) => record_starts(x, end + 1, close, acc),
+            None => if x.lexed.tokens[i] == TokComma && i + 1 < close {
+                record_starts(x, i + 1, close, acc.push(x.lexed.starts[i + 1]))
+            } else { record_starts(x, i + 1, close, acc) },
+        }
+    }
+
+let expand_record (x: Expansion) (open: Int) (compact: Int): Unit =
+    if open < 0 || x.lexed.tokens[open] != TokLBrace { () }
+    else {
+        match Map.get(x.closes, open) {
+            None => (),
+            Some(close) => if close == open + 1 { () }
+            else {
+                let starts = record_starts(x, open + 1, close, [x.lexed.starts[open + 1]]);
+                if starts.len() > compact
+                    || needs_room(x, x.lexed.starts[open], x.lexed.starts[close]) {
+                        expand_boundaries(x, x.lexed.starts[open], starts, x.lexed.starts[close]);
+                    };
+            },
+        }
+    }
+
+// Resolve relative indentation while emitting tokens. Every anchor precedes
+// its dependents, including records nested inside fields or callback bodies.
+let render_expansion
+    (x: Expansion)
+    (i: Int)
+    (anchors: Map[Int, Int])
+    (indent: Int)
+    (acc: String): String
+=
+    if i >= x.lexed.tokens.len() { acc }
+    else {
+        let offset = x.lexed.starts[i];
+        let gap = lexer.trivia_before_at(x.source.text, x.lexed, i);
+        let planned = Map.get(x.breaks.get(), offset);
+        let col = match planned {
+            None => if gap.contains("\n") { trailing_indent(gap) } else { indent },
+            Some(b) => if b.anchor < 0 { b.indent } else {
+                Map.get(anchors, b.anchor).unwrap_or(indent) + b.indent
+            },
+        };
+        let trivia = match planned {
+            None => gap,
+            Some(b) => expanded_gap(gap, col, b.blank, b.closing, x.newline)
+        };
+        let tok = lexer.token_text_at(x.source.text, x.lexed, i);
+        render_expansion(
+            x,
+            i + 1,
+            Map.insert(anchors, offset, col),
+            col,
+            acc.concat(trivia).concat(tok)
+        )
+    }
+
+let trailing_indent (gap: String): Int = {
+    let lines = gap.split("\n");
+    let last = lines[lines.len() - 1];
+    let chars = chars_of(last);
+    trailing_columns(chars, 0, 0)
+}
+
+let trailing_columns (chars: Array[String]) (i: Int) (col: Int): Int =
+    if i >= chars.len() { col }
+    else {
+        trailing_columns(chars, i + 1, if chars[i] == "\t" { col + 4 - col % 4 } else { col + 1 })
+    }
+
+// Keep comment text and its side of a boundary. A trailing comment remains
+// after its statement; leading comments remain immediately above their owner.
+let expanded_gap (gap: String) (indent: Int) (blank: Bool) (closing: Bool) (nl: String): String = {
+    let lines = indent_comments(gap.split("\n"), indent + (if closing { 4 } else { 0 }));
+    if !gap.contains("//") {
+        let count = if blank || lines.len() > 2 { 2 } else { 1 };
+        nl.concat(if count == 2 { nl } else { "" }).concat(spaces(indent))
+    } else {
+        let prefix = Array.join(lines.slice(0, lines.len() - 1), "\n");
+        if !gap.contains("\n") { gap.concat(nl).concat(spaces(indent)) }
+        else {
+            let spaced = if !blank { prefix }
+            else if lines[0].contains("//") {
+                lines[0].concat(if lines[0].ends_with("\r") { "\n" } else { nl }).concat(nl)
+                    .concat(Array.join(lines.slice(1, lines.len() - 1), "\n"))
+            } else { nl.concat(prefix) };
+            spaced.concat(if spaced.ends_with("\r") { "\n" } else { nl }).concat(spaces(indent))
+        }
+    }
+}
+
+let spread_start (x: Expansion) (i: Int) (close: Int) (acc: Array[Int]): Array[Int] =
+    if i + 1 >= close { acc }
+    else {
+        match Map.get(x.closes, i) {
+            Some(end) => spread_start(x, end + 1, close, acc),
+            None => if x.lexed.tokens[i] == TokComma && x.lexed.tokens[i + 1] == TokDotDot {
+                acc.push(x.lexed.starts[i + 1])
+            }
+            else { spread_start(x, i + 1, close, acc) },
+        }
+    }
+
+// The first trivia line may be a trailing comment on the preceding token.
+// Later comment lines belong inside the break and use its structural indent.
+let indent_comments (lines: Array[String]) (indent: Int): Array[String] = {
+    let out: Array[String] = [];
+    for i in 0..lines.len() {
+        let line = lines[i];
+        let chars = chars_of(line);
+        let skip = leading_spaces(chars, 0);
+        let text = text_slice(chars, skip, chars.len());
+        out = out.push(
+            if i > 0 && text.starts_with("//") { spaces(indent).concat(text) } else { line }
+        );
+    };
+    out
+}
+
+let leading_spaces (chars: Array[String]) (i: Int): Int =
+    if i < chars.len() && (chars[i] == " " || chars[i] == "\t") { leading_spaces(chars, i + 1) } else {
+        i
+    }

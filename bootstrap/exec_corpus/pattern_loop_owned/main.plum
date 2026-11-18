@@ -3,6 +3,7 @@
 // The sanitizer corpus checks the lifetimes; assertions check that an
 // escaped or aliased value is still valid after rebinding.
 enum Item { Left(String), Right(String), Empty }
+
 struct Pair { left: String, right: Array[String] }
 
 let error (n: Int): Result[Int, String] = Err("error-".concat(n.to_string()))
@@ -18,14 +19,22 @@ let main (): Unit = {
                 if i == 0 { saved.set(e) } else { () }
             },
         };
-        let item = if i % 2 == 0 { Left("left-".concat(i.to_string())) } else { Right("right-".concat(i.to_string())) };
+        let item = if i % 2 == 0 { Left("left-".concat(i.to_string())) } else {
+            Right("right-".concat(i.to_string()))
+        };
         match item {
             Left(s) | Right(s) if s == "never" => panic_raw("guard should fail"),
-            Left(s) | Right(s) => assert_eq(s, (if i % 2 == 0 { "left-" } else { "right-" }).concat(i.to_string())),
+            Left(s) | Right(s) => assert_eq(
+                s,
+                (if i % 2 == 0 { "left-" } else { "right-" }).concat(i.to_string())
+            ),
             Empty => panic_raw("expected a payload"),
         };
         // Repeatedly bind the same allocation, then keep using the owner.
-        match Some(shared) { Some(s) => assert_eq(s, "alias-42"), None => () };
+        match Some(shared) {
+            Some(s) => assert_eq(s, "alias-42"),
+            None => ()
+        };
         let (a, b) = ("tuple-".concat(i.to_string()), ["array-".concat(i.to_string())]);
         assert_eq(a, "tuple-".concat(i.to_string()));
         assert_eq(b[0], "array-".concat(i.to_string()));

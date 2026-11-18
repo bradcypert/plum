@@ -1,1 +1,5 @@
-let case (): Unit = { for i in 0..10 { println(i); }; }
+let case (): Unit = {
+    for i in 0..10 {
+        println(i);
+    };
+}

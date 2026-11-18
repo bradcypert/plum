@@ -1,4 +1,5 @@
 enum Choice[T] { A(T), B(Int, T), Empty }
+
 struct Pair { left: String, right: String }
 
 let pick (v: Choice[String]): String = match v {
@@ -30,12 +31,14 @@ let literal (v: Option[String]): Bool = match v {
 }
 
 let tags (v: Option[Int]): Bool = match v { None | Some(_) => true }
+
 let reordered (v: Choice[Pair]): String = match v {
     A(Pair(x, y)) | B(_, Pair(y, x)) => "${x}:${y}",
     Empty => "empty",
 }
 
 enum Outer { Direct(String), Wrapped(Choice[String]), Missing }
+
 let later_nested (v: Outer): String = match v {
     Direct(x) | Wrapped(A(x) | B(_, x)) => x,
     _ => "missing",
@@ -63,8 +66,10 @@ let main (): Unit = {
     println(later_nested(Wrapped(Empty)));
     println(later_nested(Missing));
     println(match ("tuple", "second") { (x, _) | (_, x) => x });
-    println(match (Pair { left: "ok", right: "field" }) {
-        Pair { left: "yes" | "ok", right: x } => x,
-        _ => "miss",
-    });
+    println(
+        match (Pair { left: "ok", right: "field" }) {
+            Pair { left: "yes" | "ok", right: x } => x,
+            _ => "miss",
+        }
+    );
 }

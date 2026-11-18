@@ -1,67 +1,180 @@
 use Memory;
+
 struct Owner { resource: Resource }
-extern "C" { fn filter_close(n: Int) -> Unit; fn filter_total() -> Int; fn filter_at(i: Int) -> Int; }
+
+extern "C" {
+    fn filter_close(n: Int) -> Unit; fn filter_total() -> Int; fn filter_at(i: Int) -> Int;
+}
+
 handle Resource { on_drop: filter_close }
+
 let make (n: Int): Resource = unsafe { Resource.from_raw(n) }
+
 let total (): Int = unsafe { filter_total() }
-let live (): Int = match Memory.snapshot() { Some(s) => s.live_bytes, None => -1 }
+
+let live (): Int = match Memory.snapshot() {
+    Some(s) => s.live_bytes,
+    None => -1
+}
+
 let ints (n: Int): Array[Int] = [n, n + 1]
+
 let texts (): Array[String] = ["a".repeat(32), "b".repeat(32)]
+
 let resources (n: Int): Array[Resource] = [make(n), make(n + 1)]
+
 let owners (): Array[Owner] = [Owner { resource: make(2) }, Owner { resource: make(3) }]
-let captured (n: Int): () -> Int = { let owner = make(n); || unsafe { owner.raw() } }
+
+let captured (n: Int): () -> Int = {
+    let owner = make(n);
+    || unsafe { owner.raw() }
+}
+
 let functions (): Array[() -> Int] = [captured(4), captured(5)]
+
 let scoped (): Unit = {
-    assert_eq(resources(0).filter(|r| { assert_eq(total(), 0); unsafe { r.raw() } < 0 }).len(), 0);
+    assert_eq(
+        resources(0)
+            .filter(|r| {
+                assert_eq(total(), 0);
+                unsafe { r.raw() } < 0
+            }).len(),
+        0
+    );
     assert_eq(total(), 2);
-    assert_eq(owners().filter(|o| { assert_eq(total(), 2); unsafe { o.resource.raw() } < 0 }).len(), 0);
+    assert_eq(
+        owners()
+            .filter(|o| {
+                assert_eq(total(), 2);
+                unsafe { o.resource.raw() } < 0
+            }).len(),
+        0
+    );
     assert_eq(total(), 4);
-    assert_eq(functions().filter(|f| { assert_eq(total(), 4); f() < 0 }).len(), 0);
+    assert_eq(
+        functions()
+            .filter(|f| {
+                assert_eq(total(), 4);
+                f() < 0
+            }).len(),
+        0
+    );
     assert_eq(total(), 6);
     let out = Array.filter(resources(6), {
         let marker = make(8);
-        |r: Resource| { assert_eq(total(), 6); assert_eq(unsafe { marker.raw() }, 8); unsafe { Resource.raw(r) } < 0 }
+        |r: Resource| {
+            assert_eq(total(), 6);
+            assert_eq(unsafe { marker.raw() }, 8);
+            unsafe { Resource.raw(r) } < 0
+        }
     });
-    assert_eq(out.len(), 0); assert_eq(total(), 9);
-    let kept = resources(9).filter(|r| { assert_eq(total(), 9); unsafe { r.raw() } == 9 });
-    assert_eq(kept.len(), 1); assert_eq(unsafe { kept[0].raw() }, 9); assert_eq(total(), 10);
+    assert_eq(out.len(), 0);
+    assert_eq(total(), 9);
+    let kept = resources(9)
+        .filter(|r| {
+            assert_eq(total(), 9);
+            unsafe { r.raw() } == 9
+        });
+    assert_eq(kept.len(), 1);
+    assert_eq(unsafe { kept[0].raw() }, 9);
+    assert_eq(total(), 10);
 }
+
 let round (): Unit = {
     let before = live();
     let empty = "x".repeat(4096).as_bytes().to_array().filter(|x| false).filter(|x| true);
-    if before >= 0 { assert_eq(live(), before); }; assert_eq(empty.len(), 0);
-    let mut reserved: Array[Int] = []; for i in 0..4096 { reserved = reserved.push(i); };
-    reserved = reserved.filter(|x| false); let before = live(); reserved = reserved.filter(|x| true);
-    if before >= 0 { assert_eq(live(), before); };
-    for i in 0..4096 { reserved = reserved.push(i); };
-    assert_eq(reserved.len(), 4096); assert_eq(reserved[4095], 4095);
+    if before >= 0 {
+        assert_eq(live(), before);
+    };
+    assert_eq(empty.len(), 0);
+    let mut reserved: Array[Int] = [];
+    for i in 0..4096 {
+        reserved = reserved.push(i);
+    };
+    reserved = reserved.filter(|x| false);
+    let before = live();
+    reserved = reserved.filter(|x| true);
+    if before >= 0 {
+        assert_eq(live(), before);
+    };
+    for i in 0..4096 {
+        reserved = reserved.push(i);
+    };
+    assert_eq(reserved.len(), 4096);
+    assert_eq(reserved[4095], 4095);
     assert_eq(ints(10).filter(|n| n % 2 == 0).filter(|n| n > 0), [10]);
     // A consuming predicate must never mutate the original kept String.
     let out = texts().filter(|s| s.concat("!").len() > 0).filter(|s| s.len() > 0);
-    assert_eq(out, texts()); assert_eq(texts().filter(|s| false), []);
-    let calls = ref(0); let out = ints(20).filter(|n| { calls.set(calls.get() + 1); n > 20 });
-    assert_eq(calls.get(), 2); assert_eq(out, [21]);
-    let original = texts(); let saved = ref(original); let events = ref(0);
-    let out = Array.filter({ events.set(1); original }, {
-        events.set(events.get() * 10 + 2); saved.set(original); |s: String| s != ""
+    assert_eq(out, texts());
+    assert_eq(texts().filter(|s| false), []);
+    let calls = ref(0);
+    let out = ints(20)
+        .filter(|n| {
+            calls.set(calls.get() + 1);
+            n > 20
+        });
+    assert_eq(calls.get(), 2);
+    assert_eq(out, [21]);
+    let original = texts();
+    let saved = ref(original);
+    let events = ref(0);
+    let out = Array.filter(
+        {
+            events.set(1);
+            original
+        },
+        {
+            events.set(events.get() * 10 + 2);
+            saved.set(original);
+            |s: String| s != ""
+        }
+    );
+    assert_eq(events.get(), 12);
+    assert_eq(out, texts());
+    assert_eq(saved.get(), texts());
+    assert_eq(original, texts());
+    let mut source = texts();
+    let out = Array.filter({ source }, {
+        source = ["new"];
+        |s: String| s != ""
     });
-    assert_eq(events.get(), 12); assert_eq(out, texts()); assert_eq(saved.get(), texts()); assert_eq(original, texts());
-    let mut source = texts(); let out = Array.filter({ source }, { source = ["new"]; |s: String| s != "" });
-    assert_eq(out, texts()); assert_eq(source, ["new"]);
-    let original = "z".repeat(32); let bytes = original.as_bytes(); let view = original.as_cstr();
+    assert_eq(out, texts());
+    assert_eq(source, ["new"]);
+    let original = "z".repeat(32);
+    let bytes = original.as_bytes();
+    let view = original.as_cstr();
     let out = [original, original].filter(|s| s.concat("!").len() > 0).filter(|s| true);
-    assert_eq(out, [original, original]); assert_eq(bytes.to_hex(), "7a".repeat(32));
+    assert_eq(out, [original, original]);
+    assert_eq(bytes.to_hex(), "7a".repeat(32));
     assert_eq(unsafe { view.as_string() }, original);
-    let escaped = ref(""); let out = texts().filter(|s| { escaped.set(s); false });
-    assert_eq(out, []); assert_eq(escaped.get(), "b".repeat(32));
-    let shared = texts(); let left = spawn { { shared }.filter(|s| s == "a".repeat(32)) };
+    let escaped = ref("");
+    let out = texts()
+        .filter(|s| {
+            escaped.set(s);
+            false
+        });
+    assert_eq(out, []);
+    assert_eq(escaped.get(), "b".repeat(32));
+    let shared = texts();
+    let left = spawn { { shared }.filter(|s| s == "a".repeat(32)) };
     let right = spawn { { shared }.filter(|s| s == "b".repeat(32)) };
-    assert_eq(left.join(), ["a".repeat(32)]); assert_eq(right.join(), ["b".repeat(32)]); assert_eq(shared, texts());
+    assert_eq(left.join(), ["a".repeat(32)]);
+    assert_eq(right.join(), ["b".repeat(32)]);
+    assert_eq(shared, texts());
 }
+
 let main (): Unit = {
-    let baseline = live(); round(); scoped(); if baseline >= 0 { assert_eq(live(), baseline); };
+    let baseline = live();
+    round();
+    scoped();
+    if baseline >= 0 {
+        assert_eq(live(), baseline);
+    };
     assert_eq(total(), 11);
-    for i in 0..9 { assert_eq(unsafe { filter_at(i) }, i); };
-    assert_eq(unsafe { filter_at(9) }, 10); assert_eq(unsafe { filter_at(10) }, 9);
+    for i in 0..9 {
+        assert_eq(unsafe { filter_at(i) }, i);
+    };
+    assert_eq(unsafe { filter_at(9) }, 10);
+    assert_eq(unsafe { filter_at(10) }, 9);
     println("Array.filter sources: owned temporaries, predicates, aliases and scoped cleanup")
 }

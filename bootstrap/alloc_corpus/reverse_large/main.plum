@@ -1,1 +1,6 @@
-let main (): Unit = { let out=String.reverse("aé\x00🙂".repeat(32768)); assert_eq(out.len(), 262144); assert_eq(out.starts_with("🙂"), true); assert_eq(out.ends_with("a"), true); }
+let main (): Unit = {
+    let out=String.reverse("aé\x00🙂".repeat(32768));
+    assert_eq(out.len(), 262144);
+    assert_eq(out.starts_with("🙂"), true);
+    assert_eq(out.ends_with("a"), true);
+}

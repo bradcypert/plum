@@ -1,14 +1,22 @@
 let bits[T] (x: T): T = x & x
+
 let keep[T] (mask: T) (x: T): T = mask & x
+
 let concrete (x: Int): Int = x << 1
 
 // Each global has one concrete initialized representation.
 let integer_alias: (Int) -> Int = bits
+
 let byte_alias: (U8) -> U8 = bits
+
 let unsigned_alias: (U64) -> U64 = bits
+
 let byte_chain = byte_alias
+
 let mask: U8 = 14
+
 let partial = keep(mask)
+
 let concrete_alias = concrete
 
 let main (): Unit = {

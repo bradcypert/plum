@@ -1,8 +1,11 @@
 let main (): Unit = {
     let text = "abc\x00\n".repeat(1024);
     for i in 0..32 {
-        let chars = chars_of(text); let split = text.split("");
-        assert_eq(chars.len(), 5120); assert_eq(split.len(), 5122);
-        assert_eq(chars[3], "\x00"); assert_eq(split[5], "\n");
+        let chars = chars_of(text);
+        let split = text.split("");
+        assert_eq(chars.len(), 5120);
+        assert_eq(split.len(), 5122);
+        assert_eq(chars[3], "\x00");
+        assert_eq(split[5], "\n");
     };
 }

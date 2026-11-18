@@ -23,7 +23,10 @@ pub struct Url {
     pub fragment: String,
 }
 
-let byte_at (b: Bytes) (i: Int): Int = match b.at(i) { Some(v) => v, None => 0 }
+let byte_at (b: Bytes) (i: Int): Int = match b.at(i) {
+    Some(v) => v,
+    None => 0
+}
 
 /// Ports the schemes this module knows about default to. An unknown
 /// scheme gets 0; see `Url`'s note.
@@ -59,11 +62,19 @@ let clen (s: String): Int = String.char_len(s)
 
 /// Splits `s` at the first `sep`, returning the part before and the
 /// part after. When `sep` is absent the whole string is `before`.
-pub struct Split { pub before: String, pub after: String, pub found: Bool }
+pub struct Split {
+    pub before: String,
+    pub after: String,
+    pub found: Bool
+}
 
 let split_first (s: String) (sep: String): Split =
     match String.index_of(s, sep) {
-        None => Split { before: s, after: "", found: false },
+        None => Split {
+            before: s,
+            after: "",
+            found: false
+        },
         Some(i) => Split {
             before: String.slice(s, 0, i),
             after: String.slice(s, i + clen(sep), clen(s)),
@@ -83,7 +94,12 @@ enum PercentError { Escape(String), Utf8 }
 // ASCII. Only escaped bytes can form multibyte UTF-8, so collect at most
 // one codepoint (four bytes), then use the prelude's complete validator.
 // Never decode an entire component just to discard the decoded buffer.
-let validate_pct_acc (b: Bytes) (i: Int) (pending: Array[Int]) (left: Int): Result[Unit, PercentError] =
+let validate_pct_acc
+    (b: Bytes)
+    (i: Int)
+    (pending: Array[Int])
+    (left: Int): Result[Unit, PercentError]
+=
     if i >= b.len() {
         if left == 0 { Ok(()) } else { Err(Utf8) }
     } else if byte_at(b, i) != 37 {
@@ -103,7 +119,7 @@ let validate_pct_acc (b: Bytes) (i: Int) (pending: Array[Int]) (left: Int): Resu
             else {
                 let next = pending.push(c);
                 let remaining = if left > 0 { left - 1 }
-                                else if c < 224 { 1 } else if c < 240 { 2 } else { 3 };
+                else if c < 224 { 1 } else if c < 240 { 2 } else { 3 };
                 if remaining > 0 { validate_pct_acc(b, i + 3, next, remaining) }
                 else if !Bytes.is_utf8(Bytes.from_array(next)) { Err(Utf8) }
                 else { validate_pct_acc(b, i + 3, [], 0) }
@@ -130,7 +146,12 @@ let sub_delim (c: Int): Bool =
     c == 33 || c == 36 || c == 38 || c == 39 || c == 40 || c == 41
         || c == 42 || c == 43 || c == 44 || c == 59 || c == 61
 
-enum Component { Host, Path, Query, Fragment }
+enum Component {
+    Host,
+    Path,
+    Query,
+    Fragment
+}
 
 let component_char (kind: Component) (c: Int): Bool =
     unreserved(c) || sub_delim(c) || match kind {
@@ -239,36 +260,52 @@ let parse_authority (authority: String) (scheme: String): Result[Url, String] =
                 if String.is_empty(host) { Err("Url.parse: missing host") }
                 else if !ipv6_ok(host) { Err("Url.parse: invalid or unsupported IP literal") }
                 else if String.is_empty(rest) { Ok(host_port(scheme, host, default_port(scheme))) }
-                else if !String.starts_with(rest, ":") { Err("Url.parse: trailing text after IPv6 address") }
+                else if !String.starts_with(rest, ":") {
+                    Err("Url.parse: trailing text after IPv6 address")
+                }
                 else { with_port(scheme, host, String.slice(rest, 1, clen(rest))) }
             },
         }
     } else {
         let hp = split_first(authority, ":");
         if String.is_empty(hp.before) { Err("Url.parse: missing host") }
-        else { match validate_component("host", Host, hp.before) {
-            Err(e) => Err(e),
-            Ok(_) => if !hp.found { Ok(host_port(scheme, hp.before, default_port(scheme))) }
-                     else { with_port(scheme, hp.before, hp.after) },
-        } }
+        else {
+            match validate_component("host", Host, hp.before) {
+                Err(e) => Err(e),
+                Ok(_) => if !hp.found { Ok(host_port(scheme, hp.before, default_port(scheme))) }
+                else { with_port(scheme, hp.before, hp.after) },
+            }
+        }
     }
 
 /// A partially-built `Url`; the caller fills in path/query/fragment.
 let host_port (scheme: String) (host: String) (port: Int): Url =
-    Url { scheme: scheme, host: host, port: port, path: "/", raw_query: "", fragment: "" }
+    Url {
+        scheme: scheme,
+        host: host,
+        port: port,
+        path: "/",
+        raw_query: "",
+        fragment: ""
+    }
 
 let port_digits (b: Bytes) (i: Int): Bool =
     if i >= b.len() { true }
-    else { let c = byte_at(b, i); c >= 48 && c <= 57 && port_digits(b, i + 1) }
+    else {
+        let c = byte_at(b, i);
+        c >= 48 && c <= 57 && port_digits(b, i + 1)
+    }
 
 let with_port (scheme: String) (host: String) (text: String): Result[Url, String] =
     if String.is_empty(text) { Err("Url.parse: empty port") }
     else if !port_digits(text.as_bytes(), 0) { Err("Url.parse: invalid port: ".concat(text)) }
-    else { match String.parse_int(text) {
-        Err(_) => Err("Url.parse: invalid port: ".concat(text)),
-        Ok(p) => if p < 1 || p > 65535 { Err("Url.parse: port out of range: ".concat(text)) }
-                 else { Ok(host_port(scheme, host, p)) },
-    } }
+    else {
+        match String.parse_int(text) {
+            Err(_) => Err("Url.parse: invalid port: ".concat(text)),
+            Ok(p) => if p < 1 || p > 65535 { Err("Url.parse: port out of range: ".concat(text)) }
+            else { Ok(host_port(scheme, host, p)) },
+        }
+    }
 
 // Reject raw ASCII whitespace and controls before splitting components.
 // Percent escapes remain encoded; %0D and %0A cannot delimit wire lines.
@@ -297,7 +334,9 @@ let raw_url_ok_acc (b: Bytes) (i: Int): Bool =
 /// everywhere else without thinking about it. The host is left
 /// exactly as written, matching Go's `net/url`.
 pub let parse (input: String): Result[Url, String] =
-    if !raw_url_ok_acc(input.as_bytes(), 0) { Err("Url.parse: raw whitespace or control character") }
+    if !raw_url_ok_acc(input.as_bytes(), 0) {
+        Err("Url.parse: raw whitespace or control character")
+    }
     else {
         let sp = split_first(input, "://");
         if !sp.found { Err("Url.parse: missing scheme (expected something like http://host/path)") }
@@ -309,8 +348,14 @@ pub let parse (input: String): Result[Url, String] =
             let frag = split_first(sp.after, "#");
             let q = split_first(frag.before, "?");
             let slash = String.index_of(q.before, "/");
-            let authority = match slash { Some(i) => String.slice(q.before, 0, i), None => q.before };
-            let path = match slash { Some(i) => String.slice(q.before, i, clen(q.before)), None => "/" };
+            let authority = match slash {
+                Some(i) => String.slice(q.before, 0, i),
+                None => q.before
+            };
+            let path = match slash {
+                Some(i) => String.slice(q.before, i, clen(q.before)),
+                None => "/"
+            };
             match parse_authority(authority, scheme) {
                 Err(e) => Err(e),
                 Ok(base) => match validate_component("query", Query, q.after) {
@@ -320,8 +365,12 @@ pub let parse (input: String): Result[Url, String] =
                         Ok(_) => match validate_component("fragment", Fragment, frag.after) {
                             Err(e) => Err(e),
                             Ok(_) => Ok(Url {
-                                scheme: base.scheme, host: base.host, port: base.port,
-                                path: path, raw_query: q.after, fragment: frag.after,
+                                scheme: base.scheme,
+                                host: base.host,
+                                port: base.port,
+                                path: path,
+                                raw_query: q.after,
+                                fragment: frag.after,
                             }),
                         },
                     },
@@ -372,12 +421,22 @@ pub let stringify (u: Url): String = {
 let decoded (s: String): String =
     match Encoding.percent_decode(s) {
         Err(_) => s,
-        Ok(bytes) => match bytes.as_string() { Err(_) => s, Ok(text) => text },
+        Ok(bytes) => match bytes.as_string() {
+            Err(_) => s,
+            Ok(text) => text
+        },
     }
 
-let query_all_acc (params: Array[Param]) (name: String) (i: Int) (acc: Array[String]): Array[String] =
+let query_all_acc
+    (params: Array[Param])
+    (name: String)
+    (i: Int)
+    (acc: Array[String]): Array[String]
+=
     if i >= params.len() { acc }
-    else if decoded(params[i].name) == name { query_all_acc(params, name, i + 1, acc.push(decoded(params[i].value))) }
+    else if decoded(params[i].name) == name {
+        query_all_acc(params, name, i + 1, acc.push(decoded(params[i].value)))
+    }
     else { query_all_acc(params, name, i + 1, acc) }
 
 /// Every value for `name`, in the order they appeared. A query may
@@ -399,7 +458,8 @@ pub let query_params (u: Url): Array[Param] =
 /// `Encoding` owns the encoder; this only decides where the `&` and
 /// `=` go.
 let encode_param (p: Param): String =
-    Encoding.percent_encode(p.name.as_bytes()).concat("=").concat(Encoding.percent_encode(p.value.as_bytes()))
+    Encoding.percent_encode(p.name.as_bytes()).concat("=")
+        .concat(Encoding.percent_encode(p.value.as_bytes()))
 
 /// Builds a query string from pairs, percent-encoding both halves.
 ///
@@ -412,6 +472,12 @@ pub let build_query (params: Array[Param]): String =
 /// `u` with its query replaced. A setter rather than a mutation:
 /// values are values here.
 pub let with_query (u: Url) (params: Array[Param]): Url =
-    Url { scheme: u.scheme, host: u.host, port: u.port, path: u.path,
-          raw_query: build_query(params), fragment: u.fragment }
+    Url {
+        scheme: u.scheme,
+        host: u.host,
+        port: u.port,
+        path: u.path,
+        raw_query: build_query(params),
+        fragment: u.fragment
+    }
 

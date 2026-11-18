@@ -9,13 +9,21 @@ use NativeBuffer;
 /// module: `cg_runtime_fn` keys on the bare name and does not care
 /// which module the call was written in.
 let os_temp_dir_raw (ignored: Bool): String = ""
+
 let os_self_exe_raw (ignored: Bool): String = ""
+
 let os_make_dir_raw (path: String): Int = 0
+
 let os_remove_file_raw (path: String): Int = 0
+
 let os_rename_file_raw (from: String) (to: String): Int = 0
+
 let os_remove_tree_raw (path: String): Int = 0
+
 let os_copy_tree_raw (src: String) (dst: String): Int = 0
+
 let os_platform_raw (ignored: Bool): String = ""
+
 extern "C" { fn plum_tree_last_error() -> RawCStr; }
 
 /// Which platform this program is running on: "linux", "macos" or
@@ -76,7 +84,12 @@ pub let remove_file (path: String): Result[Unit, String] =
 /// 1809 or newer and filesystem support, otherwise removal returns `Err`.
 pub let remove_tree (path: String): Result[Unit, String] =
     if os_remove_tree_raw(path) == 0 { Ok(()) }
-    else { Err("Os.remove_tree: could not remove ".concat(path).concat(": ").concat(unsafe { plum_tree_last_error().as_string() })) }
+    else {
+        Err(
+            "Os.remove_tree: could not remove ".concat(path).concat(": ")
+                .concat(unsafe { plum_tree_last_error().as_string() })
+        )
+    }
 
 /// Copies the contents of `src` into the existing directory `dst`.
 /// Both roots must be ordinary directories, even with trailing separators;
@@ -92,7 +105,12 @@ pub let remove_tree (path: String): Result[Unit, String] =
 /// Errors include both requested roots and the recorded refusal or native failure.
 pub let copy_tree (src: String) (dst: String): Result[Unit, String] =
     if os_copy_tree_raw(src, dst) == 0 { Ok(()) }
-    else { Err("Os.copy_tree: could not copy ".concat(src).concat(" to ").concat(dst).concat(": ").concat(unsafe { plum_tree_last_error().as_string() })) }
+    else {
+        Err(
+            "Os.copy_tree: could not copy ".concat(src).concat(" to ").concat(dst).concat(": ")
+                .concat(unsafe { plum_tree_last_error().as_string() })
+        )
+    }
 
 // --- Environment and process ---
 //
@@ -104,12 +122,16 @@ pub let copy_tree (src: String) (dst: String): Result[Unit, String] =
 // separate and string helpers on the type.
 
 let exit_raw (code: Int): Bool = false
+
 let env_var_raw (name: String): Array[Bytes] = []
 
 /// Exit with a status code, printing nothing. `panic_raw` also exits
 /// non-zero but prints its message first, which is wrong when the
 /// report has already been written.
-pub let exit_with (code: Int): Unit = { exit_raw(code); () }
+pub let exit_with (code: Int): Unit = {
+    exit_raw(code);
+    ()
+}
 
 // The raw runtime returns an array (empty when unset), so variant tags
 // remain the compiler's responsibility. OS bytes become text only through
@@ -187,7 +209,9 @@ pub let write_file (path: String) (contents: String): Result[Unit, String] =
 /// IR cannot construct a `Result` without hard-coding tag numbers the
 /// backend assigns per program, so the wrapping happens here.
 let read_file_bytes_raw (path: String): Array[Bytes] = []
+
 let write_file_bytes_raw (path: String) (contents: Bytes): Bool = false
+
 let append_file_bytes_raw (path: String) (contents: Bytes): Bool = false
 
 /// Reads a whole seekable file as bytes. An empty file returns empty
@@ -207,7 +231,9 @@ pub let write_bytes (path: String) (data: Bytes): Result[Unit, String] =
 
 /// Creates the file when it does not exist, the way `>>` does.
 pub let append_bytes (path: String) (data: Bytes): Result[Unit, String] =
-    if append_file_bytes_raw(path, data) { Ok(()) } else { Err("could not append to ".concat(path)) }
+    if append_file_bytes_raw(path, data) { Ok(()) } else {
+        Err("could not append to ".concat(path))
+    }
 
 // --- Streaming file I/O ---
 //
@@ -254,8 +280,17 @@ pub enum Mode { Read, Write, Append }
 /// Where a seek measures from.
 pub enum Seek { Start, Current, End }
 
-let mode_code (m: Mode): Int = match m { Read => 0, Write => 1, Append => 2 }
-let seek_code (s: Seek): Int = match s { Start => 0, Current => 1, End => 2 }
+let mode_code (m: Mode): Int = match m {
+    Read => 0,
+    Write => 1,
+    Append => 2
+}
+
+let seek_code (s: Seek): Int = match s {
+    Start => 0,
+    Current => 1,
+    End => 2
+}
 
 /// `Write` truncates an existing file; `Append` does not. Both create
 /// one that is not there, and `Read` does not.
@@ -274,12 +309,15 @@ pub let open (path: String) (mode: Mode): Result[File, String] = unsafe {
 /// with a retained NativeBuffer to reuse capacity across reads.
 pub let File.read (f: File) (max_len: Int): Result[Bytes, String] =
     if max_len <= 0 { Err("File.read: read failed") }
-    else { match NativeBuffer.create(max_len) {
-        Err(_) => Err("File.read: read failed"),
-        Ok(buffer) => match f.read_into(buffer) {
-            Err(_) => Err("File.read: read failed"), Ok(_) => NativeBuffer.copy_out(buffer),
-        },
-    } }
+    else {
+        match NativeBuffer.create(max_len) {
+            Err(_) => Err("File.read: read failed"),
+            Ok(buffer) => match f.read_into(buffer) {
+                Err(_) => Err("File.read: read failed"),
+                Ok(_) => NativeBuffer.copy_out(buffer),
+            },
+        }
+    }
 
 /// Receive up to the writable capacity of a reusable owned native buffer.
 /// Positive capacity is required; Ok(0) means EOF. Read/closed-file errors
@@ -290,7 +328,9 @@ pub let File.read (f: File) (max_len: Int): Result[Bytes, String] =
 pub let File.read_into (f: File) (buffer: NativeBuffer.Buffer): Result[Int, String] = unsafe {
     NativeBuffer.with_mut(buffer, |pointer, cap| {
         let n = unsafe { file_read_into(File.raw(f), pointer, cap) };
-        if n < 0 { Err("File.read_into: read failed or capacity is not positive") } else { Ok(n) }
+        if n < 0 { Err("File.read_into: read failed or capacity is not positive") } else {
+            Ok(n)
+        }
     })
 }
 
@@ -337,16 +377,24 @@ pub let File.close (f: File): Result[Unit, String] = unsafe {
 extern "C" { fn process_capture_status(h: Int) -> Int; }
 
 let process_run_raw (program: String) (args_joined: String) (argc: Int): Int = 0
+
 let process_exit_code_raw (handle: Int): Int = 0
+
 let process_stdout_raw (handle: Int): String = ""
+
 let process_stderr_raw (handle: Int): String = ""
+
 let process_free_raw (handle: Int): Bool = false
 
 /// What a finished process left behind.
 ///
 /// `exit_code` is the child's own status: a non-zero one is an ordinary
 /// result, not an error. Launch or output-capture failures return `Err`.
-pub struct ProcessResult { pub exit_code: Int, pub stdout: String, pub stderr: String }
+pub struct ProcessResult {
+    pub exit_code: Int,
+    pub stdout: String,
+    pub stderr: String
+}
 
 /// NO leading separator: `process_run` points argv[1] at the WHOLE
 /// joined string, so a leading tab makes argv[1] empty and pushes the
@@ -397,7 +445,9 @@ extern "C" {
 /// The process's current working directory, as an absolute path.
 pub let cwd (): Result[String, String] = unsafe {
     let d = os_cwd().as_string();
-    if String.is_empty(d) { Err("Os.cwd: could not determine the working directory") } else { Ok(d) }
+    if String.is_empty(d) { Err("Os.cwd: could not determine the working directory") } else {
+        Ok(d)
+    }
 }
 
 /// Changes the process's working directory.
@@ -407,7 +457,9 @@ pub let cwd (): Result[String, String] = unsafe {
 /// and does not change it back has altered something its caller never
 /// agreed to.
 pub let chdir (path: String): Result[Unit, String] = unsafe {
-    if os_chdir(path.as_cstr()) == 0 { Ok(()) } else { Err("Os.chdir: could not change directory to ".concat(path)) }
+    if os_chdir(path.as_cstr()) == 0 { Ok(()) } else {
+        Err("Os.chdir: could not change directory to ".concat(path))
+    }
 }
 
 /// `$HOME`, or `%USERPROFILE%` on Windows. `None` when unset or not valid UTF-8 --
@@ -461,7 +513,10 @@ pub let read_stdin (max_len: Int): Result[Bytes, String] = {
 /// stdout, since a diagnostic that lands in the same stream as the
 /// program's output cannot be separated from it by whoever is reading.
 /// No trailing newline is added; say so if you want one.
-pub let write_stderr (s: String): Unit = unsafe { stderr_write(s.as_cstr()); () }
+pub let write_stderr (s: String): Unit = unsafe {
+    stderr_write(s.as_cstr());
+    ()
+}
 
 /// --- Reading with a deadline (issue #7) ---
 ///
@@ -476,17 +531,18 @@ pub enum Input[T] { Got(T), Eof, TimedOut }
 // The native result is an owned snapshot, not the reader's pending buffer.
 // Copy and release before returning or validating UTF-8; every recoverable
 // path frees the snapshot, and another task can read during this copy.
-let read_stdin_owned (max_len: Int) (nanos: Int) (line: Int): Result[Input[Bytes], String] = unsafe {
-    let result = stdin_read_owned(max_len, nanos, line);
-    if result == 0 - 2 { Ok(TimedOut) }
-    else if result == 0 - 1 { Ok(Eof) }
-    else if result < 0 { Err("read failed") }
-    else {
-        let bytes = Bytes.from_cstr(stdin_result_data(result), stdin_result_len(result));
-        stdin_result_release(result);
-        Ok(Got(bytes))
+let read_stdin_owned (max_len: Int) (nanos: Int) (line: Int): Result[Input[Bytes], String] =
+    unsafe {
+        let result = stdin_read_owned(max_len, nanos, line);
+        if result == 0 - 2 { Ok(TimedOut) }
+        else if result == 0 - 1 { Ok(Eof) }
+        else if result < 0 { Err("read failed") }
+        else {
+            let bytes = Bytes.from_cstr(stdin_result_data(result), stdin_result_len(result));
+            stdin_result_release(result);
+            Ok(Got(bytes))
+        }
     }
-}
 
 /// The timeout bounds the WHOLE CALL, not just the wait for the first
 /// byte, so a slow writer cannot leave a caller blocked mid-line past
@@ -543,7 +599,11 @@ extern "C" {
 /// contract `is_directory` already set, and having one of these
 /// answer `exists: false` while the other errored would be two
 /// answers to one question.
-pub struct Metadata { pub is_directory: Bool, pub size: Int, pub mtime: Int }
+pub struct Metadata {
+    pub is_directory: Bool,
+    pub size: Int,
+    pub mtime: Int
+}
 
 /// Three-way underneath, and the third case is why this returns a
 /// `Result` rather than a `Bool`: "does this exist" and "can I see
@@ -562,7 +622,13 @@ pub let exists (path: String): Result[Bool, String] = unsafe {
 /// A missing path is an `Err`, matching `is_directory`.
 pub let stat (path: String): Result[Metadata, String] = unsafe {
     if os_stat_load(path.as_cstr()) != 0 { Err("Os.stat: cannot stat ".concat(path)) }
-    else { Ok(Metadata { is_directory: os_stat_is_dir() == 1, size: os_stat_size(), mtime: os_stat_mtime() }) }
+    else {
+        Ok(Metadata {
+            is_directory: os_stat_is_dir() == 1,
+            size: os_stat_size(),
+            mtime: os_stat_mtime()
+        })
+    }
 }
 
 /// Bytes. Meaningful for a regular file; for a directory it is
@@ -580,6 +646,7 @@ pub let mtime (path: String): Result[Int, String] = Result.map(stat(path), |m| m
 // not exist is a real `Err`, not silently `Ok(false)`.
 
 let path_is_dir_raw (path: String): Int = 0
+
 extern "C" {
     fn dir_open(path: CStr) -> Int;
     fn dir_next_size(handle: Int) -> Int;
@@ -587,27 +654,28 @@ extern "C" {
     fn dir_close(handle: Int) -> Unit;
 }
 
-let dir_read_all_acc (handle: Int) (builder: Ref[Array[String]]): Result[Array[String], String] = unsafe {
-    let n = dir_next_size(handle);
-    if n < 0 { Err("directory read failed") }
-    else if n == 0 { Ok(builder.get()) }
-    else {
-        // Copy while the stream still owns this entry, then validate without
-        // another copy. No unchecked OS bytes enter a Plum String.
-        match Bytes.from_cstr(dir_entry_data(handle), n).as_string() {
-            Err(_) => Err("directory entry is not valid UTF-8"),
-            Ok(name) => {
-                // Keep the array unique during growth, including across the
-                // match and recursive call's owning parameter slots.
-                let mut names = builder.get();
-                builder.set([]);
-                names = names.push(name);
-                builder.set(names);
-                dir_read_all_acc(handle, builder)
-            },
+let dir_read_all_acc (handle: Int) (builder: Ref[Array[String]]): Result[Array[String], String] =
+    unsafe {
+        let n = dir_next_size(handle);
+        if n < 0 { Err("directory read failed") }
+        else if n == 0 { Ok(builder.get()) }
+        else {
+            // Copy while the stream still owns this entry, then validate without
+            // another copy. No unchecked OS bytes enter a Plum String.
+            match Bytes.from_cstr(dir_entry_data(handle), n).as_string() {
+                Err(_) => Err("directory entry is not valid UTF-8"),
+                Ok(name) => {
+                    // Keep the array unique during growth, including across the
+                    // match and recursive call's owning parameter slots.
+                    let mut names = builder.get();
+                    builder.set([]);
+                    names = names.push(name);
+                    builder.set(names);
+                    dir_read_all_acc(handle, builder)
+                },
+            }
         }
     }
-}
 
 /// Lists a directory's entries by NAME, without `.` or `..`, in
 /// whatever order the filesystem gives.

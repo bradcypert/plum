@@ -6,9 +6,17 @@ use inner;
 
 enum Weight { Light, Heavy }
 
-let describe (s: Shade): String = match s { Light => "shade light", Dark => "shade dark" }
+let describe (s: Shade): String = match s {
+    Light => "shade light",
+    Dark => "shade dark"
+}
 
 let main (): Unit = {
     println(describe(inner.dim()));
-    println(match Heavy { Light => "weight light", Heavy => "weight heavy" })
+    println(
+        match Heavy {
+            Light => "weight light",
+            Heavy => "weight heavy"
+        }
+    )
 }

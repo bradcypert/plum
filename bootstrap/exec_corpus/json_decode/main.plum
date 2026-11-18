@@ -38,7 +38,8 @@ let owner (): Json.Decoder[Owner] =
     Json.map2(
         Json.field("login", Json.string()),
         Json.field("admin", Json.bool()),
-        |l, a| Owner { login: l, admin: a })
+        |l, a| Owner { login: l, admin: a }
+    )
 
 let repo (): Json.Decoder[Repo] =
     Json.map5(
@@ -47,7 +48,14 @@ let repo (): Json.Decoder[Repo] =
         Json.field("owner", owner()),
         Json.field("topics", Json.list(Json.string())),
         Json.field("license", Json.nullable(Json.string())),
-        |n, s, o, t, l| Repo { name: n, stars: s, owner: o, topics: t, license: l })
+        |n, s, o, t, l| Repo {
+            name: n,
+            stars: s,
+            owner: o,
+            topics: t,
+            license: l
+        }
+    )
 
 let show_owner (o: Owner): String =
     o.login.concat(if o.admin { " (admin)" } else { "" })
@@ -78,10 +86,12 @@ let good: String = doc("412", good_owner, "[\"lang\",\"compiler\"]", "null")
 // than two.
 
 let report [T] (label: String) (r: Result[T, String]) (render: (T) -> String): Unit =
-    println(String.pad_right(label, 12, " ").concat(match r {
-        Ok(v) => render(v),
-        Err(e) => "ERR ".concat(e),
-    }))
+    println(String.pad_right(label, 12, " ").concat(
+        match r {
+            Ok(v) => render(v),
+            Err(e) => "ERR ".concat(e),
+        }
+    ))
 
 let show_repo_doc (label: String) (text: String): Unit =
     report(label, Json.decode_string(repo(), text), show_repo)
@@ -129,18 +139,33 @@ let main (): Unit = {
     // containing a dot is ordinary JSON, and a path DSL would have to
     // invent an escape for it.
     let nested = "{\"data\":{\"repos\":[{\"name\":\"plum\"},{\"name\":42}]}}";
-    show_str("at", Json.decode_string(Json.at(["data", "repos"], Json.index(0, Json.field("name", Json.string()))), nested));
-    show_str("at/deep err", Json.decode_string(Json.at(["data", "repos"], Json.index(1, Json.field("name", Json.string()))), nested));
+    show_str(
+        "at",
+        Json.decode_string(
+            Json.at(["data", "repos"], Json.index(0, Json.field("name", Json.string()))),
+            nested
+        )
+    );
+    show_str(
+        "at/deep err",
+        Json.decode_string(
+            Json.at(["data", "repos"], Json.index(1, Json.field("name", Json.string()))),
+            nested
+        )
+    );
     show_str("at/no key", Json.decode_string(Json.at(["data", "users"], Json.string()), nested));
-    show_str("index/range", Json.decode_string(Json.at(["data", "repos"], Json.index(9, Json.string())), nested));
+    show_str(
+        "index/range",
+        Json.decode_string(Json.at(["data", "repos"], Json.index(9, Json.string())), nested)
+    );
 
     // --- Choosing between shapes ----------------------------------
     //
     // An id that some servers send as a number and others as a string.
-    let id = Json.field("id", Json.one_of([
-        Json.string(),
-        Json.map(Json.int(), |i| i.to_string()),
-    ]));
+    let id = Json.field(
+        "id",
+        Json.one_of([Json.string(), Json.map(Json.int(), |i| i.to_string()),])
+    );
     show_str("one_of/str", Json.decode_string(id, "{\"id\":\"abc\"}"));
     show_str("one_of/int", Json.decode_string(id, "{\"id\":7}"));
     show_str("one_of/no", Json.decode_string(id, "{\"id\":true}"));
@@ -151,33 +176,50 @@ let main (): Unit = {
     // result, which is how a versioned payload is read. `fail` is a
     // decoder that always fails, and its message gets the same path
     // treatment as a built-in one.
-    let versioned = Json.and_then(Json.field("version", Json.int()), |v|
-        if v == 2 {
-            Json.map(Json.at(["payload", "id"], Json.int()), |i| "v2 id=".concat(i.to_string()))
-        } else {
-            Json.fail("unsupported version ".concat(v.to_string()))
-        });
+    let versioned = Json.and_then(
+        Json.field("version", Json.int()),
+        |v|
+            if v == 2 {
+                Json.map(Json.at(["payload", "id"], Json.int()), |i| "v2 id=".concat(i.to_string()))
+            } else {
+                Json.fail("unsupported version ".concat(v.to_string()))
+            }
+    );
     show_str("and_then", Json.decode_string(versioned, "{\"version\":2,\"payload\":{\"id\":7}}"));
-    show_str("and_then/no", Json.decode_string(versioned, "{\"version\":1,\"payload\":{\"id\":7}}"));
+    show_str(
+        "and_then/no",
+        Json.decode_string(versioned, "{\"version\":1,\"payload\":{\"id\":7}}")
+    );
 
     // --- Escape hatches -------------------------------------------
     //
     // `value` hands back the `JsonValue` untouched, for a field whose
     // shape is not known ahead of time; `succeed` ignores the input.
-    show_str("value", Json.decode_string(Json.map(Json.field("payload", Json.value()), stringify_valid), "{\"payload\":{\"id\":7}}"));
+    show_str(
+        "value",
+        Json.decode_string(
+            Json.map(Json.field("payload", Json.value()), stringify_valid),
+            "{\"payload\":{\"id\":7}}"
+        )
+    );
     show_str("succeed", Json.decode_string(Json.succeed("ignored the input"), "[1,2,3]"));
 
     // `decode` is the same thing against an already-parsed value, for
     // when the document was read once and is decoded several ways.
-    println(match json_parse(good) {
-        Err(e) => "ERR ".concat(e),
-        Ok(v) => String.pad_right("decode", 12, " ")
-            .concat(Result.unwrap_or(Result.map(Json.decode(repo(), v), show_repo), "?")),
-    });
+    println(
+        match json_parse(good) {
+            Err(e) => "ERR ".concat(e),
+            Ok(v) => String.pad_right("decode", 12, " ")
+                .concat(Result.unwrap_or(Result.map(Json.decode(repo(), v), show_repo), "?")),
+        }
+    );
 }
 
 // These fixtures construct finite JSON. Fail loudly if that invariant changes.
 let stringify_valid (value: JsonValue): String = match json_stringify(value) {
     Ok(text) => text,
-    Err(e) => { panic_raw(e); "" },
+    Err(e) => {
+        panic_raw(e);
+        ""
+    },
 }

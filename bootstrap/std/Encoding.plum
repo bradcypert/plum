@@ -26,7 +26,9 @@ let hex_validate (b: Bytes) (i: Int) (n: Int): Result[Unit, String] =
     else {
         let hi = hex_digit_value(bytes_at_raw(b, i));
         let lo = hex_digit_value(bytes_at_raw(b, i + 1));
-        if hi < 0 || lo < 0 { Err("Encoding.hex_decode: not a hex digit at byte ".concat(i.to_string())) }
+        if hi < 0 || lo < 0 {
+            Err("Encoding.hex_decode: not a hex digit at byte ".concat(i.to_string()))
+        }
         else { hex_validate(b, i + 2, n) }
     }
 
@@ -84,6 +86,7 @@ pub let base64_url_encode (b: Bytes): String = plum__base64_encode_raw(b, true)
 /// unrecognised character, which is a real error and reported as one.
 // Validation and the writer share the same scalar byte classifier.
 let plum__base64_value_raw (c: Int): Int = 0
+
 // This bridge accepts only a prefix validated by b64_scan.
 let plum__base64_decode_validated_raw (b: Bytes) (count: Int): Bytes = Bytes.empty()
 
@@ -109,8 +112,11 @@ let b64_scan (b: Bytes) (i: Int) (n: Int): Result[Int, String] =
         let c = bytes_at_raw(b, i);
         if c == 61 {
             let pad = n - i;
-            let valid = n % 4 == 0 && ((pad == 1 && i % 4 == 3)
-                || (pad == 2 && i % 4 == 2 && bytes_at_raw(b, i + 1) == 61));
+            let valid = n % 4 == 0
+                && (
+                    (pad == 1 && i % 4 == 3)
+                        || (pad == 2 && i % 4 == 2 && bytes_at_raw(b, i + 1) == 61)
+                );
             if valid { b64_finish(b, i) }
             else { Err("Encoding.base64_decode: invalid padding") }
         }
@@ -180,11 +186,15 @@ let pct_decode_scan (b: Bytes) (i: Int) (n: Int) (escapes: Int): Result[Int, Str
     else {
         let c = bytes_at_raw(b, i);
         if c != 37 { pct_decode_scan(b, i + 1, n, escapes) }
-        else if n - i < 3 { Err("Encoding.percent_decode: truncated escape at byte ".concat(i.to_string())) }
+        else if n - i < 3 {
+            Err("Encoding.percent_decode: truncated escape at byte ".concat(i.to_string()))
+        }
         else {
             let hi = hex_digit_value(bytes_at_raw(b, i + 1));
             let lo = hex_digit_value(bytes_at_raw(b, i + 2));
-            if hi < 0 || lo < 0 { Err("Encoding.percent_decode: invalid escape at byte ".concat(i.to_string())) }
+            if hi < 0 || lo < 0 {
+                Err("Encoding.percent_decode: invalid escape at byte ".concat(i.to_string()))
+            }
             else { pct_decode_scan(b, i + 3, n, escapes + 1) }
         }
     }

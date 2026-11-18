@@ -1,3 +1,4 @@
+// fmt: off
 let update g nx = Game { ship.position.x: nx, score, ..g }
 //                       ^ property
 //                            ^ property
@@ -5,3 +6,4 @@ let update g nx = Game { ship.position.x: nx, score, ..g }
 //                                        ^ variable
 //                                            ^ property
 //                                                   ^ operator
+// fmt: on

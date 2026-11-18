@@ -1,2 +1,6 @@
 use NativeBuffer as Buffers;
-let main (): Unit = unsafe { let borrow = Buffers.with_mut; () }
+
+let main (): Unit = unsafe {
+    let borrow = Buffers.with_mut;
+    ()
+}

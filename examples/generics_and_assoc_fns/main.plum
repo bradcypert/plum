@@ -15,6 +15,7 @@ struct Point {
 // a function with the same name (`Point.add` and, say, `Vector.add`)
 // with no collision, since each lives in its own type's namespace.
 let Point.add (a: Point) (b: Point): Point = Point { x: a.x + b.x, y: a.y + b.y }
+
 let Point.scale (p: Point) (factor: Int): Point = Point { x: p.x * factor, y: p.y * factor }
 
 // A generic struct — `[T]` on the declaration, `[T]`-instantiated on

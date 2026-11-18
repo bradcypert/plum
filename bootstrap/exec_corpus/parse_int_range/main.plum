@@ -13,7 +13,10 @@
 // running.
 
 let show (s: String): String =
-    match String.parse_int(s) { Ok(n) => n.to_string(), Err(e) => "Err: ".concat(e) }
+    match String.parse_int(s) {
+        Ok(n) => n.to_string(),
+        Err(e) => "Err: ".concat(e)
+    }
 
 let main (): Unit = {
     println(show("42"));

@@ -1,1 +1,5 @@
-let main (): Unit = { for i in 0..1000 { assert_eq(String.reverse("aé\x00🙂"), "🙂\x00éa"); }; }
+let main (): Unit = {
+    for i in 0..1000 {
+        assert_eq(String.reverse("aé\x00🙂"), "🙂\x00éa");
+    };
+}

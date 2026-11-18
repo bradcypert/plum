@@ -7,13 +7,24 @@ let cg_hash (p: CgProgram) (env: Array[CgSlot]) (n: Int) (base: typecheck.TExpr)
     let b = cg_expr(p, env, n, base);
     let t = cg_concrete(p, typecheck.texpr_ty(p.subst, base));
     let h = cg_hash_code(t, b.val, b.n);
-    Emit { code: b.code.concat(h.code).concat(cg_dec(t, b.val)), allocas: b.allocas,
-        releases: b.releases, globals: b.globals, val: h.val, ty: CgInt, n: h.n }
+    Emit {
+        code: b.code.concat(h.code).concat(cg_dec(t, b.val)),
+        allocas: b.allocas,
+        releases: b.releases,
+        globals: b.globals,
+        val: h.val,
+        ty: CgInt,
+        n: h.n
+    }
 }
 
 // Like EqEmit, but the value is an i64. All public results have the sign
 // bit cleared so Map's remainder operation always gives a valid bucket.
-struct HashEmit { code: String, val: String, n: Int }
+struct HashEmit {
+    code: String,
+    val: String,
+    n: Int
+}
 
 let cg_hash_code (t: typecheck.ITy) (v: String) (n: Int): HashEmit = {
     let r = cg_reg(n);
@@ -34,7 +45,11 @@ let cg_hash_code (t: typecheck.ITy) (v: String) (n: Int): HashEmit = {
         ITRef(_) => "  ${raw} = ptrtoint ptr ${v} to i64\n  ${out} = call i64 @plum_hash_word(i64 ${raw})\n",
         _ => "  ${out} = call i64 ${cg_hash_sym(t)}(ptr ${v})\n",
     };
-    HashEmit { code: code, val: out, n: n + 3 }
+    HashEmit {
+        code: code,
+        val: out,
+        n: n + 3
+    }
 }
 
 let cg_emit_hash_fns (p: CgProgram) (ts: Array[typecheck.ITy]): String =
@@ -45,15 +60,30 @@ let cg_emit_hash_fn (p: CgProgram) (t: typecheck.ITy): String =
         match t {
             ITStruct(name, args) =>
                 if name == "Array" { cg_emit_array_hash(t, args[0]) }
-                else { cg_emit_fields_hash(t, Array.map(typecheck.ctx_field_types(p.ctx, name), |ft| typecheck.instantiate_template(typecheck.ctx_struct_generics(p.ctx, name), args, ft))) },
+                else {
+                    cg_emit_fields_hash(t, Array.map(
+                        typecheck.ctx_field_types(p.ctx, name),
+                        |ft| typecheck.instantiate_template(
+                            typecheck.ctx_struct_generics(p.ctx, name),
+                            args,
+                            ft
+                        )
+                    ))
+                },
             ITTuple(elems) => cg_emit_fields_hash(t, elems),
             ITEnum(name, args) => {
                 let vs = cg_find_enum(p, name).variants;
                 "define i64 ${cg_hash_sym(t)}(ptr %a) {\nentry:\n"
-                    .concat("  %tp = getelementptr i8, ptr %a, i64 ${cg_tag_offset(())}\n  %tag = load i64, ptr %tp\n")
-                    .concat("  switch i64 %tag, label %empty [\n${cg_enum_eq_cases(vs, 0, "")}  ]\n")
+                    .concat(
+                        "  %tp = getelementptr i8, ptr %a, i64 ${cg_tag_offset(())}\n  %tag = load i64, ptr %tp\n"
+                    )
+                    .concat(
+                        "  switch i64 %tag, label %empty [\n${cg_enum_eq_cases(vs, 0, "")}  ]\n"
+                    )
                     .concat(cg_hash_variants(p, vs, args, 0, 0))
-                    .concat("empty:\n  %h = call i64 @plum_hash_word(i64 %tag)\n  ret i64 %h\n}\n\n")
+                    .concat(
+                        "empty:\n  %h = call i64 @plum_hash_word(i64 %tag)\n  ret i64 %h\n}\n\n"
+                    )
             },
             // Ref is hashed inline, and its contents are never walked.
             _ => "",
@@ -65,37 +95,82 @@ let cg_emit_fields_hash (t: typecheck.ITy) (ts: Array[typecheck.ITy]): String = 
     "define i64 ${cg_hash_sym(t)}(ptr %a) {\nentry:\n${body.code}  ret i64 ${body.val}\n}\n\n"
 }
 
-let cg_hash_fields (ts: Array[typecheck.ITy]) (i: Int) (payload: Bool) (n: Int) (h: String) (code: String): HashEmit =
-    if i >= ts.len() { HashEmit { code: code, val: h, n: n } } else {
+let cg_hash_fields
+    (ts: Array[typecheck.ITy])
+    (i: Int)
+    (payload: Bool)
+    (n: Int)
+    (h: String)
+    (code: String): HashEmit
+=
+    if i >= ts.len() {
+        HashEmit {
+            code: code,
+            val: h,
+            n: n
+        }
+    } else {
         let off = if payload { cg_payload_offset(i) } else { cg_field_offset(i) };
         let ptr = cg_reg(n);
         let v = cg_reg(n + 1);
         let load = "  ${ptr} = getelementptr i8, ptr %a, i64 ${off}\n  ${v} = load ${cg_llvm_ty(cg_of_ity(ts[i]))}, ptr ${ptr}\n";
         let child = cg_hash_code(ts[i], v, n + 2);
         let next = cg_reg(child.n);
-        cg_hash_fields(ts, i + 1, payload, child.n + 1, next,
-            code.concat(load).concat(child.code).concat("  ${next} = call i64 @plum_hash_combine(i64 ${h}, i64 ${child.val})\n"))
+        cg_hash_fields(
+            ts,
+            i + 1,
+            payload,
+            child.n + 1,
+            next,
+            code.concat(load).concat(child.code)
+                .concat("  ${next} = call i64 @plum_hash_combine(i64 ${h}, i64 ${child.val})\n")
+        )
     }
 
-let cg_hash_variants (p: CgProgram) (vs: Array[CgVariant]) (args: Array[typecheck.ITy]) (i: Int) (n: Int): String =
+let cg_hash_variants
+    (p: CgProgram)
+    (vs: Array[CgVariant])
+    (args: Array[typecheck.ITy])
+    (i: Int)
+    (n: Int): String
+=
     if i >= vs.len() { "" }
     else if vs[i].arity == 0 { cg_hash_variants(p, vs, args, i + 1, n) }
     else {
         let v = vs[i];
-        let ts = Array.map(typecheck.ctx_variant_payload(p.ctx, v.enum_name, v.name), |q| typecheck.instantiate_template(typecheck.ctx_variant_generics(p.ctx, v.enum_name, v.name), args, q));
+        let ts = Array.map(
+            typecheck.ctx_variant_payload(p.ctx, v.enum_name, v.name),
+            |q| typecheck.instantiate_template(
+                typecheck.ctx_variant_generics(p.ctx, v.enum_name, v.name),
+                args,
+                q
+            )
+        );
         let body = cg_hash_fields(ts, 0, true, n, "%tag", "");
-        "V${v.tag}:\n${body.code}  ret i64 ${body.val}\n".concat(cg_hash_variants(p, vs, args, i + 1, body.n))
+        "V${v.tag}:\n${body.code}  ret i64 ${body.val}\n".concat(
+            cg_hash_variants(p, vs, args, i + 1, body.n)
+        )
     }
 
 let cg_emit_array_hash (t: typecheck.ITy) (elem: typecheck.ITy): String = {
     let child = cg_hash_code(elem, "%v", 0);
     "define i64 ${cg_hash_sym(t)}(ptr %a) {\nentry:\n"
-        .concat("  %lp = getelementptr i8, ptr %a, i64 8\n  %len = load i64, ptr %lp\n  br label %loop\n")
-        .concat("loop:\n  %i = phi i64 [0, %entry], [%next, %body]\n  %h = phi i64 [%len, %entry], [%joined, %body]\n")
+        .concat(
+            "  %lp = getelementptr i8, ptr %a, i64 8\n  %len = load i64, ptr %lp\n  br label %loop\n"
+        )
+        .concat(
+            "loop:\n  %i = phi i64 [0, %entry], [%next, %body]\n  %h = phi i64 [%len, %entry], [%joined, %body]\n"
+        )
         .concat("  %more = icmp ult i64 %i, %len\n  br i1 %more, label %body, label %done\nbody:\n")
-        .concat("  %off = mul i64 %i, 8\n  %base = getelementptr i8, ptr %a, i64 ${cg_array_elem_offset(0)}\n")
-        .concat("  %ep = getelementptr i8, ptr %base, i64 %off\n  %v = load ${cg_llvm_ty(cg_of_ity(elem))}, ptr %ep\n${child.code}")
-        .concat("  %joined = call i64 @plum_hash_combine(i64 %h, i64 ${child.val})\n  %next = add i64 %i, 1\n  br label %loop\n")
+        .concat(
+            "  %off = mul i64 %i, 8\n  %base = getelementptr i8, ptr %a, i64 ${cg_array_elem_offset(0)}\n"
+        )
+        .concat(
+            "  %ep = getelementptr i8, ptr %base, i64 %off\n  %v = load ${cg_llvm_ty(cg_of_ity(elem))}, ptr %ep\n${child.code}"
+        )
+        .concat(
+            "  %joined = call i64 @plum_hash_combine(i64 %h, i64 ${child.val})\n  %next = add i64 %i, 1\n  br label %loop\n"
+        )
         .concat("done:\n  %out = and i64 %h, 9223372036854775807\n  ret i64 %out\n}\n\n")
 }
 

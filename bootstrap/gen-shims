@@ -74,7 +74,11 @@ HEADER = '''// The C shims this compiler links into every binary it produces --
 // beside the point: a compiled PROGRAM calls `tcp_*`, and without the
 // shim embedded here it cannot be linked.
 
-pub struct ShimFile { pub name: String, pub source: String, pub compile: Bool }
+pub struct ShimFile {
+    pub name: String,
+    pub source: String,
+    pub compile: Bool
+}
 
 pub let shim_files (): Array[ShimFile] = [
 '''
@@ -84,12 +88,20 @@ def render(name: str, compile: bool, path: pathlib.Path) -> str:
     # Resolve against shims.plum, independent of the build's working directory.
     # Emit literal fields in declaration order for static aggregate layout.
     rel = pathlib.Path(os.path.relpath(path, OUT.parent)).as_posix()
+    # Match the formatter's soft 100-column call layout without needing a
+    # working compiler to regenerate the manifest. Reserve the trailing
+    # comma too, so the complete field stays within 100 columns.
+    embed = '        source: @embed_file("%s")' % rel
+    source = (embed + ",\n" if len(embed) + 1 <= 100 else
+              '        source: @embed_file(\n'
+              '            "%s"\n'
+              '        ),\n' % rel)
     return (
         '    ShimFile {\n'
         '        name: "%s",\n'
-        '        source: @embed_file("%s"),\n'
+        '%s'
         '        compile: %s,\n'
-        '    },\n' % (name, rel, "true" if compile else "false")
+        '    },\n' % (name, source, "true" if compile else "false")
     )
 
 

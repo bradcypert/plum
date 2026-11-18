@@ -1,2 +1,6 @@
-let f (v: Int): Bool = match v { 1 | true => true, _ => false }
+let f (v: Int): Bool = match v {
+    1 | true => true,
+    _ => false
+}
+
 let main (): Unit = ()

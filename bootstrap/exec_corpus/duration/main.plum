@@ -28,7 +28,9 @@ let main (): Unit = {
     println("1h == 60min: ".concat((Time.hours(1) == Time.minutes(60)).to_string()));
 
     // --- Arithmetic ---
-    println("200ms + 300ms: ".concat(Time.millis(200).add(Time.millis(300)).as_millis().to_string()));
+    println(
+        "200ms + 300ms: ".concat(Time.millis(200).add(Time.millis(300)).as_millis().to_string())
+    );
     println("3x 50ms: ".concat(Time.millis(50).scale(3).as_millis().to_string()));
     // A negative duration is representable. `sub` can produce one, and
     // refusing to hold it would only move the problem to every caller.
@@ -76,6 +78,8 @@ let main (): Unit = {
     // `now()` stays SECONDS. Changing it would have broken every caller
     // and every documented `iso8601` answer, which is why `now_millis`
     // is a second function rather than a wider first one.
-    println("now_millis agrees with now(): "
-        .concat((Time.now_millis() / 1000 - Time.now() <= 1).to_string()))
+    println(
+        "now_millis agrees with now(): "
+            .concat((Time.now_millis() / 1000 - Time.now() <= 1).to_string())
+    )
 }

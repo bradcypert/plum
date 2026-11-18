@@ -3,7 +3,8 @@
 let cg_symbol_byte_ok (b: Int): Bool =
     (b >= 65 && b <= 90) || (b >= 97 && b <= 122) || (b >= 48 && b <= 57) || b == 95
 
-let CG_SYMBOL_HEX: Array[String] = ["0", "1", "2", "3", "4", "5", "6", "7", "8", "9", "a", "b", "c", "d", "e", "f"]
+let CG_SYMBOL_HEX: Array[String] =
+    ["0", "1", "2", "3", "4", "5", "6", "7", "8", "9", "a", "b", "c", "d", "e", "f"]
 
 // Existing scalar runtime read, guarded by the shared view's length.
 let bytes_at_raw (bytes: Bytes) (i: Int): Int = 0
@@ -45,7 +46,10 @@ let cg_symbol_render (bytes: Bytes) (n: Int) (i: Int) (start: Int) (out: String)
 let cg_symbol_ascii (bytes: Bytes) (start: Int) (end: Int): String =
     match bytes.slice(start, end).as_string() {
         Ok(text) => text,
-        Err(_) => { cg_fail("internal: non-ASCII symbol run"); "" },
+        Err(_) => {
+            cg_fail("internal: non-ASCII symbol run");
+            ""
+        },
     }
 
 let cg_symbol_test_byte (b: Int): String =
@@ -59,7 +63,7 @@ pub let test_symbol_atom_bytes (): Unit = {
         let raw = cg_symbol_test_byte(b);
         assert_eq(raw.as_bytes().to_array(), [b]);
         let expected = if Option.is_some(String.index_of(alphabet, raw)) { raw }
-            else { "$".concat(Bytes.from_array([b]).to_hex()) };
+        else { "$".concat(Bytes.from_array([b]).to_hex()) };
         assert_eq(cg_symbol_atom(raw), expected);
         values = values.push(raw);
         encoded = encoded.push(expected);
@@ -67,12 +71,17 @@ pub let test_symbol_atom_bytes (): Unit = {
     for a in [0, 36, 46, 65, 95, 127, 128, 195, 255] {
         for b in [0, 36, 46, 65, 95, 127, 128, 169, 255] {
             let raw = "Safe_9".concat(values[a]).concat(values[b]).concat("Z");
-            assert_eq(cg_symbol_atom(raw), "Safe_9".concat(encoded[a]).concat(encoded[b]).concat("Z"));
+            assert_eq(
+                cg_symbol_atom(raw),
+                "Safe_9".concat(encoded[a]).concat(encoded[b]).concat("Z")
+            );
         };
     };
     assert_eq(cg_symbol_atom(""), "");
     let mut ascii = "valid_name09";
-    for i in 0..14 { ascii = ascii.concat(ascii); };
+    for i in 0..14 {
+        ascii = ascii.concat(ascii);
+    };
     assert_eq(cg_symbol_atom(ascii), ascii);
     let mut source = "name09".repeat(64);
     let shared = cg_symbol_atom(source);
@@ -82,7 +91,9 @@ pub let test_symbol_atom_bytes (): Unit = {
     assert_eq(source, shared.concat("changed"));
     assert_eq(unsafe { pointer.as_string() }, shared);
     let mut escaped = "$.";
-    for i in 0..12 { escaped = escaped.concat(escaped); };
+    for i in 0..12 {
+        escaped = escaped.concat(escaped);
+    };
     let mut encoded = cg_symbol_atom(escaped);
     assert_eq(encoded, "$24$2e".repeat(4096));
     assert_eq(escaped, "$.".repeat(4096));

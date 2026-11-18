@@ -1,2 +1,2 @@
 error: handle Res: on_drop names 'fake_clsoe', which is not declared. It must be an `extern "C"` function taking one Int.
-main.plum:5:1
+main.plum:6:1

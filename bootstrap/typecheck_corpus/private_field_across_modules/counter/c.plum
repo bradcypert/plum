@@ -4,5 +4,7 @@
 pub struct Counter { pub label: String, n: Int }
 
 pub let start (label: String): Counter = Counter { label: label, n: 0 }
+
 pub let bump (c: Counter): Counter = Counter { label: c.label, n: c.n + 1 }
+
 pub let count (c: Counter): Int = c.n

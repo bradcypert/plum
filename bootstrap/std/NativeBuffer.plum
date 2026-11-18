@@ -19,14 +19,18 @@ extern "C" {
 /// Aliases share one mutable native resource. Its final owner releases the
 /// allocation. Normal exits and panic follow the standard handle contract.
 pub handle Buffer { on_drop: plum_buffer_release }
+
 // Private lease: its native reference survives owner cleanup, and its drop
 // always ends the borrow, including a callback returning Err or panicking.
 handle Lease { on_drop: plum_buffer_end }
 
 let error (operation: String) (status: Int): String =
-    operation.concat(if status == -2 { ": buffer is already borrowed" }
+    operation.concat(
+        if status == -2 { ": buffer is already borrowed" }
         else if status == -3 { ": allocation failed" }
-        else { ": invalid length, capacity or NUL termination" })
+        else { ": invalid length, capacity or NUL termination" }
+    )
+
 let checked (operation: String) (status: Int): Result[Unit, String] =
     if status == 0 { Ok(()) } else { Err(error(operation, status)) }
 
@@ -38,7 +42,9 @@ pub let create (capacity: Int): Result[Buffer, String] = unsafe {
     if capacity < 0 { Err("NativeBuffer.create: capacity must be nonnegative") }
     else {
         let raw = plum_buffer_create(capacity);
-        if raw == 0 { Err("NativeBuffer.create: allocation failed or capacity is not representable") }
+        if raw == 0 {
+            Err("NativeBuffer.create: allocation failed or capacity is not representable")
+        }
         else { Ok(Buffer.from_raw(raw)) }
     }
 }
@@ -46,6 +52,7 @@ pub let create (capacity: Int): Result[Buffer, String] = unsafe {
 /// Last committed readable prefix. During an edit this remains the previous
 /// length. This metadata query does not access bytes or end the lease.
 pub let length (buffer: Buffer): Int = unsafe { plum_buffer_length(Buffer.raw(buffer)) }
+
 /// Writable bytes, including the terminator slot when used for text editing.
 pub let capacity (buffer: Buffer): Int = unsafe { plum_buffer_capacity(Buffer.raw(buffer)) }
 
@@ -60,7 +67,10 @@ pub let reserve (buffer: Buffer) (capacity: Int): Result[Unit, String] = unsafe 
 /// termination when capacity exceeds the byte length. Exact-capacity binary
 /// input remains valid without a terminator.
 pub let copy_in (buffer: Buffer) (bytes: Bytes): Result[Unit, String] = unsafe {
-    checked("NativeBuffer.copy_in", plum_buffer_write(Buffer.raw(buffer), bytes.as_cstr(), bytes.len()))
+    checked(
+        "NativeBuffer.copy_in",
+        plum_buffer_write(Buffer.raw(buffer), bytes.as_cstr(), bytes.len())
+    )
 }
 
 /// Copy the committed prefix into independent Bytes while holding a read
@@ -79,7 +89,10 @@ pub let copy_out (buffer: Buffer): Result[Bytes, String] = unsafe {
 /// Copy the committed prefix and validate UTF-8. Includes embedded NULs:
 /// use with_text when a native API instead treats the first NUL as the end.
 pub let text (buffer: Buffer): Result[String, String] =
-    match copy_out(buffer) { Err(e) => Err(e), Ok(bytes) => bytes.as_string() }
+    match copy_out(buffer) {
+        Err(e) => Err(e),
+        Ok(bytes) => bytes.as_string()
+    }
 
 /// Unsafe scoped binary access. The callback receives pointer/capacity and
 /// returns the initialized readable length. Call with all arguments inside
@@ -88,7 +101,10 @@ pub let text (buffer: Buffer): Result[String, String] =
 /// capacity. Once the callback begins, Err, invalid length or panic discards
 /// contents. Rejected acquisition leaves contents unchanged.
 /// Conflicting leases/copies/resizes return Err, including reentrant aliases.
-pub let with_mut (buffer: Buffer) (operation: (RawCStr, Int) -> Result[Int, String]): Result[Int, String] = unsafe {
+pub let with_mut
+    (buffer: Buffer)
+    (operation: (RawCStr, Int) -> Result[Int, String]): Result[Int, String]
+= unsafe {
     let raw = plum_buffer_acquire(Buffer.raw(buffer), 1);
     if raw == -1 || raw == -2 { Err(error("NativeBuffer.with_mut", raw)) }
     else {
@@ -98,7 +114,8 @@ pub let with_mut (buffer: Buffer) (operation: (RawCStr, Int) -> Result[Int, Stri
         match operation(pointer, cap) {
             Err(e) => Err(e),
             Ok(n) => match checked("NativeBuffer.with_mut", plum_buffer_commit(Lease.raw(lease), n)) {
-                Err(e) => Err(e), Ok(_) => Ok(n),
+                Err(e) => Err(e),
+                Ok(_) => Ok(n),
             },
         }
     }
@@ -112,7 +129,10 @@ pub let with_mut (buffer: Buffer) (operation: (RawCStr, Int) -> Result[Int, Stri
 /// rejected acquisition leaves them unchanged. No pointer may escape.
 /// Calls must be fully applied inside unsafe. Separate buffers are independent;
 /// aliased borrows return Err. The copy is of the text prefix, not capacity.
-pub let with_text[T] (buffer: Buffer) (operation: (RawCStr, Int) -> Result[T, String]): Result[(T, String), String] = unsafe {
+pub let with_text[T]
+    (buffer: Buffer)
+    (operation: (RawCStr, Int) -> Result[T, String]): Result[(T, String), String]
+= unsafe {
     let raw = plum_buffer_acquire(Buffer.raw(buffer), 2);
     if raw == -1 || raw == -2 { Err(error("NativeBuffer.with_text", raw)) }
     else {
@@ -124,12 +144,18 @@ pub let with_text[T] (buffer: Buffer) (operation: (RawCStr, Int) -> Result[T, St
             Ok(value) => {
                 let n = plum_buffer_text_length(Lease.raw(lease));
                 if n < 0 { Err(error("NativeBuffer.with_text", -1)) }
-                else { match Bytes.from_cstr(pointer, n).as_string() {
-                    Err(e) => Err(e),
-                    Ok(text) => match checked("NativeBuffer.with_text", plum_buffer_commit(Lease.raw(lease), n)) {
-                        Err(e) => Err(e), Ok(_) => Ok((value, text)),
-                    },
-                } }
+                else {
+                    match Bytes.from_cstr(pointer, n).as_string() {
+                        Err(e) => Err(e),
+                        Ok(text) => match checked(
+                            "NativeBuffer.with_text",
+                            plum_buffer_commit(Lease.raw(lease), n)
+                        ) {
+                            Err(e) => Err(e),
+                            Ok(_) => Ok((value, text)),
+                        },
+                    }
+                }
             },
         }
     }
@@ -162,8 +188,13 @@ pub let snapshot (): Option[Snapshot] = unsafe {
         let live_capacity = plum_buffer_snapshot_field(token, 3);
         let peak_buffers = plum_buffer_snapshot_field(token, 4);
         let peak_capacity = plum_buffer_snapshot_field(token, 5);
-        Some(Snapshot { allocations: allocations, allocated_capacity: allocated_capacity,
-            live_buffers: live_buffers, live_capacity: live_capacity,
-            peak_buffers: peak_buffers, peak_capacity: peak_capacity })
+        Some(Snapshot {
+            allocations: allocations,
+            allocated_capacity: allocated_capacity,
+            live_buffers: live_buffers,
+            live_capacity: live_capacity,
+            peak_buffers: peak_buffers,
+            peak_capacity: peak_capacity
+        })
     }
 }

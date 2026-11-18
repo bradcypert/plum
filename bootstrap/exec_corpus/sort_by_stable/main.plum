@@ -8,6 +8,13 @@ struct P { k: Int, id: Int }
 let ids (ps: Array[P]): Array[Int] = ps.map(|p| p.id)
 
 let main (): Unit = {
-    let ps = [P { k: 1, id: 0 }, P { k: 0, id: 1 }, P { k: 1, id: 2 }, P { k: 0, id: 3 }, P { k: 1, id: 4 }, P { k: 0, id: 5 }];
+    let ps = [
+        P { k: 1, id: 0 },
+        P { k: 0, id: 1 },
+        P { k: 1, id: 2 },
+        P { k: 0, id: 3 },
+        P { k: 1, id: 4 },
+        P { k: 0, id: 5 }
+    ];
     println(ids(Array.sort_by(ps, |a, b| a.k <= b.k)).to_string())
 }

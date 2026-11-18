@@ -29,6 +29,7 @@ let named (unit: Unit) (n: Int): Int =
 let collision (__unit_param1: Int) (): Int = __unit_param1
 
 let ping (): Int = if next() == 0 { pong(()) } else { 17 }
+
 let pong (): Int = if next(()) == 0 { ping() } else { 17 }
 
 let main (): Unit = {

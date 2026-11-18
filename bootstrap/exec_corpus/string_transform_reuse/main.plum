@@ -1,30 +1,62 @@
 let make (): String = "ab\x00🙂".repeat(32)
+
 let main (): Unit = {
-    let replace = String.replace; let upper = String.to_upper; let lower = String.to_lower;
-    let forward = |s: String| { assert(s.starts_with("ab")); s.replace("ab", "zy").to_upper().to_lower() };
+    let replace = String.replace;
+    let upper = String.to_upper;
+    let lower = String.to_lower;
+    let forward = |s: String| {
+        assert(s.starts_with("ab"));
+        s.replace("ab", "zy").to_upper().to_lower()
+    };
     assert_eq(forward(make()), "zy\x00🙂".repeat(32));
-    let source = make(); let bytes = source.as_bytes(); let view = source.as_cstr();
+    let source = make();
+    let bytes = source.as_bytes();
+    let view = source.as_cstr();
     assert_eq(source.replace("ab", "zy"), "zy\x00🙂".repeat(32));
     assert_eq(upper(source), "AB\x00🙂".repeat(32));
     assert_eq(lower(upper(make())), make());
-    assert_eq(source, make()); assert_eq(bytes.to_hex(), make().as_bytes().to_hex()); assert_eq(unsafe { view.as_string() }, "ab");
+    assert_eq(source, make());
+    assert_eq(bytes.to_hex(), make().as_bytes().to_hex());
+    assert_eq(unsafe { view.as_string() }, "ab");
     assert_eq(replace(make(), "ab", "zy"), "zy\x00🙂".repeat(32));
     assert_eq(replace(make(), "ab", "longer"), "longer\x00🙂".repeat(32));
     assert_eq(replace(make(), "ab", ""), "\x00🙂".repeat(32));
-    assert_eq(replace(make(), "", "!"), make()); assert_eq(replace(make(), "missing", "!"), make());
-    assert_eq("ab".repeat(32).replace("ab", ""), ""); assert_eq("".to_upper(), ""); assert_eq("".replace("", "!"), "");
-    let source = make(); assert_eq(source.replace(source, source), source);
+    assert_eq(replace(make(), "", "!"), make());
+    assert_eq(replace(make(), "missing", "!"), make());
+    assert_eq("ab".repeat(32).replace("ab", ""), "");
+    assert_eq("".to_upper(), "");
+    assert_eq("".replace("", "!"), "");
+    let source = make();
+    assert_eq(source.replace(source, source), source);
     assert_eq(source.replace("ab", source).len(), (source.len() + 5) * 32);
-    let captured = make(); let f = || captured.replace("ab", "zy").to_upper();
-    assert_eq(f(), "ZY\x00🙂".repeat(32)); assert_eq(f(), "ZY\x00🙂".repeat(32)); assert_eq(captured, make());
-    let cell = ref(make()); let current = cell.get();
-    assert_eq(current.replace("ab", "zy"), "zy\x00🙂".repeat(32)); assert_eq(cell.get(), make());
+    let captured = make();
+    let f = || captured.replace("ab", "zy").to_upper();
+    assert_eq(f(), "ZY\x00🙂".repeat(32));
+    assert_eq(f(), "ZY\x00🙂".repeat(32));
+    assert_eq(captured, make());
+    let cell = ref(make());
+    let current = cell.get();
+    assert_eq(current.replace("ab", "zy"), "zy\x00🙂".repeat(32));
+    assert_eq(cell.get(), make());
     let mut changed = "ab".repeat(32);
-    let result = changed.replace({ changed = "later"; "ab" }, { assert_eq(changed, "later"); "zy" });
-    assert_eq(result, "zy".repeat(32)); assert_eq(changed, "later");
-    let source = make(); let left = spawn { source.replace("ab", "zy").to_upper() };
+    let result = changed.replace(
+        {
+            changed = "later";
+            "ab"
+        },
+        {
+            assert_eq(changed, "later");
+            "zy"
+        }
+    );
+    assert_eq(result, "zy".repeat(32));
+    assert_eq(changed, "later");
+    let source = make();
+    let left = spawn { source.replace("ab", "zy").to_upper() };
     let right = spawn { source.to_upper().replace("AB", "ZY") };
-    assert_eq(left.join(), "ZY\x00🙂".repeat(32)); assert_eq(right.join(), "ZY\x00🙂".repeat(32)); assert_eq(source, make());
+    assert_eq(left.join(), "ZY\x00🙂".repeat(32));
+    assert_eq(right.join(), "ZY\x00🙂".repeat(32));
+    assert_eq(source, make());
     // Mapping widths and supplementary support vary by OS. A per-unit model
     // exercises both growing/shrinking units without hardcoding an OS table.
     let model = Array.concat_all(Array.map(chars_of("ȿı".repeat(32)), |s| s.to_upper()));

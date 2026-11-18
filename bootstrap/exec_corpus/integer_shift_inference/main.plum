@@ -1,5 +1,7 @@
 let left (): (Int) -> Int = |x| x << 1
+
 let right (): (Int) -> Int = |x| x >> 1
+
 let GLOBAL_NARROW: U8 = {
     let unused = |x| x >> 1;
     let shift = |x| x << 1;

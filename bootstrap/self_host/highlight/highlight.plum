@@ -82,8 +82,8 @@ let hl_class (t: lexer.Token) (text: String): String =
         // highlighter, where a rare false positive costs a colour and
         // the alternative costs a parse.
         TokIdent(name) => if hl_is_contextual_keyword(name) { "k" }
-            else if hl_starts_upper(name) { "t" }
-            else { "" },
+        else if hl_starts_upper(name) { "t" }
+        else { "" },
         TokUnderscore => "k",
         TokEof => "",
         // Everything left is punctuation and operators. Listing them
@@ -111,11 +111,7 @@ let HL_UPPER: Array[String] = String.split("ABCDEFGHIJKLMNOPQRSTUVWXYZ", "")
 //
 // Ampersand FIRST, or the escapes escape each other's escapes.
 pub let hl_escape (s: String): String =
-    String.replace(
-        String.replace(
-            String.replace(s, "&", "&amp;"),
-            "<", "&lt;"),
-        ">", "&gt;")
+    String.replace(String.replace(String.replace(s, "&", "&amp;"), "<", "&lt;"), ">", "&gt;")
 
 // --- Pieces -------------------------------------------------------
 //
@@ -205,7 +201,9 @@ let hl_pieces (source: String): Array[HlPiece] = {
     let mut in_def = false;
     for i in 0..lexed.tokens.len() {
         let gap_ps = hl_gap_pieces(lexer.trivia_before_at(chars, lexed, i), []);
-        for g in 0..gap_ps.len() { acc = acc.push(gap_ps[g]); };
+        for g in 0..gap_ps.len() {
+            acc = acc.push(gap_ps[g]);
+        };
         match lexed.tokens[i] {
             // The end-of-file token has no text. Emitting the trivia
             // before it still matters -- that is the file's trailing
@@ -215,7 +213,9 @@ let hl_pieces (source: String): Array[HlPiece] = {
             tok => {
                 let text = lexer.token_text_at(chars, lexed, i);
                 let tok_ps = hl_token_pieces(hl_class_in(in_def, tok, text), tok, text, []);
-                for t in 0..tok_ps.len() { acc = acc.push(tok_ps[t]); };
+                for t in 0..tok_ps.len() {
+                    acc = acc.push(tok_ps[t]);
+                };
                 in_def = hl_still_in_def(in_def, tok);
             },
         };
@@ -246,8 +246,8 @@ let hl_class_in (in_def: Bool) (tok: lexer.Token) (text: String): String =
             // `let mut x` -- `mut` follows `let`, and is a keyword, not
             // a name.
             TokIdent(name) => if hl_is_contextual_keyword(name) { "k" }
-                else if hl_starts_upper(name) { "t" }
-                else { "f" },
+            else if hl_starts_upper(name) { "t" }
+            else { "f" },
             _ => hl_class(tok, text),
         }
     }
@@ -258,7 +258,12 @@ let hl_class_in (in_def: Bool) (tok: lexer.Token) (text: String): String =
 // than approximately right, because an interpolation in Plum cannot
 // contain a brace of its own -- the first closing brace is always the
 // end of the hole.
-let hl_token_pieces (cls: String) (tok: lexer.Token) (text: String) (acc: Array[HlPiece]): Array[HlPiece] =
+let hl_token_pieces
+    (cls: String)
+    (tok: lexer.Token)
+    (text: String)
+    (acc: Array[HlPiece]): Array[HlPiece]
+=
     match tok {
         TokInterpStr(_) => hl_interp_pieces(text, 0, acc),
         _ => acc.push(HlPiece { cls: cls, text: text }),
@@ -288,9 +293,18 @@ let hl_interp_pieces (text: String) (from: Int) (acc: Array[HlPiece]): Array[HlP
                         // string-coloured -- they are part of the
                         // literal's syntax, and only the expression
                         // between them changes colour.
-                        let opened = acc.push(HlPiece { cls: "s", text: String.slice(text, from, open + 2) });
-                        let inner = Array.concat(opened, hl_pieces(String.slice(text, open + 2, close)));
-                        hl_interp_pieces(text, close + 1, inner.push(HlPiece { cls: "s", text: "}" }))
+                        let opened = acc.push(
+                            HlPiece { cls: "s", text: String.slice(text, from, open + 2) }
+                        );
+                        let inner = Array.concat(
+                            opened,
+                            hl_pieces(String.slice(text, open + 2, close))
+                        );
+                        hl_interp_pieces(
+                            text,
+                            close + 1,
+                            inner.push(HlPiece { cls: "s", text: "}" })
+                        )
                     },
                 }
             },
@@ -317,8 +331,10 @@ let hl_gap_pieces (gap: String) (acc: Array[HlPiece]): Array[HlPiece] =
                     None => head.push(HlPiece { cls: hl_comment_class(rest), text: rest }),
                     Some(nl) => {
                         let line = String.slice(rest, 0, nl);
-                        hl_gap_pieces(String.slice(rest, nl, rest.len()),
-                            head.push(HlPiece { cls: hl_comment_class(line), text: line }))
+                        hl_gap_pieces(
+                            String.slice(rest, nl, rest.len()),
+                            head.push(HlPiece { cls: hl_comment_class(line), text: line })
+                        )
                     },
                 }
             },
@@ -346,7 +362,9 @@ let hl_render (ps: Array[HlPiece]): String = {
     let mut cls = "";
     let mut cur = "";
     for p in ps {
-        if p.cls == cls { cur = cur.concat(p.text); }
+        if p.cls == cls {
+            cur = cur.concat(p.text);
+        }
         else {
             parts = parts.push(hl_span(cls, cur));
             cls = p.cls;

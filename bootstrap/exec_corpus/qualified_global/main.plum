@@ -13,7 +13,12 @@ use inner;
 
 let main (): Unit = {
     println(inner.LIMIT.to_string());
-    println(match inner.EMPTY { Some(v) => v, None => "empty" });
+    println(
+        match inner.EMPTY {
+            Some(v) => v,
+            None => "empty"
+        }
+    );
     // The module's own private global, used from inside the module.
     println(inner.secret_plus(1).to_string())
 }

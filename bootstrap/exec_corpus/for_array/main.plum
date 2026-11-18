@@ -10,19 +10,27 @@ struct P { name: String, n: Int }
 
 let total (xs: Array[Int]): Int = {
     let mut acc = 0;
-    for x in xs { acc = acc + x; };
+    for x in xs {
+        acc = acc + x;
+    };
     acc
 }
 
 let names (ps: Array[P]): Array[String] = {
     let mut out = [];
-    for p in ps { out = out.push(p.name); };
+    for p in ps {
+        out = out.push(p.name);
+    };
     out
 }
 
 let nested (rows: Array[Array[Int]]): Int = {
     let mut acc = 0;
-    for row in rows { for cell in row { acc = acc + cell; }; };
+    for row in rows {
+        for cell in row {
+            acc = acc + cell;
+        };
+    };
     acc
 }
 

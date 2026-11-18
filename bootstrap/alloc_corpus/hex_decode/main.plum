@@ -1,4 +1,7 @@
 use Encoding;
+
 let main (): Unit = {
-    for i in 0..1000 { assert_eq(Encoding.hex_decode("6100fF2b").unwrap_or(Bytes.empty()).len(), 4); };
+    for i in 0..1000 {
+        assert_eq(Encoding.hex_decode("6100fF2b").unwrap_or(Bytes.empty()).len(), 4);
+    };
 }

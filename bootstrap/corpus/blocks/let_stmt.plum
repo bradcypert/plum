@@ -1,1 +1,4 @@
-let case (): Int = { let x = 5; x }
+let case (): Int = {
+    let x = 5;
+    x
+}

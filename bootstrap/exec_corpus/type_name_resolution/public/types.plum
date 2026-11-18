@@ -1,2 +1,3 @@
 pub struct Solo { pub n: Int }
+
 pub enum SoloMode { On, Off }

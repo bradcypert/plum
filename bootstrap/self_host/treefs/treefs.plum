@@ -16,7 +16,14 @@ extern "C" {
     fn plum_tree_seen_add(seen: Int, identity: CStr, path: CStr) -> Int;
     fn plum_tree_seen_previous(seen: Int) -> RawCStr;
     fn plum_tree_seen_close(seen: Int) -> Unit;
-    fn plum_tree_write(root: Int, relative: CStr, reject_links: Int, expected: CStr, bytes: CStr, size: Int) -> Int;
+    fn plum_tree_write(
+        root: Int,
+        relative: CStr,
+        reject_links: Int,
+        expected: CStr,
+        bytes: CStr,
+        size: Int
+    ) -> Int;
     fn plum_tree_root_open(path: CStr) -> Int;
     fn plum_tree_entry_open(root: Int, relative: CStr, reject_links: Int) -> Int;
     fn plum_tree_entry_close(entry: Int) -> Unit;
@@ -37,11 +44,18 @@ extern "C" {
 }
 
 pub handle TreeRoot { on_drop: plum_tree_entry_close }
+
 pub handle TreeEntry { on_drop: plum_tree_entry_close }
+
 handle TreeDirectory { on_drop: plum_tree_dir_close }
+
 pub handle TreeHasher { on_drop: plum_tree_hash_close }
 
-pub struct EntryInfo { pub name: String, pub kind: Int, pub target: String }
+pub struct EntryInfo {
+    pub name: String,
+    pub kind: Int,
+    pub target: String
+}
 
 let filesystem_error (context: String): String = unsafe {
     context.concat(": ").concat(plum_tree_last_error().as_string())
@@ -53,32 +67,63 @@ pub let open_root (path: String): Result[TreeRoot, String] = unsafe {
     else { Ok(TreeRoot.from_raw(raw)) }
 }
 
-pub let open_entry (root: TreeRoot) (relative: String) (reject_links: Bool): Result[TreeEntry, String] = unsafe {
-    let raw = plum_tree_entry_open(TreeRoot.raw(root), relative.as_cstr(), if reject_links { 1 } else { 0 });
+pub let open_entry
+    (root: TreeRoot)
+    (relative: String)
+    (reject_links: Bool): Result[TreeEntry, String]
+= unsafe {
+    let raw = plum_tree_entry_open(
+        TreeRoot.raw(root),
+        relative.as_cstr(),
+        if reject_links { 1 } else { 0 }
+    );
     if raw == 0 { Err(filesystem_error("cannot resolve ${relative} inside filesystem root")) }
     else { Ok(TreeEntry.from_raw(raw)) }
 }
 
 pub let kind (entry: TreeEntry): Int = unsafe { plum_tree_entry_kind(TreeEntry.raw(entry)) }
-pub let identity (entry: TreeEntry): String = unsafe { plum_tree_entry_identity(TreeEntry.raw(entry)).as_string() }
 
-pub let file_hash (entry: TreeEntry) (relative: String) (version: Int): Result[String, String] = unsafe {
-    let digest = plum_tree_file_hash(TreeEntry.raw(entry), relative.as_cstr(), version).as_string();
-    if digest.len() == 64 { Ok(digest) } else { Err(filesystem_error("cannot hash file ${relative}")) }
-}
+pub let identity (entry: TreeEntry): String =
+    unsafe { plum_tree_entry_identity(TreeEntry.raw(entry)).as_string() }
+
+pub let file_hash (entry: TreeEntry) (relative: String) (version: Int): Result[String, String] =
+    unsafe {
+        let digest = plum_tree_file_hash(TreeEntry.raw(entry), relative.as_cstr(), version)
+            .as_string();
+        if digest.len() == 64 { Ok(digest) } else {
+            Err(filesystem_error("cannot hash file ${relative}"))
+        }
+    }
 
 // The raw entry transfers into the native iterator even if creation fails.
 // Do not first wrap it in TreeEntry: that would give the descriptor two owners.
-pub let entries (root: TreeRoot) (relative: String) (reject_links: Bool): Result[Array[EntryInfo], String] =
+pub let entries
+    (root: TreeRoot)
+    (relative: String)
+    (reject_links: Bool): Result[Array[EntryInfo], String]
+=
     directory_entries(root, relative, reject_links, true)
 
 // Discovery decides exclusions before resolving links. Integrity inventory
 // instead requests link text for every included record.
-pub let children (root: TreeRoot) (relative: String) (reject_links: Bool): Result[Array[EntryInfo], String] =
+pub let children
+    (root: TreeRoot)
+    (relative: String)
+    (reject_links: Bool): Result[Array[EntryInfo], String]
+=
     directory_entries(root, relative, reject_links, false)
 
-let directory_entries (root: TreeRoot) (relative: String) (reject_links: Bool) (read_links: Bool): Result[Array[EntryInfo], String] = unsafe {
-    let entry = plum_tree_entry_open(TreeRoot.raw(root), relative.as_cstr(), if reject_links { 1 } else { 0 });
+let directory_entries
+    (root: TreeRoot)
+    (relative: String)
+    (reject_links: Bool)
+    (read_links: Bool): Result[Array[EntryInfo], String]
+= unsafe {
+    let entry = plum_tree_entry_open(
+        TreeRoot.raw(root),
+        relative.as_cstr(),
+        if reject_links { 1 } else { 0 }
+    );
     if entry == 0 { Err(filesystem_error("cannot enumerate ${relative} inside filesystem root")) }
     else {
         let raw = plum_tree_dir_open_mode(entry, if read_links { 1 } else { 0 });
@@ -87,7 +132,11 @@ let directory_entries (root: TreeRoot) (relative: String) (reject_links: Bool) (
     }
 }
 
-let read_entries (directory: TreeDirectory) (relative: String) (builder: Ref[Array[EntryInfo]]): Result[Array[EntryInfo], String] = unsafe {
+let read_entries
+    (directory: TreeDirectory)
+    (relative: String)
+    (builder: Ref[Array[EntryInfo]]): Result[Array[EntryInfo], String]
+= unsafe {
     let kind = plum_tree_dir_next(TreeDirectory.raw(directory));
     if kind < 0 { Err(filesystem_error("cannot read directory entry in ${relative}")) }
     else if kind == 0 { Ok(builder.get()) }
@@ -96,7 +145,11 @@ let read_entries (directory: TreeDirectory) (relative: String) (builder: Ref[Arr
         let target = plum_tree_dir_link(TreeDirectory.raw(directory)).as_string();
         let mut found = builder.get();
         builder.set([]);
-        found = found.push(EntryInfo { name: name, kind: kind, target: target });
+        found = found.push(EntryInfo {
+            name: name,
+            kind: kind,
+            target: target
+        });
         builder.set(found);
         read_entries(directory, relative, builder)
     }
@@ -113,32 +166,72 @@ pub let hash_bytes (hash: TreeHasher) (bytes: Bytes): Result[Unit, String] = uns
     else { Err("cannot update tree hash state") }
 }
 
-pub let hash_finish (hash: TreeHasher): String = unsafe { plum_tree_hash_finish(TreeHasher.raw(hash)).as_string() }
+pub let hash_finish (hash: TreeHasher): String =
+    unsafe { plum_tree_hash_finish(TreeHasher.raw(hash)).as_string() }
 
 pub let test_owned_tree_io (): Unit = {
-    let path = match Os.temp_dir() { Ok(p) => p, Err(e) => { panic_raw(e); "" } };
+    let path = match Os.temp_dir() {
+        Ok(p) => p,
+        Err(e) => {
+            panic_raw(e);
+            ""
+        }
+    };
     assert(Result.is_ok(Os.make_dir("${path}/nested")));
     assert(Result.is_ok(Os.write_file("${path}/nested/data", "copied")));
     {
-        let root = match open_root(path) { Ok(r) => r, Err(e) => { panic_raw(e); unsafe { TreeRoot.from_raw(0) } } };
+        let root = match open_root(path) {
+            Ok(r) => r,
+            Err(e) => {
+                panic_raw(e);
+                unsafe { TreeRoot.from_raw(0) }
+            }
+        };
         for i in 0..10 {
-            let found = match entries(root, ".", false) { Ok(a) => a, Err(e) => { panic_raw(e); [] } };
+            let found = match entries(root, ".", false) {
+                Ok(a) => a,
+                Err(e) => {
+                    panic_raw(e);
+                    []
+                }
+            };
             assert(found.len() == 1);
             assert(found[0].name == "nested");
             assert(found[0].kind == 2);
-            let entry = match open_entry(root, "nested/data", false) { Ok(f) => f, Err(e) => { panic_raw(e); unsafe { TreeEntry.from_raw(0) } } };
+            let entry = match open_entry(root, "nested/data", false) {
+                Ok(f) => f,
+                Err(e) => {
+                    panic_raw(e);
+                    unsafe { TreeEntry.from_raw(0) }
+                }
+            };
             assert(kind(entry) == 1);
             assert(read_text(root, "nested/data", false, identity(entry)) == Ok("copied"));
             assert(Result.is_err(read_text(root, "nested/data", false, "replaced")));
             assert(!String.is_empty(identity(entry)));
-            assert(file_hash(entry, "nested/data", 1) == Ok("3bf1183476811055e3cf3938f3ad661407b7ef96bf74144b235d9c52c8b05f41"));
-            assert(file_hash(entry, "nested/data", 2) == Ok("fb30593ca32df57a8a0f19d551710dc880a98b208b6e180b07e6aff59102d148"));
+            assert(
+                file_hash(entry, "nested/data", 1)
+                    == Ok("3bf1183476811055e3cf3938f3ad661407b7ef96bf74144b235d9c52c8b05f41")
+            );
+            assert(
+                file_hash(entry, "nested/data", 2)
+                    == Ok("fb30593ca32df57a8a0f19d551710dc880a98b208b6e180b07e6aff59102d148")
+            );
         };
         assert(Result.is_err(open_entry(root, "../outside", false)));
-        let hash = match hasher() { Ok(h) => h, Err(e) => { panic_raw(e); unsafe { TreeHasher.from_raw(0) } } };
+        let hash = match hasher() {
+            Ok(h) => h,
+            Err(e) => {
+                panic_raw(e);
+                unsafe { TreeHasher.from_raw(0) }
+            }
+        };
         assert(Result.is_ok(hash_bytes(hash, Bytes.from_string("cop"))));
         assert(Result.is_ok(hash_bytes(hash, Bytes.from_string("ied"))));
-        assert(hash_finish(hash) == "fb30593ca32df57a8a0f19d551710dc880a98b208b6e180b07e6aff59102d148");
+        assert(
+            hash_finish(hash)
+                == "fb30593ca32df57a8a0f19d551710dc880a98b208b6e180b07e6aff59102d148"
+        );
     };
     assert(Result.is_ok(Os.remove_tree(path)));
 }
@@ -150,6 +243,7 @@ pub let validate_link (root: TreeRoot) (relative: String): Result[Unit, String] 
 }
 
 handle TreeText { on_drop: plum_tree_text_close }
+
 pub handle TreeSeen { on_drop: plum_tree_seen_close }
 
 pub let seen (): Result[TreeSeen, String] = unsafe {
@@ -163,12 +257,23 @@ pub let record (seen: TreeSeen) (identity: String) (path: String): Result[Unit, 
     if status == 0 { Ok(()) }
     else if status == 1 {
         let previous = plum_tree_seen_previous(TreeSeen.raw(seen)).as_string();
-        Err("duplicate filesystem identity: ${path} aliases ${previous} (directory cycle, directory alias, or duplicate source)")
+        Err(
+            "duplicate filesystem identity: ${path} aliases ${previous} (directory cycle, directory alias, or duplicate source)"
+        )
     } else { Err("cannot record filesystem identity for ${path}") }
 }
 
-pub let read_text (root: TreeRoot) (relative: String) (reject_links: Bool) (expected: String): Result[String, String] = unsafe {
-    let entry = plum_tree_entry_open(TreeRoot.raw(root), relative.as_cstr(), if reject_links { 1 } else { 0 });
+pub let read_text
+    (root: TreeRoot)
+    (relative: String)
+    (reject_links: Bool)
+    (expected: String): Result[String, String]
+= unsafe {
+    let entry = plum_tree_entry_open(
+        TreeRoot.raw(root),
+        relative.as_cstr(),
+        if reject_links { 1 } else { 0 }
+    );
     if entry == 0 { Err(filesystem_error("cannot open source ${relative} inside filesystem root")) }
     else if plum_tree_entry_identity(entry).as_string() != expected {
         plum_tree_entry_close(entry);
@@ -178,37 +283,73 @@ pub let read_text (root: TreeRoot) (relative: String) (reject_links: Bool) (expe
         if raw == 0 { Err(filesystem_error("cannot read source ${relative}")) }
         else {
             let text = TreeText.from_raw(raw);
-            let bytes = Bytes.from_cstr(plum_tree_text_data(TreeText.raw(text)), plum_tree_text_size(TreeText.raw(text)));
+            let bytes = Bytes.from_cstr(
+                plum_tree_text_data(TreeText.raw(text)),
+                plum_tree_text_size(TreeText.raw(text))
+            );
             bytes.as_string()
         }
     }
 }
 
 // Typed fatal fallbacks live beside their handle declarations.
-pub let fail_root (error: String): TreeRoot = { panic_raw(error); unsafe { TreeRoot.from_raw(0) } }
-pub let fail_entry (error: String): TreeEntry = { panic_raw(error); unsafe { TreeEntry.from_raw(0) } }
-pub let fail_seen (error: String): TreeSeen = { panic_raw(error); unsafe { TreeSeen.from_raw(0) } }
+pub let fail_root (error: String): TreeRoot = {
+    panic_raw(error);
+    unsafe { TreeRoot.from_raw(0) }
+}
 
-pub let write_text (root: TreeRoot) (relative: String) (reject_links: Bool) (expected: String) (text: String): Result[Unit, String] = unsafe {
+pub let fail_entry (error: String): TreeEntry = {
+    panic_raw(error);
+    unsafe { TreeEntry.from_raw(0) }
+}
+
+pub let fail_seen (error: String): TreeSeen = {
+    panic_raw(error);
+    unsafe { TreeSeen.from_raw(0) }
+}
+
+pub let write_text
+    (root: TreeRoot)
+    (relative: String)
+    (reject_links: Bool)
+    (expected: String)
+    (text: String): Result[Unit, String]
+= unsafe {
     let bytes = Bytes.from_string(text);
-    if plum_tree_write(TreeRoot.raw(root), relative.as_cstr(), if reject_links { 1 } else { 0 }, expected.as_cstr(), bytes.as_cstr(), bytes.len()) == 0 { Ok(()) }
+    if plum_tree_write(
+        TreeRoot.raw(root),
+        relative.as_cstr(),
+        if reject_links { 1 } else { 0 },
+        expected.as_cstr(),
+        bytes.as_cstr(),
+        bytes.len()
+    ) == 0 { Ok(()) }
     else { Err(filesystem_error("cannot replace source target ${relative}")) }
 }
 
 // Filesystem paths may contain native bytes that are not UTF-8. Match Path's
 // internal retagging: offsets are byte boundaries, not character positions.
 let str_of_bytes_raw (bytes: Bytes): String = ""
+
 pub let path_slice (path: String) (start: Int) (end: Int): String =
     str_of_bytes_raw(path.as_bytes().slice(start, end))
 
 // Return the first value for a physical identity without replacing it.
-pub let remember (seen: TreeSeen) (identity: String) (value: String): Result[Option[String], String] = unsafe {
+pub let remember
+    (seen: TreeSeen)
+    (identity: String)
+    (value: String): Result[Option[String], String]
+= unsafe {
     let status = plum_tree_seen_add(TreeSeen.raw(seen), identity.as_cstr(), value.as_cstr());
     if status == 0 { Ok(None) }
     else if status == 1 { Ok(Some(plum_tree_seen_previous(TreeSeen.raw(seen)).as_string())) }
     else { Err("cannot record filesystem identity") }
 }
-pub let fail_hasher (error: String): TreeHasher = { panic_raw(error); unsafe { TreeHasher.from_raw(0) } }
+
+pub let fail_hasher (error: String): TreeHasher = {
+    panic_raw(error);
+    unsafe { TreeHasher.from_raw(0) }
+}
 
 pub let native_text (bytes: Bytes): String = str_of_bytes_raw(bytes)
 
@@ -241,9 +382,17 @@ pub let child_present (root: TreeRoot) (name: String): Result[Bool, String] = un
 
 // Diagnostics and debug tables must not reopen a discovered logical pathname.
 // Retain capabilities and identity metadata, never another source-text cache.
-struct SourceLocation { root: TreeRoot, relative: String, reject_links: Bool, identity: String }
+struct SourceLocation {
+    root: TreeRoot,
+    relative: String,
+    reject_links: Bool,
+    identity: String
+}
+
 let SOURCE_LOCATIONS: Ref[Array[SourceLocation]] = ref([])
+
 let SOURCE_INDEX: Ref[Map[String, Int]] = ref(empty_source_index(()))
+
 let empty_source_index (): Map[String, Int] = Map.new(())
 
 pub let clear_source_locations (): Unit = {
@@ -251,13 +400,24 @@ pub let clear_source_locations (): Unit = {
     SOURCE_INDEX.set(empty_source_index(()));
 }
 
-pub let remember_source (path: String) (root: TreeRoot) (relative: String) (reject_links: Bool) (identity: String): Unit = {
+pub let remember_source
+    (path: String)
+    (root: TreeRoot)
+    (relative: String)
+    (reject_links: Bool)
+    (identity: String): Unit
+= {
     let locations = SOURCE_LOCATIONS.get();
     SOURCE_LOCATIONS.set([]);
     let index = SOURCE_INDEX.get();
     SOURCE_INDEX.set(empty_source_index(()));
     SOURCE_INDEX.set(index.insert(path, locations.len()));
-    SOURCE_LOCATIONS.set(locations.push(SourceLocation { root: root, relative: relative, reject_links: reject_links, identity: identity }));
+    SOURCE_LOCATIONS.set(locations.push(SourceLocation {
+        root: root,
+        relative: relative,
+        reject_links: reject_links,
+        identity: identity
+    }));
 }
 
 pub let read_source (path: String): Result[String, String] =
@@ -278,8 +438,10 @@ pub let source_hash (path: String): Result[String, String] =
             let source = SOURCE_LOCATIONS.get()[i];
             match open_entry(source.root, source.relative, source.reject_links) {
                 Err(e) => Err(e),
-                Ok(entry) => if identity(entry) != source.identity { Err("source identity changed: ${path}") }
-                    else { file_hash(entry, source.relative, 2) },
+                Ok(entry) => if identity(entry) != source.identity {
+                    Err("source identity changed: ${path}")
+                }
+                else { file_hash(entry, source.relative, 2) },
             }
         },
     }

@@ -5,7 +5,9 @@
 // same handle, and a reused file descriptor number is not the same
 // file. Neither answer is right, so there is no answer.
 extern "C" { fn fake_open() -> Int; fn fake_close(h: Int); }
+
 handle Res { on_drop: fake_close }
+
 let main (): Unit = {
     let a = unsafe { Res.from_raw(fake_open()) };
     let b = unsafe { Res.from_raw(fake_open()) };

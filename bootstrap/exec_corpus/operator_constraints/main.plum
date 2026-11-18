@@ -1,7 +1,10 @@
 // Global closures must have concrete signatures before any call constrains them.
 let global_both = |a, b| a && b
+
 let global_either = |a, b| a || b
+
 let global_invert = |x| !x
+
 let global_flip = |x| ~x
 
 let probe (events: Ref[Int]) (answer: Bool): Bool = {

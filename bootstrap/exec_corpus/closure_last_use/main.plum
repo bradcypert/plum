@@ -1,49 +1,109 @@
 use Memory;
+
 struct Box[T] { value: T }
+
 let consume (s: String): Unit = assert(s.starts_with("a"))
-let live (): Int = match Memory.snapshot() { Some(s) => s.live_bytes, None => -1 }
+
+let live (): Int = match Memory.snapshot() {
+    Some(s) => s.live_bytes,
+    None => -1
+}
+
 let main (): Unit = {
     let release = |s: String| {
-        assert(s.starts_with("a")); consume(s);
-        let bytes = live(); if bytes >= 0 { assert(bytes < 4096); };
+        assert(s.starts_with("a"));
+        consume(s);
+        let bytes = live();
+        if bytes >= 0 {
+            assert(bytes < 4096);
+        };
     };
     release("a".repeat(65536));
     let last_borrow = |s: String| {
         assert(s.starts_with("a"));
-        let bytes = live(); if bytes >= 0 { assert(bytes < 4096); };
+        let bytes = live();
+        if bytes >= 0 {
+            assert(bytes < 4096);
+        };
     };
     last_borrow("a".repeat(65536));
-    let change = |s: String| { assert(s.starts_with("a")); String.reverse(s) };
+    let change = |s: String| {
+        assert(s.starts_with("a"));
+        String.reverse(s)
+    };
     assert_eq(change("abc".repeat(32)), "cba".repeat(32));
     assert_eq(change("abc".repeat(32)), "cba".repeat(32));
-    let source = "abc".repeat(32); let bytes = source.as_bytes(); let view = source.as_cstr();
-    assert_eq(change(source), "cba".repeat(32)); assert_eq(source, "abc".repeat(32));
-    assert_eq(bytes.to_hex(), source.as_bytes().to_hex()); assert_eq(unsafe { view.as_string() }, source);
-    let later = |s: String| { let out = String.reverse(s); assert(s.starts_with("a")); out };
+    let source = "abc".repeat(32);
+    let bytes = source.as_bytes();
+    let view = source.as_cstr();
+    assert_eq(change(source), "cba".repeat(32));
+    assert_eq(source, "abc".repeat(32));
+    assert_eq(bytes.to_hex(), source.as_bytes().to_hex());
+    assert_eq(unsafe { view.as_string() }, source);
+    let later = |s: String| {
+        let out = String.reverse(s);
+        assert(s.starts_with("a"));
+        out
+    };
     assert_eq(later("abc".repeat(32)), "cba".repeat(32));
     let saved = "abc".repeat(32);
-    let capture = || { assert(saved.starts_with("a")); String.reverse(saved) };
-    assert_eq(capture(), "cba".repeat(32)); assert_eq(capture(), "cba".repeat(32)); assert_eq(saved, "abc".repeat(32));
-    let escape = |s: String| { assert(s.starts_with("a")); || String.reverse(s) };
-    let kept = escape("abc".repeat(32)); assert_eq(kept(), "cba".repeat(32)); assert_eq(kept(), "cba".repeat(32));
-    let wrap = |s: Option[String]| { assert_eq(s, Some("abc")); Some(s) };
+    let capture = || {
+        assert(saved.starts_with("a"));
+        String.reverse(saved)
+    };
+    assert_eq(capture(), "cba".repeat(32));
+    assert_eq(capture(), "cba".repeat(32));
+    assert_eq(saved, "abc".repeat(32));
+    let escape = |s: String| {
+        assert(s.starts_with("a"));
+        || String.reverse(s)
+    };
+    let kept = escape("abc".repeat(32));
+    assert_eq(kept(), "cba".repeat(32));
+    assert_eq(kept(), "cba".repeat(32));
+    let wrap = |s: Option[String]| {
+        assert_eq(s, Some("abc"));
+        Some(s)
+    };
     assert_eq(wrap(Some("abc")), Some(Some("abc")));
-    let nest = |b: Box[String]| { assert_eq(b, Box { value: "abc" }); Box { value: b } };
+    let nest = |b: Box[String]| {
+        assert_eq(b, Box { value: "abc" });
+        Box { value: b }
+    };
     assert_eq(nest(Box { value: "abc" }).value.value, "abc");
-    let array = |xs: Array[Int]| { assert_eq(xs.len(), 3); [xs] };
+    let array = |xs: Array[Int]| {
+        assert_eq(xs.len(), 3);
+        [xs]
+    };
     assert_eq(array([1, 2, 3]), [[1, 2, 3]]);
     let branch = |s: String, yes: Bool| {
-        assert(s.starts_with("a")); if yes { String.reverse(s) } else { s.concat("!") }
+        assert(s.starts_with("a"));
+        if yes { String.reverse(s) } else { s.concat("!") }
     };
-    assert_eq(branch("abc", true), "cba"); assert_eq(branch("abc", false), "abc!");
+    assert_eq(branch("abc", true), "cba");
+    assert_eq(branch("abc", false), "abc!");
     let guarded = |s: String| match 0 {
         0 if String.reverse(s) == "never" => "bad",
-        _ => { assert(s.starts_with("a")); String.reverse(s) },
+        _ => {
+            assert(s.starts_with("a"));
+            String.reverse(s)
+        },
     };
-    assert_eq(guarded("abc"), "cba"); assert_eq(guarded("abc"), "cba");
-    let looped = |s: String| { for i in 0..3 { assert(s.starts_with("a")); }; String.reverse(s) };
+    assert_eq(guarded("abc"), "cba");
+    assert_eq(guarded("abc"), "cba");
+    let looped = |s: String| {
+        for i in 0..3 {
+            assert(s.starts_with("a"));
+        };
+        String.reverse(s)
+    };
     assert_eq(looped("abc"), "cba");
-    let rebound = |s: String| { let s = "ab".concat("c"); let out = String.reverse(s); assert_eq(s, "abc"); out };
+    let rebound = |s: String| {
+        let s = "ab".concat("c");
+        let out = String.reverse(s);
+        assert_eq(s, "abc");
+        out
+    };
     assert_eq(rebound("unused"), "cba");
     println("Closure last use: parameters, captures, aliases, constructors and paths")
 }

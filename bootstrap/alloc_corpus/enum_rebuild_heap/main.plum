@@ -10,6 +10,19 @@ enum Label { Empty, Named(String) }
 
 let bump (c: Label) (n: Int): Label =
     if n <= 0 { c }
-    else { bump(match c { Empty => Named("x"), Named(s) => Named(s) }, n - 1) }
+    else {
+        bump(
+            match c {
+                Empty => Named("x"),
+                Named(s) => Named(s)
+            },
+            n - 1
+        )
+    }
 
-let main (): Unit = println(match bump(Empty, 1000) { Empty => "e", Named(s) => s })
+let main (): Unit = println(
+    match bump(Empty, 1000) {
+        Empty => "e",
+        Named(s) => s
+    }
+)

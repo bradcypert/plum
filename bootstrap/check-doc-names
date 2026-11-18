@@ -41,10 +41,11 @@ trap 'rm -rf "$work"' EXIT
 # records fixing IN THE COMPILER: "a hand-maintained second copy of that
 # list... Found when `Encoding` landed and silently did not appear."
 # The harness kept its copy.
-mods="$(grep -oE 'pub let std_module_names \(\): Array\[String\] = \[[^]]*\]' \
-    bootstrap/self_host/parser/parser.plum | grep -oE '"[A-Za-z_]+"' | tr -d '"')"
+# The compiler and this harness consume the same validated metadata, with
+# generated-declaration freshness checked before any names can be omitted.
+mods="$("$PY_BIN" bootstrap/compiler_metadata.py stdlib_modules)" || exit 1
 if [ -z "$mods" ]; then
-    echo "check-doc-names: could not read std_module_names from parser.plum" >&2
+    echo "check-doc-names: no standard-library modules in compiler metadata" >&2
     exit 1
 fi
 : > "$work/main.plum"
@@ -63,8 +64,13 @@ docs="README.md $(awk '/^page /{print $2}' bootstrap/build-site)"
 
 # shellcheck disable=SC2086
 "$PY_BIN" - "$work/names.json" "$mods" $docs <<'PY'
-import re, json, sys
-names = set(x["name"] for x in json.load(open(sys.argv[1])))
+import re, sys
+sys.path.insert(0, "bootstrap")
+from plum_queries import completion_names
+try:
+    names = completion_names(open(sys.argv[1]).read())
+except ValueError as error:
+    sys.exit("check-doc-names: invalid completion output: %s" % error)
 spaces = set(n.split(".")[0] for n in names if "." in n)
 fails = 0
 

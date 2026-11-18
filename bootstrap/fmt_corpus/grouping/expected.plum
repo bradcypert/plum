@@ -1,0 +1,41 @@
+// Wrappers from the Powerlaunch backup manifest stay with their payload.
+let manifest (): Result[String, String] = json_stringify(JsonObject([
+    JsonEntry { key: "format", value: JsonString("powerlaunch-library-backup") },
+    JsonEntry { key: "version", value: JsonNumber(1.0) },
+]))
+
+// A record's fields still get their own lines.
+let boxed (): Result[P, String] = Ok(P {
+    x: 1,
+    y: 2,
+    z: 3
+})
+
+// Callback statements keep their room without a separate wrapper staircase.
+let callback (): Result[Int, String] = Result.and_then(value, |v| {
+    let n = produce(v);
+    Ok(n)
+})
+
+// Nested Result callbacks keep their bodies on their own continuation lines.
+let chain (): R =
+    Result.and_then(library.encode(lib), |json|
+        Result.and_then(library.decode(json), |validated|
+            Result.and_then(
+                manifest(games, covers),
+                |description|
+                    if names.len() > 65532 { Err("Too many artwork files.") }
+                    else { plan_covers(root, names, 0, inputs, c) }
+            )))
+
+// Short argument and type lists have one answer regardless of old line breaks.
+let short (): Int = consume(first, second)
+
+let types (xs: Array[Map[String, Int]]): Int = xs.len()
+
+// Comments at the join keep their original side of that boundary.
+let commented (): Int = consume(
+    // keep first
+    first,
+    second // keep second
+)

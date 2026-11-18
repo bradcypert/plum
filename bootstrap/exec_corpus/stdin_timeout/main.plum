@@ -31,7 +31,12 @@ let show_line (r: Result[Os.Input[String], String]): String = match r {
 
 let show_bytes (r: Result[Os.Input[Bytes], String]): String = match r {
     Ok(Got(b)) => "got:".concat(b.len().to_string()).concat("[")
-        .concat(match b.as_string() { Ok(s) => s, Err(_) => "?" }).concat("]"),
+        .concat(
+            match b.as_string() {
+                Ok(s) => s,
+                Err(_) => "?"
+            }
+        ).concat("]"),
     Ok(Eof) => "eof",
     Ok(TimedOut) => "timeout",
     Err(e) => "ERR ".concat(e),
@@ -43,10 +48,12 @@ let budget (): Time.Duration = Time.seconds(1)
 
 let empty_reads (): Unit = {
     for max_len in [0, -1, 0 - 9223372036854775807 - 1] {
-        println(match Os.read_stdin(max_len) {
-            Ok(b) => b.len() == 0,
-            Err(_) => false,
-        });
+        println(
+            match Os.read_stdin(max_len) {
+                Ok(b) => b.len() == 0,
+                Err(_) => false,
+            }
+        );
         for nanos in [0, -1, 9223372036854775807] {
             println(show_bytes(Os.read_stdin_timeout(max_len, Time.nanos(nanos))));
         };
@@ -86,7 +93,10 @@ let child (argv: Array[String]): Unit =
 
 let run_self (self: String) (mode: String) (input: String): Unit =
     match Process.run(Process.Options {
-        program: self, args: [mode], env: [], stdin: Some(input),
+        program: self,
+        args: [mode],
+        env: [],
+        stdin: Some(input),
     }) {
         Err(e) => println("ERR ".concat(e)),
         Ok(res) => print(res.stdout),

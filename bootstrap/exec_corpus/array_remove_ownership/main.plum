@@ -1,6 +1,9 @@
 use Memory;
+
 struct Box { text: String }
+
 enum Item { Empty, Text(String) }
+
 extern "C" {
     fn remove_close(n: Int) -> Unit;
     fn remove_count() -> Int;
@@ -8,90 +11,198 @@ extern "C" {
     fn remove_pattern(i: Int) -> Float;
     fn remove_bits(n: Float) -> Int;
 }
+
 handle Resource { on_drop: remove_close }
+
 let make (n: Int): Resource = unsafe { Resource.from_raw(n) }
-let captured (n: Int): () -> Int = { let owner = make(n); || unsafe { owner.raw() } }
+
+let captured (n: Int): () -> Int = {
+    let owner = make(n);
+    || unsafe { owner.raw() }
+}
+
 let ints (n: Int): Array[Int] = [n, n + 1, n + 2, n + 3]
+
 let text (n: Int): String = n.to_string().repeat(32)
-let live (): Int = match Memory.snapshot() { Some(s) => s.live_bytes, None => -1 }
+
+let live (): Int = match Memory.snapshot() {
+    Some(s) => s.live_bytes,
+    None => -1
+}
+
 let order (offset: Int) (expected: Array[Int]): Unit = {
     assert_eq(unsafe { remove_count() }, offset + expected.len());
-    for i in 0..expected.len() { assert_eq(unsafe { remove_at(offset + i) }, expected[i]); }
+    for i in 0..expected.len() {
+        assert_eq(unsafe { remove_at(offset + i) }, expected[i]);
+    }
 }
+
 let scoped (): Unit = {
-    let owners = [make(1), make(2)]; let marker = make(3);
+    let owners = [make(1), make(2)];
+    let marker = make(3);
     let out = owners.remove(0);
-    assert_eq(unsafe { out[0].raw() }, 2); assert_eq(unsafe { remove_count() }, 0);
+    assert_eq(unsafe { out[0].raw() }, 2);
+    assert_eq(unsafe { remove_count() }, 0);
 }
+
 let assigned (): Unit = {
-    let mut xs = [captured(4), captured(5)]; let marker = make(6);
+    let mut xs = [captured(4), captured(5)];
+    let marker = make(6);
     xs = xs.remove(0);
-    order(3, [4]); assert_eq(xs[0](), 5);
+    order(3, [4]);
+    assert_eq(xs[0](), 5);
 }
+
 let discarded (): Unit = {
-    let xs = [captured(7), captured(8)]; let marker = make(9);
-    xs.remove(0); assert_eq(unsafe { remove_count() }, 6);
+    let xs = [captured(7), captured(8)];
+    let marker = make(9);
+    xs.remove(0);
+    assert_eq(unsafe { remove_count() }, 6);
 }
+
 let remove[T] (xs: Array[T]) (i: Int): Array[T] = xs.remove(i)
+
 let temporary (): Unit = {
-    let marker = make(12); let out = [captured(10), captured(11)].remove(0);
-    order(9, [10]); assert_eq(out[0](), 11);
+    let marker = make(12);
+    let out = [captured(10), captured(11)].remove(0);
+    order(9, [10]);
+    assert_eq(out[0](), 11);
 }
+
 let singleton (): Unit = {
-    let marker = make(14); let out = [captured(13)].remove(0);
-    order(12, [13]); assert_eq(out.len(), 0);
+    let marker = make(14);
+    let out = [captured(13)].remove(0);
+    order(12, [13]);
+    assert_eq(out.len(), 0);
 }
+
 let drain[T] (xs: Array[T]): Array[T] =
     if xs.len() == 0 { xs } else { drain(xs.remove(xs.len() - 1)) }
+
 let memory_round (): Unit = {
-    let shared = ints(0); let before = live(); let result = shared.remove(1);
-    if before >= 0 { assert_eq(live() - before, 40); };
-    assert_eq(shared, [0, 1, 2, 3]); assert_eq(result, [0, 2, 3]);
-    let mut unique = ints(10); let before = live(); unique = unique.remove(2);
-    if before >= 0 { assert_eq(live(), before); };
+    let shared = ints(0);
+    let before = live();
+    let result = shared.remove(1);
+    if before >= 0 {
+        assert_eq(live() - before, 40);
+    };
+    assert_eq(shared, [0, 1, 2, 3]);
+    assert_eq(result, [0, 2, 3]);
+    let mut unique = ints(10);
+    let before = live();
+    unique = unique.remove(2);
+    if before >= 0 {
+        assert_eq(live(), before);
+    };
     assert_eq(unique, [10, 11, 13]);
     assert_eq(drain(ints(0)), []);
 }
+
 let main (): Unit = {
-    let baseline = live(); memory_round();
-    if baseline >= 0 { assert_eq(live(), baseline); };
+    let baseline = live();
+    memory_round();
+    if baseline >= 0 {
+        assert_eq(live(), baseline);
+    };
     assert_eq(ints(1).remove(0), [2, 3, 4]);
     assert_eq(Array.remove(ints(1), 3), [1, 2, 3]);
-    assert_eq([99].remove(0), []); assert_eq([text(1)].remove(0), []);
+    assert_eq([99].remove(0), []);
+    assert_eq([text(1)].remove(0), []);
     assert_eq([true, false, true].remove(1), [true, true]);
     assert_eq([(), (), ()].remove(1), [(), ()]);
-    let bytes: Array[U8] = [0, 255, 128]; assert_eq(bytes.remove(1), [0, 128]);
+    let bytes: Array[U8] = [0, 255, 128];
+    assert_eq(bytes.remove(1), [0, 128]);
     let wide: Array[U64] = [18446744073709551615, 0, 9223372036854775808];
     assert_eq(wide.remove(1), [18446744073709551615, 9223372036854775808]);
-    let floats = [unsafe { remove_pattern(0) }, unsafe { remove_pattern(1) }, unsafe { remove_pattern(2) }, unsafe { remove_pattern(3) }].remove(1);
-    for i in 0..3 { assert_eq(unsafe { remove_bits(floats[i]) }, unsafe { remove_bits(remove_pattern(if i == 0 { 0 } else { i + 1 })) }); };
-    let mut state = ints(10); let original = state;
-    for i in 0..4 { state = state.remove(0); assert_eq(state.len(), 3 - i); };
+    let floats = [
+        unsafe { remove_pattern(0) },
+        unsafe { remove_pattern(1) },
+        unsafe { remove_pattern(2) },
+        unsafe { remove_pattern(3) }
+    ].remove(1);
+    for i in 0..3 {
+        assert_eq(
+            unsafe { remove_bits(floats[i]) },
+            unsafe { remove_bits(remove_pattern(if i == 0 { 0 } else { i + 1 })) }
+        );
+    };
+    let mut state = ints(10);
+    let original = state;
+    for i in 0..4 {
+        state = state.remove(0);
+        assert_eq(state.len(), 3 - i);
+    };
     assert_eq(original, ints(10));
-    let mut versions: Array[Array[Int]] = []; let mut xs = "x".repeat(128).as_bytes().to_array();
-    for i in 0..128 { versions = versions.push(xs); xs = xs.remove(i % xs.len()); };
-    for n in 0..128 { assert_eq(versions[n].len(), 128 - n); for x in versions[n] { assert_eq(x, 120); }; };
+    let mut versions: Array[Array[Int]] = [];
+    let mut xs = "x".repeat(128).as_bytes().to_array();
+    for i in 0..128 {
+        versions = versions.push(xs);
+        xs = xs.remove(i % xs.len());
+    };
+    for n in 0..128 {
+        assert_eq(versions[n].len(), 128 - n);
+        for x in versions[n] {
+            assert_eq(x, 120);
+        };
+    };
     assert_eq(xs, []);
     let mut source = ints(20);
-    let out = source.remove({ source = ints(30); 1 });
-    assert_eq(out, [20, 22, 23]); assert_eq(source, ints(30));
-    let published = ref(ints(0)); let receiver = ints(40);
-    let out = receiver.remove({ published.set(receiver); 2 });
-    assert_eq(out, [40, 41, 43]); assert_eq(published.get(), ints(40));
-    let first = text(1); let second = text(2); let bytes = first.as_bytes(); let view = first.as_cstr();
-    let mut strings = [first, first, second]; strings = strings.remove(0); strings = strings.remove(1);
-    assert_eq(strings, [first]); assert_eq(bytes.to_hex(), first.as_bytes().to_hex()); assert_eq(unsafe { view.as_string() }, first);
-    let nested = [ints(0), ints(10)].remove(0); assert_eq(nested[0], ints(10));
-    let boxes = [Box { text: first }, Box { text: second }].remove(0); assert_eq(boxes[0].text, second);
+    let out = source.remove({
+        source = ints(30);
+        1
+    });
+    assert_eq(out, [20, 22, 23]);
+    assert_eq(source, ints(30));
+    let published = ref(ints(0));
+    let receiver = ints(40);
+    let out = receiver.remove({
+        published.set(receiver);
+        2
+    });
+    assert_eq(out, [40, 41, 43]);
+    assert_eq(published.get(), ints(40));
+    let first = text(1);
+    let second = text(2);
+    let bytes = first.as_bytes();
+    let view = first.as_cstr();
+    let mut strings = [first, first, second];
+    strings = strings.remove(0);
+    strings = strings.remove(1);
+    assert_eq(strings, [first]);
+    assert_eq(bytes.to_hex(), first.as_bytes().to_hex());
+    assert_eq(unsafe { view.as_string() }, first);
+    let nested = [ints(0), ints(10)].remove(0);
+    assert_eq(nested[0], ints(10));
+    let boxes = [Box { text: first }, Box { text: second }].remove(0);
+    assert_eq(boxes[0].text, second);
     assert_eq([Text(first), Empty, Text(second)].remove(1), [Text(first), Text(second)]);
-    let refs = [ref(first), ref(second)].remove(0); assert_eq(refs[0].get(), second);
-    let pairs = [(first, 1), (second, 2)].remove(0); let (s, n) = pairs[0]; assert_eq(s, second); assert_eq(n, 2);
-    let views = [first.as_cstr(), second.as_cstr()].remove(0); assert_eq(unsafe { views[0].as_string() }, second);
+    let refs = [ref(first), ref(second)].remove(0);
+    assert_eq(refs[0].get(), second);
+    let pairs = [(first, 1), (second, 2)].remove(0);
+    let (s, n) = pairs[0];
+    assert_eq(s, second);
+    assert_eq(n, 2);
+    let views = [first.as_cstr(), second.as_cstr()].remove(0);
+    assert_eq(unsafe { views[0].as_string() }, second);
     let f: (Array[Int], Int) -> Array[Int] = remove;
     assert_eq(f(ints(10), 1), [10, 12, 13]);
-    let partial = remove(ints(10)); assert_eq(partial(2), [10, 11, 13]);
-    let shared = [first, second]; let left = spawn { shared.remove(0) }; let right = spawn { shared.remove(1) };
-    assert_eq(left.join(), [second]); assert_eq(right.join(), [first]); assert_eq(shared, [first, second]);
-    scoped(); order(0, [3, 1, 2]); assigned(); order(3, [4, 6, 5]); discarded(); order(6, [9, 7, 8]); temporary(); order(9, [10, 11, 12]); singleton(); order(12, [13, 14]);
+    let partial = remove(ints(10));
+    assert_eq(partial(2), [10, 11, 13]);
+    let shared = [first, second];
+    let left = spawn { shared.remove(0) };
+    let right = spawn { shared.remove(1) };
+    assert_eq(left.join(), [second]);
+    assert_eq(right.join(), [first]);
+    assert_eq(shared, [first, second]);
+    scoped();
+    order(0, [3, 1, 2]);
+    assigned();
+    order(3, [4, 6, 5]);
+    discarded();
+    order(6, [9, 7, 8]);
+    temporary();
+    order(9, [10, 11, 12]);
+    singleton();
+    order(12, [13, 14]);
     println("Array.remove: consuming reuse, exact shared copies, scalar bits and scoped owners")
 }

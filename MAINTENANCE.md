@@ -71,7 +71,7 @@ advice used to describe.
 | `cross-check` | every C shim compiles, and the compiler links, for macOS arm64/x86_64 and Windows | 4s |
 | `platform-smoke` | a compiler *binary* builds and runs every execution fixture on the machine it is sitting on, plus timed stdin reads over a real PIPE — the one path a corpus fixture cannot reach, since `Process.run` feeds a child from a file | 119s |
 | `example-sweep` | every `examples/` project matches its recorded output | 13s |
-| `fmt-check` | every repo file is already formatted, `fmt` touches only leading whitespace, and `fmt_corpus` reformats as recorded | 27s |
+| `fmt-check` | repository sources are formatted (position-sensitive inputs excluded), tokens are preserved, formatting is idempotent, and `fmt_corpus` reformats as recorded | 27s |
 | `lossless-check` | every `.plum` file survives a round trip through the token stream, and nothing but trivia sits between tokens -- the floor a formatter stands on | 7s |
 | `bootstrap-check` | the compiler compiled by itself is the same compiler | 93s |
 | `check-seed` | the checked-in seed still bootstraps to today's compiler | 136s |

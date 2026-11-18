@@ -21,7 +21,9 @@ pub let cg_lines (lines: Array[String]): String =
     Array.concat_all(cg_newline_terminate(lines, 0, []))
 
 let cg_newline_terminate (lines: Array[String]) (i: Int) (acc: Array[String]): Array[String] =
-    if i >= lines.len() { acc } else { cg_newline_terminate(lines, i + 1, acc.push(lines[i]).push("\n")) }
+    if i >= lines.len() { acc } else {
+        cg_newline_terminate(lines, i + 1, acc.push(lines[i]).push("\n"))
+    }
 
 // The self-referential tail of `@plum_pat_safe` -- `n` copies of
 // `ptr @plum_pat_safe`, comma-separated. A global is allowed to name
@@ -29,7 +31,12 @@ let cg_newline_terminate (lines: Array[String]) (i: Int) (acc: Array[String]): A
 // stand in for a payload chain of unbounded depth.
 let cg_pat_safe_words (n: Int) (acc: String): String =
     if n <= 0 { acc }
-    else { cg_pat_safe_words(n - 1, if acc == "" { "ptr @plum_pat_safe" } else { acc.concat(", ptr @plum_pat_safe") }) }
+    else {
+        cg_pat_safe_words(
+            n - 1,
+            if acc == "" { "ptr @plum_pat_safe" } else { acc.concat(", ptr @plum_pat_safe") }
+        )
+    }
 
 // Immortal one-byte ASCII cells use the ordinary String header/NUL layout.
 // Keep the LLVM declaration on one line for freestanding symbol selection.
@@ -38,7 +45,9 @@ let cg_ascii_cells (): String = {
     for i in 0..128 {
         cells = cells.push("{ i64, i64, [2 x i8] } { i64 -1, i64 1, [2 x i8] [i8 ${i}, i8 0] }");
     };
-    "@.plum_ascii_cells = private constant [128 x { i64, i64, [2 x i8] }] [".concat(Array.join(cells, ", ")).concat("], align 8")
+    "@.plum_ascii_cells = private constant [128 x { i64, i64, [2 x i8] }] [".concat(
+        Array.join(cells, ", ")
+    ).concat("], align 8")
 }
 
 pub let cg_runtime (heap: Bool): String = cg_lines([
@@ -112,7 +121,9 @@ pub let cg_runtime (heap: Bool): String = cg_lines([
     "declare i32 @memcmp(ptr, ptr, i64)",
     "declare void @exit(i32)",
     "declare void @free(ptr)",
-    if heap { "declare ptr @plum_heap_alloc(i64)\ndeclare ptr @plum_heap_alloc_origin(i64, i64)\ndeclare void @plum_heap_free(ptr)\ndeclare void @plum_heap_adopt_origin(ptr, i64, i64)" } else { "" },
+    if heap {
+        "declare ptr @plum_heap_alloc(i64)\ndeclare ptr @plum_heap_alloc_origin(i64, i64)\ndeclare void @plum_heap_free(ptr)\ndeclare void @plum_heap_adopt_origin(ptr, i64, i64)"
+    } else { "" },
     "declare i64 @malloc_usable_size(ptr)",
     "declare ptr @getenv(ptr)",
     "declare i32 @dprintf(i32, ptr, ...)",
@@ -267,7 +278,9 @@ pub let cg_runtime (heap: Bool): String = cg_lines([
     // in bounds rather than needing a fixed number of levels. Writable,
     // not `constant`: a stray increment through it must corrupt a dead
     // word, not fault on a read-only page.
-    "@plum_pat_safe = internal global [16 x ptr] [ptr null, ptr null, ".concat(cg_pat_safe_words(14, "")).concat("]"),
+    "@plum_pat_safe = internal global [16 x ptr] [ptr null, ptr null, ".concat(
+        cg_pat_safe_words(14, "")
+    ).concat("]"),
     "",
     "; The one allocation point. Every cell begins with a reference",
     "; count, initialised to 1: the caller owns the result. Generated",
@@ -300,17 +313,20 @@ pub let cg_runtime (heap: Bool): String = cg_lines([
     "entry:",
     "  %pn = atomicrmw add ptr @plum_n_alloc, i64 1 monotonic",
     "  %pb = atomicrmw add ptr @plum_b_alloc, i64 %size monotonic",
-    "  %cell = call ptr @".concat(if heap { "plum_heap_alloc" } else { "malloc" }).concat("(i64 %size)"),
+    "  %cell = call ptr @".concat(if heap { "plum_heap_alloc" } else { "malloc" })
+        .concat("(i64 %size)"),
     "  store i64 1, ptr %cell",
     "  ret ptr %cell",
     "}",
-    if heap { Array.concat_all([
-        "\ndefine ptr @plum_alloc_origin(i64 %size, i64 %origin) {\n",
-        "entry:\n  %pn = atomicrmw add ptr @plum_n_alloc, i64 1 monotonic\n",
-        "  %pb = atomicrmw add ptr @plum_b_alloc, i64 %size monotonic\n",
-        "  %cell = call ptr @plum_heap_alloc_origin(i64 %size, i64 %origin)\n",
-        "  store i64 1, ptr %cell\n  ret ptr %cell\n}\n",
-    ]) } else { "" },
+    if heap {
+        Array.concat_all([
+            "\ndefine ptr @plum_alloc_origin(i64 %size, i64 %origin) {\n",
+            "entry:\n  %pn = atomicrmw add ptr @plum_n_alloc, i64 1 monotonic\n",
+            "  %pb = atomicrmw add ptr @plum_b_alloc, i64 %size monotonic\n",
+            "  %cell = call ptr @plum_heap_alloc_origin(i64 %size, i64 %origin)\n",
+            "  store i64 1, ptr %cell\n  ret ptr %cell\n}\n",
+        ])
+    } else { "" },
     "",
     "; Only successful cells count. Optional reserve failure retries the minimum.",
     "@.plum_concat_size_error = private constant [41 x i8] c\"Plum String: invalid concatenation size\\0A\\00\"",
@@ -340,7 +356,9 @@ pub let cg_runtime (heap: Bool): String = cg_lines([
     "ready:",
     "  %cell = phi ptr [ %first, %first_ok ], [ %minimum, %minimum_ready ]",
     "  %size = phi i64 [ %preferred, %first_ok ], [ %required, %minimum_ready ]",
-    if heap { "  call void @plum_heap_adopt_origin(ptr %cell, i64 %size, i64 %origin)" } else { "" },
+    if heap { "  call void @plum_heap_adopt_origin(ptr %cell, i64 %size, i64 %origin)" } else {
+        ""
+    },
     "  %pn = atomicrmw add ptr @plum_n_alloc, i64 1 monotonic",
     "  %pb = atomicrmw add ptr @plum_b_alloc, i64 %size monotonic",
     "  store i64 1, ptr %cell",
@@ -607,7 +625,9 @@ pub let cg_runtime (heap: Bool): String = cg_lines([
     "  %slp = getelementptr i8, ptr %sep, i64 8",
     "  %sl = load i64, ptr %slp",
     "  %size = add i64 %total, 17",
-    "  %cell = call ptr @plum_alloc_preferred(i64 %size, i64 %size, i64 ".concat(cg_origin_bytes(()).to_string()).concat(")"),
+    "  %cell = call ptr @plum_alloc_preferred(i64 %size, i64 %size, i64 ".concat(
+        cg_origin_bytes(()).to_string()
+    ).concat(")"),
     "  %sn = atomicrmw add ptr @plum_n_str, i64 1 monotonic",
     "  %outlp = getelementptr i8, ptr %cell, i64 8",
     "  store i64 %total, ptr %outlp",
@@ -726,7 +746,9 @@ pub let cg_runtime (heap: Bool): String = cg_lines([
     "  ret ptr %s",
     "allocate:",
     "  %size = add i64 %total, 17",
-    "  %cell = call ptr @plum_alloc_preferred(i64 %size, i64 %size, i64 ".concat(cg_origin_bytes(()).to_string()).concat(")"),
+    "  %cell = call ptr @plum_alloc_preferred(i64 %size, i64 %size, i64 ".concat(
+        cg_origin_bytes(()).to_string()
+    ).concat(")"),
     "  %sn = atomicrmw add ptr @plum_n_str, i64 1 monotonic",
     "  %outlp = getelementptr i8, ptr %cell, i64 8",
     "  store i64 %total, ptr %outlp",
@@ -798,7 +820,9 @@ pub let cg_runtime (heap: Bool): String = cg_lines([
     "inplace:",
     "  br label %write",
     "allocate:",
-    "  %fresh = call ptr @plum_alloc_preferred(i64 %required, i64 %required, i64 ".concat(cg_origin_bytes(()).to_string()).concat(")"),
+    "  %fresh = call ptr @plum_alloc_preferred(i64 %required, i64 %required, i64 ".concat(
+        cg_origin_bytes(()).to_string()
+    ).concat(")"),
     "  %sn = atomicrmw add ptr @plum_n_str, i64 1 monotonic",
     "  br label %write",
     "write:",
@@ -841,7 +865,9 @@ pub let cg_runtime (heap: Bool): String = cg_lines([
     "  ret ptr @.plum_str_empty",
     "allocate:",
     "  %size = add i64 %length, 17",
-    "  %cell = call ptr @plum_alloc_preferred(i64 %size, i64 %size, i64 ".concat(cg_origin_bytes(()).to_string()).concat(")"),
+    "  %cell = call ptr @plum_alloc_preferred(i64 %size, i64 %size, i64 ".concat(
+        cg_origin_bytes(()).to_string()
+    ).concat(")"),
     "  %sn = atomicrmw add ptr @plum_n_str, i64 1 monotonic",
     "  %outlp = getelementptr i8, ptr %cell, i64 8",
     "  store i64 %length, ptr %outlp",
@@ -946,7 +972,9 @@ pub let cg_runtime (heap: Bool): String = cg_lines([
     "  ret ptr %bytes",
     "allocate:",
     "  %size = add i64 %total, 17",
-    "  %cell = call ptr @plum_alloc_preferred(i64 %size, i64 %size, i64 ".concat(cg_origin_bytes(()).to_string()).concat(")"),
+    "  %cell = call ptr @plum_alloc_preferred(i64 %size, i64 %size, i64 ".concat(
+        cg_origin_bytes(()).to_string()
+    ).concat(")"),
     "  %sn = atomicrmw add ptr @plum_n_str, i64 1 monotonic",
     "  %outlp = getelementptr i8, ptr %cell, i64 8",
     "  store i64 %total, ptr %outlp",
@@ -1038,7 +1066,9 @@ pub let cg_runtime (heap: Bool): String = cg_lines([
     "  ret ptr @.plum_str_empty",
     "allocate:",
     "  %size = add i64 %total, 17",
-    "  %cell = call ptr @plum_alloc_preferred(i64 %size, i64 %size, i64 ".concat(cg_origin_bytes(()).to_string()).concat(")"),
+    "  %cell = call ptr @plum_alloc_preferred(i64 %size, i64 %size, i64 ".concat(
+        cg_origin_bytes(()).to_string()
+    ).concat(")"),
     "  %sn = atomicrmw add ptr @plum_n_str, i64 1 monotonic",
     "  %outlp = getelementptr i8, ptr %cell, i64 8",
     "  store i64 %total, ptr %outlp",
@@ -1104,7 +1134,9 @@ pub let cg_runtime (heap: Bool): String = cg_lines([
     "  ret ptr %bytes",
     "allocate:",
     "  %size = add i64 %total, 17",
-    "  %cell = call ptr @plum_alloc_preferred(i64 %size, i64 %size, i64 ".concat(cg_origin_bytes(()).to_string()).concat(")"),
+    "  %cell = call ptr @plum_alloc_preferred(i64 %size, i64 %size, i64 ".concat(
+        cg_origin_bytes(()).to_string()
+    ).concat(")"),
     "  %sn = atomicrmw add ptr @plum_n_str, i64 1 monotonic",
     "  %outlp = getelementptr i8, ptr %cell, i64 8",
     "  store i64 %total, ptr %outlp",
@@ -1257,7 +1289,9 @@ pub let cg_runtime (heap: Bool): String = cg_lines([
     "  ret ptr @.plum_str_empty",
     "allocate:",
     "  %size = add i64 %total, 17",
-    "  %cell = call ptr @plum_alloc_preferred(i64 %size, i64 %size, i64 ".concat(cg_origin_bytes(()).to_string()).concat(")"),
+    "  %cell = call ptr @plum_alloc_preferred(i64 %size, i64 %size, i64 ".concat(
+        cg_origin_bytes(()).to_string()
+    ).concat(")"),
     "  %sn = atomicrmw add ptr @plum_n_str, i64 1 monotonic",
     "  %outlp = getelementptr i8, ptr %cell, i64 8",
     "  store i64 %total, ptr %outlp",
@@ -1371,7 +1405,9 @@ pub let cg_runtime (heap: Bool): String = cg_lines([
     "  ret ptr @.plum_str_empty",
     "allocate:",
     "  %size = add i64 %total, 17",
-    "  %cell = call ptr @plum_alloc_preferred(i64 %size, i64 %size, i64 ".concat(cg_origin_bytes(()).to_string()).concat(")"),
+    "  %cell = call ptr @plum_alloc_preferred(i64 %size, i64 %size, i64 ".concat(
+        cg_origin_bytes(()).to_string()
+    ).concat(")"),
     "  %sn = atomicrmw add ptr @plum_n_str, i64 1 monotonic",
     "  %lp = getelementptr i8, ptr %cell, i64 8",
     "  store i64 %total, ptr %lp",
@@ -1444,7 +1480,9 @@ pub let cg_runtime (heap: Bool): String = cg_lines([
     "entry:",
     "  %cn = atomicrmw add ptr @plum_n_concat, i64 1 monotonic",
     "  %required = add i64 %length, 17",
-    "  %cell = call ptr @plum_alloc_preferred(i64 %required, i64 %preferred, i64 ".concat(cg_origin_bytes(()).to_string()).concat(")"),
+    "  %cell = call ptr @plum_alloc_preferred(i64 %required, i64 %preferred, i64 ".concat(
+        cg_origin_bytes(()).to_string()
+    ).concat(")"),
     "  %lp = getelementptr i8, ptr %cell, i64 8",
     "  store i64 %length, ptr %lp",
     "  %data = getelementptr i8, ptr %cell, i64 16",
@@ -1664,7 +1702,9 @@ pub let cg_runtime (heap: Bool): String = cg_lines([
     "zero:",
     "  ret ptr @.plum_barray_empty",
     "allocate:",
-    "  %cell = call ptr @plum_alloc_preferred_or_fail(i64 %request, i64 %request, i64 ".concat(cg_origin_array(()).to_string()).concat(", ptr @.plum_barray_alloc_error, i64 42)"),
+    "  %cell = call ptr @plum_alloc_preferred_or_fail(i64 %request, i64 %request, i64 ".concat(
+        cg_origin_array(()).to_string()
+    ).concat(", ptr @.plum_barray_alloc_error, i64 42)"),
     "  %an = atomicrmw add ptr @plum_n_array, i64 1 monotonic",
     "  %lp = getelementptr i8, ptr %cell, i64 8",
     "  store i64 %n, ptr %lp",
@@ -1732,7 +1772,9 @@ pub let cg_runtime (heap: Bool): String = cg_lines([
     "  %mask = select i1 %hex, i64 15, i64 1",
     "  %last = sub i64 %len, 1",
     "  %request = add i64 %len, 17",
-    "  %cell = call ptr @plum_alloc_preferred(i64 %request, i64 %request, i64 ".concat(cg_origin_bytes(()).to_string()).concat(")"),
+    "  %cell = call ptr @plum_alloc_preferred(i64 %request, i64 %request, i64 ".concat(
+        cg_origin_bytes(()).to_string()
+    ).concat(")"),
     "  %sn = atomicrmw add ptr @plum_n_str, i64 1 monotonic",
     "  %lenp = getelementptr i8, ptr %cell, i64 8",
     "  store i64 %len, ptr %lenp",
@@ -2164,7 +2206,9 @@ pub let cg_runtime (heap: Bool): String = cg_lines([
     "  br label %copy",
     "copy:",
     "  %preferred = phi i64 [ %required, %shared ], [ %preferred_bytes, %grow ]",
-    "  %out = call ptr @plum_alloc_preferred_or_fail(i64 %required, i64 %preferred, i64 ".concat(cg_origin_array(()).to_string()).concat(", ptr @.plum_aconcat_alloc_error, i64 50)"),
+    "  %out = call ptr @plum_alloc_preferred_or_fail(i64 %required, i64 %preferred, i64 ".concat(
+        cg_origin_array(()).to_string()
+    ).concat(", ptr @.plum_aconcat_alloc_error, i64 50)"),
     "  %an = atomicrmw add ptr @plum_n_array, i64 1 monotonic",
     "  %out_len = getelementptr i8, ptr %out, i64 8",
     "  store i64 %total, ptr %out_len",
@@ -2248,7 +2292,9 @@ pub let cg_runtime (heap: Bool): String = cg_lines([
     "  %cap = select i1 %reserve, i64 %growth, i64 %newlen",
     "  %preferred_data = mul i64 %cap, 8",
     "  %preferred = add i64 %preferred_data, 16",
-    "  %out = call ptr @plum_alloc_preferred_or_fail(i64 %required, i64 %preferred, i64 ".concat(cg_origin_array(()).to_string()).concat(", ptr @.plum_apush_alloc_error, i64 43)"),
+    "  %out = call ptr @plum_alloc_preferred_or_fail(i64 %required, i64 %preferred, i64 ".concat(
+        cg_origin_array(()).to_string()
+    ).concat(", ptr @.plum_apush_alloc_error, i64 43)"),
     "  %an = atomicrmw add ptr @plum_n_array, i64 1 monotonic",
     "  %out_len = getelementptr i8, ptr %out, i64 8",
     "  store i64 %newlen, ptr %out_len",
@@ -2440,7 +2486,9 @@ pub let cg_runtime (heap: Bool): String = cg_lines([
     "  ret ptr %s",
     "allocate:",
     "  %request = add i64 %n, 17",
-    "  %cell = call ptr @plum_alloc_preferred(i64 %request, i64 %request, i64 ".concat(cg_origin_bytes(()).to_string()).concat(")"),
+    "  %cell = call ptr @plum_alloc_preferred(i64 %request, i64 %request, i64 ".concat(
+        cg_origin_bytes(()).to_string()
+    ).concat(")"),
     "  %sn = atomicrmw add ptr @plum_n_str, i64 1 monotonic",
     "  %out_lenp = getelementptr i8, ptr %cell, i64 8",
     "  store i64 %n, ptr %out_lenp",
@@ -3204,7 +3252,8 @@ pub let cg_runtime (heap: Bool): String = cg_lines([
     "  ret i64 %r",
     "}",
     "",
-    "", "; The shim returns a NUL-terminated C string in a STATIC buffer, so",
+    "",
+    "; The shim returns a NUL-terminated C string in a STATIC buffer, so",
     "; this must copy it into a Plum cell before anything else can call",
     "; back in. Empty means failure -- see `os_shim.c` on why a null",
     "; return is not an option here. The `ignored` parameter mirrors",
@@ -3838,7 +3887,9 @@ pub let cg_runtime (heap: Bool): String = cg_lines([
     "  ret ptr @.plum_str_empty",
     "allocate:",
     "  %request = add i64 %total, 17",
-    "  %cell = call ptr @plum_alloc_preferred(i64 %request, i64 %request, i64 ".concat(cg_origin_bytes(()).to_string()).concat(")"),
+    "  %cell = call ptr @plum_alloc_preferred(i64 %request, i64 %request, i64 ".concat(
+        cg_origin_bytes(()).to_string()
+    ).concat(")"),
     "  %sn = atomicrmw add ptr @plum_n_str, i64 1 monotonic",
     "  %lp = getelementptr i8, ptr %cell, i64 8",
     "  store i64 %total, ptr %lp",
@@ -3952,7 +4003,9 @@ pub let cg_runtime (heap: Bool): String = cg_lines([
     "  ret ptr %s",
     "allocate:",
     "  %request = add i64 %total, 17",
-    "  %cell = call ptr @plum_alloc_preferred(i64 %request, i64 %request, i64 ".concat(cg_origin_bytes(()).to_string()).concat(")"),
+    "  %cell = call ptr @plum_alloc_preferred(i64 %request, i64 %request, i64 ".concat(
+        cg_origin_bytes(()).to_string()
+    ).concat(")"),
     "  %sn = atomicrmw add ptr @plum_n_str, i64 1 monotonic",
     "  %out_lenp = getelementptr i8, ptr %cell, i64 8",
     "  store i64 %total, ptr %out_lenp",

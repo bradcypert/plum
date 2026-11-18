@@ -13,4 +13,7 @@ This directory is **outside** `bootstrap/self_host/` so
 | `<Name>.plum` | `codegen/stdlib.plum` (`cg_std_source`) |
 
 A new `use`-gated module still needs its name in
-`parser.std_module_names()`, a `cg_std_source` arm, and a file here.
+`bootstrap/compiler-metadata.json`, a `cg_std_source` arm, and a file here.
+Run `bootstrap/gen-compiler-metadata` after editing the module list. The
+generated compiler declarations and bootstrap tools share that list;
+`parser.std_module_names()` exposes it to the rest of the compiler.

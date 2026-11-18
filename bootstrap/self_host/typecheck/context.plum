@@ -17,11 +17,34 @@ use Os;
 
 // `is_pub` was parsed into `StructFieldNode` and dropped here until
 // 2026-08-27, which is why `pub` on a field did nothing.
-struct StructFieldTemplate { name: String, ty: ITy, is_pub: Bool }
+struct StructFieldTemplate {
+    name: String,
+    ty: ITy,
+    is_pub: Bool
+}
+
 // Names carry the module-qualified identity; visibility belongs to the declaration.
-struct StructInfo { name: String, generics: Array[String], fields: Array[StructFieldTemplate], module: String, is_pub: Bool }
-struct VariantInfo { tag: String, enum_name: String, payload: Array[ITy] }
-struct EnumInfo { name: String, generics: Array[String], variants: Array[VariantInfo], module: String, is_pub: Bool }
+struct StructInfo {
+    name: String,
+    generics: Array[String],
+    fields: Array[StructFieldTemplate],
+    module: String,
+    is_pub: Bool
+}
+
+struct VariantInfo {
+    tag: String,
+    enum_name: String,
+    payload: Array[ITy]
+}
+
+struct EnumInfo {
+    name: String,
+    generics: Array[String],
+    variants: Array[VariantInfo],
+    module: String,
+    is_pub: Bool
+}
 
 // An opaque native handle (issue #9). Registered as a zero-field
 // STRUCT as well, so that every existing path -- name resolution,
@@ -35,13 +58,28 @@ struct EnumInfo { name: String, generics: Array[String], variants: Array[Variant
 // actually ask.
 // Keep the declaration's short name alongside its qualified identity. Both
 // context passes reuse the parsed name; lookup must not split it repeatedly.
-struct HandleInfo { name: String, short_name: String, module: String, is_pub: Bool, on_drop: String }
+struct HandleInfo {
+    name: String,
+    short_name: String,
+    module: String,
+    is_pub: Bool,
+    on_drop: String
+}
 
 let handle_info (decl: parser.HandleDeclNode) (module_name: String) (is_pub: Bool): HandleInfo =
-    HandleInfo { name: parser.qualify_type(module_name, decl.name), short_name: decl.name,
-        module: module_name, is_pub: is_pub, on_drop: decl.on_drop }
+    HandleInfo {
+        name: parser.qualify_type(module_name, decl.name),
+        short_name: decl.name,
+        module: module_name,
+        is_pub: is_pub,
+        on_drop: decl.on_drop
+    }
 
-pub struct TyContext { pub structs: Array[StructInfo], pub enums: Array[EnumInfo], handles: Array[HandleInfo] }
+pub struct TyContext {
+    pub structs: Array[StructInfo],
+    pub enums: Array[EnumInfo],
+    handles: Array[HandleInfo]
+}
 
 // --- Where an error points -------------------------------------------
 //
@@ -54,8 +92,17 @@ pub struct TyContext { pub structs: Array[StructInfo], pub enums: Array[EnumInfo
 // It sits here rather than there because `infer.plum` imports this file
 // and not the other way round, so this is the only end of the pair both
 // can reach.
-pub struct ErrPos { pub path: String, pub offset: Int, pub fn_name: String }
-let ERR: Ref[ErrPos] = ref(ErrPos { path: "", offset: 0 - 1, fn_name: "" })
+pub struct ErrPos {
+    pub path: String,
+    pub offset: Int,
+    pub fn_name: String
+}
+
+let ERR: Ref[ErrPos] = ref(ErrPos {
+    path: "",
+    offset: 0 - 1,
+    fn_name: ""
+})
 
 // The FUNCTION being checked, recorded alongside the position. It is
 // what a PRELUDE error has instead of a position: prelude source is a
@@ -63,16 +110,27 @@ let ERR: Ref[ErrPos] = ref(ErrPos { path: "", offset: 0 - 1, fn_name: "" })
 // "unknown struct: Array" with no further context is nearly useless
 // when the prelude is a thousand lines.
 pub let set_err_pos (path: String) (offset: Int) (fn_name: String): Unit =
-    ERR.set(ErrPos { path: path, offset: offset, fn_name: fn_name })
+    ERR.set(ErrPos {
+        path: path,
+        offset: offset,
+        fn_name: fn_name
+    })
 
 // A statement offset of -1 means "synthesized, or parsed without a
 // source context" -- keep whatever the enclosing item set instead of
 // overwriting it with a position that points nowhere.
 pub let current_err_offset (unit: Unit): Int = ERR.get().offset
+
 pub let err_path (unit: Unit): String = ERR.get().path
 
 pub let set_stmt_pos (offset: Int): Unit =
-    if offset >= 0 { ERR.set(ErrPos { path: ERR.get().path, offset: offset, fn_name: ERR.get().fn_name }) } else { () }
+    if offset >= 0 {
+        ERR.set(ErrPos {
+            path: ERR.get().path,
+            offset: offset,
+            fn_name: ERR.get().fn_name
+        })
+    } else { () }
 
 // Every checker error goes through here. With a position it renders
 // `error: <msg>` with the source line and a caret; without one it says
@@ -85,8 +143,10 @@ pub let set_stmt_pos (offset: Int): Unit =
 pub let fail_at_err (msg: String): Unit = {
     let e = ERR.get();
     if e.path == "" || e.offset < 0 {
-        panic_raw("self-hosted type checker: ".concat(msg)
-            .concat(if e.fn_name == "" { "" } else { " (checking '${e.fn_name}')" }))
+        panic_raw(
+            "self-hosted type checker: ".concat(msg)
+                .concat(if e.fn_name == "" { "" } else { " (checking '${e.fn_name}')" })
+        )
     }
     else {
         match treefs.read_source(e.path) {
@@ -107,7 +167,11 @@ let fail_ctx (msg: String): Unit = fail_at_err(msg)
 //
 // Keyed by FILE, which is the point of the feature, and the file is
 // already known: `err_path` is set per function for diagnostics.
-pub struct UseBinding { pub path: String, pub local: String, pub module: String }
+pub struct UseBinding {
+    pub path: String,
+    pub local: String,
+    pub module: String
+}
 
 let USES: Ref[Array[UseBinding]] = ref([])
 
@@ -142,9 +206,23 @@ pub let rewrite_type_path (name: String): String = {
 pub let test_qualified_alias_boundaries (): Unit = {
     let saved_uses = USES.get();
     let saved_error = ERR.get();
-    set_uses([UseBinding { path: "first.plum", local: "é中", module: "package.deep" },
-        UseBinding { path: "second.plum", local: "é中", module: "other" },
-        UseBinding { path: "first.plum", local: "nested.alias", module: "canonical" }]);
+    set_uses([
+        UseBinding {
+            path: "first.plum",
+            local: "é中",
+            module: "package.deep"
+        },
+        UseBinding {
+            path: "second.plum",
+            local: "é中",
+            module: "other"
+        },
+        UseBinding {
+            path: "first.plum",
+            local: "nested.alias",
+            module: "canonical"
+        }
+    ]);
     set_err_pos("first.plum", 0, "");
     assert_eq(rewrite_type_path("é中.Point"), "package.deep.Point");
     assert_eq(rewrite_type_path("nested.alias.Enum"), "canonical.Enum");
@@ -225,7 +303,13 @@ let collect_names_acc (items: Array[parser.ItemNode]) (i: Int) (ctx: TyContext):
     else {
         match items[i].kind {
             IKStruct(decl) => collect_names_acc(items, i + 1, TyContext {
-                structs: ctx.structs.push(StructInfo { name: parser.qualify_type(items[i].module, decl.name), generics: Array.map(decl.generics, |g| g.name), fields: [], module: items[i].module, is_pub: items[i].is_pub }),
+                structs: ctx.structs.push(StructInfo {
+                    name: parser.qualify_type(items[i].module, decl.name),
+                    generics: Array.map(decl.generics, |g| g.name),
+                    fields: [],
+                    module: items[i].module,
+                    is_pub: items[i].is_pub
+                }),
                 enums: ctx.enums,
                 handles: ctx.handles,
             }),
@@ -233,26 +317,58 @@ let collect_names_acc (items: Array[parser.ItemNode]) (i: Int) (ctx: TyContext):
             // Registering the struct half here is what makes the NAME
             // resolve everywhere a type name can appear.
             IKHandle(decl) => collect_names_acc(items, i + 1, TyContext {
-                structs: ctx.structs.push(StructInfo { name: parser.qualify_type(items[i].module, decl.name), generics: [], fields: [], module: items[i].module, is_pub: items[i].is_pub }),
+                structs: ctx.structs.push(StructInfo {
+                    name: parser.qualify_type(items[i].module, decl.name),
+                    generics: [],
+                    fields: [],
+                    module: items[i].module,
+                    is_pub: items[i].is_pub
+                }),
                 enums: ctx.enums,
                 handles: ctx.handles.push(handle_info(decl, items[i].module, items[i].is_pub)),
             }),
             IKEnum(decl) => collect_names_acc(items, i + 1, TyContext {
                 structs: ctx.structs,
-                enums: ctx.enums.push(EnumInfo { name: parser.qualify_type(items[i].module, decl.name), generics: Array.map(decl.generics, |g| g.name), variants: [], module: items[i].module, is_pub: items[i].is_pub }),
+                enums: ctx.enums.push(EnumInfo {
+                    name: parser.qualify_type(items[i].module, decl.name),
+                    generics: Array.map(decl.generics, |g| g.name),
+                    variants: [],
+                    module: items[i].module,
+                    is_pub: items[i].is_pub
+                }),
                 handles: ctx.handles,
             }),
             _ => collect_names_acc(items, i + 1, ctx),
         }
     }
 
-let resolve_decls_acc (items: Array[parser.ItemNode]) (i: Int) (names: TyContext) (out: TyContext): TyContext =
+let resolve_decls_acc
+    (items: Array[parser.ItemNode])
+    (i: Int)
+    (names: TyContext)
+    (out: TyContext): TyContext
+=
     if i >= items.len() { out }
     else {
         match items[i].kind {
-            IKStruct(decl) => resolve_decls_acc(items, i + 1, names, add_struct(names, out, decl, items[i].module, items[i].is_pub)),
-            IKEnum(decl) => resolve_decls_acc(items, i + 1, names, add_enum(names, out, decl, items[i].module, items[i].is_pub)),
-            IKHandle(decl) => resolve_decls_acc(items, i + 1, names, add_handle(out, decl, items[i].module, items[i].is_pub)),
+            IKStruct(decl) => resolve_decls_acc(
+                items,
+                i + 1,
+                names,
+                add_struct(names, out, decl, items[i].module, items[i].is_pub)
+            ),
+            IKEnum(decl) => resolve_decls_acc(
+                items,
+                i + 1,
+                names,
+                add_enum(names, out, decl, items[i].module, items[i].is_pub)
+            ),
+            IKHandle(decl) => resolve_decls_acc(
+                items,
+                i + 1,
+                names,
+                add_handle(out, decl, items[i].module, items[i].is_pub)
+            ),
             _ => resolve_decls_acc(items, i + 1, names, out),
         }
     }
@@ -261,32 +377,79 @@ let resolve_decls_acc (items: Array[parser.ItemNode]) (i: Int) (names: TyContext
 // AGAINST; `out` is the fully-resolved context being accumulated. Two
 // separate contexts on purpose — resolving against `out` would
 // reintroduce the in-order dependency this split exists to remove.
-let add_struct (names: TyContext) (out: TyContext) (decl: parser.StructDeclNode) (module_name: String) (is_pub: Bool): TyContext = {
+let add_struct
+    (names: TyContext)
+    (out: TyContext)
+    (decl: parser.StructDeclNode)
+    (module_name: String)
+    (is_pub: Bool): TyContext
+= {
     // A struct's OWN declared generic names are already fully known
     // from its own declaration — resolving its fields' annotations
     // needs no fresh-var bootstrapping the way a mutually-recursive
     // FUNCTION signature would (see `infer.plum`'s own top comment for
     // that same reasoning, applied to functions instead of structs).
     let generic_names = Array.map(decl.generics, |g| g.name);
-    let fields = Array.map(decl.fields, |f| StructFieldTemplate { name: f.name, ty: resolve_ann_seen(names, module_name, generic_names, f.ty), is_pub: f.is_pub });
-    TyContext { structs: out.structs.push(StructInfo { name: parser.qualify_type(module_name, decl.name), generics: generic_names, fields: fields, module: module_name, is_pub: is_pub }), enums: out.enums, handles: out.handles }
+    let fields = Array.map(decl.fields, |f| StructFieldTemplate {
+        name: f.name,
+        ty: resolve_ann_seen(names, module_name, generic_names, f.ty),
+        is_pub: f.is_pub
+    });
+    TyContext {
+        structs: out.structs.push(StructInfo {
+            name: parser.qualify_type(module_name, decl.name),
+            generics: generic_names,
+            fields: fields,
+            module: module_name,
+            is_pub: is_pub
+        }),
+        enums: out.enums,
+        handles: out.handles
+    }
 }
 
-let add_enum (names: TyContext) (out: TyContext) (decl: parser.EnumDeclNode) (module_name: String) (is_pub: Bool): TyContext = {
+let add_enum
+    (names: TyContext)
+    (out: TyContext)
+    (decl: parser.EnumDeclNode)
+    (module_name: String)
+    (is_pub: Bool): TyContext
+= {
     let generic_names = Array.map(decl.generics, |g| g.name);
     let variants = Array.map(decl.variants, |v| VariantInfo {
         tag: v.name,
         enum_name: parser.qualify_type(module_name, decl.name),
         payload: Array.map(v.payload, |t| resolve_ann_seen(names, module_name, generic_names, t)),
     });
-    TyContext { structs: out.structs, enums: out.enums.push(EnumInfo { name: parser.qualify_type(module_name, decl.name), generics: generic_names, variants: variants, module: module_name, is_pub: is_pub }), handles: out.handles }
+    TyContext {
+        structs: out.structs,
+        enums: out.enums.push(EnumInfo {
+            name: parser.qualify_type(module_name, decl.name),
+            generics: generic_names,
+            variants: variants,
+            module: module_name,
+            is_pub: is_pub
+        }),
+        handles: out.handles
+    }
 }
 
 // No annotations to resolve -- a handle has no fields -- so pass 2 adds
 // exactly what pass 1 did.
-let add_handle (out: TyContext) (decl: parser.HandleDeclNode) (module_name: String) (is_pub: Bool): TyContext =
+let add_handle
+    (out: TyContext)
+    (decl: parser.HandleDeclNode)
+    (module_name: String)
+    (is_pub: Bool): TyContext
+=
     TyContext {
-        structs: out.structs.push(StructInfo { name: parser.qualify_type(module_name, decl.name), generics: [], fields: [], module: module_name, is_pub: is_pub }),
+        structs: out.structs.push(StructInfo {
+            name: parser.qualify_type(module_name, decl.name),
+            generics: [],
+            fields: [],
+            module: module_name,
+            is_pub: is_pub
+        }),
         enums: out.enums,
         handles: out.handles.push(handle_info(decl, module_name, is_pub)),
     }
@@ -307,7 +470,12 @@ let add_handle (out: TyContext) (decl: parser.HandleDeclNode) (module_name: Stri
 // literal has to name every field. That is deliberate -- it is what
 // makes a constructor function the only way in, which is the whole
 // point of hiding the field -- but it means such a struct needs one.
-pub let check_field_visible (ctx: TyContext) (viewer: String) (struct_name: String) (field: String): Unit =
+pub let check_field_visible
+    (ctx: TyContext)
+    (viewer: String)
+    (struct_name: String)
+    (field: String): Unit
+=
     // Callers pass either an identity (qualified, straight out of an
     // `ITStruct`) or a name as written in source (bare). Try the
     // identity first: `best_struct` would fail to match a qualified
@@ -319,14 +487,19 @@ pub let check_field_visible (ctx: TyContext) (viewer: String) (struct_name: Stri
     } {
         None => (),
         Some(info) => if viewer == ANY_MODULE() || viewer == info.module { () }
-            else { match find_field_pub(info.fields, field, 0) {
+        else {
+            match find_field_pub(info.fields, field, 0) {
                 None => (),
                 Some(is_pub) => if is_pub { () } else {
-                    fail_ctx("field ${struct_name}.${field}"
-                        .concat(" is private to ").concat(module_label(info.module))
-                        .concat(". Add `pub` to it to use it from ").concat(module_label(viewer)))
+                    fail_ctx(
+                        "field ${struct_name}.${field}"
+                            .concat(" is private to ").concat(module_label(info.module))
+                            .concat(". Add `pub` to it to use it from ")
+                            .concat(module_label(viewer))
+                    )
                 },
-            } },
+            }
+        },
     }
 
 let find_field_pub (fields: Array[StructFieldTemplate]) (name: String) (i: Int): Option[Bool] =
@@ -380,11 +553,20 @@ let best_type_name (ctx: TyContext) (viewer: String) (name: String): Option[Stri
         else if has_type_name(ctx, prelude) { Some(prelude) }
         else {
             let suffix = ".".concat(name);
-            let structs = bare_struct_names(ctx.structs, viewer, suffix, 0, BareTypeNames { visible: None, hidden: None });
+            let structs = bare_struct_names(
+                ctx.structs,
+                viewer,
+                suffix,
+                0,
+                BareTypeNames { visible: None, hidden: None }
+            );
             let found = bare_enum_names(ctx.enums, viewer, suffix, 0, structs);
             // Preserve a visibility diagnostic for a private-only name. A private
             // sibling does not compete with a public declaration for fallback.
-            match found.visible { Some(qname) => Some(qname), None => found.hidden }
+            match found.visible {
+                Some(qname) => Some(qname),
+                None => found.hidden
+            }
         }
     }
 }
@@ -393,48 +575,84 @@ let best_type_name (ctx: TyContext) (viewer: String) (name: String): Option[Stri
 // lives in TyContext. Ambiguity diagnostics are independent of scan order.
 struct BareTypeNames { visible: Option[String], hidden: Option[String] }
 
-let add_bare_type (found: BareTypeNames) (viewer: String) (qname: String) (owner: String) (is_pub: Bool): BareTypeNames =
+let add_bare_type
+    (found: BareTypeNames)
+    (viewer: String)
+    (qname: String)
+    (owner: String)
+    (is_pub: Bool): BareTypeNames
+=
     if is_pub || viewer == owner || viewer == ANY_MODULE() {
         match found.visible {
             None => BareTypeNames { visible: Some(qname), hidden: found.hidden },
             Some(_) => {
-                fail_ctx("ambiguous type name: ".concat(parser.bare_type_name(qname)).concat("; use a module-qualified type name"));
+                fail_ctx(
+                    "ambiguous type name: ".concat(parser.bare_type_name(qname))
+                        .concat("; use a module-qualified type name")
+                );
                 found
             },
         }
     }
     else {
         // Stable even when several inaccessible declarations share a name.
-        let hidden = match found.hidden { None => qname, Some(old) => if qname < old { qname } else { old } };
+        let hidden = match found.hidden {
+            None => qname,
+            Some(old) => if qname < old { qname } else { old }
+        };
         BareTypeNames { visible: found.visible, hidden: Some(hidden) }
     }
 
-let bare_struct_names (structs: Array[StructInfo]) (viewer: String) (suffix: String) (i: Int) (found: BareTypeNames): BareTypeNames =
+let bare_struct_names
+    (structs: Array[StructInfo])
+    (viewer: String)
+    (suffix: String)
+    (i: Int)
+    (found: BareTypeNames): BareTypeNames
+=
     if i >= structs.len() { found }
     else {
         let info = structs[i];
-        let next = if String.ends_with(info.name, suffix) { add_bare_type(found, viewer, info.name, info.module, info.is_pub) } else { found };
+        let next = if String.ends_with(info.name, suffix) {
+            add_bare_type(found, viewer, info.name, info.module, info.is_pub)
+        } else { found };
         bare_struct_names(structs, viewer, suffix, i + 1, next)
     }
 
-let bare_enum_names (enums: Array[EnumInfo]) (viewer: String) (suffix: String) (i: Int) (found: BareTypeNames): BareTypeNames =
+let bare_enum_names
+    (enums: Array[EnumInfo])
+    (viewer: String)
+    (suffix: String)
+    (i: Int)
+    (found: BareTypeNames): BareTypeNames
+=
     if i >= enums.len() { found }
     else {
         let info = enums[i];
-        let next = if String.ends_with(info.name, suffix) { add_bare_type(found, viewer, info.name, info.module, info.is_pub) } else { found };
+        let next = if String.ends_with(info.name, suffix) {
+            add_bare_type(found, viewer, info.name, info.module, info.is_pub)
+        } else { found };
         bare_enum_names(enums, viewer, suffix, i + 1, next)
     }
 
 // `find_struct`/`find_enum` take a QUALIFIED name -- the one carried in
 // `ITStruct`/`ITEnum`. Resolving a name written in SOURCE goes through
 // `best_struct`/`best_enum` instead, which take the source spelling.
-pub let find_struct (ctx: TyContext) (name: String): Option[StructInfo] = find_struct_acc(ctx.structs, name, 0)
-let find_struct_acc (structs: Array[StructInfo]) (name: String) (i: Int): Option[StructInfo] =
-    if i >= structs.len() { None } else if structs[i].name == name { Some(structs[i]) } else { find_struct_acc(structs, name, i + 1) }
+pub let find_struct (ctx: TyContext) (name: String): Option[StructInfo] =
+    find_struct_acc(ctx.structs, name, 0)
 
-pub let find_enum (ctx: TyContext) (name: String): Option[EnumInfo] = find_enum_acc(ctx.enums, name, 0)
+let find_struct_acc (structs: Array[StructInfo]) (name: String) (i: Int): Option[StructInfo] =
+    if i >= structs.len() { None } else if structs[i].name == name { Some(structs[i]) } else {
+        find_struct_acc(structs, name, i + 1)
+    }
+
+pub let find_enum (ctx: TyContext) (name: String): Option[EnumInfo] =
+    find_enum_acc(ctx.enums, name, 0)
+
 let find_enum_acc (enums: Array[EnumInfo]) (name: String) (i: Int): Option[EnumInfo] =
-    if i >= enums.len() { None } else if enums[i].name == name { Some(enums[i]) } else { find_enum_acc(enums, name, i + 1) }
+    if i >= enums.len() { None } else if enums[i].name == name { Some(enums[i]) } else {
+        find_enum_acc(enums, name, i + 1)
+    }
 
 // A variant tag's owning enum + declared generics + payload template.
 //
@@ -445,10 +663,16 @@ let find_enum_acc (enums: Array[EnumInfo]) (name: String) (i: Int): Option[EnumI
 // enum declares the tag, because more than one is reported instead of
 // guessed. `find_variant` is that last scan and is no longer the way
 // anything resolves a tag on its own.
-pub struct VariantLookup { pub enum_name: String, pub enum_generics: Array[String], pub payload: Array[ITy] }
+pub struct VariantLookup {
+    pub enum_name: String,
+    pub enum_generics: Array[String],
+    pub payload: Array[ITy]
+}
 
 let find_variant_acc (variants: Array[VariantInfo]) (tag: String) (i: Int): Option[VariantInfo] =
-    if i >= variants.len() { None } else if variants[i].tag == tag { Some(variants[i]) } else { find_variant_acc(variants, tag, i + 1) }
+    if i >= variants.len() { None } else if variants[i].tag == tag { Some(variants[i]) } else {
+        find_variant_acc(variants, tag, i + 1)
+    }
 
 // Resolution that NAMES the enum instead of searching for it. Every
 // caller that already knows which enum it means should use this:
@@ -458,21 +682,39 @@ let find_variant_acc (variants: Array[VariantInfo]) (tag: String) (i: Int): Opti
 // Every enum that declares this tag, in declaration order. One
 // candidate is an answer; more than one is a question the program has
 // to answer for itself.
-pub let variant_candidates (ctx: TyContext) (tag: String): Array[VariantLookup] = variant_candidates_acc(ctx.enums, tag, 0, [])
-let variant_candidates_acc (enums: Array[EnumInfo]) (tag: String) (i: Int) (acc: Array[VariantLookup]): Array[VariantLookup] =
+pub let variant_candidates (ctx: TyContext) (tag: String): Array[VariantLookup] =
+    variant_candidates_acc(ctx.enums, tag, 0, [])
+
+let variant_candidates_acc
+    (enums: Array[EnumInfo])
+    (tag: String)
+    (i: Int)
+    (acc: Array[VariantLookup]): Array[VariantLookup]
+=
     if i >= enums.len() { acc }
     else {
         match find_variant_acc(enums[i].variants, tag, 0) {
-            Some(v) => variant_candidates_acc(enums, tag, i + 1, acc.push(VariantLookup { enum_name: enums[i].name, enum_generics: enums[i].generics, payload: v.payload })),
+            Some(v) => variant_candidates_acc(enums, tag, i + 1, acc.push(VariantLookup {
+                enum_name: enums[i].name,
+                enum_generics: enums[i].generics,
+                payload: v.payload
+            })),
             None => variant_candidates_acc(enums, tag, i + 1, acc),
         }
     }
 
 // The candidates declared in one module. `module_of_type` splits a
 // qualified name back into the module that owns it.
-pub let variants_in_module (cands: Array[VariantLookup]) (module_name: String) (i: Int) (acc: Array[VariantLookup]): Array[VariantLookup] =
+pub let variants_in_module
+    (cands: Array[VariantLookup])
+    (module_name: String)
+    (i: Int)
+    (acc: Array[VariantLookup]): Array[VariantLookup]
+=
     if i >= cands.len() { acc }
-    else if module_of_type(cands[i].enum_name) == module_name { variants_in_module(cands, module_name, i + 1, acc.push(cands[i])) }
+    else if module_of_type(cands[i].enum_name) == module_name {
+        variants_in_module(cands, module_name, i + 1, acc.push(cands[i]))
+    }
     else { variants_in_module(cands, module_name, i + 1, acc) }
 
 // "" for a name with no qualifier -- a builtin like `Array`, which no
@@ -491,7 +733,11 @@ pub let find_variant_in (ctx: TyContext) (enum_name: String) (tag: String): Opti
     match find_enum(ctx, enum_name) {
         None => None,
         Some(info) => match find_variant_acc(info.variants, tag, 0) {
-            Some(v) => Some(VariantLookup { enum_name: info.name, enum_generics: info.generics, payload: v.payload }),
+            Some(v) => Some(VariantLookup {
+                enum_name: info.name,
+                enum_generics: info.generics,
+                payload: v.payload
+            }),
             None => None,
         },
     }
@@ -512,16 +758,33 @@ pub let resolve_ann (ctx: TyContext) (in_scope: Array[String]) (t: parser.Ty): I
 // A type is private unless declared `pub`, exactly as a function is.
 // This only ever refuses to resolve a name the looking module has no
 // business naming; it never changes which type a name means.
-pub let check_type_visible (viewer: String) (owner: String) (is_pub: Bool) (kind: String) (name: String): Unit =
+pub let check_type_visible
+    (viewer: String)
+    (owner: String)
+    (is_pub: Bool)
+    (kind: String)
+    (name: String): Unit
+=
     if is_pub || viewer == ANY_MODULE() || viewer == owner { () }
     else {
-        fail_ctx(kind.concat(" ").concat(name).concat(" is private to ").concat(module_label(owner))
-            .concat(". Add `pub` to its declaration to use it from ").concat(module_label(viewer)))
+        fail_ctx(
+            kind.concat(" ").concat(name).concat(" is private to ").concat(module_label(owner))
+                .concat(". Add `pub` to its declaration to use it from ")
+                .concat(module_label(viewer))
+        )
     }
 
-pub let resolve_ann_seen (ctx: TyContext) (viewer: String) (in_scope: Array[String]) (t: parser.Ty): ITy =
+pub let resolve_ann_seen
+    (ctx: TyContext)
+    (viewer: String)
+    (in_scope: Array[String])
+    (t: parser.Ty): ITy
+=
     match t {
-        TyFunction(params, ret) => ITFunction(Array.map(params, |p| resolve_ann_seen(ctx, viewer, in_scope, p)), resolve_ann_seen(ctx, viewer, in_scope, ret)),
+        TyFunction(params, ret) => ITFunction(
+            Array.map(params, |p| resolve_ann_seen(ctx, viewer, in_scope, p)),
+            resolve_ann_seen(ctx, viewer, in_scope, ret)
+        ),
         // The WHOLE path, not its last segment. Taking the last segment
         // meant `a.Shade` and `b.Shade` resolved to the same enum --
         // whichever the bare-name scan reached first -- so this
@@ -530,7 +793,13 @@ pub let resolve_ann_seen (ctx: TyContext) (viewer: String) (in_scope: Array[Stri
         //     let mix (s: b.Shade): a.Shade = s
         //
         // A single-segment name is unaffected: joined, it is itself.
-        TyGeneric(base, args) => resolve_named(ctx, viewer, in_scope, parser.join_dot(base), Array.map(args, |a| resolve_ann_seen(ctx, viewer, in_scope, a))),
+        TyGeneric(base, args) => resolve_named(
+            ctx,
+            viewer,
+            in_scope,
+            parser.join_dot(base),
+            Array.map(args, |a| resolve_ann_seen(ctx, viewer, in_scope, a))
+        ),
         TyPath(segments) => resolve_named(ctx, viewer, in_scope, parser.join_dot(segments), []),
         TyTuple(elems) => ITTuple(Array.map(elems, |e| resolve_ann_seen(ctx, viewer, in_scope, e))),
     }
@@ -546,47 +815,106 @@ pub let canonical_primitive_name (name: String): String = if name == "I64" { "In
 pub let canonical_associated_name (name: String): String =
     if name.starts_with("I64.") { "Int".concat(String.slice(name, 3, name.len())) } else { name }
 
-let resolve_named (ctx: TyContext) (viewer: String) (in_scope: Array[String]) (name: String) (args: Array[ITy]): ITy =
-    if canonical_primitive_name(name) == "Int" { check_type_arity(name, 0, args.len()); ITInt }
-    else if Option.is_some(integer_named(name)) { check_type_arity(name, 0, args.len()); match integer_named(name) { Some(t) => t, None => ITUnit } }
-    else if name == "Float" { check_type_arity(name, 0, args.len()); ITFloat }
-    else if name == "Bool" { check_type_arity(name, 0, args.len()); ITBool }
-    else if name == "String" { check_type_arity(name, 0, args.len()); ITStr }
-    else if name == "CStr" { check_type_arity(name, 0, args.len()); ITCStr }
-    else if name == "RawCStr" { check_type_arity(name, 0, args.len()); ITRawCStr }
-    else if name == "Bytes" { check_type_arity(name, 0, args.len()); ITBytes }
-    else if name == "Unit" { check_type_arity(name, 0, args.len()); ITUnit }
-    else if name == "Array" { check_type_arity(name, 1, args.len()); ITStruct("Array", args) }
+let resolve_named
+    (ctx: TyContext)
+    (viewer: String)
+    (in_scope: Array[String])
+    (name: String)
+    (args: Array[ITy]): ITy
+=
+    if canonical_primitive_name(name) == "Int" {
+        check_type_arity(name, 0, args.len());
+        ITInt
+    }
+    else if Option.is_some(integer_named(name)) {
+        check_type_arity(name, 0, args.len());
+        match integer_named(name) {
+            Some(t) => t,
+            None => ITUnit
+        }
+    }
+    else if name == "Float" {
+        check_type_arity(name, 0, args.len());
+        ITFloat
+    }
+    else if name == "Bool" {
+        check_type_arity(name, 0, args.len());
+        ITBool
+    }
+    else if name == "String" {
+        check_type_arity(name, 0, args.len());
+        ITStr
+    }
+    else if name == "CStr" {
+        check_type_arity(name, 0, args.len());
+        ITCStr
+    }
+    else if name == "RawCStr" {
+        check_type_arity(name, 0, args.len());
+        ITRawCStr
+    }
+    else if name == "Bytes" {
+        check_type_arity(name, 0, args.len());
+        ITBytes
+    }
+    else if name == "Unit" {
+        check_type_arity(name, 0, args.len());
+        ITUnit
+    }
+    else if name == "Array" {
+        check_type_arity(name, 1, args.len());
+        ITStruct("Array", args)
+    }
     // Handles, not declarations: `Task`/`Sender`/`Receiver` have no
     // fields to look up, and the type argument is what `.join()`/
     // `.recv()` read the element type from.
-    else if name == "Task" { check_type_arity(name, 1, args.len()); ITStruct("Task", args) }
-    else if name == "Sender" { check_type_arity(name, 1, args.len()); ITStruct("Sender", args) }
-    else if name == "Receiver" { check_type_arity(name, 1, args.len()); ITStruct("Receiver", args) }
+    else if name == "Task" {
+        check_type_arity(name, 1, args.len());
+        ITStruct("Task", args)
+    }
+    else if name == "Sender" {
+        check_type_arity(name, 1, args.len());
+        ITStruct("Sender", args)
+    }
+    else if name == "Receiver" {
+        check_type_arity(name, 1, args.len());
+        ITStruct("Receiver", args)
+    }
     // `Ref[T]` is a TYPE you can write, not only one inference can
     // produce. `ITRef` has always existed and `ref(v)` has always made
     // one; there was simply no way to NAME it, so `let r: Ref[Int] =
     // ref(1)` failed with "unknown type: Ref" while the identical line
     // without the annotation compiled.
-    else if name == "Ref" { check_type_arity(name, 1, args.len()); ITRef(args[0]) }
-    else if Array.contains(in_scope, name) { check_type_arity(name, 0, args.len()); ITParam(name) }
+    else if name == "Ref" {
+        check_type_arity(name, 1, args.len());
+        ITRef(args[0])
+    }
+    else if Array.contains(in_scope, name) {
+        check_type_arity(name, 0, args.len());
+        ITParam(name)
+    }
     // Resolved through the VIEWER's own module first, so a name means
     // what it means where it was written.
-    else { match best_struct(ctx, viewer, rewrite_type_path(name)) {
-        Some(info) => {
-            check_struct_named(ctx, viewer, name);
-            check_type_arity(name, info.generics.len(), args.len());
-            ITStruct(info.name, args)
-        },
-        None => match best_enum(ctx, viewer, name) {
+    else {
+        match best_struct(ctx, viewer, rewrite_type_path(name)) {
             Some(info) => {
-                check_enum_named(ctx, viewer, name);
+                check_struct_named(ctx, viewer, name);
                 check_type_arity(name, info.generics.len(), args.len());
-                ITEnum(info.name, args)
+                ITStruct(info.name, args)
             },
-            None => { fail_ctx("unknown type: ".concat(name)); ITUnit },
-        },
-    } }
+            None => match best_enum(ctx, viewer, name) {
+                Some(info) => {
+                    check_enum_named(ctx, viewer, name);
+                    check_type_arity(name, info.generics.len(), args.len());
+                    ITEnum(info.name, args)
+                },
+                None => {
+                    fail_ctx("unknown type: ".concat(name));
+                    ITUnit
+                },
+            },
+        }
+    }
 
 // --- Instantiating a declaration's template at a concrete use site ---
 
@@ -600,15 +928,31 @@ let resolve_named (ctx: TyContext) (viewer: String) (in_scope: Array[String]) (n
 pub let instantiate_template (generics: Array[String]) (args: Array[ITy]) (template: ITy): ITy =
     match template {
         ITParam(name) => Option.unwrap_or(lookup_generic_arg(generics, args, name, 0), template),
-        ITFunction(params, ret) => ITFunction(Array.map(params, |p| instantiate_template(generics, args, p)), instantiate_template(generics, args, ret)),
+        ITFunction(params, ret) => ITFunction(
+            Array.map(params, |p| instantiate_template(generics, args, p)),
+            instantiate_template(generics, args, ret)
+        ),
         ITTuple(elems) => ITTuple(Array.map(elems, |e| instantiate_template(generics, args, e))),
-        ITStruct(name, sargs) => ITStruct(name, Array.map(sargs, |a| instantiate_template(generics, args, a))),
-        ITEnum(name, sargs) => ITEnum(name, Array.map(sargs, |a| instantiate_template(generics, args, a))),
+        ITStruct(name, sargs) => ITStruct(
+            name,
+            Array.map(sargs, |a| instantiate_template(generics, args, a))
+        ),
+        ITEnum(name, sargs) => ITEnum(
+            name,
+            Array.map(sargs, |a| instantiate_template(generics, args, a))
+        ),
         _ => template,
     }
 
-let lookup_generic_arg (generics: Array[String]) (args: Array[ITy]) (name: String) (i: Int): Option[ITy] =
-    if i >= generics.len() { None } else if generics[i] == name { Some(args[i]) } else { lookup_generic_arg(generics, args, name, i + 1) }
+let lookup_generic_arg
+    (generics: Array[String])
+    (args: Array[ITy])
+    (name: String)
+    (i: Int): Option[ITy]
+=
+    if i >= generics.len() { None } else if generics[i] == name { Some(args[i]) } else {
+        lookup_generic_arg(generics, args, name, i + 1)
+    }
 
 // --- Layout accessors for the backend ---
 //
@@ -644,9 +988,21 @@ pub let ctx_handle_names (ctx: TyContext): Array[String] =
     Array.map(ctx.handles, |h| h.name)
 
 pub let test_handle_lookup_names_and_drop_hooks (): Unit = {
-    let root = parser.parse_program(lexer.tokenize("handle Root { on_drop: root_close }\nstruct Holder { value: alpha.Shared }\n")).items;
-    let alpha = parser.with_module(parser.parse_program(lexer.tokenize("pub handle Shared { on_drop: alpha_close }\npub handle Other { on_drop: other_close }\nstruct Plain {}\n")).items, "alpha");
-    let beta = parser.with_module(parser.parse_program(lexer.tokenize("pub handle Shared { on_drop: beta_close }\n")).items, "beta");
+    let root = parser.parse_program(
+        lexer.tokenize(
+            "handle Root { on_drop: root_close }\nstruct Holder { value: alpha.Shared }\n"
+        )
+    ).items;
+    let alpha = parser.with_module(
+        parser.parse_program(lexer.tokenize(
+            "pub handle Shared { on_drop: alpha_close }\npub handle Other { on_drop: other_close }\nstruct Plain {}\n"
+        )).items,
+        "alpha"
+    );
+    let beta = parser.with_module(
+        parser.parse_program(lexer.tokenize("pub handle Shared { on_drop: beta_close }\n")).items,
+        "beta"
+    );
     let ctx = build_context(parser.ProgramNode { items: root.concat(alpha).concat(beta) });
     assert_eq(ctx_handle_names(ctx), ["Root", "alpha.Shared", "alpha.Other", "beta.Shared"]);
     assert_eq(ctx_field_types(ctx, "Holder"), [ITStruct("alpha.Shared", [])]);
@@ -670,19 +1026,28 @@ pub let test_handle_lookup_names_and_drop_hooks (): Unit = {
 pub let ctx_field_names (ctx: TyContext) (name: String): Array[String] =
     match find_struct(ctx, name) {
         Some(info) => Array.map(info.fields, |f| f.name),
-        None => { fail_ctx("unknown struct: ${name} (asked for its field names)"); [] },
+        None => {
+            fail_ctx("unknown struct: ${name} (asked for its field names)");
+            []
+        },
     }
 
 pub let ctx_field_types (ctx: TyContext) (name: String): Array[ITy] =
     match find_struct(ctx, name) {
         Some(info) => Array.map(info.fields, |f| f.ty),
-        None => { fail_ctx("unknown struct: ${name} (asked for its field types)"); [] },
+        None => {
+            fail_ctx("unknown struct: ${name} (asked for its field types)");
+            []
+        },
     }
 
 pub let ctx_variant_payload (ctx: TyContext) (enum_name: String) (tag: String): Array[ITy] =
     match find_variant_in(ctx, enum_name, tag) {
         Some(v) => v.payload,
-        None => { fail_ctx("unknown variant: ${enum_name}.${tag}"); [] },
+        None => {
+            fail_ctx("unknown variant: ${enum_name}.${tag}");
+            []
+        },
     }
 
 // The declared type-parameter names of a struct, and of the enum a
@@ -693,13 +1058,19 @@ pub let ctx_variant_payload (ctx: TyContext) (enum_name: String) (tag: String): 
 pub let ctx_struct_generics (ctx: TyContext) (name: String): Array[String] =
     match find_struct(ctx, name) {
         Some(info) => info.generics,
-        None => { fail_ctx("unknown struct: ${name} (asked for its generics)"); [] },
+        None => {
+            fail_ctx("unknown struct: ${name} (asked for its generics)");
+            []
+        },
     }
 
 pub let ctx_variant_generics (ctx: TyContext) (enum_name: String) (tag: String): Array[String] =
     match find_variant_in(ctx, enum_name, tag) {
         Some(v) => v.enum_generics,
-        None => { fail_ctx("unknown variant: ${enum_name}.${tag}"); [] },
+        None => {
+            fail_ctx("unknown variant: ${enum_name}.${tag}");
+            []
+        },
     }
 
 // Every variant tag of an enum, in declaration order — what

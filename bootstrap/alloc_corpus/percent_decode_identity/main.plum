@@ -1,4 +1,7 @@
 use Encoding;
+
 let main (): Unit = {
-    for i in 0..1000 { assert_eq(Encoding.percent_decode("abc+é").unwrap_or(Bytes.empty()).len(), 6); };
+    for i in 0..1000 {
+        assert_eq(Encoding.percent_decode("abc+é").unwrap_or(Bytes.empty()).len(), 6);
+    };
 }

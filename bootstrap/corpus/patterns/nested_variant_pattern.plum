@@ -1,1 +1,4 @@
-let case (o: Option[Option[Int]]): Int = match o { Some(Some(x)) => x, _ => 0 }
+let case (o: Option[Option[Int]]): Int = match o {
+    Some(Some(x)) => x,
+    _ => 0
+}

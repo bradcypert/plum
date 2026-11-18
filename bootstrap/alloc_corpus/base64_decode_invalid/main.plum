@@ -1,4 +1,7 @@
 use Encoding;
+
 let main (): Unit = {
-    for i in 0..1000 { assert(Result.is_err(Encoding.base64_decode("AB"))); };
+    for i in 0..1000 {
+        assert(Result.is_err(Encoding.base64_decode("AB")));
+    };
 }

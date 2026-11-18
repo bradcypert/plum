@@ -1,16 +1,26 @@
 use shadow;
+
 extern "C" {
     fn i64_alias_echo(value: I64) -> Int;
     fn i64_alias_return(value: Int) -> I64;
 }
+
 struct Counter { value: I64 }
+
 enum Payload { Number(I64), Empty }
+
 let START: I64 = 7
+
 let I64.twice (value: I64): Int = value * 2
+
 let Int.plus_three (value: Int): I64 = value + 3
+
 let identity[T] (value: T): T = value
+
 let takes_int (value: Int): I64 = value
+
 let takes_alias (value: I64): Int = value
+
 let main (): Unit = {
     let value: I64 = START;
     assert_eq(takes_int(value), takes_alias(value));
@@ -21,7 +31,13 @@ let main (): Unit = {
     cell.set(takes_alias(11));
     assert_eq(cell.get(), 11);
     assert_eq(Counter { value: value }.value, value);
-    assert_eq(match Number(value) { Number(n) => takes_int(n), Empty => 0 }, value);
+    assert_eq(
+        match Number(value) {
+            Number(n) => takes_int(n),
+            Empty => 0
+        },
+        value
+    );
     let tuple: (I64, Int) = (value, 12);
     assert(tuple == (7, 12));
     let twice: (Int) -> I64 = I64.twice;

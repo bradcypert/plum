@@ -10,14 +10,21 @@
 //
 // One allocation total, and it is the string `main` prints.
 enum Maybe { Nothing, Just(Int) }
+
 struct Point { x: Int, y: Int }
 
 let go (acc: Int) (n: Int): Int =
     if n <= 0 { acc }
     else {
-        go(acc + Array.fold([1, 2, 3], 0, |a, v| a + v)
-             + Point { x: 1, y: 2 }.y
-             + match Nothing { Nothing => 0, Just(k) => k }, n - 1)
+        go(
+            acc + Array.fold([1, 2, 3], 0, |a, v| a + v)
+                + Point { x: 1, y: 2 }.y
+                + match Nothing {
+                    Nothing => 0,
+                    Just(k) => k
+                },
+            n - 1
+        )
     }
 
 let main (): Unit = println(go(0, 1000).to_string())

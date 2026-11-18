@@ -20,9 +20,13 @@ let call (): Int = pair(1, 2) + pair(3, 4)
 // `-` is unary or binary depending on what precedes it, and only what
 // precedes it. Every one of these is left or spaced accordingly.
 let neg (n: Int): Int = -n
+
 let sub (a: Int) (b: Int): Int = a - b
+
 let both (n: Int): Int = -n + (0 - n) * -1
+
 let negs (): Array[Int] = [-1, -2]
+
 let cmp (n: Int): Bool = n >= -1 && n < 0
 
 // A colon is a type annotation in `x: Int` and a SEPARATOR here, and
@@ -34,6 +38,4 @@ let half (n: Int): Int
 = n / 2
 
 // A gap holding a newline belongs to the indent pass.
-let broken (): Int = pair(
-    1,
-    2)
+let broken (): Int = pair(1, 2)

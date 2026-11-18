@@ -1,4 +1,5 @@
 extern "C" { fn source() -> RawCStr; }
+
 let main (): Unit = {
     let pointer = unsafe { source() };
     let allowed = unsafe { unsafe { Bytes.from_cstr(pointer, 1) } };

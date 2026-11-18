@@ -6,9 +6,11 @@ use Time;
 
 let main (): Unit = {
     let (tx, rx) = channel[Int]();
-    println(select {
-        n = rx => n.to_string(),
-        else => "nothing ready",
-        Time.millis(50) => "timed out",
-    })
+    println(
+        select {
+            n = rx => n.to_string(),
+            else => "nothing ready",
+            Time.millis(50) => "timed out",
+        }
+    )
 }

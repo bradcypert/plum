@@ -81,7 +81,10 @@ let main (): Unit = {
         let path = "project/名.txt";
         let expected = "project".concat(Path.separator_in(windows)).concat("名.tar.gz");
         for i in 0..1000 {
-            assert_eq(Path.try_with_extension_in(windows, path, "../../../outside"), Err("invalid path extension"));
+            assert_eq(
+                Path.try_with_extension_in(windows, path, "../../../outside"),
+                Err("invalid path extension")
+            );
             assert_eq(Path.try_with_extension_in(windows, path, "tar.gz"), Ok(expected));
             assert_eq(path, "project/名.txt");
         };
@@ -96,5 +99,9 @@ let main (): Unit = {
     // asserted as a relationship rather than printed, since its value
     // differs by platform and this file must not.
     println("separator is 1 char: ".concat((String.char_len(Path.separator()) == 1).to_string()));
-    println("join uses it: ".concat((Path.join("a", "b") == "a".concat(Path.separator()).concat("b")).to_string()))
+    println(
+        "join uses it: ".concat(
+            (Path.join("a", "b") == "a".concat(Path.separator()).concat("b")).to_string()
+        )
+    )
 }

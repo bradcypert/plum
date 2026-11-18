@@ -13,7 +13,10 @@ struct P { name: String, n: Int }
 let main (): Unit = {
     println(Array.sort_int([3, 1, 2, 1]).to_string());
     println(Array.sort_float([2.5, 0.5, 1.5]).to_string());
-    println(Array.sort_by([P { name: "b", n: 2 }, P { name: "a", n: 1 }], |x: P, y: P| x.n <= y.n).to_string());
+    println(
+        Array.sort_by([P { name: "b", n: 2 }, P { name: "a", n: 1 }], |x: P, y: P| x.n <= y.n)
+            .to_string()
+    );
     println(Array.sort_int([]).to_string());
 
     let z = Array.zip([1, 2, 3], ["a", "b"]);

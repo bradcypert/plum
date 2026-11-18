@@ -225,6 +225,8 @@ jobs:
         run: ./bootstrap/example-sweep
       - name: embedded C shims match native_stdlib/
         run: ./bootstrap/check-shims
+      - name: compiler metadata and tools tolerate formatting changes
+        run: python3 ./bootstrap/tooling-metadata-check.py ./sh.real
       - name: no runtime declare goes unused
         run: ./bootstrap/check-declares
       - name: plum test really runs tests

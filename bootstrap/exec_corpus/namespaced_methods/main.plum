@@ -11,12 +11,17 @@
 // signature (`Array.map`), and a function the user declared.
 
 struct Box { v: Int }
+
 enum Colour { Red, Blue }
 
 // A user's own namespaced functions are methods on their own types by
 // exactly the same rule -- nothing about this is special to the stdlib.
 let Box.bump (b: Box) (n: Int): Box = Box { v: b.v + n }
-let Colour.name (c: Colour): String = match c { Red => "red", Blue => "blue" }
+
+let Colour.name (c: Colour): String = match c {
+    Red => "red",
+    Blue => "blue"
+}
 
 let main (): Unit = {
     // Built-in primitives, which still take precedence.

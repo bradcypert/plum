@@ -1,3 +1,6 @@
 let main (): Unit = {
-    for i in 0..1000 { assert_eq("aaaa".replace("a", ""), ""); assert_eq("".replace("a", "X"), ""); };
+    for i in 0..1000 {
+        assert_eq("aaaa".replace("a", ""), "");
+        assert_eq("".replace("a", "X"), "");
+    };
 }

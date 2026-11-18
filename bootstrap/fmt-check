@@ -1,12 +1,10 @@
 #!/usr/bin/env bash
 # Is every `.plum` file in the repo already formatted?
 #
-# `plum fmt` has exactly one opinion: the line a statement or an item
-# begins on is indented four spaces per enclosing block. That rule was
-# not invented, it was MEASURED -- across this repo indentation is
-# already a multiple of four everywhere, with no tabs, no trailing
-# whitespace and no missing final newline. The corpus is the style
-# guide and this asserts the formatter agrees with it.
+# The default formatter applies structural spacing and a soft 100-column
+# layout. Repository sources are maintained at its fixed point; deliberately
+# cramped inputs live in fmt_corpus with explicit expected output. Highlight
+# input fixtures use source-local directives to preserve caret columns.
 #
 # Three properties, and the second is the one that makes a formatter
 # safe to run on somebody's code:
@@ -180,8 +178,20 @@ if ! python3 bootstrap/formatter-layout-check.py "$plum"; then
     fail=$((fail + 1))
 fi
 
+if ! python3 bootstrap/formatter-width-check.py "$plum"; then
+    fail=$((fail + 1))
+fi
+
+if ! python3 bootstrap/formatter-exclusions-check.py "$plum"; then
+    fail=$((fail + 1))
+fi
+
+if ! python3 bootstrap/formatter-scaling-check.py "$plum"; then
+    fail=$((fail + 1))
+fi
+
 if [ "$fail" -ne 0 ]; then
     printf '\nfmt-check: %d file(s) failed, %d already formatted\n' "$fail" "$ok"
     exit 1
 fi
-printf 'fmt-check: %d checks pass -- every repo file already formatted, and fmt_corpus reformatted as recorded; %d intentional lexer errors rejected\n' "$ok" "$expected_lex_errors"
+printf 'fmt-check: %d checks pass -- sources formatted, position-sensitive inputs stable, and fmt_corpus reformatted as recorded; %d intentional lexer errors rejected\n' "$ok" "$expected_lex_errors"

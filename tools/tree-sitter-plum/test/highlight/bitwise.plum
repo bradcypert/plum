@@ -1,3 +1,4 @@
+// fmt: off
 let x = a | b
 //        ^ operator
 let x = a ^ b
@@ -10,3 +11,4 @@ let x = a >> n
 //        ^ operator
 let x = ~mask
 //      ^ operator
+// fmt: on

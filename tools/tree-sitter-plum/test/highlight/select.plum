@@ -1,3 +1,4 @@
+// fmt: off
 let f rx = select {
     //     ^ keyword
     value = rx => value,
@@ -11,3 +12,4 @@ let g rx budget = select {
     //^ variable
     //     ^ operator
 }
+// fmt: on

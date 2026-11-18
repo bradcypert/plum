@@ -28,7 +28,8 @@ let deep (n: Int): Int =
                                                                                                         // This comment follows the innermost value.
                                                                                                         let value =
                                                                                                             identity(
-                                                                                                                1);
+                                                                                                                1
+                                                                                                            );
                                                                                                         value
                                                                                                     },
                                                                                                 }

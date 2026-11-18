@@ -31,7 +31,18 @@ extern "C" {
     fn raylib_clear_background(r: Int, g: Int, b: Int, a: Int);
     fn raylib_draw_circle_lines(x: Float, y: Float, radius: Float, r: Int, g: Int, b: Int, a: Int);
     fn raylib_draw_circle_v(x: Float, y: Float, radius: Float, r: Int, g: Int, b: Int, a: Int);
-    fn raylib_draw_triangle_lines(x1: Float, y1: Float, x2: Float, y2: Float, x3: Float, y3: Float, r: Int, g: Int, b: Int, a: Int);
+    fn raylib_draw_triangle_lines(
+        x1: Float,
+        y1: Float,
+        x2: Float,
+        y2: Float,
+        x3: Float,
+        y3: Float,
+        r: Int,
+        g: Int,
+        b: Int,
+        a: Int
+    );
     fn raylib_draw_text(text: CStr, x: Int, y: Int, font_size: Int, r: Int, g: Int, b: Int, a: Int);
     fn raylib_measure_text(text: CStr, font_size: Int) -> Int;
     fn raylib_is_key_down(key: Int) -> Bool;
@@ -42,8 +53,11 @@ extern "C" {
 // --- Constants ---
 
 let SCREEN_WIDTH = 800
+
 let SCREEN_HEIGHT = 600
+
 let SCREEN_WIDTH_F = 800.0
+
 let SCREEN_HEIGHT_F = 600.0
 
 // `Float.pi()` since issue #20. This used to be a hand-typed constant
@@ -53,35 +67,57 @@ let SCREEN_HEIGHT_F = 600.0
 let PI = Float.pi()
 
 let SHIP_SIZE = 20.0
+
 let SHIP_ROTATION_SPEED = 3.5
+
 let SHIP_THRUST = 220.0
+
 let SHIP_DRAG = 0.60
+
 let MAX_SHIP_SPEED = 380.0
+
 let SHIP_COLLISION_RADIUS = 12.0
 
 let BULLET_SPEED = 520.0
+
 let BULLET_LIFETIME = 1.1
+
 let FIRE_COOLDOWN = 0.25
+
 let MAX_BULLETS = 32
+
 let BULLET_RADIUS = 2.0
 
 let MAX_ASTEROIDS = 64
+
 let ASTEROID_SPEED_MIN = 40.0
+
 let ASTEROID_SPEED_MAX = 110.0
+
 let ASTEROID_SPLIT_COUNT = 2
 
 let STARTING_LIVES = 3
+
 let STARTING_ASTEROIDS = 4
+
 let INVULNERABILITY_TIME = 2.0
+
 let RESPAWN_DELAY = 1.5
 
 let KEY_A = 65
+
 let KEY_D = 68
+
 let KEY_W = 87
+
 let KEY_LEFT = 263
+
 let KEY_RIGHT = 262
+
 let KEY_UP = 265
+
 let KEY_SPACE = 32
+
 let KEY_ENTER = 257
 
 struct Vec2 { x: Float, y: Float }
@@ -89,13 +125,25 @@ struct Vec2 { x: Float, y: Float }
 enum AsteroidSize { Large, Medium, Small }
 
 let asteroid_radius (size: AsteroidSize): Float =
-    match size { Large => 40.0, Medium => 22.0, Small => 12.0 }
+    match size {
+        Large => 40.0,
+        Medium => 22.0,
+        Small => 12.0
+    }
 
 let asteroid_score (size: AsteroidSize): Int =
-    match size { Large => 20, Medium => 50, Small => 100 }
+    match size {
+        Large => 20,
+        Medium => 50,
+        Small => 100
+    }
 
 let asteroid_next_size (size: AsteroidSize): Option[AsteroidSize] =
-    match size { Large => Some(Medium), Medium => Some(Small), Small => None }
+    match size {
+        Large => Some(Medium),
+        Medium => Some(Small),
+        Small => None
+    }
 
 struct Ship {
     position: Vec2,
@@ -136,12 +184,17 @@ struct Game {
 }
 
 let vec2_add (a: Vec2) (b: Vec2): Vec2 = Vec2 { x: a.x + b.x, y: a.y + b.y }
+
 let vec2_sub (a: Vec2) (b: Vec2): Vec2 = Vec2 { x: a.x - b.x, y: a.y - b.y }
+
 let vec2_scale (a: Vec2) (s: Float): Vec2 = Vec2 { x: a.x * s, y: a.y * s }
+
 let vec2_length (a: Vec2): Float = Float.sqrt(a.x * a.x + a.y * a.y)
+
 let zero_vec2 (): Vec2 = Vec2 { x: 0.0, y: 0.0 }
 
-let ship_facing (rotation: Float): Vec2 = Vec2 { x: Float.sin(rotation), y: 0.0 - Float.cos(rotation) }
+let ship_facing (rotation: Float): Vec2 =
+    Vec2 { x: Float.sin(rotation), y: 0.0 - Float.cos(rotation) }
 
 let wrap_position (pos: Vec2): Vec2 = {
     let x =
@@ -196,13 +249,24 @@ let find_inactive_asteroid_index (asteroids: Array[Asteroid]) (i: Int): Option[I
     else if asteroids[i].active { find_inactive_asteroid_index(asteroids, i + 1) }
     else { Some(i) }
 
-let find_colliding_asteroid_index (asteroids: Array[Asteroid]) (pos: Vec2) (radius: Float) (i: Int): Option[Int] =
+let find_colliding_asteroid_index
+    (asteroids: Array[Asteroid])
+    (pos: Vec2)
+    (radius: Float)
+    (i: Int): Option[Int]
+=
     if i >= asteroids.len() { None }
     else if asteroids[i].active
-        && circle_collide(pos, radius, asteroids[i].position, asteroid_radius(asteroids[i].size)) { Some(i) }
+        && circle_collide(pos, radius, asteroids[i].position, asteroid_radius(asteroids[i].size)) {
+            Some(i)
+        }
     else { find_colliding_asteroid_index(asteroids, pos, radius, i + 1) }
 
-let spawn_asteroid (asteroids: Array[Asteroid]) (position: Vec2) (size: AsteroidSize): Array[Asteroid] =
+let spawn_asteroid
+    (asteroids: Array[Asteroid])
+    (position: Vec2)
+    (size: AsteroidSize): Array[Asteroid]
+=
     match find_inactive_asteroid_index(asteroids, 0) {
         None => asteroids,
         Some(i) => {
@@ -221,7 +285,12 @@ let spawn_asteroid (asteroids: Array[Asteroid]) (position: Vec2) (size: Asteroid
         }
     }
 
-let spawn_n_asteroids (asteroids: Array[Asteroid]) (position: Vec2) (size: AsteroidSize) (n: Int): Array[Asteroid] =
+let spawn_n_asteroids
+    (asteroids: Array[Asteroid])
+    (position: Vec2)
+    (size: AsteroidSize)
+    (n: Int): Array[Asteroid]
+=
     if n <= 0 { asteroids }
     else { spawn_n_asteroids(spawn_asteroid(asteroids, position, size), position, size, n - 1) }
 
@@ -277,7 +346,11 @@ let fire_bullet (g: Game): Game =
                     lifetime: BULLET_LIFETIME,
                     active: true,
                 };
-                Game { bullets: g.bullets.set(i, b), fire_cooldown: FIRE_COOLDOWN, ..g }
+                Game {
+                    bullets: g.bullets.set(i, b),
+                    fire_cooldown: FIRE_COOLDOWN,
+                    ..g
+                }
             }
         }
     }
@@ -304,10 +377,14 @@ let tick_respawn (g: Game) (dt: Float): Game = {
 let handle_input_and_physics (g: Game) (dt: Float): Game = unsafe {
     let rot1 = g.ship.rotation;
     let rot2 =
-        if raylib_is_key_down(KEY_A) || raylib_is_key_down(KEY_LEFT) { rot1 - SHIP_ROTATION_SPEED * dt }
+        if raylib_is_key_down(KEY_A) || raylib_is_key_down(KEY_LEFT) {
+            rot1 - SHIP_ROTATION_SPEED * dt
+        }
         else { rot1 };
     let rot3 =
-        if raylib_is_key_down(KEY_D) || raylib_is_key_down(KEY_RIGHT) { rot2 + SHIP_ROTATION_SPEED * dt }
+        if raylib_is_key_down(KEY_D) || raylib_is_key_down(KEY_RIGHT) {
+            rot2 + SHIP_ROTATION_SPEED * dt
+        }
         else { rot2 };
     let vel1 =
         if raylib_is_key_down(KEY_W) || raylib_is_key_down(KEY_UP) {
@@ -319,7 +396,12 @@ let handle_input_and_physics (g: Game) (dt: Float): Game = unsafe {
     let drag_factor = Float.pow(SHIP_DRAG, dt);
     let vel3 = vec2_scale(vel2, drag_factor);
     let position = wrap_position(vec2_add(g.ship.position, vec2_scale(vel3, dt)));
-    Game { ship.rotation: rot3, ship.velocity: vel3, ship.position: position, ..g_after_fire }
+    Game {
+        ship.rotation: rot3,
+        ship.velocity: vel3,
+        ship.position: position,
+        ..g_after_fire
+    }
 }
 
 let tick_fire_cooldown (g: Game) (dt: Float): Game =
@@ -379,12 +461,20 @@ let resolve_bullet_collision_at (g: Game) (bullet_idx: Int): Game =
     if bullet_idx >= g.bullets.len() { g }
     else if !g.bullets[bullet_idx].active { resolve_bullet_collision_at(g, bullet_idx + 1) }
     else {
-        match find_colliding_asteroid_index(g.asteroids, g.bullets[bullet_idx].position, BULLET_RADIUS, 0) {
+        match find_colliding_asteroid_index(
+            g.asteroids,
+            g.bullets[bullet_idx].position,
+            BULLET_RADIUS,
+            0
+        ) {
             None => resolve_bullet_collision_at(g, bullet_idx + 1),
             Some(asteroid_idx) => {
                 let g2 = split_asteroid(g, asteroid_idx);
                 let g3 = Game {
-                    bullets: g2.bullets.set(bullet_idx, Bullet { active: false, ..g2.bullets[bullet_idx] }),
+                    bullets: g2.bullets.set(
+                        bullet_idx,
+                        Bullet { active: false, ..g2.bullets[bullet_idx] }
+                    ),
                     ..g2
                 };
                 resolve_bullet_collision_at(g3, bullet_idx + 1)
@@ -401,8 +491,22 @@ let resolve_ship_asteroid_collision (g: Game): Game =
             Some(_) => {
                 let new_lives = g.lives - 1;
                 let ship = Ship { alive: false, ..g.ship };
-                if new_lives <= 0 { Game { lives: new_lives, ship: ship, state: GameOver, ..g } }
-                else { Game { lives: new_lives, ship: ship, respawn_timer: RESPAWN_DELAY, ..g } }
+                if new_lives <= 0 {
+                    Game {
+                        lives: new_lives,
+                        ship: ship,
+                        state: GameOver,
+                        ..g
+                    }
+                }
+                else {
+                    Game {
+                        lives: new_lives,
+                        ship: ship,
+                        respawn_timer: RESPAWN_DELAY,
+                        ..g
+                    }
+                }
             }
         }
     } else { g }
@@ -418,7 +522,9 @@ let advance_wave_if_clear (g: Game): Game =
     if !any_asteroid_active(g.asteroids) { spawn_wave(Game { wave: g.wave + 1, ..g }) } else { g }
 
 let update_playing (g: Game) (dt: Float): Game = {
-    let g1 = if g.respawn_timer > 0.0 { tick_respawn(g, dt) } else { handle_input_and_physics(g, dt) };
+    let g1 = if g.respawn_timer > 0.0 { tick_respawn(g, dt) } else {
+        handle_input_and_physics(g, dt)
+    };
     let g2 = tick_fire_cooldown(g1, dt);
     let g3 = update_bullets(g2, dt);
     let g4 = update_asteroids(g3, dt);
@@ -442,12 +548,26 @@ let draw_ship (ship: Ship): Unit = {
         } else { true };
         if should_draw {
             let nose = vec2_add(ship.position, vec2_scale(ship_facing(ship.rotation), SHIP_SIZE));
-            let left = vec2_add(ship.position, vec2_scale(ship_facing(ship.rotation + 2.5), SHIP_SIZE));
-            let right = vec2_add(ship.position, vec2_scale(ship_facing(ship.rotation - 2.5), SHIP_SIZE));
+            let left = vec2_add(
+                ship.position,
+                vec2_scale(ship_facing(ship.rotation + 2.5), SHIP_SIZE)
+            );
+            let right = vec2_add(
+                ship.position,
+                vec2_scale(ship_facing(ship.rotation - 2.5), SHIP_SIZE)
+            );
             unsafe {
                 raylib_draw_triangle_lines(
-                    nose.x, nose.y, left.x, left.y, right.x, right.y,
-                    255, 255, 255, 255,
+                    nose.x,
+                    nose.y,
+                    left.x,
+                    left.y,
+                    right.x,
+                    right.y,
+                    255,
+                    255,
+                    255,
+                    255,
                 );
             }
         };
@@ -458,7 +578,15 @@ let draw_asteroids (asteroids: Array[Asteroid]): Unit = {
     for a in asteroids {
         if a.active {
             unsafe {
-                raylib_draw_circle_lines(a.position.x, a.position.y, asteroid_radius(a.size), 130, 130, 130, 255);
+                raylib_draw_circle_lines(
+                    a.position.x,
+                    a.position.y,
+                    asteroid_radius(a.size),
+                    130,
+                    130,
+                    130,
+                    255
+                );
             }
         };
     };
@@ -482,14 +610,26 @@ let draw_ui (g: Game): Unit = unsafe {
         let msg = "GAME OVER";
         let w = raylib_measure_text(msg.as_cstr(), 40);
         raylib_draw_text(
-            msg.as_cstr(), SCREEN_WIDTH / 2 - w / 2, SCREEN_HEIGHT / 2 - 40, 40,
-            255, 0, 0, 255,
+            msg.as_cstr(),
+            SCREEN_WIDTH / 2 - w / 2,
+            SCREEN_HEIGHT / 2 - 40,
+            40,
+            255,
+            0,
+            0,
+            255,
         );
         let sub = "Press ENTER to restart";
         let w2 = raylib_measure_text(sub.as_cstr(), 20);
         raylib_draw_text(
-            sub.as_cstr(), SCREEN_WIDTH / 2 - w2 / 2, SCREEN_HEIGHT / 2 + 10, 20,
-            255, 255, 255, 255,
+            sub.as_cstr(),
+            SCREEN_WIDTH / 2 - w2 / 2,
+            SCREEN_HEIGHT / 2 + 10,
+            20,
+            255,
+            255,
+            255,
+            255,
         );
     };
 }

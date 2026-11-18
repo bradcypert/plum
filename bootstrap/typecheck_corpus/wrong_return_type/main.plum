@@ -1,2 +1,3 @@
 let f (): Int = true
+
 let main (): Unit = println(f().to_string())

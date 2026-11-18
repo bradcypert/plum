@@ -1,1 +1,4 @@
-let main (): Unit = { let values: Array = []; () }
+let main (): Unit = {
+    let values: Array = [];
+    ()
+}

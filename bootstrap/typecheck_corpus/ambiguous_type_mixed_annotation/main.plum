@@ -2,4 +2,5 @@ use left;
 use right;
 
 let consume (s: Shade): Unit = ()
+
 let main (): Unit = ()

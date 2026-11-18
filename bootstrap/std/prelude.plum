@@ -3,6 +3,7 @@
 /// Plum has no null, so absence is spelled here and the checker makes
 /// you handle it.
 pub enum Option[T] { Some(T), None }
+
 /// A value, or an explanation of why there isn't one.
 ///
 /// Failure is an ordinary value: no exceptions, so a function that can
@@ -11,7 +12,16 @@ pub enum Result[T, E] { Ok(T), Err(E) }
 
 /// The mathematical integer kinds used by checked integer conversions.
 /// `Signed64` represents both `Int` and its `I64` alias.
-pub enum IntegerKind { Signed8, Signed16, Signed32, Signed64, Unsigned8, Unsigned16, Unsigned32, Unsigned64 }
+pub enum IntegerKind {
+    Signed8,
+    Signed16,
+    Signed32,
+    Signed64,
+    Unsigned8,
+    Unsigned16,
+    Unsigned32,
+    Unsigned64
+}
 
 /// A checked integer conversion whose value is outside the destination range.
 /// Contains only source and destination kind tags, not the rejected value or
@@ -19,71 +29,139 @@ pub enum IntegerKind { Signed8, Signed16, Signed32, Signed64, Unsigned8, Unsigne
 pub struct IntegerConversionError { pub source: IntegerKind, pub destination: IntegerKind }
 
 /// Whether there is a value.
-pub let Option.is_some[T] (o: Option[T]): Bool = match o { Some(_) => true, None => false }
+pub let Option.is_some[T] (o: Option[T]): Bool = match o {
+    Some(_) => true,
+    None => false
+}
+
 /// Whether there is no value.
-pub let Option.is_none[T] (o: Option[T]): Bool = match o { Some(_) => false, None => true }
+pub let Option.is_none[T] (o: Option[T]): Bool = match o {
+    Some(_) => false,
+    None => true
+}
+
 /// The first option when it contains a value, or `fallback` otherwise.
 ///
 /// `fallback` is evaluated whether or not it is needed. Use `or_else`
 /// when finding the fallback costs something.
-pub let Option.or[T] (o: Option[T]) (fallback: Option[T]): Option[T] = match o { Some(_) => o, None => fallback }
+pub let Option.or[T] (o: Option[T]) (fallback: Option[T]): Option[T] = match o {
+    Some(_) => o,
+    None => fallback
+}
+
 /// The first option when it contains a value, or the result of calling
 /// `f` otherwise. The lazy `or`: `f` runs only when it has to.
-pub let Option.or_else[T] (o: Option[T]) (f: () -> Option[T]): Option[T] = match o { Some(_) => o, None => f() }
+pub let Option.or_else[T] (o: Option[T]) (f: () -> Option[T]): Option[T] = match o {
+    Some(_) => o,
+    None => f()
+}
+
 /// The value, or `fallback` when there is none.
 ///
 /// `fallback` is evaluated whether or not it is needed. Use
 /// `unwrap_or_else` when computing it costs something.
-pub let Option.unwrap_or[T] (o: Option[T]) (fallback: T): T = match o { Some(v) => v, None => fallback }
+pub let Option.unwrap_or[T] (o: Option[T]) (fallback: T): T = match o {
+    Some(v) => v,
+    None => fallback
+}
+
 /// The value, or the result of calling `f` when there is none. The
 /// lazy `unwrap_or`: `f` runs only when it has to.
-pub let Option.unwrap_or_else[T] (o: Option[T]) (f: () -> T): T = match o { Some(v) => v, None => f() }
+pub let Option.unwrap_or_else[T] (o: Option[T]) (f: () -> T): T = match o {
+    Some(v) => v,
+    None => f()
+}
+
 /// Transforms the value if there is one, leaving `None` alone.
-pub let Option.map[T, U] (o: Option[T]) (f: (T) -> U): Option[U] = match o { Some(v) => Some(f(v)), None => None }
+pub let Option.map[T, U] (o: Option[T]) (f: (T) -> U): Option[U] = match o {
+    Some(v) => Some(f(v)),
+    None => None
+}
+
 /// Chains an operation that may itself find nothing.
 ///
 /// `map` with a function returning `Option` would give
 /// `Option[Option[U]]`; this is the one that keeps it flat.
-pub let Option.and_then[T, U] (o: Option[T]) (f: (T) -> Option[U]): Option[U] = match o { Some(v) => f(v), None => None }
+pub let Option.and_then[T, U] (o: Option[T]) (f: (T) -> Option[U]): Option[U] = match o {
+    Some(v) => f(v),
+    None => None
+}
+
 /// Turns nothing into an error, so an `Option` can join a chain of
 /// `Result`s.
-pub let Option.ok_or[T, E] (o: Option[T]) (err: E): Result[T, E] = match o { Some(v) => Ok(v), None => Err(err) }
+pub let Option.ok_or[T, E] (o: Option[T]) (err: E): Result[T, E] = match o {
+    Some(v) => Ok(v),
+    None => Err(err)
+}
 
 /// Whether this succeeded.
-pub let Result.is_ok[T, E] (r: Result[T, E]): Bool = match r { Ok(_) => true, Err(_) => false }
+pub let Result.is_ok[T, E] (r: Result[T, E]): Bool = match r {
+    Ok(_) => true,
+    Err(_) => false
+}
+
 /// Whether this failed.
-pub let Result.is_err[T, E] (r: Result[T, E]): Bool = match r { Ok(_) => false, Err(_) => true }
+pub let Result.is_err[T, E] (r: Result[T, E]): Bool = match r {
+    Ok(_) => false,
+    Err(_) => true
+}
+
 /// The value, or `fallback` on failure — DISCARDING the error. Reach
 /// for `unwrap_or_else` when the error should shape the answer.
-pub let Result.unwrap_or[T, E] (r: Result[T, E]) (fallback: T): T = match r { Ok(v) => v, Err(_) => fallback }
+pub let Result.unwrap_or[T, E] (r: Result[T, E]) (fallback: T): T = match r {
+    Ok(v) => v,
+    Err(_) => fallback
+}
+
 /// The value, or the result of calling `f` with the error. The
 /// recovery that gets to see what went wrong.
-pub let Result.unwrap_or_else[T, E] (r: Result[T, E]) (f: (E) -> T): T = match r { Ok(v) => v, Err(e) => f(e) }
+pub let Result.unwrap_or_else[T, E] (r: Result[T, E]) (f: (E) -> T): T = match r {
+    Ok(v) => v,
+    Err(e) => f(e)
+}
+
 /// Transforms the value on success, leaving an error untouched.
-pub let Result.map[T, E, U] (r: Result[T, E]) (f: (T) -> U): Result[U, E] = match r { Ok(v) => Ok(f(v)), Err(e) => Err(e) }
+pub let Result.map[T, E, U] (r: Result[T, E]) (f: (T) -> U): Result[U, E] = match r {
+    Ok(v) => Ok(f(v)),
+    Err(e) => Err(e)
+}
+
 /// Transforms the ERROR, leaving a success untouched. For adding
 /// context to a failure on its way up.
-pub let Result.map_err[T, E, F] (r: Result[T, E]) (f: (E) -> F): Result[T, F] = match r { Ok(v) => Ok(v), Err(e) => Err(f(e)) }
+pub let Result.map_err[T, E, F] (r: Result[T, E]) (f: (E) -> F): Result[T, F] = match r {
+    Ok(v) => Ok(v),
+    Err(e) => Err(f(e))
+}
+
 /// Chains an operation that may itself fail, stopping at the first
 /// error. The flat version of `map` over a fallible step.
-pub let Result.and_then[T, E, U] (r: Result[T, E]) (f: (T) -> Result[U, E]): Result[U, E] = match r { Ok(v) => f(v), Err(e) => Err(e) }
+pub let Result.and_then[T, E, U] (r: Result[T, E]) (f: (T) -> Result[U, E]): Result[U, E] =
+    match r {
+        Ok(v) => f(v),
+        Err(e) => Err(e)
+    }
 
 /// Whether the array has no elements.
 pub let Array.is_empty[T] (xs: Array[T]): Bool = xs.len() == 0
 
 let plum__array_concat_acc[T] (a: Array[T]) (b: Array[T]) (i: Int): Array[T] =
     if i >= b.len() { a } else { plum__array_concat_acc(a.push(b[i]), b, i + 1) }
+
 /// A new array with `b`'s elements after `a`'s. Neither input is
 /// changed.
 pub let Array.concat[T] (a: Array[T]) (b: Array[T]): Array[T] = plum__array_concat_acc(a, b, 0)
 
 let plum__array_contains_acc[T] (xs: Array[T]) (needle: T) (i: Int): Bool =
-    if i >= xs.len() { false } else if xs[i] == needle { true } else { plum__array_contains_acc(xs, needle, i + 1) }
+    if i >= xs.len() { false } else if xs[i] == needle { true } else {
+        plum__array_contains_acc(xs, needle, i + 1)
+    }
+
 /// Whether any element equals `needle`, compared structurally.
 pub let Array.contains[T] (xs: Array[T]) (needle: T): Bool = plum__array_contains_acc(xs, needle, 0)
 
 let plum__array_any_acc[T] (xs: Array[T]) (f: (T) -> Bool) (i: Int): Bool =
     if i >= xs.len() { false } else if f(xs[i]) { true } else { plum__array_any_acc(xs, f, i + 1) }
+
 /// Whether `f` holds for at least one element. Stops at the first
 /// that passes; false for an empty array.
 pub let Array.any[T] (xs: Array[T]) (f: (T) -> Bool): Bool = plum__array_any_acc(xs, f, 0)
@@ -92,7 +170,10 @@ pub let Array.any[T] (xs: Array[T]) (f: (T) -> Bool): Bool = plum__array_any_acc
 /// the end is the tail, not a crash, which matters because this
 /// backend emits no bounds check of its own.
 let plum__array_slice_acc[T] (xs: Array[T]) (i: Int) (end: Int) (acc: Array[T]): Array[T] =
-    if i >= end { acc } else if i >= xs.len() { acc } else { plum__array_slice_acc(xs, i + 1, end, acc.push(xs[i])) }
+    if i >= end { acc } else if i >= xs.len() { acc } else {
+        plum__array_slice_acc(xs, i + 1, end, acc.push(xs[i]))
+    }
+
 /// The elements from `start` up to but NOT including `end`.
 ///
 /// Out-of-range bounds are clamped rather than an error, and a `start`
@@ -105,35 +186,51 @@ pub let Array.slice[T] (xs: Array[T]) (start: Int) (end: Int): Array[T] =
 // as a semantic fallback for evaluators without that lowering.
 let plum__array_reverse_acc[T] (xs: Array[T]) (i: Int) (acc: Array[T]): Array[T] =
     if i < 0 { acc } else { plum__array_reverse_acc(xs, i - 1, acc.push(xs[i])) }
+
 /// A new array in the opposite order.
 pub let Array.reverse[T] (xs: Array[T]): Array[T] = plum__array_reverse_acc(xs, xs.len() - 1, [])
 
 let plum__array_all_acc[T] (xs: Array[T]) (f: (T) -> Bool) (i: Int): Bool =
     if i >= xs.len() { true } else if f(xs[i]) { plum__array_all_acc(xs, f, i + 1) } else { false }
+
 /// Whether `f` holds for every element. Stops at the first that
 /// fails; TRUE for an empty array, which is the convention everywhere
 /// and still surprises people.
 pub let Array.all[T] (xs: Array[T]) (f: (T) -> Bool): Bool = plum__array_all_acc(xs, f, 0)
 
 let plum__array_find_acc[T] (xs: Array[T]) (f: (T) -> Bool) (i: Int): Option[T] =
-    if i >= xs.len() { None } else if f(xs[i]) { Some(xs[i]) } else { plum__array_find_acc(xs, f, i + 1) }
+    if i >= xs.len() { None } else if f(xs[i]) { Some(xs[i]) } else {
+        plum__array_find_acc(xs, f, i + 1)
+    }
+
 /// The first element `f` accepts, or `None`.
 pub let Array.find[T] (xs: Array[T]) (f: (T) -> Bool): Option[T] = plum__array_find_acc(xs, f, 0)
 
 let plum__array_find_index_acc[T] (xs: Array[T]) (f: (T) -> Bool) (i: Int): Option[Int] =
-    if i >= xs.len() { None } else if f(xs[i]) { Some(i) } else { plum__array_find_index_acc(xs, f, i + 1) }
+    if i >= xs.len() { None } else if f(xs[i]) { Some(i) } else {
+        plum__array_find_index_acc(xs, f, i + 1)
+    }
+
 /// The index of the first element `f` accepts, or `None`.
-pub let Array.find_index[T] (xs: Array[T]) (f: (T) -> Bool): Option[Int] = plum__array_find_index_acc(xs, f, 0)
+pub let Array.find_index[T] (xs: Array[T]) (f: (T) -> Bool): Option[Int] =
+    plum__array_find_index_acc(xs, f, 0)
 
 /// The index of the first element equal to `needle`, or `None`.
-pub let Array.index_of[T] (xs: Array[T]) (needle: T): Option[Int] = Array.find_index(xs, |x| x == needle)
+pub let Array.index_of[T] (xs: Array[T]) (needle: T): Option[Int] =
+    Array.find_index(xs, |x| x == needle)
+
 /// The first element, or `None` when the array is empty.
-pub let Array.first[T] (xs: Array[T]): Option[T] = if Array.is_empty(xs) { None } else { Some(xs[0]) }
+pub let Array.first[T] (xs: Array[T]): Option[T] =
+    if Array.is_empty(xs) { None } else { Some(xs[0]) }
+
 /// The last element, or `None` when the array is empty.
-pub let Array.last[T] (xs: Array[T]): Option[T] = if Array.is_empty(xs) { None } else { Some(xs[xs.len() - 1]) }
+pub let Array.last[T] (xs: Array[T]): Option[T] =
+    if Array.is_empty(xs) { None } else { Some(xs[xs.len() - 1]) }
+
 /// The first `n` elements, or all of them if there are fewer. Never
 /// an error.
 pub let Array.take[T] (xs: Array[T]) (n: Int): Array[T] = Array.slice(xs, 0, n)
+
 /// Everything after the first `n` elements, or nothing if there are
 /// fewer.
 pub let Array.drop[T] (xs: Array[T]) (n: Int): Array[T] = Array.slice(xs, n, xs.len())
@@ -141,6 +238,7 @@ pub let Array.drop[T] (xs: Array[T]) (n: Int): Array[T] = Array.slice(xs, n, xs.
 /// The sum, which OVERFLOWS like any other addition and stops the
 /// program rather than wrapping.
 pub let Array.sum_int (xs: Array[Int]): Int = Array.fold(xs, 0, |acc, x| acc + x)
+
 /// The sum, left to right. Floating-point addition is not
 /// associative, so a different order can give a different last digit.
 pub let Array.sum_float (xs: Array[Float]): Float = Array.fold(xs, 0.0, |acc, x| acc + x)
@@ -153,10 +251,13 @@ pub let Array.sum_float (xs: Array[Float]): Float = Array.fold(xs, 0.0, |acc, x|
 /// overflows, which stops the program rather than returning a negative
 /// "absolute" value.
 pub let Int.abs (a: Int): Int = if a < 0 { 0 - a } else { a }
+
 /// The smaller of two.
 pub let Int.min (a: Int) (b: Int): Int = if a < b { a } else { b }
+
 /// The larger of two.
 pub let Int.max (a: Int) (b: Int): Int = if a > b { a } else { b }
+
 /// `x` held between `lo` and `hi` inclusive. A `lo` above `hi` gives
 /// `hi`, since the upper bound is applied last.
 pub let Int.clamp (x: Int) (lo: Int) (hi: Int): Int = Int.min(Int.max(x, lo), hi)
@@ -195,14 +296,18 @@ let PLUM_NIBBLE_ONES: Array[Int] = [0, 1, 1, 2, 1, 2, 2, 3, 1, 2, 2, 3, 2, 3, 3,
 /// The absolute value, clearing the sign bit (including on negative zero).
 /// NaN remains NaN.
 pub let Float.abs (a: Float): Float = abs_raw(a)
+
 /// Whether `x` is neither infinity nor NaN. Includes both signed zeros
 /// and subnormal values.
 pub let Float.is_finite (x: Float): Bool = x - x == 0.0
+
 /// The smaller of two. NaN does not compare, so a NaN argument gives
 /// an answer that is not meaningful.
 pub let Float.min (a: Float) (b: Float): Float = if a < b { a } else { b }
+
 /// The larger of two. See `Float.min` on NaN.
 pub let Float.max (a: Float) (b: Float): Float = if a > b { a } else { b }
+
 /// `x` held between `lo` and `hi` inclusive.
 pub let Float.clamp (x: Float) (lo: Float) (hi: Float): Float = Float.min(Float.max(x, lo), hi)
 
@@ -220,8 +325,10 @@ let plum__string_reverse_raw (s: String): String = ""
 /// allocation. Uses constant scratch without character arrays or strings.
 /// Empty output uses static storage; a single character shares input storage.
 pub let String.reverse (s: String): String = plum__string_reverse_raw(s)
+
 /// Whether the string has no bytes.
 pub let String.is_empty (s: String): Bool = s.len() == 0
+
 /// Characters from `start` up to but not including `end`, counted in
 /// CODEPOINTS rather than bytes. Out-of-range bounds are clamped.
 /// Scans only as far as the requested boundaries, without allocating an
@@ -252,6 +359,7 @@ let plum__string_slice_boundary (bytes: Bytes) (n: Int) (i: Int) (left: Int): In
         else if left <= 0 { i }
         else { plum__string_slice_boundary(bytes, n, i + 1, left - 1) }
     }
+
 // Borrows the input and returns an owned result; lowered to the runtime.
 let plum__string_repeat_raw (s: String) (n: Int): String = ""
 
@@ -291,10 +399,13 @@ pub let String.char_len (s: String): Int = {
 /// width is returned unchanged: this pads, it never truncates.
 /// Unique storage is reused when it already fits; other padded results
 /// use one compact buffer without intermediate repeated-fill strings.
-pub let String.pad_left (s: String) (width: Int) (fill: String): String = plum__pad(s, width, fill, 0)
+pub let String.pad_left (s: String) (width: Int) (fill: String): String =
+    plum__pad(s, width, fill, 0)
+
 /// Padded on the RIGHT to `width` characters — left-aligned text.
 /// Never truncates; see `String.pad_left`.
-pub let String.pad_right (s: String) (width: Int) (fill: String): String = plum__pad(s, width, fill, 1)
+pub let String.pad_right (s: String) (width: Int) (fill: String): String =
+    plum__pad(s, width, fill, 1)
 
 // --- Formatting numbers (issue #23) ---
 //
@@ -312,7 +423,8 @@ pub let String.pad_right (s: String) (width: Int) (fill: String): String = plum_
 /// Centred padding, completing the set beside `pad_left`/`pad_right`.
 /// An odd remainder goes on the RIGHT, so a column of centred headings
 /// lines up on its left edge rather than drifting.
-pub let String.pad_center (s: String) (width: Int) (fill: String): String = plum__pad(s, width, fill, 2)
+pub let String.pad_center (s: String) (width: Int) (fill: String): String =
+    plum__pad(s, width, fill, 2)
 
 /// `decimals` places after the point, rounded HALF TO EVEN. Precision is
 /// clamped to 0..17: negative values act as 0, and values above 17 act as 17.
@@ -463,7 +575,9 @@ pub let Int.to_radix (n: Int) (radix: Int): String = {
 // Remaining magnitude is nonnegative. Append least-significant digits into
 // one owned accumulator; prepending would copy the growing suffix each time.
 let plum__radix_acc (n: Int) (r: Int) (acc: String): String =
-    if n == 0 { acc } else { plum__radix_acc(n / r, r, acc.concat(plum__radix_digit(n - (n / r) * r))) }
+    if n == 0 { acc } else {
+        plum__radix_acc(n / r, r, acc.concat(plum__radix_digit(n - (n / r) * r)))
+    }
 
 // A finite formatting alphabet needs no per-call arrays, byte buffers or
 // Result cells. Each arm returns an immutable String literal. A global
@@ -512,8 +626,10 @@ let plum__radix_digit (v: Int): String = match v {
 /// Lowercase hex, SIGNED: `-255` is `-ff`, not a two's-complement bit
 /// pattern. `Int.to_hex_bits` is the one that shows the bits.
 pub let Int.to_hex (n: Int): String = Int.to_radix(n, 16)
+
 /// Binary, SIGNED: `-1` is `-1`. `Int.to_bits` shows all 64 bits.
 pub let Int.to_binary (n: Int): String = Int.to_radix(n, 2)
+
 /// Octal, signed. See `Int.to_radix` for other bases.
 pub let Int.to_octal (n: Int): String = Int.to_radix(n, 8)
 
@@ -551,10 +667,15 @@ let print_raw (s: String): Bool = false
 
 /// Writes to standard output with NO trailing newline. `println` is
 /// the one that adds one.
-pub let print (s: String): Unit = { print_raw(s); () }
+pub let print (s: String): Unit = {
+    print_raw(s);
+    ()
+}
 
 let wrapping_add_raw (a: Int) (b: Int): Int = 0
+
 let wrapping_sub_raw (a: Int) (b: Int): Int = 0
+
 let wrapping_mul_raw (a: Int) (b: Int): Int = 0
 
 /// Addition that WRAPS on overflow, two's complement, instead of
@@ -583,150 +704,187 @@ pub let Int.wrapping_mul (a: Int) (b: Int): Int = wrapping_mul_raw(a, b)
 
 // Fixed-width wrapping uses the same named primitive path as Int.
 let i8_wrapping_add_raw (a: I8) (b: I8): I8 = 0
+
 /// Adds modulo 2^8; interprets the result as signed two’s complement. Ordinary arithmetic remains checked.
 pub let I8.wrapping_add (a: I8) (b: I8): I8 = i8_wrapping_add_raw(a, b)
 
 let i8_wrapping_sub_raw (a: I8) (b: I8): I8 = 0
+
 /// Subtracts modulo 2^8; interprets the result as signed two’s complement. Ordinary arithmetic remains checked.
 pub let I8.wrapping_sub (a: I8) (b: I8): I8 = i8_wrapping_sub_raw(a, b)
 
 let i8_wrapping_mul_raw (a: I8) (b: I8): I8 = 0
+
 /// Multiplies modulo 2^8; interprets the result as signed two’s complement. Ordinary arithmetic remains checked.
 pub let I8.wrapping_mul (a: I8) (b: I8): I8 = i8_wrapping_mul_raw(a, b)
 
 let i16_wrapping_add_raw (a: I16) (b: I16): I16 = 0
+
 /// Adds modulo 2^16; interprets the result as signed two’s complement. Ordinary arithmetic remains checked.
 pub let I16.wrapping_add (a: I16) (b: I16): I16 = i16_wrapping_add_raw(a, b)
 
 let i16_wrapping_sub_raw (a: I16) (b: I16): I16 = 0
+
 /// Subtracts modulo 2^16; interprets the result as signed two’s complement. Ordinary arithmetic remains checked.
 pub let I16.wrapping_sub (a: I16) (b: I16): I16 = i16_wrapping_sub_raw(a, b)
 
 let i16_wrapping_mul_raw (a: I16) (b: I16): I16 = 0
+
 /// Multiplies modulo 2^16; interprets the result as signed two’s complement. Ordinary arithmetic remains checked.
 pub let I16.wrapping_mul (a: I16) (b: I16): I16 = i16_wrapping_mul_raw(a, b)
 
 let i32_wrapping_add_raw (a: I32) (b: I32): I32 = 0
+
 /// Adds modulo 2^32; interprets the result as signed two’s complement. Ordinary arithmetic remains checked.
 pub let I32.wrapping_add (a: I32) (b: I32): I32 = i32_wrapping_add_raw(a, b)
 
 let i32_wrapping_sub_raw (a: I32) (b: I32): I32 = 0
+
 /// Subtracts modulo 2^32; interprets the result as signed two’s complement. Ordinary arithmetic remains checked.
 pub let I32.wrapping_sub (a: I32) (b: I32): I32 = i32_wrapping_sub_raw(a, b)
 
 let i32_wrapping_mul_raw (a: I32) (b: I32): I32 = 0
+
 /// Multiplies modulo 2^32; interprets the result as signed two’s complement. Ordinary arithmetic remains checked.
 pub let I32.wrapping_mul (a: I32) (b: I32): I32 = i32_wrapping_mul_raw(a, b)
 
 let u8_wrapping_add_raw (a: U8) (b: U8): U8 = 0
+
 /// Adds modulo 2^8; returns the unsigned low bits. Ordinary arithmetic remains checked.
 pub let U8.wrapping_add (a: U8) (b: U8): U8 = u8_wrapping_add_raw(a, b)
 
 let u8_wrapping_sub_raw (a: U8) (b: U8): U8 = 0
+
 /// Subtracts modulo 2^8; returns the unsigned low bits. Ordinary arithmetic remains checked.
 pub let U8.wrapping_sub (a: U8) (b: U8): U8 = u8_wrapping_sub_raw(a, b)
 
 let u8_wrapping_mul_raw (a: U8) (b: U8): U8 = 0
+
 /// Multiplies modulo 2^8; returns the unsigned low bits. Ordinary arithmetic remains checked.
 pub let U8.wrapping_mul (a: U8) (b: U8): U8 = u8_wrapping_mul_raw(a, b)
 
 let u16_wrapping_add_raw (a: U16) (b: U16): U16 = 0
+
 /// Adds modulo 2^16; returns the unsigned low bits. Ordinary arithmetic remains checked.
 pub let U16.wrapping_add (a: U16) (b: U16): U16 = u16_wrapping_add_raw(a, b)
 
 let u16_wrapping_sub_raw (a: U16) (b: U16): U16 = 0
+
 /// Subtracts modulo 2^16; returns the unsigned low bits. Ordinary arithmetic remains checked.
 pub let U16.wrapping_sub (a: U16) (b: U16): U16 = u16_wrapping_sub_raw(a, b)
 
 let u16_wrapping_mul_raw (a: U16) (b: U16): U16 = 0
+
 /// Multiplies modulo 2^16; returns the unsigned low bits. Ordinary arithmetic remains checked.
 pub let U16.wrapping_mul (a: U16) (b: U16): U16 = u16_wrapping_mul_raw(a, b)
 
 let u32_wrapping_add_raw (a: U32) (b: U32): U32 = 0
+
 /// Adds modulo 2^32; returns the unsigned low bits. Ordinary arithmetic remains checked.
 pub let U32.wrapping_add (a: U32) (b: U32): U32 = u32_wrapping_add_raw(a, b)
 
 let u32_wrapping_sub_raw (a: U32) (b: U32): U32 = 0
+
 /// Subtracts modulo 2^32; returns the unsigned low bits. Ordinary arithmetic remains checked.
 pub let U32.wrapping_sub (a: U32) (b: U32): U32 = u32_wrapping_sub_raw(a, b)
 
 let u32_wrapping_mul_raw (a: U32) (b: U32): U32 = 0
+
 /// Multiplies modulo 2^32; returns the unsigned low bits. Ordinary arithmetic remains checked.
 pub let U32.wrapping_mul (a: U32) (b: U32): U32 = u32_wrapping_mul_raw(a, b)
 
 let u64_wrapping_add_raw (a: U64) (b: U64): U64 = 0
+
 /// Adds modulo 2^64; returns the unsigned low bits. Ordinary arithmetic remains checked.
 pub let U64.wrapping_add (a: U64) (b: U64): U64 = u64_wrapping_add_raw(a, b)
 
 let u64_wrapping_sub_raw (a: U64) (b: U64): U64 = 0
+
 /// Subtracts modulo 2^64; returns the unsigned low bits. Ordinary arithmetic remains checked.
 pub let U64.wrapping_sub (a: U64) (b: U64): U64 = u64_wrapping_sub_raw(a, b)
 
 let u64_wrapping_mul_raw (a: U64) (b: U64): U64 = 0
+
 /// Multiplies modulo 2^64; returns the unsigned low bits. Ordinary arithmetic remains checked.
 pub let U64.wrapping_mul (a: U64) (b: U64): U64 = u64_wrapping_mul_raw(a, b)
 
 // Fixed-width bit helpers retain the Int helper conventions.
 let i8_shr_logical_raw (x: I8) (n: Int): I8 = 0
+
 /// Shifts the low 8 bits right with zero fill. Nonpositive counts return x; counts at least 8 return zero. The result retains I8.
 pub let I8.shr_logical (x: I8) (n: Int): I8 = i8_shr_logical_raw(x, n)
 
 let i8_count_ones_raw (x: I8): Int = 0
+
 /// Counts one bits within the 8-bit representation, excluding any sign extension. Returns an Int in 0..8 inclusive.
 pub let I8.count_ones (x: I8): Int = i8_count_ones_raw(x)
 
 let i16_shr_logical_raw (x: I16) (n: Int): I16 = 0
+
 /// Shifts the low 16 bits right with zero fill. Nonpositive counts return x; counts at least 16 return zero. The result retains I16.
 pub let I16.shr_logical (x: I16) (n: Int): I16 = i16_shr_logical_raw(x, n)
 
 let i16_count_ones_raw (x: I16): Int = 0
+
 /// Counts one bits within the 16-bit representation, excluding any sign extension. Returns an Int in 0..16 inclusive.
 pub let I16.count_ones (x: I16): Int = i16_count_ones_raw(x)
 
 let i32_shr_logical_raw (x: I32) (n: Int): I32 = 0
+
 /// Shifts the low 32 bits right with zero fill. Nonpositive counts return x; counts at least 32 return zero. The result retains I32.
 pub let I32.shr_logical (x: I32) (n: Int): I32 = i32_shr_logical_raw(x, n)
 
 let i32_count_ones_raw (x: I32): Int = 0
+
 /// Counts one bits within the 32-bit representation, excluding any sign extension. Returns an Int in 0..32 inclusive.
 pub let I32.count_ones (x: I32): Int = i32_count_ones_raw(x)
 
 let u8_shr_logical_raw (x: U8) (n: Int): U8 = 0
+
 /// Shifts the low 8 bits right with zero fill. Nonpositive counts return x; counts at least 8 return zero. The result retains U8.
 pub let U8.shr_logical (x: U8) (n: Int): U8 = u8_shr_logical_raw(x, n)
 
 let u8_count_ones_raw (x: U8): Int = 0
+
 /// Counts one bits within the 8-bit representation, excluding any sign extension. Returns an Int in 0..8 inclusive.
 pub let U8.count_ones (x: U8): Int = u8_count_ones_raw(x)
 
 let u16_shr_logical_raw (x: U16) (n: Int): U16 = 0
+
 /// Shifts the low 16 bits right with zero fill. Nonpositive counts return x; counts at least 16 return zero. The result retains U16.
 pub let U16.shr_logical (x: U16) (n: Int): U16 = u16_shr_logical_raw(x, n)
 
 let u16_count_ones_raw (x: U16): Int = 0
+
 /// Counts one bits within the 16-bit representation, excluding any sign extension. Returns an Int in 0..16 inclusive.
 pub let U16.count_ones (x: U16): Int = u16_count_ones_raw(x)
 
 let u32_shr_logical_raw (x: U32) (n: Int): U32 = 0
+
 /// Shifts the low 32 bits right with zero fill. Nonpositive counts return x; counts at least 32 return zero. The result retains U32.
 pub let U32.shr_logical (x: U32) (n: Int): U32 = u32_shr_logical_raw(x, n)
 
 let u32_count_ones_raw (x: U32): Int = 0
+
 /// Counts one bits within the 32-bit representation, excluding any sign extension. Returns an Int in 0..32 inclusive.
 pub let U32.count_ones (x: U32): Int = u32_count_ones_raw(x)
 
 let u64_shr_logical_raw (x: U64) (n: Int): U64 = 0
+
 /// Shifts the low 64 bits right with zero fill. Nonpositive counts return x; counts at least 64 return zero. The result retains U64.
 pub let U64.shr_logical (x: U64) (n: Int): U64 = u64_shr_logical_raw(x, n)
 
 let u64_count_ones_raw (x: U64): Int = 0
+
 /// Counts one bits within the 64-bit representation, excluding any sign extension. Returns an Int in 0..64 inclusive.
 pub let U64.count_ones (x: U64): Int = u64_count_ones_raw(x)
 
 // i traverses the borrowed prefix [0, n); no optional byte cell is needed.
 let plum__string_hash_acc (b: Bytes) (i: Int) (n: Int) (h: Int): Int =
     if i >= n { h & 9223372036854775807 }
-    else { plum__string_hash_acc(b, i + 1, n, Int.wrapping_mul(h ^ bytes_at_raw(b, i), 1099511628211)) }
+    else {
+        plum__string_hash_acc(b, i + 1, n, Int.wrapping_mul(h ^ bytes_at_raw(b, i), 1099511628211))
+    }
 
 /// A hash of the string's bytes, for bucketing.
 ///
@@ -750,7 +908,12 @@ pub let String.is_ascii_ws (c: String): Bool = c == " " || c == "\t" || c == "\n
 // KMP failure links: the longest proper prefix that is also a suffix
 // of the bytes matched so far. Following a link never advances the
 // input, and never repeats comparisons for a discarded prefix.
-let plum__string_search_fallback (needle: Bytes) (links: Array[Int]) (matched: Int) (byte: Int): Int =
+let plum__string_search_fallback
+    (needle: Bytes)
+    (links: Array[Int])
+    (matched: Int)
+    (byte: Int): Int
+=
     if matched > 0 && bytes_at_raw(needle, matched) != byte {
         plum__string_search_fallback(needle, links, links[matched - 1], byte)
     } else { matched }
@@ -769,7 +932,13 @@ let plum__string_search_links (needle: Bytes): Array[Int] = {
     links
 }
 
-let plum__string_search_bytes (s: Bytes) (needle: Bytes) (links: Array[Int]) (i: Int) (matched: Int): Option[Int] =
+let plum__string_search_bytes
+    (s: Bytes)
+    (needle: Bytes)
+    (links: Array[Int])
+    (i: Int)
+    (matched: Int): Option[Int]
+=
     if i >= bytes_len_raw(s) { None }
     else {
         let byte = bytes_at_raw(s, i);
@@ -785,7 +954,12 @@ let plum__string_count_starts (s: Bytes) (end: Int) (i: Int) (count: Int): Int =
     if i >= end { count }
     else {
         let byte = bytes_at_raw(s, i);
-        plum__string_count_starts(s, end, i + 1, count + if byte < 128 || byte >= 192 { 1 } else { 0 })
+        plum__string_count_starts(
+            s,
+            end,
+            i + 1,
+            count + if byte < 128 || byte >= 192 { 1 } else { 0 }
+        )
     }
 
 /// The CHARACTER index where `needle` first appears, or `None`.
@@ -824,24 +998,30 @@ pub let String.index_of (s: String) (needle: String): Option[Int] =
 /// The number of BYTES. `String.char_len` is the character count, and
 /// the two differ for anything outside ASCII.
 pub let String.len (s: String): Int = s.len()
+
 /// Splits on every occurrence of `sep`.
 ///
 /// A separator at either end produces an empty piece, so splitting
 /// `\",a,\"` on `\",\"` gives three pieces. Splitting on an empty
 /// separator gives the characters.
 pub let String.split (s: String) (sep: String): Array[String] = s.split(sep)
+
 /// Whether `needle` appears anywhere.
 pub let String.contains (s: String) (needle: String): Bool = s.contains(needle)
+
 /// Whether the string begins with `prefix`.
 pub let String.starts_with (s: String) (prefix: String): Bool = s.starts_with(prefix)
+
 /// Whether the string ends with `suffix`.
 pub let String.ends_with (s: String) (suffix: String): Bool = s.ends_with(suffix)
+
 /// Every occurrence of `from` replaced with `to`. An empty `from`
 /// leaves the string alone rather than looping.
 /// Unchanged nonempty results share the input cell. Equal-byte-length changes
 /// may reuse uniquely owned storage; other changed results allocate exactly.
 /// Empty results use static storage.
 pub let String.replace (s: String) (from: String) (to: String): String = s.replace(from, to)
+
 /// Uppercased using the platform's one-codepoint Unicode mapping. This
 /// does not perform multi-codepoint expansions (for example, ß to SS).
 /// POSIX uses the initialized UTF-8 locale; Windows maps the BMP only
@@ -850,19 +1030,27 @@ pub let String.replace (s: String) (from: String) (to: String): String = s.repla
 /// uniquely owned storage when every mapped codepoint keeps its byte width;
 /// otherwise they allocate exactly. Empty results use static storage.
 pub let String.to_upper (s: String): String = s.to_upper()
+
 /// Lowercased with the same platform mapping and storage rules as `String.to_upper`.
 pub let String.to_lower (s: String): String = s.to_lower()
+
 /// Whitespace removed from both ends, including Unicode spaces.
 /// Unchanged input shares its owned storage; changed input copies only
 /// the retained UTF-8 bytes.
 pub let String.trim (s: String): String = s.trim()
 
 let bytes_of_str_raw (s: String): Bytes = bytes_of_str_raw(s)
+
 let str_of_bytes_raw (b: Bytes): String = ""
+
 let bytes_len_raw (b: Bytes): Int = 0
+
 let bytes_at_raw (b: Bytes) (i: Int): Int = 0
+
 let bytes_slice_raw (b: Bytes) (start: Int) (end: Int): Bytes = bytes_slice_raw(b, start, end)
+
 let bytes_concat_raw (a: Bytes) (b: Bytes): Bytes = bytes_concat_raw(a, b)
+
 let bytes_from_array_raw (xs: Array[Int]): Bytes = bytes_from_array_raw(xs)
 
 /// No bytes.
@@ -870,6 +1058,7 @@ pub let Bytes.empty (): Bytes = bytes_of_str_raw("")
 
 /// How many bytes.
 pub let Bytes.len (b: Bytes): Int = bytes_len_raw(b)
+
 /// Whether there are no bytes.
 pub let Bytes.is_empty (b: Bytes): Bool = bytes_len_raw(b) == 0
 
@@ -878,6 +1067,7 @@ pub let Bytes.is_empty (b: Bytes): Bool = bytes_len_raw(b) == 0
 /// The string's bytes, as UTF-8. No copy of the text is decoded, so
 /// this is the cheap direction.
 pub let String.as_bytes (s: String): Bytes = bytes_of_str_raw(s)
+
 /// The string's UTF-8 bytes. The same as `String.as_bytes`, named for
 /// a caller thinking in bytes.
 pub let Bytes.from_string (s: String): Bytes = bytes_of_str_raw(s)
@@ -952,6 +1142,7 @@ let plum__utf8_ok (b: Bytes) (i: Int) (n: Int): Bool =
 
 /// Whether these bytes are valid UTF-8, without building a string.
 pub let Bytes.is_utf8 (b: Bytes): Bool = plum__utf8_ok(b, 0, bytes_len_raw(b))
+
 /// Decodes UTF-8 into a string.
 ///
 /// `Err` when the bytes are not valid UTF-8 — which is why this is a
@@ -1011,6 +1202,7 @@ pub let Bytes.from_array (xs: Array[Int]): Bytes = bytes_from_array_raw(xs)
 /// on the next call, or freed by the callee; the copy is what makes
 /// the result an ordinary owned Plum value.
 let bytes_from_cstr_raw (c: RawCStr) (len: Int): Bytes = unsafe { bytes_from_cstr_raw(c, len) }
+
 /// Copies `len` bytes from a C pointer.
 ///
 /// Requires an `unsafe` block and all arguments at the call site;
@@ -1027,6 +1219,7 @@ pub let Bytes.from_cstr (c: RawCStr) (len: Int): Bytes = unsafe {
 
 // Borrows b and returns independent owned Array[Int] storage.
 let plum__bytes_to_array_raw (b: Bytes): Array[Int] = []
+
 /// The bytes as numbers 0-255, using one exact-sized array allocation.
 /// The result is independent of the input; empty results use static storage.
 pub let Bytes.to_array (b: Bytes): Array[Int] = plum__bytes_to_array_raw(b)
@@ -1046,6 +1239,7 @@ let plum__hex_digit (v: Int): String =
 
 // Implemented by the generated runtime; borrows b and returns owned storage.
 let plum__bytes_to_hex_raw (b: Bytes): String = ""
+
 /// Lowercase hex, two characters per byte. `Encoding.hex_decode`
 /// reads it back. A nonempty result uses one exact-sized allocation;
 /// an empty result uses shared static storage.
@@ -1068,7 +1262,15 @@ let plum__int_min (u: Unit): Int = 0 - 9223372036854775807 - 1
 
 // chars_of groups following continuation bytes with the preceding byte,
 // even for unsafe raw Strings. Only accept a sign/digit as a one-byte unit.
-let plum__string_parse_int_acc (s: String) (bytes: Bytes) (n: Int) (i: Int) (acc: Int) (any: Bool) (negative: Bool): Result[Int, String] =
+let plum__string_parse_int_acc
+    (s: String)
+    (bytes: Bytes)
+    (n: Int)
+    (i: Int)
+    (acc: Int)
+    (any: Bool)
+    (negative: Bool): Result[Int, String]
+=
     if i >= n { if any { Ok(acc) } else { Err("expected at least one digit") } }
     else {
         let byte = bytes_at_raw(bytes, i);
@@ -1084,10 +1286,14 @@ let plum__string_parse_int_acc (s: String) (bytes: Bytes) (n: Int) (i: Int) (acc
             if negative {
                 if acc < 0 - 922337203685477580 { Err("integer out of range") }
                 else if acc * 10 < plum__int_min(()) + digit { Err("integer out of range") }
-                else { plum__string_parse_int_acc(s, bytes, n, i + 1, acc * 10 - digit, true, negative) }
+                else {
+                    plum__string_parse_int_acc(s, bytes, n, i + 1, acc * 10 - digit, true, negative)
+                }
             } else if acc > 922337203685477580 { Err("integer out of range") }
             else if acc * 10 > 9223372036854775807 - digit { Err("integer out of range") }
-            else { plum__string_parse_int_acc(s, bytes, n, i + 1, acc * 10 + digit, true, negative) }
+            else {
+                plum__string_parse_int_acc(s, bytes, n, i + 1, acc * 10 + digit, true, negative)
+            }
         }
     }
 
@@ -1129,7 +1335,9 @@ pub let String.parse_int (s: String): Result[Int, String] = {
 pub let String.parse_float (s: String): Result[Float, String] = {
     let cs = bytes_of_str_raw(s);
     match parse_number(cs, 0) {
-        Ok(r) => if r.next_pos == bytes_len_raw(cs) { Ok(r.value) } else { Err("trailing characters after number") },
+        Ok(r) => if r.next_pos == bytes_len_raw(cs) { Ok(r.value) } else {
+            Err("trailing characters after number")
+        },
         Err(e) => Err(e),
     }
 }
@@ -1139,7 +1347,14 @@ pub let String.parse_float (s: String): Result[Float, String] = {
 // Merge into a fresh, uniquely owned accumulator. Tail calls move it
 // into the next push, so growth is amortized O(1) per element. Taking
 // the left element on equality preserves the original order of ties.
-let plum__array_sort_merge_acc[T] (left: Array[T]) (right: Array[T]) (le: (T, T) -> Bool) (i: Int) (j: Int) (acc: Array[T]): Array[T] =
+let plum__array_sort_merge_acc[T]
+    (left: Array[T])
+    (right: Array[T])
+    (le: (T, T) -> Bool)
+    (i: Int)
+    (j: Int)
+    (acc: Array[T]): Array[T]
+=
     if i >= left.len() {
         if j >= right.len() { acc }
         else { plum__array_sort_merge_acc(left, right, le, i, j + 1, acc.push(right[j])) }
@@ -1171,13 +1386,16 @@ let plum__array_sort_range[T] (arr: Array[T]) (le: (T, T) -> Bool) (lo: Int) (hi
 /// produce the ordering people expect.
 ///
 /// Merge sort with O(n log n) comparisons and O(n) auxiliary storage.
-pub let Array.sort_by[T] (arr: Array[T]) (le: (T, T) -> Bool): Array[T] = plum__array_sort_range(arr, le, 0, arr.len())
+pub let Array.sort_by[T] (arr: Array[T]) (le: (T, T) -> Bool): Array[T] =
+    plum__array_sort_range(arr, le, 0, arr.len())
 
 /// Sorted ascending.
 pub let Array.sort_int (arr: Array[Int]): Array[Int] = Array.sort_by(arr, |a: Int, b: Int| a <= b)
+
 /// Sorted ascending. NaN does not compare, so an array containing one
 /// has no meaningful order.
-pub let Array.sort_float (arr: Array[Float]): Array[Float] = Array.sort_by(arr, |a: Float, b: Float| a <= b)
+pub let Array.sort_float (arr: Array[Float]): Array[Float] =
+    Array.sort_by(arr, |a: Float, b: Float| a <= b)
 
 // `Array.sort_string` is deliberately ABSENT: the real prelude compares
 // via `a.runes()`, and this compiler has no `.runes()` primitive. It
@@ -1189,15 +1407,24 @@ pub let Array.sort_float (arr: Array[Float]): Array[Float] = Array.sort_by(arr, 
 /// A named struct, not a tuple, exactly as the real prelude has it.
 pub struct Zipped[A, B] { pub first: A, pub second: B }
 
-let plum__array_zip_acc[T, U] (a: Array[T]) (b: Array[U]) (i: Int) (acc: Array[Zipped[T, U]]): Array[Zipped[T, U]] =
-    if i >= a.len() || i >= b.len() { acc } else { plum__array_zip_acc(a, b, i + 1, acc.push(Zipped { first: a[i], second: b[i] })) }
+let plum__array_zip_acc[T, U]
+    (a: Array[T])
+    (b: Array[U])
+    (i: Int)
+    (acc: Array[Zipped[T, U]]): Array[Zipped[T, U]]
+=
+    if i >= a.len() || i >= b.len() { acc } else {
+        plum__array_zip_acc(a, b, i + 1, acc.push(Zipped { first: a[i], second: b[i] }))
+    }
 
 /// Pairs elements positionally, stopping at the shorter array.
-pub let Array.zip[T, U] (a: Array[T]) (b: Array[U]): Array[Zipped[T, U]] = plum__array_zip_acc(a, b, 0, [])
+pub let Array.zip[T, U] (a: Array[T]) (b: Array[U]): Array[Zipped[T, U]] =
+    plum__array_zip_acc(a, b, 0, [])
 
 // --- String trimming ---
 
 let plum__string_trim_start_raw (s: String): String = ""
+
 let plum__string_trim_end_raw (s: String): String = ""
 
 /// Whitespace removed from the start, using the same Unicode whitespace
@@ -1226,35 +1453,57 @@ pub let String.lines (s: String): Array[String] = s.split("\n")
 /// This backend has no `extern "C"`/`unsafe` support, so they reach the
 /// same libm functions as runtime primitives instead.
 let abs_raw (x: Float): Float = 0.0
+
 let sqrt_raw (x: Float): Float = 0.0
+
 let pow_raw (b: Float) (e: Float): Float = 0.0
+
 let floor_raw (x: Float): Float = 0.0
+
 let ceil_raw (x: Float): Float = 0.0
+
 let round_raw (x: Float): Float = 0.0
+
 let sin_raw (x: Float): Float = 0.0
+
 let cos_raw (x: Float): Float = 0.0
+
 let tan_raw (x: Float): Float = 0.0
+
 let asin_raw (x: Float): Float = 0.0
+
 let acos_raw (x: Float): Float = 0.0
+
 let atan_raw (x: Float): Float = 0.0
+
 let atan2_raw (y: Float) (x: Float): Float = 0.0
+
 let log_raw (x: Float): Float = 0.0
+
 let log2_raw (x: Float): Float = 0.0
+
 let log10_raw (x: Float): Float = 0.0
+
 let exp_raw (x: Float): Float = 0.0
+
 let float_fixed_raw (x: Float) (decimals: Int): String = ""
+
 let random_raw (ignored: Bool): Float = 0.0
 
 /// The square root. Negative input gives NaN rather than failing.
 pub let Float.sqrt (x: Float): Float = sqrt_raw(x)
+
 /// `base` raised to `exp`. A fractional exponent of a negative base
 /// gives NaN.
 pub let Float.pow (base: Float) (exp: Float): Float = pow_raw(base, exp)
+
 /// The largest whole number no greater than `x` — toward negative
 /// infinity, so `floor(-2.5)` is `-3.0`.
 pub let Float.floor (x: Float): Float = floor_raw(x)
+
 /// The smallest whole number no less than `x`.
 pub let Float.ceil (x: Float): Float = ceil_raw(x)
+
 /// The nearest whole number, halves AWAY FROM ZERO: `round(2.5)` is
 /// `3.0` and `round(-2.5)` is `-3.0`.
 ///
@@ -1269,6 +1518,7 @@ pub let Float.round (x: Float): Float = round_raw(x)
 /// Different every run, and NOT reproducible. `Rng.from_seed` is the
 /// one for a test or a replay.
 pub let Float.random (): Float = random_raw(true)
+
 /// A float in `[lo, hi)`, from the same unseeded generator as
 /// `Float.random`.
 pub let Float.random_range (lo: Float) (hi: Float): Float = lo + (hi - lo) * Float.random(())
@@ -1281,17 +1531,22 @@ pub let Float.random_range (lo: Float) (hi: Float): Float = lo + (hi - lo) * Flo
 /// rather than scattering `* 3.14159 / 180.0`.
 /// Sine of an angle in RADIANS.
 pub let Float.sin (x: Float): Float = sin_raw(x)
+
 /// Cosine of an angle in radians.
 pub let Float.cos (x: Float): Float = cos_raw(x)
+
 /// Tangent of an angle in radians. Grows without bound near odd
 /// multiples of pi/2 rather than failing.
 pub let Float.tan (x: Float): Float = tan_raw(x)
+
 /// The angle in radians whose sine is `x`, in `[-pi/2, pi/2]`. NaN
 /// outside `[-1, 1]`.
 pub let Float.asin (x: Float): Float = asin_raw(x)
+
 /// The angle in radians whose cosine is `x`, in `[0, pi]`. NaN
 /// outside `[-1, 1]`.
 pub let Float.acos (x: Float): Float = acos_raw(x)
+
 /// The angle in radians whose tangent is `x`. `Float.atan2` is the
 /// one that knows which quadrant.
 pub let Float.atan (x: Float): Float = atan_raw(x)
@@ -1308,11 +1563,14 @@ pub let Float.atan2 (y: Float) (x: Float): Float = atan2_raw(y, x)
 /// The natural logarithm. NaN for a negative argument, and negative
 /// infinity at zero.
 pub let Float.log (x: Float): Float = log_raw(x)
+
 /// Base-2 logarithm, computed directly rather than as a division —
 /// which is what keeps `log2(8.0)` exactly `3.0`.
 pub let Float.log2 (x: Float): Float = log2_raw(x)
+
 /// Base-10 logarithm, computed directly. See `Float.log2`.
 pub let Float.log10 (x: Float): Float = log10_raw(x)
+
 /// `e` raised to `x`.
 pub let Float.exp (x: Float): Float = exp_raw(x)
 
@@ -1322,15 +1580,18 @@ pub let Float.exp (x: Float): Float = exp_raw(x)
 /// not a rounding of something else.
 /// Pi, to the last digit a double holds.
 pub let Float.pi (): Float = 3.141592653589793
+
 /// Two pi — a full turn, which is the more useful constant when
 /// working with angles.
 pub let Float.tau (): Float = 6.283185307179586
+
 /// Euler's number.
 pub let Float.e (): Float = 2.718281828459045
 
 /// Degrees to radians. Every trigonometric function here takes
 /// radians, so this is the conversion at the edge.
 pub let Float.radians (degrees: Float): Float = degrees * 3.141592653589793 / 180.0
+
 /// Radians to degrees.
 pub let Float.degrees (radians: Float): Float = radians * 180.0 / 3.141592653589793
 
@@ -1362,8 +1623,11 @@ pub let Float.degrees (radians: Float): Float = radians * 180.0 / 3.141592653589
 pub struct Rng { state: Int }
 
 let RNG_GAMMA: Int = -7046029254386353131
+
 let RNG_MIX_1: Int = -4658895280553007687
+
 let RNG_MIX_2: Int = -7723592293110705685
+
 let RNG_RANGE: Int = 9223372036854775807
 
 /// Any `Int` is a legal seed, including zero and negatives. SplitMix64
@@ -1507,7 +1771,8 @@ let string_cmp_raw (a: String) (b: String): Int = 0
 
 /// Sorted by BYTE order, not by any locale's alphabet — so uppercase
 /// sorts before lowercase, and accented letters sort after `z`.
-pub let Array.sort_string (arr: Array[String]): Array[String] = Array.sort_by(arr, |a: String, b: String| a <= b)
+pub let Array.sort_string (arr: Array[String]): Array[String] =
+    Array.sort_by(arr, |a: String, b: String| a <= b)
 
 // --- Assertions ---
 //
@@ -1526,13 +1791,19 @@ pub let assert (cond: Bool): Unit =
 /// it in a test.
 pub let assert_eq[T] (a: T) (b: T): Unit =
     if a == b { () } else {
-        panic_raw("assertion failed: left != right\n  left:  ".concat(a.to_string()).concat("\n  right: ").concat(b.to_string()))
+        panic_raw(
+            "assertion failed: left != right\n  left:  ".concat(a.to_string()).concat("\n  right: ")
+                .concat(b.to_string())
+        )
     }
 
 /// Stops the program if the two are equal, printing them.
 pub let assert_ne[T] (a: T) (b: T): Unit =
     if a != b { () } else {
-        panic_raw("assertion failed: left == right\n  left:  ".concat(a.to_string()).concat("\n  right: ").concat(b.to_string()))
+        panic_raw(
+            "assertion failed: left == right\n  left:  ".concat(a.to_string()).concat("\n  right: ")
+                .concat(b.to_string())
+        )
     }
 
 // --- Collections: Map and Set ---
@@ -1559,8 +1830,11 @@ enum MapNode[K, V] {
 pub struct Map[K, V] { root: MapNode[K, V], size: Int }
 
 let value_hash[T: Hash] (x: T): Int = x.hash()
+
 let map_bit (hash: Int) (shift: Int): Int = 1 << (Int.shr_logical(hash, shift) & 31)
+
 let map_rank (bits: Int) (bit: Int): Int = Int.count_ones(bits & (bit - 1))
+
 let map_bucket_find_index[K: Eq, V] (bucket: Array[MapEntry[K, V]]) (k: K) (i: Int): Int =
     if i >= bucket.len() { -1 }
     else if bucket[i].key == k { i }
@@ -1568,7 +1842,13 @@ let map_bucket_find_index[K: Eq, V] (bucket: Array[MapEntry[K, V]]) (k: K) (i: I
 
 // Joining distinct complete hashes must diverge before all hash bits are
 // consumed. Keeping this separate also handles a collision node as a child.
-let map_join[K, V] (a: MapNode[K, V]) (ah: Int) (b: MapNode[K, V]) (bh: Int) (shift: Int): MapNode[K, V] = {
+let map_join[K, V]
+    (a: MapNode[K, V])
+    (ah: Int)
+    (b: MapNode[K, V])
+    (bh: Int)
+    (shift: Int): MapNode[K, V]
+= {
     let abit = map_bit(ah, shift);
     let bbit = map_bit(bh, shift);
     if abit == bbit { MapBranch(abit, [map_join(a, ah, b, bh, shift + 5)]) }
@@ -1576,63 +1856,93 @@ let map_join[K, V] (a: MapNode[K, V]) (ah: Int) (b: MapNode[K, V]) (bh: Int) (sh
     else { MapBranch(abit | bbit, [b, a]) }
 }
 
-let map_child_insert[K, V] (children: Array[MapNode[K, V]]) (at: Int) (child: MapNode[K, V]): Array[MapNode[K, V]] = {
+let map_child_insert[K, V]
+    (children: Array[MapNode[K, V]])
+    (at: Int)
+    (child: MapNode[K, V]): Array[MapNode[K, V]]
+= {
     let mut out = [];
     for i in 0..children.len() {
-        if i == at { out = out.push(child); };
+        if i == at {
+            out = out.push(child);
+        };
         out = out.push(children[i]);
     };
-    if at == children.len() { out = out.push(child); };
+    if at == children.len() {
+        out = out.push(child);
+    };
     out
 }
 
-let map_node_get[K: Eq, V] (node: MapNode[K, V]) (hash: Int) (key: K) (shift: Int): Option[V] = match node {
-    MapEmpty => None,
-    MapLeaf(h, k, v) => if h == hash && k == key { Some(v) } else { None },
-    MapCollision(h, entries) => if h != hash { None } else {
-        let i = map_bucket_find_index(entries, key, 0);
-        if i < 0 { None } else { Some(entries[i].value) }
-    },
-    MapBranch(bits, children) => {
-        let bit = map_bit(hash, shift);
-        if (bits & bit) == 0 { None }
-        else { map_node_get(children[map_rank(bits, bit)], hash, key, shift + 5) }
-    },
-}
+let map_node_get[K: Eq, V] (node: MapNode[K, V]) (hash: Int) (key: K) (shift: Int): Option[V] =
+    match node {
+        MapEmpty => None,
+        MapLeaf(h, k, v) => if h == hash && k == key { Some(v) } else { None },
+        MapCollision(h, entries) => if h != hash { None } else {
+            let i = map_bucket_find_index(entries, key, 0);
+            if i < 0 { None } else { Some(entries[i].value) }
+        },
+        MapBranch(bits, children) => {
+            let bit = map_bit(hash, shift);
+            if (bits & bit) == 0 { None }
+            else { map_node_get(children[map_rank(bits, bit)], hash, key, shift + 5) }
+        },
+    }
 
 // Presence checks must not allocate an Option or retain a stored value.
-let map_node_contains[K: Eq, V] (node: MapNode[K, V]) (hash: Int) (key: K) (shift: Int): Bool = match node {
-    MapEmpty => false,
-    MapLeaf(h, k, _) => h == hash && k == key,
-    MapCollision(h, entries) => h == hash && map_bucket_find_index(entries, key, 0) >= 0,
-    MapBranch(bits, children) => {
-        let bit = map_bit(hash, shift);
-        (bits & bit) != 0 && map_node_contains(children[map_rank(bits, bit)], hash, key, shift + 5)
-    },
-}
+let map_node_contains[K: Eq, V] (node: MapNode[K, V]) (hash: Int) (key: K) (shift: Int): Bool =
+    match node {
+        MapEmpty => false,
+        MapLeaf(h, k, _) => h == hash && k == key,
+        MapCollision(h, entries) => h == hash && map_bucket_find_index(entries, key, 0) >= 0,
+        MapBranch(bits, children) => {
+            let bit = map_bit(hash, shift);
+            (bits & bit) != 0
+                && map_node_contains(children[map_rank(bits, bit)], hash, key, shift + 5)
+        },
+    }
 
-let map_node_put[K: Eq, V] (node: MapNode[K, V]) (hash: Int) (key: K) (value: V) (shift: Int): MapNode[K, V] = match node {
+let map_node_put[K: Eq, V]
+    (node: MapNode[K, V])
+    (hash: Int)
+    (key: K)
+    (value: V)
+    (shift: Int): MapNode[K, V]
+= match node {
     MapEmpty => MapLeaf(hash, key, value),
     MapLeaf(h, k, v) => if h != hash { map_join(node, h, MapLeaf(hash, key, value), hash, shift) }
-        else if k == key { MapLeaf(hash, key, value) }
-        else { MapCollision(hash, [MapEntry { key: k, value: v }, MapEntry { key: key, value: value }]) },
-    MapCollision(h, entries) => if h != hash { map_join(node, h, MapLeaf(hash, key, value), hash, shift) }
-        else {
-            let i = map_bucket_find_index(entries, key, 0);
-            let entry = MapEntry { key: key, value: value };
-            MapCollision(hash, if i < 0 { entries.push(entry) } else { entries.set(i, entry) })
-        },
+    else if k == key { MapLeaf(hash, key, value) }
+    else {
+        MapCollision(hash, [MapEntry { key: k, value: v }, MapEntry { key: key, value: value }])
+    },
+    MapCollision(h, entries) => if h != hash {
+        map_join(node, h, MapLeaf(hash, key, value), hash, shift)
+    }
+    else {
+        let i = map_bucket_find_index(entries, key, 0);
+        let entry = MapEntry { key: key, value: value };
+        MapCollision(hash, if i < 0 { entries.push(entry) } else { entries.set(i, entry) })
+    },
     MapBranch(bits, children) => {
         let bit = map_bit(hash, shift);
         let i = map_rank(bits, bit);
-        if (bits & bit) == 0 { MapBranch(bits | bit, map_child_insert(children, i, MapLeaf(hash, key, value))) }
-        else { MapBranch(bits, children.set(i, map_node_put(children[i], hash, key, value, shift + 5))) }
+        if (bits & bit) == 0 {
+            MapBranch(bits | bit, map_child_insert(children, i, MapLeaf(hash, key, value)))
+        }
+        else {
+            MapBranch(bits, children.set(i, map_node_put(children[i], hash, key, value, shift + 5)))
+        }
     },
 }
 
 // Branches encode their depth implicitly: only a leaf or collision node can
 // be lifted through a singleton branch without changing the routing shift.
-let map_node_remove[K: Eq, V] (node: MapNode[K, V]) (hash: Int) (key: K) (shift: Int): MapNode[K, V] = match node {
+let map_node_remove[K: Eq, V]
+    (node: MapNode[K, V])
+    (hash: Int)
+    (key: K)
+    (shift: Int): MapNode[K, V]
+= match node {
     MapEmpty => node,
     MapLeaf(h, k, _) => if h == hash && k == key { MapEmpty } else { node },
     MapCollision(h, entries) => if h != hash { node } else {
@@ -1648,12 +1958,22 @@ let map_node_remove[K: Eq, V] (node: MapNode[K, V]) (hash: Int) (key: K) (shift:
         if (bits & bit) == 0 { node } else {
             let i = map_rank(bits, bit);
             let child = map_node_remove(children[i], hash, key, shift + 5);
-            let rest = match child { MapEmpty => children.remove(i), _ => children.set(i, child) };
-            let new_bits = match child { MapEmpty => bits & ~bit, _ => bits };
+            let rest = match child {
+                MapEmpty => children.remove(i),
+                _ => children.set(i, child)
+            };
+            let new_bits = match child {
+                MapEmpty => bits & ~bit,
+                _ => bits
+            };
             if rest.len() == 0 { MapEmpty }
-            else if rest.len() == 1 { match rest[0] {
-                MapLeaf(_, _, _) => rest[0], MapCollision(_, _) => rest[0], _ => MapBranch(new_bits, rest),
-            } } else { MapBranch(new_bits, rest) }
+            else if rest.len() == 1 {
+                match rest[0] {
+                    MapLeaf(_, _, _) => rest[0],
+                    MapCollision(_, _) => rest[0],
+                    _ => MapBranch(new_bits, rest),
+                }
+            } else { MapBranch(new_bits, rest) }
         }
     },
 }
@@ -1670,7 +1990,8 @@ pub let Map.insert[K: Eq + Hash, V] (m: Map[K, V]) (k: K) (v: V): Map[K, V] = {
 }
 
 /// The value for `k`, or `None`.
-pub let Map.get[K: Eq + Hash, V] (m: Map[K, V]) (k: K): Option[V] = map_node_get(m.root, value_hash(k), k, 0)
+pub let Map.get[K: Eq + Hash, V] (m: Map[K, V]) (k: K): Option[V] =
+    map_node_get(m.root, value_hash(k), k, 0)
 
 /// Whether `k` has a value.
 pub let Map.contains[K: Eq + Hash, V] (m: Map[K, V]) (k: K): Bool =
@@ -1692,26 +2013,35 @@ let map_node_keys[K, V] (node: MapNode[K, V]) (acc: Array[K]): Array[K] = match 
     MapLeaf(_, k, _) => acc.push(k),
     MapCollision(_, entries) => {
         let mut out = acc;
-        for entry in entries { out = out.push(entry.key); };
+        for entry in entries {
+            out = out.push(entry.key);
+        };
         out
     },
     MapBranch(_, children) => {
         let mut out = acc;
-        for child in children { out = map_node_keys(child, out); };
+        for child in children {
+            out = map_node_keys(child, out);
+        };
         out
     },
 }
+
 let map_node_values[K, V] (node: MapNode[K, V]) (acc: Array[V]): Array[V] = match node {
     MapEmpty => acc,
     MapLeaf(_, _, v) => acc.push(v),
     MapCollision(_, entries) => {
         let mut out = acc;
-        for entry in entries { out = out.push(entry.value); };
+        for entry in entries {
+            out = out.push(entry.value);
+        };
         out
     },
     MapBranch(_, children) => {
         let mut out = acc;
-        for child in children { out = map_node_values(child, out); };
+        for child in children {
+            out = map_node_values(child, out);
+        };
         out
     },
 }
@@ -1722,11 +2052,20 @@ pub let Map.keys[K, V] (m: Map[K, V]): Array[K] = map_node_keys(m.root, [])
 /// Every value, in the same order as `Map.keys`.
 pub let Map.values[K, V] (m: Map[K, V]): Array[V] = map_node_values(m.root, [])
 
-let map_from_arrays_acc[K: Eq + Hash, V] (keys: Array[K]) (values: Array[V]) (i: Int) (acc: Map[K, V]): Map[K, V] =
-    if i >= keys.len() || i >= values.len() { acc } else { map_from_arrays_acc(keys, values, i + 1, Map.insert(acc, keys[i], values[i])) }
+let map_from_arrays_acc[K: Eq + Hash, V]
+    (keys: Array[K])
+    (values: Array[V])
+    (i: Int)
+    (acc: Map[K, V]): Map[K, V]
+=
+    if i >= keys.len() || i >= values.len() { acc } else {
+        map_from_arrays_acc(keys, values, i + 1, Map.insert(acc, keys[i], values[i]))
+    }
+
 /// A map from parallel arrays, stopping at the shorter. A repeated
 /// key keeps the LAST value.
-pub let Map.from_arrays[K: Eq + Hash, V] (keys: Array[K]) (values: Array[V]): Map[K, V] = map_from_arrays_acc(keys, values, 0, Map.new(()))
+pub let Map.from_arrays[K: Eq + Hash, V] (keys: Array[K]) (values: Array[V]): Map[K, V] =
+    map_from_arrays_acc(keys, values, 0, Map.new(()))
 
 /// A set of `T`, persistent like `Map` — `Set.insert` returns a new
 /// set. Members need `Eq` and `Hash`. Equal keys hash identically.
@@ -1736,47 +2075,66 @@ pub struct Set[T] { inner: Map[T, Unit] }
 
 /// An empty set.
 pub let Set.new[T] (): Set[T] = Set { inner: Map.new(()) }
+
 /// A new set with `x` added. Adding a member twice changes nothing.
-pub let Set.insert[T: Eq + Hash] (s: Set[T]) (x: T): Set[T] = Set { inner: Map.insert(s.inner, x, ()) }
+pub let Set.insert[T: Eq + Hash] (s: Set[T]) (x: T): Set[T] =
+    Set { inner: Map.insert(s.inner, x, ()) }
+
 /// Whether `x` is a member.
 pub let Set.contains[T: Eq + Hash] (s: Set[T]) (x: T): Bool = Map.contains(s.inner, x)
+
 /// A new set without `x`.
 pub let Set.remove[T: Eq + Hash] (s: Set[T]) (x: T): Set[T] = Set { inner: Map.remove(s.inner, x) }
+
 /// How many members.
 pub let Set.len[T] (s: Set[T]): Int = Map.len(s.inner)
+
 /// Every member, in no particular order.
 pub let Set.to_array[T] (s: Set[T]): Array[T] = Map.keys(s.inner)
 
 /// Everything in either set.
 pub let Set.union[T: Eq + Hash] (a: Set[T]) (b: Set[T]): Set[T] = {
     let mut result = b;
-    for x in Set.to_array(a) { result = Set.insert(result, x); };
+    for x in Set.to_array(a) {
+        result = Set.insert(result, x);
+    };
     result
 }
 
 /// Only what is in both.
 pub let Set.intersection[T: Eq + Hash] (a: Set[T]) (b: Set[T]): Set[T] = {
     let mut result = Set.new(());
-    for x in Set.to_array(a) { if Set.contains(b, x) { result = Set.insert(result, x); } };
+    for x in Set.to_array(a) {
+        if Set.contains(b, x) {
+            result = Set.insert(result, x);
+        }
+    };
     result
 }
 
 /// What is in `a` and not in `b`.
 pub let Set.difference[T: Eq + Hash] (a: Set[T]) (b: Set[T]): Set[T] = {
     let mut result = Set.new(());
-    for x in Set.to_array(a) { if !Set.contains(b, x) { result = Set.insert(result, x); } };
+    for x in Set.to_array(a) {
+        if !Set.contains(b, x) {
+            result = Set.insert(result, x);
+        }
+    };
     result
 }
 
 let set_from_array_acc[T: Eq + Hash] (arr: Array[T]) (i: Int) (acc: Set[T]): Set[T] =
     if i >= arr.len() { acc } else { set_from_array_acc(arr, i + 1, Set.insert(acc, arr[i])) }
+
 /// A set of the array's elements, discarding duplicates.
-pub let Set.from_array[T: Eq + Hash] (arr: Array[T]): Set[T] = set_from_array_acc(arr, 0, Set.new(()))
+pub let Set.from_array[T: Eq + Hash] (arr: Array[T]): Set[T] =
+    set_from_array_acc(arr, 0, Set.new(()))
 
 // --- JSON ---
 
 /// An object member, with a decoded key and JSON value.
 pub struct JsonEntry { pub key: String, pub value: JsonValue }
+
 /// A parsed JSON document.
 ///
 /// Numbers are binary64 `Float`s and may lose precision when parsed.
@@ -1790,6 +2148,7 @@ pub enum JsonValue {
     JsonArray(Array[JsonValue]),
     JsonObject(Array[JsonEntry]),
 }
+
 /// What a JSON parse step consumed: a value, and where to carry on
 /// from. Public because the parser's own pieces return it; a caller
 /// wants `json_parse`.
@@ -1807,7 +2166,9 @@ let skip_ws (bytes: Bytes) (pos: Int): Int =
 let json_digit (c: Int): Bool = c >= 48 && c <= 57
 
 let parse_digits (bytes: Bytes) (pos: Int): Int =
-    if pos < bytes_len_raw(bytes) && json_digit(bytes_at_raw(bytes, pos)) { parse_digits(bytes, pos + 1) }
+    if pos < bytes_len_raw(bytes) && json_digit(bytes_at_raw(bytes, pos)) {
+        parse_digits(bytes, pos + 1)
+    }
     else { pos }
 
 // Shared lexical scanner for String.parse_float and JSON. No numeric
@@ -1822,9 +2183,13 @@ let parse_number (bytes: Bytes) (pos: Int): Result[ParseResult[Float], String] =
         let frac_end = if has_frac { parse_digits(bytes, int_end + 1) } else { int_end };
         if has_frac && frac_end == int_end + 1 { Err("expected digit") }
         else {
-            let has_exp = frac_end < n && (bytes_at_raw(bytes, frac_end) == 101 || bytes_at_raw(bytes, frac_end) == 69);
+            let has_exp = frac_end < n
+                && (bytes_at_raw(bytes, frac_end) == 101 || bytes_at_raw(bytes, frac_end) == 69);
             let after_e = frac_end + 1;
-            let exp_start = if has_exp && after_e < n && (bytes_at_raw(bytes, after_e) == 45 || bytes_at_raw(bytes, after_e) == 43) { after_e + 1 } else { after_e };
+            let exp_start = if has_exp && after_e < n
+                && (bytes_at_raw(bytes, after_e) == 45 || bytes_at_raw(bytes, after_e) == 43) {
+                    after_e + 1
+                } else { after_e };
             let end = if has_exp { parse_digits(bytes, exp_start) } else { frac_end };
             if has_exp && end == exp_start { Err("expected digit") }
             else {
@@ -1839,8 +2204,15 @@ let parse_number (bytes: Bytes) (pos: Int): Result[ParseResult[Float], String] =
     }
 }
 
-let parse_literal (bytes: Bytes) (pos: Int) (word: String) (value: JsonValue): Result[ParseResult[JsonValue], String] =
-    if str_of_bytes_raw(bytes_slice_raw(bytes, pos, pos + word.len())) == word { Ok(ParseResult { value: value, next_pos: pos + word.len() }) }
+let parse_literal
+    (bytes: Bytes)
+    (pos: Int)
+    (word: String)
+    (value: JsonValue): Result[ParseResult[JsonValue], String]
+=
+    if str_of_bytes_raw(bytes_slice_raw(bytes, pos, pos + word.len())) == word {
+        Ok(ParseResult { value: value, next_pos: pos + word.len() })
+    }
     else { Err("invalid literal") }
 
 let json_hex (c: Int): Int =
@@ -1869,12 +2241,22 @@ let json_unicode (bytes: Bytes) (pos: Int): Result[ParseResult[String], String] 
     match json_hex4(bytes, pos, 4, 0) {
         Err(e) => Err(e),
         Ok(c) => if c >= 55296 && c <= 56319 {
-            if pos + 6 > bytes_len_raw(bytes) || bytes_at_raw(bytes, pos + 4) != 92 || bytes_at_raw(bytes, pos + 5) != 117 { Err("invalid unicode surrogate pair") }
-            else { match json_hex4(bytes, pos + 6, 4, 0) {
-                Err(e) => Err(e),
-                Ok(low) => if low < 56320 || low > 57343 { Err("invalid unicode surrogate pair") }
-                else { Ok(ParseResult { value: json_codepoint(65536 + (c - 55296) * 1024 + low - 56320), next_pos: pos + 10 }) },
-            } }
+            if pos + 6 > bytes_len_raw(bytes) || bytes_at_raw(bytes, pos + 4) != 92
+                || bytes_at_raw(bytes, pos + 5) != 117 { Err("invalid unicode surrogate pair") }
+            else {
+                match json_hex4(bytes, pos + 6, 4, 0) {
+                    Err(e) => Err(e),
+                    Ok(low) => if low < 56320 || low > 57343 {
+                        Err("invalid unicode surrogate pair")
+                    }
+                    else {
+                        Ok(ParseResult {
+                            value: json_codepoint(65536 + (c - 55296) * 1024 + low - 56320),
+                            next_pos: pos + 10
+                        })
+                    },
+                }
+            }
         } else if c >= 56320 && c <= 57343 { Err("invalid unicode surrogate pair") }
         else { Ok(ParseResult { value: json_codepoint(c), next_pos: pos + 4 }) },
     }
@@ -1882,12 +2264,19 @@ let json_unicode (bytes: Bytes) (pos: Int): Result[ParseResult[String], String] 
 // An ordinary run is copied once into a chunk. Escapes append small
 // chunks to a uniquely owned growable array, then concat_all copies the
 // decoded string once. Width is handled by tail calls, not stack frames.
-let parse_string_body (bytes: Bytes) (pos: Int) (run: Int) (parts: Array[String]): Result[ParseResult[String], String] =
+let parse_string_body
+    (bytes: Bytes)
+    (pos: Int)
+    (run: Int)
+    (parts: Array[String]): Result[ParseResult[String], String]
+=
     if pos >= bytes_len_raw(bytes) { Err("unterminated string") }
     else {
         let c = bytes_at_raw(bytes, pos);
         if c == 34 || c == 92 {
-            if pos > run { parts = parts.push(str_of_bytes_raw(bytes_slice_raw(bytes, run, pos))); };
+            if pos > run {
+                parts = parts.push(str_of_bytes_raw(bytes_slice_raw(bytes, run, pos)));
+            };
             if c == 34 { Ok(ParseResult { value: Array.concat_all(parts), next_pos: pos + 1 }) }
             else if pos + 1 >= bytes_len_raw(bytes) { Err("unterminated escape") }
             else {
@@ -1922,7 +2311,9 @@ let parse_string_body (bytes: Bytes) (pos: Int) (run: Int) (parts: Array[String]
     }
 
 let parse_string (bytes: Bytes) (pos: Int): Result[ParseResult[String], String] =
-    if pos >= bytes_len_raw(bytes) || bytes_at_raw(bytes, pos) != 34 { Err("expected opening quote") }
+    if pos >= bytes_len_raw(bytes) || bytes_at_raw(bytes, pos) != 34 {
+        Err("expected opening quote")
+    }
     else { parse_string_body(bytes, pos + 1, pos + 1, []) }
 
 let parse_value (bytes: Bytes) (pos: Int) (depth: Int): Result[ParseResult[JsonValue], String] =
@@ -1935,53 +2326,86 @@ let parse_value (bytes: Bytes) (pos: Int) (depth: Int): Result[ParseResult[JsonV
                 Err(e) => Err(e),
             }
         }
-        else if c == 123 { if depth >= 128 { Err("JSON nesting limit exceeded (128)") } else { parse_object(bytes, pos, depth + 1) } }
-        else if c == 91 { if depth >= 128 { Err("JSON nesting limit exceeded (128)") } else { parse_array(bytes, pos, depth + 1) } }
+        else if c == 123 {
+            if depth >= 128 { Err("JSON nesting limit exceeded (128)") } else {
+                parse_object(bytes, pos, depth + 1)
+            }
+        }
+        else if c == 91 {
+            if depth >= 128 { Err("JSON nesting limit exceeded (128)") } else {
+                parse_array(bytes, pos, depth + 1)
+            }
+        }
         else if c == 116 { parse_literal(bytes, pos, "true", JsonBool(true)) }
         else if c == 102 { parse_literal(bytes, pos, "false", JsonBool(false)) }
         else if c == 110 { parse_literal(bytes, pos, "null", JsonNull) }
         else if json_digit(c) || c == 45 {
             let start = if c == 45 { pos + 1 } else { pos };
-            if start + 1 < bytes_len_raw(bytes) && bytes_at_raw(bytes, start) == 48 && json_digit(bytes_at_raw(bytes, start + 1)) { Err("leading zero in JSON number") }
-            else { match parse_number(bytes, pos) {
-                Ok(r) => Ok(ParseResult { value: JsonNumber(r.value), next_pos: r.next_pos }),
-                Err(e) => Err(e),
-            } }
+            if start + 1 < bytes_len_raw(bytes) && bytes_at_raw(bytes, start) == 48
+                && json_digit(bytes_at_raw(bytes, start + 1)) { Err("leading zero in JSON number") }
+            else {
+                match parse_number(bytes, pos) {
+                    Ok(r) => Ok(ParseResult { value: JsonNumber(r.value), next_pos: r.next_pos }),
+                    Err(e) => Err(e),
+                }
+            }
         }
         else { Err("unexpected character") }
     }
 
 let parse_array (bytes: Bytes) (pos: Int) (depth: Int): Result[ParseResult[JsonValue], String] = {
     let p1 = skip_ws(bytes, pos + 1);
-    if p1 < bytes_len_raw(bytes) && bytes_at_raw(bytes, p1) == 93 { Ok(ParseResult { value: JsonArray([]), next_pos: p1 + 1 }) }
+    if p1 < bytes_len_raw(bytes) && bytes_at_raw(bytes, p1) == 93 {
+        Ok(ParseResult { value: JsonArray([]), next_pos: p1 + 1 })
+    }
     else { parse_array_entries(bytes, p1, depth, []) }
 }
 
-let parse_array_entries (bytes: Bytes) (pos: Int) (depth: Int) (acc: Array[JsonValue]): Result[ParseResult[JsonValue], String] =
+let parse_array_entries
+    (bytes: Bytes)
+    (pos: Int)
+    (depth: Int)
+    (acc: Array[JsonValue]): Result[ParseResult[JsonValue], String]
+=
     match parse_value(bytes, pos, depth) {
         Err(e) => Err(e),
         Ok(val_r) => {
             acc = acc.push(val_r.value);
             let p1 = skip_ws(bytes, val_r.next_pos);
-            if p1 < bytes_len_raw(bytes) && bytes_at_raw(bytes, p1) == 44 { parse_array_entries(bytes, skip_ws(bytes, p1 + 1), depth, acc) }
-            else if p1 < bytes_len_raw(bytes) && bytes_at_raw(bytes, p1) == 93 { Ok(ParseResult { value: JsonArray(acc), next_pos: p1 + 1 }) }
+            if p1 < bytes_len_raw(bytes) && bytes_at_raw(bytes, p1) == 44 {
+                parse_array_entries(bytes, skip_ws(bytes, p1 + 1), depth, acc)
+            }
+            else if p1 < bytes_len_raw(bytes) && bytes_at_raw(bytes, p1) == 93 {
+                Ok(ParseResult { value: JsonArray(acc), next_pos: p1 + 1 })
+            }
             else { Err("expected ',' or ']'") }
         }
     }
 
 let parse_object (bytes: Bytes) (pos: Int) (depth: Int): Result[ParseResult[JsonValue], String] = {
     let p1 = skip_ws(bytes, pos + 1);
-    if p1 < bytes_len_raw(bytes) && bytes_at_raw(bytes, p1) == 125 { Ok(ParseResult { value: JsonObject([]), next_pos: p1 + 1 }) }
+    if p1 < bytes_len_raw(bytes) && bytes_at_raw(bytes, p1) == 125 {
+        Ok(ParseResult { value: JsonObject([]), next_pos: p1 + 1 })
+    }
     else { parse_object_entries(bytes, p1, depth, []) }
 }
 
-let parse_object_entries (bytes: Bytes) (pos: Int) (depth: Int) (acc: Array[JsonEntry]): Result[ParseResult[JsonValue], String] =
+let parse_object_entries
+    (bytes: Bytes)
+    (pos: Int)
+    (depth: Int)
+    (acc: Array[JsonEntry]): Result[ParseResult[JsonValue], String]
+=
     match parse_string(bytes, pos) {
         Err(e) => Err(e),
         Ok(key_r) => {
             let p1 = skip_ws(bytes, key_r.next_pos);
-            if Array.any(acc, |entry: JsonEntry| entry.key == key_r.value) { Err("duplicate object member name") }
-            else if p1 >= bytes_len_raw(bytes) || bytes_at_raw(bytes, p1) != 58 { Err("expected ':'") }
+            if Array.any(acc, |entry: JsonEntry| entry.key == key_r.value) {
+                Err("duplicate object member name")
+            }
+            else if p1 >= bytes_len_raw(bytes) || bytes_at_raw(bytes, p1) != 58 {
+                Err("expected ':'")
+            }
             else {
                 let p2 = skip_ws(bytes, p1 + 1);
                 match parse_value(bytes, p2, depth) {
@@ -1989,8 +2413,12 @@ let parse_object_entries (bytes: Bytes) (pos: Int) (depth: Int) (acc: Array[Json
                     Ok(val_r) => {
                         acc = acc.push(JsonEntry { key: key_r.value, value: val_r.value });
                         let p3 = skip_ws(bytes, val_r.next_pos);
-                        if p3 < bytes_len_raw(bytes) && bytes_at_raw(bytes, p3) == 44 { parse_object_entries(bytes, skip_ws(bytes, p3 + 1), depth, acc) }
-                        else if p3 < bytes_len_raw(bytes) && bytes_at_raw(bytes, p3) == 125 { Ok(ParseResult { value: JsonObject(acc), next_pos: p3 + 1 }) }
+                        if p3 < bytes_len_raw(bytes) && bytes_at_raw(bytes, p3) == 44 {
+                            parse_object_entries(bytes, skip_ws(bytes, p3 + 1), depth, acc)
+                        }
+                        else if p3 < bytes_len_raw(bytes) && bytes_at_raw(bytes, p3) == 125 {
+                            Ok(ParseResult { value: JsonObject(acc), next_pos: p3 + 1 })
+                        }
                         else { Err("expected ',' or '}'") }
                     }
                 }
@@ -2021,7 +2449,9 @@ pub let json_parse (s: String): Result[JsonValue, String] = {
         Err(e) => Err(e),
         Ok(r) => {
             let after = skip_ws(bytes, r.next_pos);
-            if after == bytes_len_raw(bytes) { Ok(r.value) } else { Err("trailing characters after JSON value") }
+            if after == bytes_len_raw(bytes) { Ok(r.value) } else {
+                Err("trailing characters after JSON value")
+            }
         }
     }
 }
@@ -2071,7 +2501,9 @@ let json_emit (stack: JsonWriteStack) (parts: Array[String]): Result[String, Str
     },
     JsonWriteString(s, pos, rest) => {
         let end = json_run_end(s, pos);
-        if end > pos { parts = parts.push(str_of_bytes_raw(bytes_slice_raw(s, pos, end))); };
+        if end > pos {
+            parts = parts.push(str_of_bytes_raw(bytes_slice_raw(s, pos, end)));
+        };
         if end == bytes_len_raw(s) {
             parts = parts.push("\"");
             json_emit(rest, parts)
@@ -2113,7 +2545,9 @@ let json_emit (stack: JsonWriteStack) (parts: Array[String]): Result[String, Str
             parts = parts.push("]");
             json_emit(rest, parts)
         } else {
-            if pos > 0 { parts = parts.push(","); };
+            if pos > 0 {
+                parts = parts.push(",");
+            };
             json_emit(JsonWriteValue(arr[pos], JsonWriteArray(arr, pos + 1, rest)), parts)
         },
     JsonWriteObject(entries, pos, rest) =>
@@ -2122,10 +2556,15 @@ let json_emit (stack: JsonWriteStack) (parts: Array[String]): Result[String, Str
             json_emit(rest, parts)
         } else {
             let entry = entries[pos];
-            if pos > 0 { parts = parts.push(","); };
+            if pos > 0 {
+                parts = parts.push(",");
+            };
             parts = parts.push("\"");
             let next = JsonWriteValue(entry.value, JsonWriteObject(entries, pos + 1, rest));
-            json_emit(JsonWriteString(bytes_of_str_raw(entry.key), 0, JsonWriteText(":", next)), parts)
+            json_emit(
+                JsonWriteString(bytes_of_str_raw(entry.key), 0, JsonWriteText(":", next)),
+                parts
+            )
         },
 }
 
@@ -2138,7 +2577,9 @@ let json_emit (stack: JsonWriteStack) (parts: Array[String]): Result[String, Str
 /// stack proportional to nesting depth instead of native stack recursion.
 /// Returns `Err("non-finite JSON number")` for NaN or either infinity,
 /// including inside arrays and objects. No partial output is returned.
-pub let json_stringify (v: JsonValue): Result[String, String] = json_emit(JsonWriteValue(v, JsonWriteDone), [])
+pub let json_stringify (v: JsonValue): Result[String, String] =
+    json_emit(JsonWriteValue(v, JsonWriteDone), [])
+
 /// `pub` because the PARSER generates calls to these when it
 /// desugars `requires`/`ensures`, and that generated code lands in
 /// the user's own module. Nobody writes them by hand.

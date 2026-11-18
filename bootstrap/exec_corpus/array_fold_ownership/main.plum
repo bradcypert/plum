@@ -1,92 +1,246 @@
 use Memory;
+
 struct Box { text: String }
+
 enum Item { Text(String), Empty }
+
 struct Owner { resource: Resource }
-extern "C" { fn fold_close(n: Int) -> Unit; fn fold_total() -> Int; fn fold_at(i: Int) -> Int; fn fold_live() -> Int; }
-handle Resource { on_drop: fold_close }
-let make (n: Int): Resource = unsafe { Resource.from_raw(n) }
-let total (): Int = unsafe { fold_total() }
-let live (): Int = match Memory.snapshot() { Some(s) => s.live_bytes, None => -1 }
-let texts (): Array[String] = ["a".repeat(32), "b".repeat(32)]
-let short (): Array[String] = ["a".repeat(2), "b".repeat(2)]
-let resources (n: Int): Array[Resource] = [make(n), make(n + 1)]
-let owners (): Array[Owner] = [Owner { resource: make(2) }, Owner { resource: make(3) }]
-let captured (n: Int): () -> Int = { let owner = make(n); || unsafe { owner.raw() } }
-let functions (): Array[() -> Int] = [captured(4), captured(5)]
-let big_words (): Array[String] = {
-    let mut xs: Array[String] = []; for i in 0..64 { xs = xs.push("x".repeat(1024)); }; xs
+
+extern "C" {
+    fn fold_close(n: Int) -> Unit; fn fold_total() -> Int; fn fold_at(i: Int) -> Int; fn fold_live() -> Int;
 }
+
+handle Resource { on_drop: fold_close }
+
+let make (n: Int): Resource = unsafe { Resource.from_raw(n) }
+
+let total (): Int = unsafe { fold_total() }
+
+let live (): Int = match Memory.snapshot() {
+    Some(s) => s.live_bytes,
+    None => -1
+}
+
+let texts (): Array[String] = ["a".repeat(32), "b".repeat(32)]
+
+let short (): Array[String] = ["a".repeat(2), "b".repeat(2)]
+
+let resources (n: Int): Array[Resource] = [make(n), make(n + 1)]
+
+let owners (): Array[Owner] = [Owner { resource: make(2) }, Owner { resource: make(3) }]
+
+let captured (n: Int): () -> Int = {
+    let owner = make(n);
+    || unsafe { owner.raw() }
+}
+
+let functions (): Array[() -> Int] = [captured(4), captured(5)]
+
+let big_words (): Array[String] = {
+    let mut xs: Array[String] = [];
+    for i in 0..64 {
+        xs = xs.push("x".repeat(1024));
+    };
+    xs
+}
+
 let reclaim (): Int = Array.fold(big_words(), 0, |n, s| {
     // Earlier ordinary children must be gone before the final callback,
     // while this callback's input is still needed below.
-    if n == 63 { let bytes = unsafe { fold_live() }; if bytes >= 0 { assert(bytes < 8192); }; };
+    if n == 63 {
+        let bytes = unsafe { fold_live() };
+        if bytes >= 0 {
+            assert(bytes < 8192);
+        };
+    };
     n + if s.len() == 1024 { 1 } else { 0 }
 })
+
 let scoped (): Unit = {
-    assert_eq(Array.fold(resources(0), 0, |n, r| { assert_eq(total(), 0); n + unsafe { r.raw() } }), 1);
+    assert_eq(
+        Array.fold(resources(0), 0, |n, r| {
+            assert_eq(total(), 0);
+            n + unsafe { r.raw() }
+        }),
+        1
+    );
     assert_eq(total(), 2);
-    assert_eq(Array.fold(owners(), 0, |n, o| { assert_eq(total(), 2); n + unsafe { o.resource.raw() } }), 5);
+    assert_eq(
+        Array.fold(owners(), 0, |n, o| {
+            assert_eq(total(), 2);
+            n + unsafe { o.resource.raw() }
+        }),
+        5
+    );
     assert_eq(total(), 4);
-    assert_eq(Array.fold(functions(), 0, |n, f| { assert_eq(total(), 4); n + f() }), 9);
+    assert_eq(
+        Array.fold(functions(), 0, |n, f| {
+            assert_eq(total(), 4);
+            n + f()
+        }),
+        9
+    );
     assert_eq(total(), 6);
     let out = Array.fold(resources(6), 0, {
         let marker = make(8);
-        |n: Int, r: Resource| { assert_eq(total(), 6); assert_eq(unsafe { marker.raw() }, 8); n + unsafe { Resource.raw(r) } }
+        |n: Int, r: Resource| {
+            assert_eq(total(), 6);
+            assert_eq(unsafe { marker.raw() }, 8);
+            n + unsafe { Resource.raw(r) }
+        }
     });
-    assert_eq(out, 13); assert_eq(total(), 9);
+    assert_eq(out, 13);
+    assert_eq(total(), 9);
     let input = [10, 11];
     let out = Array.fold(input, make(9), |acc, n| {
-        assert_eq(total(), n - 1); assert_eq(unsafe { acc.raw() }, n - 1); make(n)
+        assert_eq(total(), n - 1);
+        assert_eq(unsafe { acc.raw() }, n - 1);
+        make(n)
     });
-    assert_eq(unsafe { out.raw() }, 11); assert_eq(total(), 11);
+    assert_eq(unsafe { out.raw() }, 11);
+    assert_eq(total(), 11);
 }
+
 let round (): Unit = {
     assert_eq(Array.fold(["a", "b"], "", |acc, s| acc.concat(s)), "ab");
     let boxes = [Box { text: "a".repeat(32) }, Box { text: "b".repeat(32) }];
-    assert_eq(Array.fold(boxes, "", |acc, b| acc.concat(b.text)), "a".repeat(32).concat("b".repeat(32)));
+    assert_eq(
+        Array.fold(boxes, "", |acc, b| acc.concat(b.text)),
+        "a".repeat(32).concat("b".repeat(32))
+    );
     let items = [Text("a".repeat(32)), Empty, Text("b".repeat(32))];
-    assert_eq(Array.fold(items, 0, |n, item| n + match item { Text(s) => s.len(), Empty => 0 }), 64);
-    assert_eq(Array.fold([texts(), texts()], 0, |n, xs| n + Array.fold(xs, 0, |sum, s| sum + s.len())), 128);
+    assert_eq(
+        Array.fold(
+            items,
+            0,
+            |n, item| n + match item {
+                Text(s) => s.len(),
+                Empty => 0
+            }
+        ),
+        64
+    );
+    assert_eq(
+        Array.fold([texts(), texts()], 0, |n, xs| n + Array.fold(xs, 0, |sum, s| sum + s.len())),
+        128
+    );
     let out = Array.fold(texts(), [], |acc: Array[String], s: String| acc.push(s.concat("!")));
     assert_eq(out, ["a".repeat(32).concat("!"), "b".repeat(32).concat("!")]);
     // A unique parent can contain shared children, including duplicate slots.
-    let original = "z".repeat(32); let bytes = original.as_bytes(); let view = original.as_cstr();
-    let out = Array.fold([original, original], [], |acc: Array[String], s: String| acc.push(s.concat("!")));
-    assert_eq(out, [original.concat("!"), original.concat("!")]); assert_eq(original, "z".repeat(32));
-    assert_eq(bytes.to_hex(), "7a".repeat(32)); assert_eq(unsafe { view.as_string() }, original);
-    let xs = short(); assert_eq(Array.fold(xs, xs[0], |acc, s| s.concat(acc)), "bbaaaa");
+    let original = "z".repeat(32);
+    let bytes = original.as_bytes();
+    let view = original.as_cstr();
+    let out = Array.fold(
+        [original, original],
+        [],
+        |acc: Array[String], s: String| acc.push(s.concat("!"))
+    );
+    assert_eq(out, [original.concat("!"), original.concat("!")]);
+    assert_eq(original, "z".repeat(32));
+    assert_eq(bytes.to_hex(), "7a".repeat(32));
+    assert_eq(unsafe { view.as_string() }, original);
+    let xs = short();
+    assert_eq(Array.fold(xs, xs[0], |acc, s| s.concat(acc)), "bbaaaa");
     // The accumulator can alias the entire source, not just a child.
-    let xs = short(); let out = Array.fold(xs, xs, |acc, s| { assert_eq(acc, short()); acc });
+    let xs = short();
+    let out = Array.fold(xs, xs, |acc, s| {
+        assert_eq(acc, short());
+        acc
+    });
     assert_eq(out, short());
-    let xs = texts(); let snapshot = xs; let bytes = xs[0].as_bytes(); let view = xs[0].as_cstr();
+    let xs = texts();
+    let snapshot = xs;
+    let bytes = xs[0].as_bytes();
+    let view = xs[0].as_cstr();
     let out = Array.fold(xs, [], |acc: Array[String], s: String| acc.push(s.concat("!")));
-    assert_eq(out[0], "a".repeat(32).concat("!")); assert_eq(snapshot, texts());
-    assert_eq(bytes.to_hex(), "61".repeat(32)); assert_eq(unsafe { view.as_string() }, "a".repeat(32));
-    let saved = ref(""); assert_eq(Array.fold(texts(), 0, |n, s| { saved.set(s); n + s.len() }), 64);
+    assert_eq(out[0], "a".repeat(32).concat("!"));
+    assert_eq(snapshot, texts());
+    assert_eq(bytes.to_hex(), "61".repeat(32));
+    assert_eq(unsafe { view.as_string() }, "a".repeat(32));
+    let saved = ref("");
+    assert_eq(
+        Array.fold(texts(), 0, |n, s| {
+            saved.set(s);
+            n + s.len()
+        }),
+        64
+    );
     assert_eq(saved.get(), "b".repeat(32));
     let callbacks = Array.fold(texts(), [], |acc: Array[() -> String], s: String| acc.push(|| s));
-    assert_eq(callbacks[0](), "a".repeat(32)); assert_eq(callbacks[0](), "a".repeat(32));
+    assert_eq(callbacks[0](), "a".repeat(32));
+    assert_eq(callbacks[0](), "a".repeat(32));
     let views = Array.fold(texts(), [], |acc: Array[CStr], s: String| acc.push(s.as_cstr()));
     assert_eq(unsafe { views[1].as_string() }, "b".repeat(32));
     let mut source = texts();
-    assert_eq(Array.fold(source, { source = ["new"]; 0 }, |n, s| n + s.len()), 64); assert_eq(source, ["new"]);
-    let published = ref(texts()); let source = texts();
-    assert_eq(Array.fold(source, { published.set(source); 0 }, |n, s| n + s.len()), 64);
-    assert_eq(published.get(), texts()); assert_eq(source, texts());
+    assert_eq(
+        Array.fold(
+            source,
+            {
+                source = ["new"];
+                0
+            },
+            |n, s| n + s.len()
+        ),
+        64
+    );
+    assert_eq(source, ["new"]);
+    let published = ref(texts());
+    let source = texts();
+    assert_eq(
+        Array.fold(
+            source,
+            {
+                published.set(source);
+                0
+            },
+            |n, s| n + s.len()
+        ),
+        64
+    );
+    assert_eq(published.get(), texts());
+    assert_eq(source, texts());
     let source = texts();
     assert_eq(Array.fold(source, 0, |n, s| n + s.len() + source[0].len()), 128);
-    let events = ref(0); let empty: Array[String] = [];
-    let out = Array.fold({ events.set(1); empty }, { events.set(events.get() * 10 + 2); 7 }, {
-        events.set(events.get() * 10 + 3); |n: Int, s: String| { events.set(999); n }
-    });
-    assert_eq(events.get(), 123); assert_eq(out, 7);
-    let shared = texts(); let left = spawn { Array.fold(shared, 0, |n, s| n + s.len()) };
+    let events = ref(0);
+    let empty: Array[String] = [];
+    let out = Array.fold(
+        {
+            events.set(1);
+            empty
+        },
+        {
+            events.set(events.get() * 10 + 2);
+            7
+        },
+        {
+            events.set(events.get() * 10 + 3);
+            |n: Int, s: String| {
+                events.set(999);
+                n
+            }
+        }
+    );
+    assert_eq(events.get(), 123);
+    assert_eq(out, 7);
+    let shared = texts();
+    let left = spawn { Array.fold(shared, 0, |n, s| n + s.len()) };
     let right = spawn { Array.fold(shared, 0, |n, s| n + s.len()) };
-    assert_eq(left.join(), 64); assert_eq(right.join(), 64); assert_eq(shared, texts());
+    assert_eq(left.join(), 64);
+    assert_eq(right.join(), 64);
+    assert_eq(shared, texts());
 }
+
 let main (): Unit = {
-    let baseline = live(); assert_eq(reclaim(), 64); round(); scoped();
-    if baseline >= 0 { assert_eq(live(), baseline); };
-    assert_eq(total(), 12); for i in 0..12 { assert_eq(unsafe { fold_at(i) }, i); };
+    let baseline = live();
+    assert_eq(reclaim(), 64);
+    round();
+    scoped();
+    if baseline >= 0 {
+        assert_eq(live(), baseline);
+    };
+    assert_eq(total(), 12);
+    for i in 0..12 {
+        assert_eq(unsafe { fold_at(i) }, i);
+    };
     println("Array.fold: owned arguments, prompt reclamation, operand aliases and scoped cleanup")
 }

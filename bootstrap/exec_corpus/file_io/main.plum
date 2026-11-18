@@ -14,10 +14,20 @@ use Os;
 // a random name, and a fixture compares exact output.
 
 let show (label: String) (r: Result[Bytes, String]): Unit =
-    println(label.concat(": ").concat(match r { Ok(b) => b.to_hex(), Err(e) => e }))
+    println(label.concat(": ").concat(
+        match r {
+            Ok(b) => b.to_hex(),
+            Err(e) => e
+        }
+    ))
 
 let position (label: String) (r: Result[Int, String]): Unit =
-    println(label.concat(": ").concat(match r { Ok(n) => n.to_string(), Err(e) => e }))
+    println(label.concat(": ").concat(
+        match r {
+            Ok(n) => n.to_string(),
+            Err(e) => e
+        }
+    ))
 
 let main (): Unit = match Os.temp_dir() {
     Err(e) => println(e),
@@ -36,12 +46,18 @@ let main (): Unit = match Os.temp_dir() {
                 };
                 // Explicit close, because a failed final flush is worth
                 // knowing about.
-                match f.close() { Ok(_) => println("close: ok"), Err(e) => println("close: ".concat(e)) };
+                match f.close() {
+                    Ok(_) => println("close: ok"),
+                    Err(e) => println("close: ".concat(e))
+                };
                 // Closing again is harmless -- and it is the NORMAL
                 // path, since the handle's own cleanup runs after this.
                 // The shim owns a slot table precisely so the second
                 // close cannot reach a stale FILE*.
-                match f.close() { Ok(_) => println("close again: ok"), Err(e) => println("close again: ".concat(e)) }
+                match f.close() {
+                    Ok(_) => println("close again: ok"),
+                    Err(e) => println("close again: ".concat(e))
+                }
             },
         };
 
@@ -123,6 +139,9 @@ let main (): Unit = match Os.temp_dir() {
             Err(_) => println("missing: err"),
         };
 
-        match Os.remove_tree(root) { Ok(_) => println("cleanup ok"), Err(e) => println(e) }
+        match Os.remove_tree(root) {
+            Ok(_) => println("cleanup ok"),
+            Err(e) => println(e)
+        }
     },
 }

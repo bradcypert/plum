@@ -10,7 +10,10 @@ let second_name (): String = "snow-\u{2603}-\u{1f30d}"
 let repeat_listing (root: String) (n: Int): Unit = {
     if n > 0 {
         match Os.list_dir(root) {
-            Err(e) => { panic_raw(e); () },
+            Err(e) => {
+                panic_raw(e);
+                ()
+            },
             Ok(names) => {
                 require(names.len() == 2);
                 require(Array.contains(names, "alpha"));
@@ -22,21 +25,42 @@ let repeat_listing (root: String) (n: Int): Unit = {
 }
 
 let main (): Unit = {
-    let root = Result.unwrap_or_else(Os.temp_dir(), |e| { panic_raw(e); "" });
-    require(Result.unwrap_or_else(Os.list_dir(root), |e| { panic_raw(e); [] }).len() == 0);
+    let root = Result.unwrap_or_else(Os.temp_dir(), |e| {
+        panic_raw(e);
+        ""
+    });
+    require(
+        Result.unwrap_or_else(Os.list_dir(root), |e| {
+            panic_raw(e);
+            []
+        }).len() == 0
+    );
     println("empty directory: ok");
     require(Result.is_ok(Os.write_file(root.concat("/alpha"), "")));
     require(Result.is_ok(Os.write_file(root.concat("/").concat(second_name()), "")));
     repeat_listing(root, 256);
     println("repeated listings: ok");
     // Returned strings survive subsequent reads and closing both streams.
-    let saved = Result.unwrap_or_else(Os.list_dir(root), |e| { panic_raw(e); [] });
+    let saved = Result.unwrap_or_else(Os.list_dir(root), |e| {
+        panic_raw(e);
+        []
+    });
     repeat_listing(root, 2);
     require(Array.contains(saved, "alpha"));
     require(Array.contains(saved, second_name()));
     println("names outlive native storage: ok");
-    require(match Os.list_dir(root.concat("/alpha")) { Err(_) => true, Ok(_) => false });
-    require(match Os.list_dir(root.concat("/missing")) { Err(_) => true, Ok(_) => false });
+    require(
+        match Os.list_dir(root.concat("/alpha")) {
+            Err(_) => true,
+            Ok(_) => false
+        }
+    );
+    require(
+        match Os.list_dir(root.concat("/missing")) {
+            Err(_) => true,
+            Ok(_) => false
+        }
+    );
     println("open failures: ok");
     // Windows filesystem encoding is covered separately by issue #109.
     if Os.platform() != "windows" {
@@ -44,10 +68,12 @@ let main (): Unit = {
         require(created == 0 || created == 1);
         if created == 1 { repeat_listing(root, 2) };
         for iteration in 0..(if created == 0 { 32 } else { 0 }) {
-            require(match Os.list_dir(root) {
-                Err(e) => String.contains(e, "not valid UTF-8"),
-                Ok(_) => false,
-            })
+            require(
+                match Os.list_dir(root) {
+                    Err(e) => String.contains(e, "not valid UTF-8"),
+                    Ok(_) => false,
+                }
+            )
         }
     };
     println("invalid UTF-8 rejected: ok");

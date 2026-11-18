@@ -16,10 +16,11 @@ use Terminal;
 
 let show (label: String) (b: Bool): Unit = println("${label} ${b}")
 
-let red_x (): String = match Bytes.as_string(Bytes.from_array([27, 91, 51, 49, 109, 120, 27, 91, 48, 109])) {
-    Ok(s) => s,
-    Err(_) => "",
-}
+let red_x (): String =
+    match Bytes.as_string(Bytes.from_array([27, 91, 51, 49, 109, 120, 27, 91, 48, 109])) {
+        Ok(s) => s,
+        Err(_) => "",
+    }
 
 let main (): Unit = {
     // Cells, not bytes or codepoints. These cases are all deterministic
@@ -44,10 +45,12 @@ let main (): Unit = {
     // No terminal means no size, and that is an `Err` rather than a
     // guess. 80x24 is a guess, and a library that guesses on a caller's
     // behalf is worse than one that says it does not know.
-    println(match Terminal.size() {
-        Ok(s) => "size ${s.cols}x${s.rows}",
-        Err(_) => "size unknown, as it should be when piped",
-    });
+    println(
+        match Terminal.size() {
+            Ok(s) => "size ${s.cols}x${s.rows}",
+            Err(_) => "size unknown, as it should be when piped",
+        }
+    );
 
     // `write` adds no newline and does not flush; `flush` is what makes
     // a frame visible. Both matter to a program drawing with escape
@@ -56,12 +59,36 @@ let main (): Unit = {
     // sequences written into a pipe are not invisible, they are
     // corruption, and raw mode on a pipe would leave a program waiting
     // for keys that cannot come.
-    println(match Terminal.enter_raw() { Ok(_) => "raw entered (wrong)", Err(_) => "raw refused, as it should be" });
-    println(match Terminal.enter_alt_screen() { Ok(_) => "alt entered (wrong)", Err(_) => "alt refused, as it should be" });
-    println(match Terminal.hide_cursor() { Ok(_) => "cursor hidden (wrong)", Err(_) => "cursor refused, as it should be" });
+    println(
+        match Terminal.enter_raw() {
+            Ok(_) => "raw entered (wrong)",
+            Err(_) => "raw refused, as it should be"
+        }
+    );
+    println(
+        match Terminal.enter_alt_screen() {
+            Ok(_) => "alt entered (wrong)",
+            Err(_) => "alt refused, as it should be"
+        }
+    );
+    println(
+        match Terminal.hide_cursor() {
+            Ok(_) => "cursor hidden (wrong)",
+            Err(_) => "cursor refused, as it should be"
+        }
+    );
 
-    match Terminal.write("no newline ->") { Ok(_) => (), Err(e) => println(e) };
-    match Terminal.write(" still the same line") { Ok(_) => (), Err(e) => println(e) };
-    match Terminal.flush() { Ok(_) => println(""), Err(e) => println(e) };
+    match Terminal.write("no newline ->") {
+        Ok(_) => (),
+        Err(e) => println(e)
+    };
+    match Terminal.write(" still the same line") {
+        Ok(_) => (),
+        Err(e) => println(e)
+    };
+    match Terminal.flush() {
+        Ok(_) => println(""),
+        Err(e) => println(e)
+    };
     println("done")
 }

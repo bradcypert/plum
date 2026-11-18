@@ -17,10 +17,7 @@ let add3 (a: Int) (b: Int) (c: Int): Int = a + b + c
 
 // A call's arguments answer to the CALL, not to the statement.
 let call (a: Int) (b: Int) (c: Int): Int =
-    add3(
-        a,
-        b,
-        c)
+    add3(a, b, c)
 
 // An `else` continues the `if` without going inside it.
 let bump (n: Int) (acc: Int): Int =
@@ -38,10 +35,7 @@ let label (n: Int): String =
 
 let nested (xs: Array[Int]): Int = {
     let total =
-        Array.fold(
-            xs,
-            0,
-            |a, v| a + v);
+        Array.fold(xs, 0, |a, v| a + v);
     total
 }
 
@@ -50,7 +44,7 @@ let nested (xs: Array[Int]): Int = {
 // would say eight; this line says nine, under the condition above it.
 let aligned (a: Int) (b: Int) (c: Int): Bool =
     a > 0 && b > 0
-         && a != b && b != c
+        && a != b && b != c
 
 // Contract clauses and the `=` that follows them are item header
 // lines, and no rule here claims them.
@@ -60,7 +54,9 @@ let divide (a: Int) (b: Int): Int
 
 // The line after this one begins INSIDE a string literal, so its
 // leading spaces are part of the program and are never touched.
-let newline_in_string (): String = "a".concat("
-").concat("b")
+let newline_in_string (): String = "a".concat(
+    "
+"
+).concat("b")
 
 let main (): Unit = print(describe(3).concat(chain(["a"])).concat(label(0)))
