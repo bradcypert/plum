@@ -66,7 +66,7 @@ suite passed. The seed gate produced an identical compiler without a seed
 refresh. A focused AddressSanitizer build of the actual formatter/parser modules
 passed 12 fixtures and retained-snapshot assertions with leak detection enabled.
 
-## 2. Nested-call grouping and canonical layout — planned
+## 2. Nested-call grouping and canonical layout — complete
 
 Collect representative Powerlaunch examples as golden fixtures. Keep small
 wrapper calls around multiline payloads together when prefixes and suffixes
@@ -74,9 +74,59 @@ fit, reducing delimiter-only lines and unnecessary indentation. Define when
 short expressions return to one line so incidental input line breaks do not
 permanently determine their layout.
 
-Acceptance: approved before/after examples for JSON wrappers, callbacks,
+Acceptance: reviewable before/after examples for JSON wrappers, callbacks,
 Result chains, records, and signatures; stable output and unchanged tokens;
 comments and literal contents retain their text and ownership.
+
+The width pass now measures token/gap prefixes once, independently of their
+existing line breaks. Comment-free parenthesized and bracketed groups collapse
+when they fit the 100-column target. Expanded brace bodies and multiline literal
+contents remain hard boundaries. Existing line breaks outside those groups are
+retained; this step does not collapse statement or definition boundaries.
+
+A call can keep its short prefix and final delimited payload together, including
+nested JSON wrappers, literal arrays, records, and closure bodies. Index/type
+argument brackets and conditional branches use ordinary argument layout. A
+short final call or list stays whole on a fresh argument line when the outer
+call is too wide; attachment is reserved for payloads that need their own lines.
+Both the opening prefix and the trailing delimiters/separators count toward the
+line budget. Comments at either join prevent contraction. Long signatures and
+chain links use the same flat measurements so moving an inner group does not
+require another save. When a callback body is another multiline call, its body
+keeps a continuation line after `|v|`, including nested Result chains. Earlier
+callback arguments stay inline when they fit.
+
+For example:
+
+```plum
+let boxed (): Result[P, String] = Ok(P {
+    x: 1,
+    y: 2,
+    z: 3
+})
+```
+
+The earlier output put `P {` and `})` inside another pair of wrapper-only lines.
+The fixtures in `bootstrap/fmt_corpus/grouping/` capture JSON wrappers, records,
+Result callbacks, short calls, nested types, and comment boundaries. Width tests
+also cover boundary lengths, closing delimiter reservations, CRLF, Unicode,
+token preservation, and second-pass stability; editor tests cover the same rules
+on unsaved buffers.
+
+Validation passed with a compiler built through the seed-to-source path: 825
+formatter checks and allocation budgets, 54 compiler tests, 92 properties,
+43 documentation pages, generated-shim consistency, 339 CLI checks, editor
+formatting/lifecycle and full LSP smoke tests, formatter filesystem checks, and
+the seed equivalence gate. A focused build of the formatter/parser passed 23
+AddressSanitizer/LeakSanitizer fixtures. The new grouping regression rejects the
+allocation-only formatter. The repository is reformatted with the new default;
+original formatting inputs and column-sensitive highlighting fixtures remain
+inputs to their respective tests.
+
+The additional width metadata raises the 4,000-statement fixture's cumulative
+allocation traffic from 67.6 MB after step 1 to 70.9 MB. Doubling-size growth
+remains close to linear and within the existing budgets. No seed refresh is
+needed.
 
 ## 3. Explicit formatting exclusions — planned
 

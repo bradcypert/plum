@@ -5,6 +5,7 @@ struct WidthLayout {
     lexed: lexer.LexedSource,
     closes: Map[Int, Int],
     headers: Map[Int, Int],
+    flat: FlatLayout,
     newline: String,
     out: Ref[String],
     column: Ref[Int],
@@ -17,19 +18,179 @@ let format_width (path: String) (src: String): String = {
     let empty: Map[Int, Int] = Map.new(());
     let closes = matching_groups(lexed, 0, [], empty);
     let headers: Map[Int, Int] = Map.new(());
+    let flat = measure_flat_layout(source, lexed, closes);
     let x = WidthLayout {
         source: source,
         lexed: lexed,
         closes: closes,
-        headers: signature_breaks(source, lexed, closes, 0, headers),
+        headers: signature_breaks(source, lexed, closes, flat, 0, headers),
+        flat: flat,
         newline: if src.contains("\r\n") { "\r\n" } else { "\n" },
         out: ref(""),
         column: ref(0),
         indent: ref(0)
     };
-    width_range(x, 0, lexed.tokens.len(), -1, false, 0);
+    width_range(x, 0, lexed.tokens.len(), -1, false, 0, 0);
     x.out.get()
 }
+
+// Prefix measurements make fit decisions independent of existing line breaks.
+// Comments, multiline literals and expanded braces are hard boundaries. Measure
+// each token/gap once; nested groups never rescan their entire contents.
+struct FlatLayout {
+    gaps: Array[String],
+    columns: Array[Int],
+    hard: Array[Int],
+    suffix: Array[Int]
+}
+
+let measure_flat_layout
+    (source: Source)
+    (lexed: lexer.LexedSource)
+    (closes: Map[Int, Int]): FlatLayout
+= {
+    let gaps: Array[String] = [];
+    let columns = [0];
+    let hard = [0];
+    let previous = "";
+    let before_previous = "";
+    for i in 0..lexed.tokens.len() {
+        let text = lexer.token_text_at(source.text, lexed, i);
+        let gap = lexer.trivia_before_at(source.text, lexed, i);
+        let inline_gap = if !gap.contains("\n") || gap.contains("//") { gap }
+        else if text == "." || previous == "." { "" }
+        else {
+            canonical_gap(
+                if text == "(" || text == "[" { "" } else { " " },
+                previous,
+                text,
+                before_previous
+            )
+        };
+        let expanded_brace = lexed.tokens[i] == TokLBrace && match Map.get(closes, i) {
+            Some(close) => line_start_of(source, lexed.starts[i])
+                != line_start_of(source, lexed.starts[close]),
+            None => false
+        };
+        gaps = gaps.push(inline_gap);
+        columns = columns.push(columns[i] + String.char_len(inline_gap) + String.char_len(text));
+        hard = hard.push(
+            hard[i] + if gap.contains("//") || text.contains("\n")
+                || expanded_brace { 1 } else { 0 }
+        );
+        before_previous = previous;
+        previous = text;
+    };
+    // Reserve trailing delimiters/separators too: a child ending at column
+    // 100 must leave room for the enclosing call's `))` and statement `;`.
+    let suffix: Array[Int] = [];
+    let tail = 0;
+    for reverse in 0..lexed.tokens.len() {
+        let i = lexed.tokens.len() - reverse - 1;
+        suffix = suffix.push(tail);
+        let tok = lexed.tokens[i];
+        tail = if (tok == TokRParen || tok == TokRBracket || tok == TokComma || tok == TokSemicolon)
+            && !lexer.trivia_before_at(source.text, lexed, i).contains("//") { tail + 1 }
+        else { 0 };
+    };
+    FlatLayout {
+        gaps: gaps,
+        columns: columns,
+        hard: hard,
+        suffix: suffix
+    }
+}
+
+let flat_span_size (flat: FlatLayout) (start: Int) (end: Int): Int =
+    flat.columns[end] - flat.columns[start] - String.char_len(flat.gaps[start])
+
+let flat_group (x: WidthLayout) (open: Int) (close: Int): Bool =
+    x.flat.hard[close + 1] == x.flat.hard[open + 1]
+        && !(
+            x.lexed.tokens[open] == TokLBrace
+                && line_start_of(x.source, x.lexed.starts[open])
+                != line_start_of(x.source, x.lexed.starts[close])
+        )
+
+let flat_group_size (x: WidthLayout) (open: Int) (close: Int): Int =
+    1 + x.flat.columns[close + 1] - x.flat.columns[open + 1]
+
+// Keep a short call prefix attached to its final delimited payload, for example
+// json_stringify(JsonObject([ ... ])) or and_then(value, |v| { ... }). A comment
+// before either seam prevents joining it. Ordinary argument lists still wrap.
+let final_payload (x: WidthLayout) (at: Int) (close: Int): Int =
+    if at >= close { -1 }
+    // A final conditional branch is not a call's payload: keep the whole
+    // control expression inside the ordinary argument layout.
+    else if x.lexed.tokens[at] == TokIf || x.lexed.tokens[at] == TokElse
+        || x.lexed.tokens[at] == TokMatch || x.lexed.tokens[at] == TokSelect
+        || x.lexed.tokens[at] == TokFor { -1 }
+    else {
+        match Map.get(x.closes, at) {
+            Some(end) => if end == close - 1 { at }
+            else { final_payload(x, end + 1, close) },
+            None => final_payload(x, at + 1, close)
+        }
+    }
+
+let hugging_payload (x: WidthLayout) (open: Int) (close: Int): Int = {
+    let payload = if x.lexed.tokens[open] == TokLParen {
+        final_payload(x, open + 1, close)
+    } else { -1 };
+    if payload < 0 { -1 }
+    // Only an array literal can be a bracketed payload. An index or type
+    // argument list should stay whole when its enclosing call wraps.
+    else if x.lexed.tokens[payload] == TokLBracket && payload > open + 1
+        && x.lexed.tokens[payload - 1] != TokComma
+        && x.lexed.tokens[payload - 1] != TokPipe
+        && x.lexed.tokens[payload - 1] != TokOrOr { -1 }
+    // Hug content that needs its own lines. If the final call/list is short
+    // on a fresh argument line, wrap the outer arguments and keep it whole.
+    else if flat_group(x, payload, close - 1)
+        && x.indent.get() + 4 + flat_group_size(x, payload, close - 1) <= 100 { -1 }
+    else if x.flat.hard[payload] != x.flat.hard[open + 1]
+        || lexer.trivia_before_at(x.source.text, x.lexed, payload).contains("//")
+        || lexer.trivia_before_at(x.source.text, x.lexed, close).contains("//") { -1 }
+    else if x.column.get() + 1 + x.flat.columns[payload + 1] - x.flat.columns[open + 1]
+        <= 100 { payload }
+    else { -1 }
+}
+
+let final_callback (x: WidthLayout) (at: Int) (payload: Int): Bool =
+    if at >= payload { true }
+    else if x.lexed.tokens[at] == TokComma { false }
+    else {
+        final_callback(
+            x,
+            match Map.get(x.closes, at) {
+                Some(end) => end + 1,
+                None => at + 1
+            },
+            payload
+        )
+    }
+
+// A callback whose body is another multiline call gets its own continuation.
+// Keep `call(value, |v|` together, without pulling the nested call onto that line.
+let hugging_prefix_end (x: WidthLayout) (start: Int) (at: Int) (payload: Int): Int =
+    if at >= payload || x.lexed.tokens[payload] != TokLParen { payload + 1 }
+    else if starts_closure(x, at, start) {
+        let end = if x.lexed.tokens[at] == TokOrOr { at } else {
+            closure_end(x.lexed, x.closes, at + 1, payload)
+        };
+        if end + 1 < payload && final_callback(x, end + 1, payload) { end + 1 }
+        else { payload + 1 }
+    } else {
+        hugging_prefix_end(
+            x,
+            start,
+            match Map.get(x.closes, at) {
+                Some(end) => end + 1,
+                None => at + 1
+            },
+            payload
+        )
+    }
 
 // Only inspect root-level tokens: local lets live inside delimiter groups.
 // This avoids reparsing the program merely to find signature boundaries.
@@ -37,6 +198,7 @@ let signature_breaks
     (source: Source)
     (lexed: lexer.LexedSource)
     (closes: Map[Int, Int])
+    (flat: FlatLayout)
     (i: Int)
     (acc: Map[Int, Int]): Map[Int, Int]
 =
@@ -47,10 +209,11 @@ let signature_breaks
             let start = if i > 0 && lexed.tokens[i - 1] == TokPub { i - 1 } else { i };
             let eq = header_equals(lexed, closes, i, source.text.len());
             if eq < 0 { acc }
-            else if lexed.starts[eq] - lexed.starts[start] > 100 {
+            else if flat_span_size(flat, start, eq + 1) - 1 > 100 {
                 let params = header_parameters(
                     lexed,
                     closes,
+                    flat,
                     signature_params_start(lexed, closes, i + 2),
                     eq,
                     -1,
@@ -69,6 +232,7 @@ let signature_breaks
             source,
             lexed,
             closes,
+            flat,
             match Map.get(closes, i) {
                 Some(e) => e + 1,
                 None => i + 1
@@ -102,6 +266,7 @@ let signature_params_start (lexed: lexer.LexedSource) (closes: Map[Int, Int]) (i
 let header_parameters
     (lexed: lexer.LexedSource)
     (closes: Map[Int, Int])
+    (flat: FlatLayout)
     (i: Int)
     (eq: Int)
     (last: Int)
@@ -109,17 +274,33 @@ let header_parameters
 =
     if i >= eq { acc }
     else if lexed.tokens[i] == TokColon {
-        if last >= 0 && lexed.starts[eq] - lexed.starts[last] + 4 > 100 { Map.insert(acc, i, 4) } else {
+        if last >= 0 && flat_span_size(flat, last, eq + 1) + 3 > 100 { Map.insert(acc, i, 4) } else {
             acc
         }
     } else {
         match lexed.tokens[i] {
             TokIdent("require") => acc,
             TokIdent("ensure") => acc,
-            TokIdent(_) => header_parameters(lexed, closes, i + 1, eq, i, Map.insert(acc, i, 4)),
+            TokIdent(_) => header_parameters(
+                lexed,
+                closes,
+                flat,
+                i + 1,
+                eq,
+                i,
+                Map.insert(acc, i, 4)
+            ),
             _ => match Map.get(closes, i) {
-                Some(e) => header_parameters(lexed, closes, e + 1, eq, i, Map.insert(acc, i, 4)),
-                None => header_parameters(lexed, closes, i + 1, eq, last, acc),
+                Some(e) => header_parameters(
+                    lexed,
+                    closes,
+                    flat,
+                    e + 1,
+                    eq,
+                    i,
+                    Map.insert(acc, i, 4)
+                ),
+                None => header_parameters(lexed, closes, flat, i + 1, eq, last, acc),
             },
         }
     }
@@ -148,7 +329,14 @@ let width_token (x: WidthLayout) (i: Int): Unit = {
     x.indent.set(indent)
 }
 
-let width_gap (x: WidthLayout) (i: Int) (forced: Int) (closing: Bool) (shift: Int): Unit = {
+let width_gap
+    (x: WidthLayout)
+    (i: Int)
+    (forced: Int)
+    (closing: Bool)
+    (shift: Int)
+    (inline: Bool): Unit
+= {
     let gap = lexer.trivia_before_at(x.source.text, x.lexed, i);
     let header = Map.get(x.headers, i);
     let col = match header {
@@ -158,6 +346,7 @@ let width_gap (x: WidthLayout) (i: Int) (forced: Int) (closing: Bool) (shift: In
     width_emit(
         x,
         if col >= 0 { expanded_gap(gap, col, false, closing, x.newline) }
+        else if inline && !gap.contains("//") { x.flat.gaps[i] }
         else if shift != 0 && gap.contains("\n") {
             expanded_gap(gap, Int.max(0, trailing_indent(gap) + shift), false, closing, x.newline)
         }
@@ -242,7 +431,8 @@ let width_range
     (end: Int)
     (base: Int)
     (separate: Bool)
-    (shift: Int): Unit
+    (shift: Int)
+    (compact_until: Int): Unit
 = {
     let at = start;
     let next_indent = if separate { base } else { -1 };
@@ -260,11 +450,16 @@ let width_range
                 chain_indent = x.indent.get() + 4;
             };
             let link = if chain { link_end(x, i + 1, end) } else { i };
-            let size = if link > i { x.lexed.ends[link - 1] - x.lexed.starts[i] } else { 0 };
-            let multiline_link = link > i && line_start_of(x.source, x.lexed.starts[i])
-                != line_start_of(x.source, x.lexed.ends[link - 1] - 1);
-            let break_chain = chain
-                && (gap.contains("\n") || multiline_link || x.column.get() + gap.len() + size > 100);
+            let size = if link > i {
+                flat_span_size(x.flat, i, link)
+                    + x.flat.suffix[x.lexed.tokens.len() - link]
+            } else { 0 };
+            let multiline_link = link > i && x.flat.hard[link] != x.flat.hard[i + 1];
+            let break_chain = chain && i >= compact_until
+                && (
+                    gap.contains("\n") || multiline_link || x.column.get() + gap.len() + size
+                        > 100
+                );
             width_gap(
                 x,
                 i,
@@ -274,7 +469,8 @@ let width_range
                 }
                 else if break_chain { chain_indent } else { -1 },
                 false,
-                expression_shift
+                expression_shift,
+                i < compact_until
             );
             next_indent = -1;
             if tok == TokIf {
@@ -287,18 +483,36 @@ let width_range
                 Some(close) => {
                     let anchor = x.indent.get();
                     let nonempty = close > i + 1;
-                    let multiline = line_start_of(x.source, x.lexed.starts[i])
-                        != line_start_of(x.source, x.lexed.starts[close]);
-                    let size = x.lexed.ends[close] - x.lexed.starts[i];
-                    let wrap = nonempty && (multiline || x.column.get() + size > 100);
+                    let fits = flat_group(x, i, close)
+                        && x.column.get() + flat_group_size(x, i, close)
+                        + x.flat.suffix[x.lexed.tokens.len() - close - 1] <= 100;
+                    let payload = if !fits { hugging_payload(x, i, close) } else { -1 };
+                    let wrap = nonempty && !fits && payload < 0;
                     width_token(x, i);
                     let old_anchor = indent_columns(
                         x.source,
                         line_start_of(x.source, x.lexed.starts[i]),
                         0
                     );
-                    width_range(x, i + 1, close, anchor + 4, wrap, anchor - old_anchor);
-                    width_gap(x, close, if wrap { anchor } else { -1 }, true, expression_shift);
+                    width_range(
+                        x,
+                        i + 1,
+                        close,
+                        anchor + 4,
+                        wrap,
+                        anchor - old_anchor,
+                        if fits { close }
+                        else if payload >= 0 { hugging_prefix_end(x, i + 1, i + 1, payload) }
+                        else { 0 }
+                    );
+                    width_gap(
+                        x,
+                        close,
+                        if wrap { anchor } else { -1 },
+                        true,
+                        expression_shift,
+                        fits || payload >= 0
+                    );
                     width_token(x, close);
                     at = close + 1;
                 },
@@ -308,14 +522,14 @@ let width_range
                     };
                     for p in i..(Int.min(close + 1, end)) {
                         if p != i {
-                            width_gap(x, p, -1, false, shift);
+                            width_gap(x, p, -1, false, shift, p < compact_until);
                         };
                         width_token(x, p);
                     };
                     at = Int.min(close + 1, end);
                     if at < end {
                         let body_gap = lexer.trivia_before_at(x.source.text, x.lexed, at);
-                        if body_gap.contains("\n") {
+                        if at == compact_until || (body_gap.contains("\n") && at >= compact_until) {
                             next_indent = x.indent.get() + 4;
                             expression_shift = next_indent - trailing_indent(body_gap);
                         };
@@ -329,7 +543,8 @@ let width_range
                     if tok == TokComma {
                         expression_shift = shift;
                     };
-                    if chain && at < end && lexer.trivia_before_at(x.source.text, x.lexed, at)
+                    if chain && at >= compact_until && at < end
+                        && lexer.trivia_before_at(x.source.text, x.lexed, at)
                         .contains("\n") {
                             next_indent = chain_indent;
                         };

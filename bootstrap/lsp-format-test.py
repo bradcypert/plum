@@ -112,6 +112,20 @@ def check(compiler):
         formatting(original, {"line": 0, "character": len(original)},
                    'let render (): String =\n    render_values(\n'
                    + ',\n'.join('        ' + value for value in values) + '\n    )')
+        # Group contraction and wrapper attachment are shared with CLI fmt,
+        # including an unsaved CRLF buffer and Unicode inside its payload.
+        original = 'let short (): Int = consume(\n    1,\n    2\n)'
+        change(uri_a, original)
+        formatting(original, {"line": 3, "character": 1}, 'let short (): Int = consume(1, 2)')
+        original = 'let boxed (): R = Ok(P { x: "λ🙂", y: 2, z: 3 })\r\n'
+        change(uri_a, original)
+        formatting(original, {"line": 1, "character": 0},
+                   'let boxed (): R = Ok(P {\r\n    x: "λ🙂",\r\n    y: 2,\r\n    z: 3\r\n})\r\n')
+        original = 'let callbacks (): R = bind(value, |v| nested(P { x: 1, y: 2, z: 3 }))'
+        change(uri_a, original)
+        formatting(original, {"line": 0, "character": len(original)},
+                   'let callbacks (): R = bind(value, |v|\n    nested(P {\n'
+                   '        x: 1,\n        y: 2,\n        z: 3\n    }))')
         # Close releases unsaved text: formatting must now use disk.
         notify("didClose", uri_a)
         formatting(disk)
