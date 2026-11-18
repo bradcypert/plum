@@ -1,126 +1,85 @@
-#!/usr/bin/env bash
-# Every method the CHECKER recognises is offered by COMPLETION.
-#
-# `infer_method_call` recognises builtin methods as a chain of name
-# comparisons -- each needs its own unification and its own IR node, so
-# there is no signature table to look up. Completion cannot read a chain
-# of `if`s, and it was reading the prelude's SOURCE instead: everything
-# written in Plum appeared, everything the compiler implements itself
-# did not.
-#
-# The result was an editor that offered twenty-three methods on an array
-# and not `map`, `filter`, `fold`, `len` or `push` -- the five a person
-# reaches for first. There WAS a hand-written list of builtins for
-# completion; it had seven entries, none of those five, and it fed only
-# the `Array.` path and not the `xs.` one.
-#
-# `typecheck.builtin_methods()` is that list, moved next to the chain it
-# has to agree with. This is what stops it drifting again: the chain is
-# the authority, and a name it matches that the table does not carry is
-# a failure. A hand-kept list is only safe when something checks it.
-set -uo pipefail
+#!/usr/bin/env python3
+"""Every builtin the checker recognizes must be inventoried and shared names tested."""
+from collections import defaultdict
+from pathlib import Path
+import sys
+import tempfile
 
-root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-cd "$root"
+from compiler_metadata import ROOT, check_generated, load
+from plum_queries import ast, comparison_names, completion_names, function_body, inventory_names, nodes, query
 
-infer=bootstrap/self_host/typecheck/infer.plum
 
-# Names the checker matches on, and names the table declares. The table
-# is read from `name:` fields inside the `builtin_methods` literal.
-chain="$(grep -o 'method_name == "[a-z_]*"' "$infer" | sed 's/.*"\(.*\)"/\1/' | sort -u)"
-table="$(sed -n '/pub let builtin_methods /,/^]/p' "$infer" | grep -o 'name: "[a-z_]*"' | sed 's/.*"\(.*\)"/\1/' | sort -u)"
+def inventories(program):
+    # Inspect parsed comparisons independently of the completion tables:
+    # completion alone cannot reveal a builtin missing from its table.
+    methods = comparison_names(program, "method_name")
+    functions = comparison_names(function_body(program, "builtin_sig"), "name")
+    for claimed, listed, label in [
+        (methods, inventory_names(program, "builtin_methods", "BuiltinMethod"), "methods"),
+        (functions, inventory_names(program, "builtin_functions", "BuiltinFn"), "functions"),
+    ]:
+        missing = claimed - listed
+        if missing:
+            raise ValueError(f"checker accepts builtin {label} missing from the inventory: {', '.join(sorted(missing))}")
+    return methods
 
-if [ -z "$chain" ] || [ -z "$table" ]; then
-    echo "check-builtins: found no names -- has infer.plum's shape changed?" >&2
-    exit 1
-fi
 
-missing="$(comm -23 <(printf '%s\n' "$chain") <(printf '%s\n' "$table"))"
+def shared_methods(names, methods):
+    spaces = defaultdict(set)
+    for name in names:
+        if "." in name:
+            namespace, method = name.rsplit(".", 1)
+            spaces[method].add(namespace)
+    return {name for name, namespaces in spaces.items() if len(namespaces) > 1 and name in methods}
 
-if [ -n "$missing" ]; then
-    echo "check-builtins: the checker accepts these methods and completion does not offer them:" >&2
-    printf '  %s\n' $missing >&2
-    echo "add them to \`builtin_methods\` in $infer" >&2
-    exit 1
-fi
 
-# --- the FREE functions the compiler implements ---
-#
-# Same problem as the methods above, one step over: `builtin_sig` is
-# also a chain of name comparisons, so nothing can enumerate it, and
-# the generated reference silently omitted `args`, `chars_of` and
-# `panic_raw` entirely -- three functions that exist, are callable, and
-# are used by this compiler, under a heading promising completeness.
-#
-# `typecheck.builtin_functions()` is the table the reference reads. This
-# is what stops it drifting from the chain beside it.
-# The range ends at the next TOP-LEVEL declaration, not at the first
-# blank line.
-#
-# It used to be `/^$/`, which worked only because `builtin_sig`'s arms
-# happened to be contiguous. Insert a blank line and a comment mid-chain
-# -- the natural way to add an arm with a note about it -- and the range
-# stopped there, so every name below became invisible while the harness
-# reported success. Verified by injection: a new arm after a blank line
-# was not seen, and neither was `args`, and this still exited 0.
-#
-# That is exactly the regression this half exists to prevent: `args`,
-# `chars_of` and `panic_raw` were once missing from the generated
-# reference under a heading promising completeness.
-sig_chain="$(sed -n '/^let builtin_sig /,/^\(pub \)\?let [a-z_]* /p' "$infer" | grep -oE 'name == "[A-Za-z_.]+"' | sed 's/.*"\(.*\)"/\1/' | sort -u)"
-sig_table="$(sed -n '/pub let builtin_functions /,/^]/p' "$infer" | grep -oE 'name: "[A-Za-z_.]+"' | sed 's/.*"\(.*\)"/\1/' | sort -u)"
+def namespace_path(node):
+    if type(node) is str:
+        return node
+    if isinstance(node, list) and len(node) == 3 and node[0] == "field":
+        base = namespace_path(node[1])
+        if base is not None:
+            return base + "." + node[2]
+    return None
 
-if [ -z "$sig_chain" ] || [ -z "$sig_table" ]; then
-    echo "check-builtins: found no builtin_sig names -- has infer.plum's shape changed?" >&2
-    exit 1
-fi
 
-sig_missing="$(comm -23 <(printf '%s\n' "$sig_chain") <(printf '%s\n' "$sig_table"))"
-if [ -n "$sig_missing" ]; then
-    echo "check-builtins: builtin_sig answers for these and the reference does not list them:" >&2
-    printf '  %s\n' $sig_missing >&2
-    echo "add them to \`builtin_functions\` in $infer" >&2
-    exit 1
-fi
+def dot_calls(program, namespaces):
+    # A field callee can also be Ns.method(...). Exclude the namespaces
+    # reported by completion so they cannot stand in for receiver coverage.
+    return {node[1][-1] for node in nodes(program)
+            if len(node) >= 2 and node[0] == "call" and isinstance(node[1], list)
+            and len(node[1]) == 3 and node[1][0] == "field"
+            and namespace_path(node[1][1]) not in namespaces}
 
-# --- and every SHARED name is exercised as a dot call ---
-#
-# A builtin arm matches on NAME before the receiver is known, so a name
-# that another type also declares must hand back what it does not own.
-# `contains` was fixed for that; `len`, `concat` and `remove` were not,
-# and `m.len()` on a Map reported "Map[String, Int] != Array[T0]" until
-# 2026-08-31.
-#
-# The names at risk are exactly those a builtin shares with a declared
-# function, and they are derivable: `plum complete` lists every declared
-# `Ns.name`. Each one has to appear as a dot call in the fixture, so a
-# new builtin that shadows something cannot ship untested.
-plum="${1:-./sh}"
-fixture=bootstrap/exec_corpus/dot_methods/main.plum
-work="$(mktemp -d)"
-trap 'rm -rf "$work"' EXIT
-printf 'use Os;\nuse Time;\nuse Net;\nuse Http;\nuse Process;\nlet main (): Unit = println("x")\n' > "$work/main.plum"
 
-if "$plum" complete "$work" > "$work/names.json" 2>/dev/null; then
-    # Distinct `Ns.name` pairs FIRST -- completion lists a builtin and a
-    # prelude declaration of the same name separately, and counting those
-    # as two namespaces would flag every String primitive.
-    shared="$(grep -o '"name":"[A-Z][A-Za-z0-9_]*\.[a-z_][A-Za-z0-9_]*"' "$work/names.json" \
-        | sed 's/"name":"//;s/"$//' | sort -u \
-        | sed 's/^[A-Za-z0-9_]*\.//' | sort | uniq -d)"
-    untested=""
-    for m in $shared; do
-        printf '%s\n' "$chain" | grep -qx "$m" || continue
-        grep -q "\.$m(" "$fixture" || untested="$untested $m"
-    done
-    if [ -n "$untested" ]; then
-        echo "check-builtins: these builtin methods share a name with a declared function" >&2
-        echo "and are not exercised as a dot call in $fixture:" >&2
-        printf '  %s\n' $untested >&2
-        exit 1
-    fi
-else
-    echo "check-builtins: \`plum complete\` failed; skipping the shared-name half" >&2
-fi
+def main():
+    compiler = sys.argv[1] if len(sys.argv) > 1 else "./sh"
+    if "/" in compiler or "\\" in compiler:
+        compiler = (ROOT / compiler).resolve()
+    data = load()
+    check_generated(data)
+    methods = inventories(ast(compiler, ROOT / "bootstrap/self_host/typecheck/infer.plum"))
+    with tempfile.TemporaryDirectory(prefix="plum-builtins-") as work:
+        Path(work, "main.plum").write_text(
+            "".join(f"use {m};\n" for m in data["stdlib_modules"]) + 'let main (): Unit = println("x")\n',
+            encoding="utf-8",
+        )
+        names = completion_names(query(compiler, "complete", work))
+    absent = set(data["stdlib_modules"]) - {name.split(".")[0] for name in names if "." in name}
+    if absent:
+        raise ValueError(f"completion offered nothing for: {', '.join(sorted(absent))}")
+    shared = shared_methods(names, methods)
+    if not shared:
+        raise ValueError("no shared builtin names found -- nothing was checked")
+    namespaces = {name.rsplit(".", 1)[0] for name in names if "." in name}
+    missing = shared - dot_calls(ast(compiler, ROOT / "bootstrap/exec_corpus/dot_methods/main.plum"), namespaces)
+    if missing:
+        raise ValueError(f"shared builtin names missing dot-call coverage: {', '.join(sorted(missing))}")
+    print(f"check-builtins: {len(methods)} builtin methods inventoried; {len(shared)} shared names exercised")
 
-printf 'check-builtins: %d builtin methods, every one offered by completion and every shared name exercised\n' "$(printf '%s\n' "$chain" | wc -l | tr -d ' ')"
+
+if __name__ == "__main__":
+    try:
+        main()
+    except (OSError, ValueError) as error:
+        sys.exit(f"check-builtins: {error}")

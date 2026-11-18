@@ -53,7 +53,7 @@ let main (): Unit = {
             None => "none"
         }
     );
-    println(Array.join(Array.map(["p"], upper), ","));
+    println(["p"].map(upper).join(","));
 
     // `set` is shared between `Array.set(i, v)` and `Ref.set(v)`, and
     // they are told apart by arity rather than by receiver.

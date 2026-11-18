@@ -1,0 +1,19 @@
+#!/usr/bin/env python3
+"""Generate compiler declarations without requiring a Plum compiler."""
+import argparse
+from compiler_metadata import OUTPUT, check_generated, load, render
+
+ap = argparse.ArgumentParser(description=__doc__)
+ap.add_argument("--check", action="store_true")
+args = ap.parse_args()
+try:
+    data = load()
+    if args.check:
+        check_generated(data)
+        print("compiler metadata declarations match")
+    else:
+        OUTPUT.parent.mkdir(parents=True, exist_ok=True)
+        OUTPUT.write_text(render(data), encoding="utf-8")
+        print(f"generated {OUTPUT}")
+except (OSError, ValueError) as error:
+    ap.exit(1, f"compiler metadata: {error}\n")
