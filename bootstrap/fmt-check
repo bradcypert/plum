@@ -4,7 +4,7 @@
 # The default formatter applies structural spacing and a soft 100-column
 # layout. Repository sources are maintained at its fixed point; deliberately
 # cramped inputs live in fmt_corpus with explicit expected output. Highlight
-# input fixtures retain source columns for their caret assertions.
+# input fixtures use source-local directives to preserve caret columns.
 #
 # Three properties, and the second is the one that makes a formatter
 # safe to run on somebody's code:
@@ -40,12 +40,7 @@ trap 'rm -rf "$work"' EXIT
 ok=0; fail=0; expected_lex_errors=0
 while IFS= read -r f; do
     expected_lex_error=0
-    position_fixture=0
     case "$f" in
-        ./tools/tree-sitter-plum/test/highlight/*)
-            # Caret comments assert original source columns. Exercise token
-            # preservation/idempotence, but retain these as input fixtures.
-            position_fixture=1 ;;
         ./bootstrap/typecheck_corpus/invalid_hex_escape/main.plum)
             expected_lex_error=1 ;;
         ./bootstrap/typecheck_corpus/invalid_unicode_escape/main.plum)
@@ -96,7 +91,7 @@ while IFS= read -r f; do
         fail=$((fail + 1)); continue
     fi
 
-    if [ "$position_fixture" -eq 0 ] && ! cmp -s "$f" "$work/out"; then
+    if ! cmp -s "$f" "$work/out"; then
         printf 'FAIL  %-58s not formatted\n' "$f"
         diff "$f" "$work/out" | head -n 4 | sed 's/^/        /'
         fail=$((fail + 1)); continue
@@ -184,6 +179,10 @@ if ! python3 bootstrap/formatter-layout-check.py "$plum"; then
 fi
 
 if ! python3 bootstrap/formatter-width-check.py "$plum"; then
+    fail=$((fail + 1))
+fi
+
+if ! python3 bootstrap/formatter-exclusions-check.py "$plum"; then
     fail=$((fail + 1))
 fi
 

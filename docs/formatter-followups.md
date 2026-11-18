@@ -128,7 +128,7 @@ allocation traffic from 67.6 MB after step 1 to 70.9 MB. Doubling-size growth
 remains close to linear and within the existing budgets. No seed refresh is
 needed.
 
-## 3. Explicit formatting exclusions — planned
+## 3. Explicit formatting exclusions — complete
 
 Design a small directive surface for skipping a construct or preserving a
 region, such as `fmt: skip` and `fmt: off/on`. Define nesting, unmatched markers,
@@ -139,6 +139,39 @@ Acceptance: CLI/editor agreement, byte-preserved excluded regions, clear
 boundary behavior, and column-sensitive highlighting fixtures maintained with
 source-local directives rather than hard-coded path exemptions. Deliberately
 invalid lexer fixtures remain a separate concern.
+
+The default formatter recognizes standalone `// fmt: skip`, `// fmt: off`,
+and `// fmt: on` comments. `skip` selects the widest parsed definition,
+statement, or expression starting at the following token. Regions nest; an
+unclosed `off` extends through EOF, a stray `on` has no effect, and overlapping
+exclusions are combined. Strings, doc comments, trailing comments, and comments
+with extra prose do not activate directives. [TOOLING.md](../TOOLING.md) describes
+exact trivia/indentation boundaries and examples.
+
+Preservation uses lossless token ordinals across normalization, structural
+layout, indentation, and width emission. Each stage restores protected source
+before the next stage runs; width emission reads protected gaps directly so
+later columns reflect actual preserved text. Files without directive text take
+the existing path. The highlighting fixtures now contain local `off/on` markers;
+`fmt-check` no longer has a path-specific fixed-point exemption.
+
+The enlarged compiler exposed the existing monomorphization guard counting
+call occurrences: 10,041 occurrences represented only 2,319 distinct instances.
+The companion bootstrap fix counts new specializations, retains the separate
+cycle-search policy, and refreshes the seed. See
+[the callgraph follow-up](compiler-callgraph-worklists.md#specialization-budget-follow-up)
+for the measured trigger, bridge compiler, and boundary regressions.
+
+Validation uses a compiler built from the refreshed seed: 827 formatter
+checks, 30 exclusion cases (including 200/400-construct allocation growth),
+55 compiler tests, 92 properties, 43 stdlib documentation pages, generated shims,
+339 CLI checks, editor formatting and full LSP smoke, and formatter filesystem
+checks all pass. All 106 tree-sitter tests pass, including the migrated caret
+fixtures, and 624 highlighter inputs round-trip exactly. A focused
+AddressSanitizer/LeakSanitizer probe matches the CLI on 62 formatter runs and
+checks retained parser-span snapshots. Default formatting allocation budgets
+remain unchanged; specialization FIFO/memory and both limit boundaries pass.
+The refreshed seed independently builds an equivalent compiler.
 
 ## 4. Formatting-independent tooling — planned
 

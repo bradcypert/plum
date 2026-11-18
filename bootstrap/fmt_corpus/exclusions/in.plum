@@ -1,0 +1,16 @@
+let before (): Int = { let n = 1; n }
+
+// fmt: skip
+let aligned (): Array[Int] = [1,   2,
+             3,4]
+
+let middle (): Int = { let n = 2; n }
+
+// fmt: off
+let compact (): Int = {   3 }
+  // fmt: off
+   let nested (): Int = { 4 }
+  // fmt: on
+// fmt: on
+
+    let after (): Int = { let n = 5; n }

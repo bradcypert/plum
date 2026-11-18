@@ -1,3 +1,4 @@
+// fmt: off
 let template = @embed_file("../../README.md").len()
 //             ^ function.builtin
 //              ^ function.builtin
@@ -8,3 +9,4 @@ let ordinary = embed_file("template.md")
 //             ^ variable
 let second = @embed_file("../../README.md")
 //           ^ function.builtin
+// fmt: on

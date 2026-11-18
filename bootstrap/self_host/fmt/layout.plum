@@ -16,8 +16,10 @@ struct Expansion {
     generation: Ref[Int],
 }
 
-let format_layout (path: String) (src: String): String = {
-    let normalized = normalize_gaps(path, src);
+let format_layout (path: String) (src: String): String = format_layout_kept(path, src, [])
+
+let format_layout_kept (path: String) (src: String) (kept: Array[KeptRange]): String = {
+    let normalized = restore_kept(path, src, normalize_gaps(path, src), kept);
     let lexed = lexer.tokenize_spanned_at(normalized, path);
     parser.set_source_context(path, normalized, lexed.starts, lexed.ends);
     let items = parser.parse_program(lexed.tokens).items;
@@ -34,7 +36,9 @@ let format_layout (path: String) (src: String): String = {
     };
     expand_items(x, items, 0);
     let anchors: Map[Int, Int] = Map.new(());
-    format_width(path, format_once(path, render_expansion(x, 0, anchors, 0, "")))
+    let expanded = restore_kept(path, src, render_expansion(x, 0, anchors, 0, ""), kept);
+    let indented = restore_kept(path, src, format_once(path, expanded), kept);
+    restore_kept(path, src, format_width_kept(path, indented, kept), kept)
 }
 
 // Source offsets are codepoints. Index braces, parentheses and brackets once

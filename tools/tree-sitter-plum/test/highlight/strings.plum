@@ -1,3 +1,4 @@
+// fmt: off
 let text = "first line
 // still string text"
 // ^ string
@@ -8,3 +9,4 @@ let escaped = "first line
 second \"quoted\" line"
 //     ^ string.escape
 //       ^ string
+// fmt: on

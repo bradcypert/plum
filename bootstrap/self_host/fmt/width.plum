@@ -6,13 +6,14 @@ struct WidthLayout {
     closes: Map[Int, Int],
     headers: Map[Int, Int],
     flat: FlatLayout,
+    kept: Array[KeptRange],
     newline: String,
     out: Ref[String],
     column: Ref[Int],
     indent: Ref[Int],
 }
 
-let format_width (path: String) (src: String): String = {
+let format_width_kept (path: String) (src: String) (kept: Array[KeptRange]): String = {
     let lexed = lexer.tokenize_spanned_at(src, path);
     let source = source_of(src, lexed.starts);
     let empty: Map[Int, Int] = Map.new(());
@@ -25,6 +26,7 @@ let format_width (path: String) (src: String): String = {
         closes: closes,
         headers: signature_breaks(source, lexed, closes, flat, 0, headers),
         flat: flat,
+        kept: kept,
         newline: if src.contains("\r\n") { "\r\n" } else { "\n" },
         out: ref(""),
         column: ref(0),
@@ -105,7 +107,7 @@ let flat_span_size (flat: FlatLayout) (start: Int) (end: Int): Int =
     flat.columns[end] - flat.columns[start] - String.char_len(flat.gaps[start])
 
 let flat_group (x: WidthLayout) (open: Int) (close: Int): Bool =
-    x.flat.hard[close + 1] == x.flat.hard[open + 1]
+    !kept_token(x.kept, open) && x.flat.hard[close + 1] == x.flat.hard[open + 1]
         && !(
             x.lexed.tokens[open] == TokLBrace
                 && line_start_of(x.source, x.lexed.starts[open])
@@ -343,15 +345,12 @@ let width_gap
         Some(c) => c,
         None => forced
     };
-    width_emit(
-        x,
-        if col >= 0 { expanded_gap(gap, col, false, closing, x.newline) }
-        else if inline && !gap.contains("//") { x.flat.gaps[i] }
-        else if shift != 0 && gap.contains("\n") {
-            expanded_gap(gap, Int.max(0, trailing_indent(gap) + shift), false, closing, x.newline)
-        }
-        else { gap }
-    );
+    let formatted = if col >= 0 { expanded_gap(gap, col, false, closing, x.newline) }
+    else if inline && !gap.contains("//") { x.flat.gaps[i] }
+    else if shift != 0 && gap.contains("\n") {
+        expanded_gap(gap, Int.max(0, trailing_indent(gap) + shift), false, closing, x.newline)
+    } else { gap };
+    width_emit(x, kept_gap(x.kept, i, x.lexed.tokens.len() - 1, gap, formatted));
 }
 
 // A closure's parameter commas are not argument separators. A pipe following

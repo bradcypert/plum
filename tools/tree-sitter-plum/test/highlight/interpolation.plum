@@ -1,3 +1,4 @@
+// fmt: off
 let greeting = "hello ${name + 1e3}!"
 //              ^ string
 //                    ^ punctuation.special
@@ -35,3 +36,4 @@ let multiline = "text
 //  ^ number
 //   ^ punctuation.special
 //     ^ string
+// fmt: on
