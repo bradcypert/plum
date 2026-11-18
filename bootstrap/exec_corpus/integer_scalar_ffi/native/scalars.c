@@ -1,5 +1,4 @@
 #include <stdint.h>
-#include <string.h>
 
 int8_t ffi_echo_i8(int8_t x) { return x; }
 int64_t ffi_widen_i8(int8_t x) { return x; }
@@ -46,10 +45,19 @@ uint64_t ffi_widen_u64(uint64_t x) { return x; }
 uint64_t ffi_min_u64(void) { return 0; }
 uint64_t ffi_max_u64(void) { return UINT64_MAX; }
 
+/* Keep this fixture freestanding: no dependency on a hosted string header. */
+static int ffi_text_matches(const char *text) {
+    const char expected[] = "scalar";
+    for (unsigned i = 0; i < sizeof expected; ++i) {
+        if (text[i] != expected[i]) return 0;
+    }
+    return 1;
+}
+
 uint64_t ffi_mixed(uint8_t a, int16_t b, uint64_t c, int8_t d, uint32_t e, int32_t f, uint16_t g, int64_t h, int flag, double scale, const char *text) {
     return a == UINT8_MAX && b == INT16_MIN && c == UINT64_MAX && d == INT8_MIN
         && e == UINT32_MAX && f == INT32_MIN && g == UINT16_MAX && h == INT64_MIN
-        && flag == 1 && scale == 1.5 && strcmp(text, "scalar") == 0 ? c : 0;
+        && flag == 1 && scale == 1.5 && ffi_text_matches(text) ? c : 0;
 }
 uint8_t ffi_byte(const char *text) { return (uint8_t)text[0]; }
 const char *ffi_pointer(const char *text) { return text; }

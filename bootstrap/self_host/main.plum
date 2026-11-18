@@ -4304,7 +4304,7 @@ let build_options (argv: Array[String]) (target: String): buildmode.Options = {
 // cache key need it. Pure IR emission without new-width externs needs no C tool.
 let NATIVE_C_TARGET: Ref[String] = ref("")
 
-let c_abi_target (target: String): String = {
+let try_c_abi_target (target: String): String = {
     if target != "" { target }
     else if NATIVE_C_TARGET.get() != "" { NATIVE_C_TARGET.get() }
     else {
@@ -4315,14 +4315,21 @@ let c_abi_target (target: String): String = {
             Ok(r) => if r.exit_code == 0 { r.stdout.trim() } else { "" },
             Err(_) => "",
         };
-        if triple == "" {
-            fail_cmd(
-                "cannot determine the C compiler target with -dumpmachine; specify --target explicitly"
-            )
-        };
         NATIVE_C_TARGET.set(triple);
         triple
     }
+}
+
+// Only fixed-width C emission requires discovery to succeed. A cache key is
+// optional: drivers without a query interface can still compile ordinary IR.
+let c_abi_target (target: String): String = {
+    let triple = try_c_abi_target(target);
+    if triple == "" {
+        fail_cmd(
+            "cannot determine the C compiler target with -dumpmachine; specify --target explicitly"
+        )
+    };
+    triple
 }
 
 // Apply generation policy for every entry point, including file emission and
@@ -5213,11 +5220,12 @@ let ir_input_key
 = {
     let compiler = buildcache.compiler_hash(());
     let cwd = Result.unwrap_or(Os.cwd(()), "");
-    if compiler == "" || cwd == "" { "" }
+    let abi = if compiler == "" || cwd == "" { "" } else { try_c_abi_target(target) };
+    if abi == "" { "" }
     else {
         let mut parts = [
             "plum-ir-v3",
-            buildcache.frame(c_abi_target(target)),
+            buildcache.frame(abi),
             buildcache.frame(compiler),
             buildcache.frame(cwd),
             buildcache.frame(dir),

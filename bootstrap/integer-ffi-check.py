@@ -71,11 +71,13 @@ def main():
             f'{ctypes[k]} call_{k.lower()}({ctypes[k]} x) {{ return ffi_echo_{k.lower()}(x); }}'
             for k in KINDS))
 
-        def signature(ir, kind):
-            match = re.search(r'^declare (?:dso_local )?(?:(signext|zeroext) )?i(\d+) '
-                              r'@ffi_echo_' + kind.lower() + r'\(i\d+([^)]*)\)', ir, re.M)
+        def signature(ir, kind, *, call=False):
+            prefix = r'\bcall ' if call else r'^declare (?:dso_local )?'
+            match = re.search(prefix + r'(?:(signext|zeroext) )?i(\d+) '
+                              r'@ffi_echo_' + re.escape(kind.lower()) + r'\(i(\d+)([^)]*)\)', ir, re.M)
             assert match, (kind, ir[:1000])
-            ret_attr, bits, param = match.groups()
+            ret_attr, bits, param_bits, param = match.groups()
+            assert bits == param_bits, (kind, bits, param_bits)
             param_attrs = re.findall(r'\b(?:signext|zeroext)\b', param)
             assert len(param_attrs) <= 1
             return ret_attr or '', bits, param_attrs[0] if param_attrs else ''
@@ -86,10 +88,7 @@ def main():
             for kind in KINDS:
                 actual = signature(plum_ir, kind)
                 assert actual == signature(c_ir, kind), (target, kind, actual, signature(c_ir, kind))
-                ret_attr, bits, param_attr = actual
-                ret = (ret_attr + ' ' if ret_attr else '') + 'i' + bits
-                arg = 'i' + bits + ' ' + (param_attr + ' ' if param_attr else '')
-                assert re.search(r'call ' + ret + r' @ffi_echo_' + kind.lower() + r'\(' + arg, plum_ir), (target, kind)
+                assert signature(plum_ir, kind, call=True) == actual, (target, kind)
             ir_file = work / 'target.ll'
             ir_file.write_text(plum_ir)
             run('clang', '--target=' + target, '-Wno-override-module', '-c', ir_file, '-o', work / 'target.o')
@@ -130,6 +129,23 @@ def main():
         assert 'cannot determine the C compiler target' in failure.stdout + failure.stderr
         run(compiler, 'emit-llvm', ROOT / 'bootstrap/exec_corpus/ffi', overlay=missing_driver)
 
+        # Target discovery is optional for ordinary IR caching. A wrapper
+        # without -dumpmachine must still compile a program without new-width
+        # externs, while ABI-sensitive emission must keep its fatal diagnostic.
+        no_query = work / 'no-query.py'
+        no_query.write_text('import subprocess, sys\n'
+                            'if "-dumpmachine" in sys.argv: sys.exit(1)\n'
+                            'sys.exit(subprocess.call(["clang", *sys.argv[1:]]))\n')
+        plain = work / 'plain'
+        plain.mkdir()
+        (plain / 'main.plum').write_text('let main (): Unit = println("wrapper ok")\n')
+        no_query_env = {'PLUM_CC': f'{sys.executable} {no_query}', 'PLUM_CACHE_TRACE': '1'}
+        for _ in range(2):
+            ordinary = run(compiler, 'run', plain, overlay=no_query_env)
+            assert ordinary.stdout == 'wrapper ok\n' and 'IR bypass' in ordinary.stderr, ordinary
+        failure = run(compiler, 'run', FIXTURE, ok=False, overlay=no_query_env)
+        assert 'cannot determine the C compiler target' in failure.stdout + failure.stderr
+
         # Stop the driver at IR handoff. run publishes IR before native
         # compilation, so switching the driver's native target exercises real
         # cache lookup without needing a foreign linker or SDK. build itself
@@ -152,16 +168,23 @@ def main():
             ('aarch64-unknown-linux-gnu', '', 'miss'),
             ('x86_64-w64-windows-gnu', '', 'hit'),
         ):
+            captured.unlink(missing_ok=True)
             failed = run(compiler, 'run', FIXTURE, ok=False, overlay=overlay | {'FFI_TARGET': target})
+            assert captured.is_file(), failed
             assert 'IR ' + event in failed.stderr, failed
             assert signature(captured.read_text(), 'I8')[0] == attr
         for target in ('x86_64-w64-windows-gnu', 'aarch64-unknown-linux-gnu'):
-            run(compiler, 'build', FIXTURE, '--target', target, '-o', work / 'handoff', ok=False,
-                overlay=overlay | {'FFI_TARGET': 'x86_64-unknown-linux-gnu'})
+            captured.unlink(missing_ok=True)
+            failed = run(compiler, 'build', FIXTURE, '--target', target, '-o', work / 'handoff', ok=False,
+                         overlay=overlay | {'FFI_TARGET': 'x86_64-unknown-linux-gnu'})
+            assert captured.is_file(), failed
             assert signature(captured.read_text(), 'I8')[0] == ''
         print('integer-ffi-check: unsupported boundaries rejected and build IR cache isolated by target', flush=True)
 
         if options.core:
+            resource_headers = Path(run('clang', '-print-resource-dir').stdout.strip()) / 'include'
+            run('clang', '--target=x86_64-unknown-none', '-ffreestanding', '-nostdinc',
+                '-isystem', resource_headers, '-fsyntax-only', FIXTURE / 'native/scalars.c')
             hooks = work / 'hooks.c'
             hooks.write_text(HOOKS)
             for mode in ([], ['--release']):
@@ -169,7 +192,7 @@ def main():
                 run(compiler, 'build', FIXTURE, '--target', 'x86_64-unknown-none', '--emit-object', *mode, '-o', obj)
                 symbols = {line.split()[-1] for line in run('nm', '-u', obj).stdout.splitlines()}
                 assert symbols <= {'plum_kernel_alloc', 'plum_kernel_free', 'plum_kernel_write',
-                                   'plum_kernel_panic', 'plum_kernel_halt', 'memcpy', 'memmove', 'memset', 'memcmp', 'strcmp'}, symbols
+                                   'plum_kernel_panic', 'plum_kernel_halt', 'memcpy', 'memmove', 'memset', 'memcmp'}, symbols
                 exe = work / 'core'
                 run('clang', '-no-pie', obj, hooks, '-o', exe)
                 assert run(exe).stdout == expected

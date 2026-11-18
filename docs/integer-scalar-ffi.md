@@ -53,9 +53,11 @@ architectures is unchanged. Custom calling conventions are outside this contract
 `build --target <triple>` and `emit-llvm --target <triple>` select the same ABI.
 Without `--target`, the compiler asks the selected C driver (`PLUM_CC`, default
 `clang`) for `-dumpmachine`. An explicit target permits IR emission without a
-native C driver. IR cache keys include the effective target, so a Linux ABI
-module cannot be reused for a Windows or arm64 build. When compiling emitted
-hosted IR separately, pass the matching target to the C driver too.
+native C driver. Drivers that cannot answer the query can still compile programs
+without new-width externs, using the uncached path. IR cache keys include the
+effective target, so a Linux ABI module cannot be reused for a Windows or arm64
+build. When compiling emitted hosted IR separately, pass the matching target to
+the C driver too.
 
 ## Boundaries kept closed
 

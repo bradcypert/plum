@@ -49,6 +49,12 @@
 #
 # If a ceiling fails, compare actual allocation traffic, output size,
 # lifetimes and platform measurements before recalibrating it.
+# Run 716 (2026-11-18) reached 144.35 MiB debug RSS on Linux x86_64 and
+# 144.13 MiB on arm64. On identical base sources the scalar-FFI compiler
+# allocates only 5.5 KiB more than its predecessor; the larger compiler
+# source adds 0.36% allocation traffic and 0.29% emitted IR. The 144 MiB
+# ceiling has exhausted its workload-growth margin. Use 152 MiB for Linux
+# debug emission, retaining the release/check and requested-byte ceilings.
 #
 # The Windows job does not run this at all -- it is a separate job with
 # its own steps. The `resource` guard below is defensive rather than
@@ -143,7 +149,7 @@ echo "mem-check: peak RSS of the compiler alone (no clang in these)"
 # the same checkout is run on all three.
 case "$(uname -s)" in
     Darwin) debug_emit_ceiling=196608; release_emit_ceiling=196608; check_ceiling=81920 ;;
-    *)      debug_emit_ceiling=147456; release_emit_ceiling=131072; check_ceiling=65536 ;;
+    *)      debug_emit_ceiling=155648; release_emit_ceiling=131072; check_ceiling=65536 ;;
 esac
 
 # 120 MB on Linux with compact TLS embedding; 744 MB measured on the
