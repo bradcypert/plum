@@ -3198,7 +3198,7 @@ let compile_and_run_tests
         Ok(scratch) => {
             let bin = scratch.concat("/tests");
             let ll = bin.concat(".ll");
-            let ir = emit_program(program, "__plum_test_main", mode);
+            let ir = emit_program(program, "__plum_test_main", mode, native_target());
             let outcome = match Os.write_file(ll, ir) {
                 Err(e) => TestRun { failed: 1, detail: "could not write test IR: ".concat(e) },
                 Ok(_) => {
@@ -4300,14 +4300,58 @@ let build_options (argv: Array[String]) (target: String): buildmode.Options = {
     mode
 }
 
+// The native driver is queried only when ABI-sensitive declarations or a build
+// cache key need it. Pure IR emission without new-width externs needs no C tool.
+let NATIVE_C_TARGET: Ref[String] = ref("")
+
+let c_abi_target (target: String): String = {
+    if target != "" { target }
+    else if NATIVE_C_TARGET.get() != "" { NATIVE_C_TARGET.get() }
+    else {
+        let triple = match run_process(
+            cc_program(),
+            Array.concat(cc_prefix_args(), ["-dumpmachine"])
+        ) {
+            Ok(r) => if r.exit_code == 0 { r.stdout.trim() } else { "" },
+            Err(_) => "",
+        };
+        if triple == "" {
+            fail_cmd(
+                "cannot determine the C compiler target with -dumpmachine; specify --target explicitly"
+            )
+        };
+        NATIVE_C_TARGET.set(triple);
+        triple
+    }
+}
+
 // Apply generation policy for every entry point, including file emission and
 // test dispatchers. Instrument the complete module so helpers are covered too.
-let emit_program (program: parser.ProgramNode) (entry: String) (mode: buildmode.Options): String = {
+let emit_program
+    (program: parser.ProgramNode)
+    (entry: String)
+    (mode: buildmode.Options)
+    (target: String): String
+= {
+    codegen.set_c_abi_target(
+        if codegen.cg_has_fixed_externs(program) { c_abi_target(target) } else { target }
+    );
     codegen.set_heap_stats(mode.heap);
     codegen.set_debug_frames(mode.trace);
     codegen.set_debug_info(buildmode.symbols(mode));
     let ir = codegen.cg_emit_program_entry(program, entry);
     if mode.address { codegen.cg_sanitize_address(ir) } else { ir }
+}
+
+// Select the same ABI as build, including for emit-only cross-target checks.
+let emit_llvm_command (program: parser.ProgramNode) (argv: Array[String]): Unit = {
+    let target = Option.unwrap_or(find_flag_value(argv, "--target", 0), native_target());
+    let bad = target_error(target);
+    if bad != "" { fail_cmd(bad) };
+    codegen.set_core_runtime(freestanding.enabled(target));
+    let ir = emit_program(program, "main", build_options(argv, target), target);
+    println(if freestanding.enabled(target) { codegen.cg_freestanding(ir) } else { ir });
+    codegen.set_core_runtime(false);
 }
 
 let compile_prepared
@@ -4356,7 +4400,9 @@ let compile_with_scratch
     let extra = native.args;
     let ll = out.concat(".ll");
     let key_time = buildcache.start(());
-    let key = if cached && buildcache.enabled(()) { ir_input_key(dir, inputs, mode) } else { "" };
+    let key = if cached && buildcache.enabled(()) { ir_input_key(dir, inputs, mode, target) } else {
+        ""
+    };
     let hit = if key == "" { None } else { buildcache.load_ir(key) };
     buildcache.finish("IR lookup", key_time);
     let ir = match hit {
@@ -4370,7 +4416,7 @@ let compile_with_scratch
             let t = buildcache.start(());
             let program = parser.ProgramNode { items: parse_source_files(inputs.files, 0, []) };
             buildcache.finish("lex/parse", t);
-            emit_program(program, "main", mode)
+            emit_program(program, "main", mode, target)
         },
     };
     match Os.write_file(ll, ir) {
@@ -4382,7 +4428,7 @@ let compile_with_scratch
                 // file membership before publishing. Concurrent edits yield
                 // an uncached build, never an artifact under the old key.
                 if buildcache.sources_unchanged(()) && buildcache.unchanged(reads)
-                    && ir_input_key(dir, prepare_inputs(dir), mode) == key {
+                    && ir_input_key(dir, prepare_inputs(dir), mode, target) == key {
                         buildcache.store("ir", key, ll, reads)
                     } else { buildcache.diagnostic("inputs changed; IR not stored") }
             } else { () };
@@ -5159,13 +5205,19 @@ let manifest_input (dir: String): String = {
     }
 }
 
-let ir_input_key (dir: String) (inputs: BuildInputs) (mode: buildmode.Options): String = {
+let ir_input_key
+    (dir: String)
+    (inputs: BuildInputs)
+    (mode: buildmode.Options)
+    (target: String): String
+= {
     let compiler = buildcache.compiler_hash(());
     let cwd = Result.unwrap_or(Os.cwd(()), "");
     if compiler == "" || cwd == "" { "" }
     else {
         let mut parts = [
-            "plum-ir-v2",
+            "plum-ir-v3",
+            buildcache.frame(c_abi_target(target)),
             buildcache.frame(compiler),
             buildcache.frame(cwd),
             buildcache.frame(dir),
@@ -5777,11 +5829,7 @@ let main (): Unit = {
         // Same directory loading `check` and `run` use. A real Plum
         // project is several modules, so a backend that only accepted
         // one file could never compile one.
-        println(emit_program(
-            parser.ProgramNode { items: collect_project(argv[1]) },
-            "main",
-            build_options(argv, native_target())
-        ));
+        emit_llvm_command(parser.ProgramNode { items: collect_project(argv[1]) }, argv);
     } else if argv[0] == "fmt" {
         cmd_fmt(argv);
     } else if argv[0] == "spans" {
@@ -5849,11 +5897,7 @@ let main (): Unit = {
                     // `builtin_sig` table. That hazard is gone: `check`
                     // prepends the prelude too now, and the table with
                     // it. See DESIGN.md's "One prelude, not two".
-                    println(emit_program(
-                        parser.parse_program(lexed0.tokens),
-                        "main",
-                        build_options(argv, native_target())
-                    ));
+                    emit_llvm_command(parser.parse_program(lexed0.tokens), argv);
                 } else if argv[0] == "run" {
                     // A single FILE runs the same way a project does --
                     // compiled. `collect_project` accepts either, so

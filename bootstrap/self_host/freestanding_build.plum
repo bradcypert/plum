@@ -43,7 +43,9 @@ let freestanding_ir
     (mode: buildmode.Options)
     (ll: String): String
 = {
-    let source_key = if buildcache.enabled(()) { ir_input_key(dir, inputs, mode) } else { "" };
+    let source_key = if buildcache.enabled(()) {
+        ir_input_key(dir, inputs, mode, freestanding.target(()))
+    } else { "" };
     let key = if source_key == "" { "" } else {
         buildcache.hash(freestanding.cache_key(mode).concat(buildcache.frame(source_key)))
     };
@@ -60,7 +62,8 @@ let freestanding_ir
             let emitted = emit_program(
                 parser.ProgramNode { items: parse_source_files(inputs.files, 0, []) },
                 "main",
-                mode
+                mode,
+                freestanding.target(())
             );
             codegen.set_core_runtime(false);
             codegen.cg_freestanding(emitted)
@@ -73,7 +76,7 @@ let freestanding_ir
     if err == "" && Option.is_none(hit) && key != "" {
         let reads = buildcache.read_manifest(());
         if buildcache.sources_unchanged(()) && buildcache.unchanged(reads)
-            && ir_input_key(dir, prepare_inputs(dir), mode) == source_key {
+            && ir_input_key(dir, prepare_inputs(dir), mode, freestanding.target(())) == source_key {
                 buildcache.store("ir", key, ll, reads)
             } else { buildcache.diagnostic("inputs changed; IR not stored") }
     };

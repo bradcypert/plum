@@ -5786,7 +5786,7 @@ let cg_extern_call
     (ret: CgTy): Emit
 = {
     let a = cg_args(p, env, n, args);
-    // Bool arguments widen to C's `int` before the call.
+    // Marshal integer widths, C's int Bool, and borrowed CStr data pointers.
     let m = cg_marshal_args(p, args, a.vals, 0, a.n, "", []);
     let reg = cg_reg(m.n);
     let raw = cg_reg(m.n + 1);
@@ -5800,7 +5800,10 @@ let cg_extern_call
         "  ${raw} = call i32 @${name}(${cg_join_commas(m.vals)})\n"
             .concat("  ").concat(reg).concat(" = icmp ne i32 ").concat(raw).concat(", 0\n")
     } else {
-        "  ${reg} = call ${cg_llvm_ty(ret)} @${name}(${cg_join_commas(m.vals)})\n"
+        match ret {
+            CgInteger(k) => cg_c_integer_return(k, name, cg_join_commas(m.vals), reg, raw),
+            _ => "  ${reg} = call ${cg_llvm_ty(ret)} @${name}(${cg_join_commas(m.vals)})\n",
+        }
     };
     Emit {
         code: a.code.concat(m.code).concat(call).concat(cg_dec_args(p, args, a.vals, 0, "")),
@@ -5819,8 +5822,8 @@ struct MarshalEmit {
     n: Int
 }
 
-// One operand per argument in C's spelling: widen Bool, unwrap CStr
-// owners to their data pointer, and pass unmanaged RawCStr through unchanged.
+// One operand per argument in C's spelling: narrow integers, widen Bool,
+// unwrap CStr owners, and pass unmanaged RawCStr through unchanged.
 let cg_marshal_args
     (p: CgProgram)
     (args: Array[typecheck.TExpr])
@@ -5862,7 +5865,31 @@ let cg_marshal_args
                 code.concat("  ${w} = getelementptr i8, ptr ${cg_arg_val(vals[i])}, i64 16\n"),
                 acc.push("ptr ${w}")
             )
-        } else { cg_marshal_args(p, args, vals, i + 1, n, code, acc.push(vals[i])) }
+        } else {
+            match ty {
+                CgInteger(k) => {
+                    let spec = typecheck.integer_spec(k);
+                    let attr = cg_c_integer_attr(k);
+                    let w = cg_reg(n);
+                    let value = cg_arg_val(vals[i]);
+                    let narrow = spec.bits < 64;
+                    cg_marshal_args(
+                        p,
+                        args,
+                        vals,
+                        i + 1,
+                        if narrow { n + 1 } else { n },
+                        code.concat(
+                            if narrow { "  ${w} = trunc i64 ${value} to i${spec.bits}\n" } else {
+                                ""
+                            }
+                        ),
+                        acc.push("i${spec.bits} ${attr}".concat(if narrow { w } else { value }))
+                    )
+                },
+                _ => cg_marshal_args(p, args, vals, i + 1, n, code, acc.push(vals[i])),
+            }
+        }
     }
 
 // `cg_args` yields "<ty> <reg>" operands; the register alone is what a
@@ -11696,7 +11723,7 @@ let cg_extern_decl_list
     else if cg_name_in(seen, fns[i].name, 0) { cg_extern_decl_list(fns, i + 1, acc, seen) }
     else {
         let ret = match fns[i].ret_ty {
-            Some(t) => cg_c_ty(cg_of_ann(t)),
+            Some(t) => cg_c_ret(cg_of_ann(t)),
             None => "void"
         };
         let params = cg_extern_param_tys(fns[i].params, 0, "");
@@ -11746,7 +11773,7 @@ let cg_declared_name_of (line: String): Option[String] =
 let cg_extern_param_tys (ps: Array[parser.ExternParamNode]) (i: Int) (acc: String): String =
     if i >= ps.len() { acc }
     else {
-        let t = cg_c_ty(cg_of_ann(ps[i].ty));
+        let t = cg_c_param(cg_of_ann(ps[i].ty));
         cg_extern_param_tys(ps, i + 1, if acc == "" { t } else { acc.concat(", ").concat(t) })
     }
 
@@ -11754,8 +11781,8 @@ let cg_extern_param_tys (ps: Array[parser.ExternParamNode]) (i: Int) (acc: Strin
 // never go through inference, so they are mapped here rather than read
 // off a `TExpr`. Only the C-compatible surface is accepted; anything
 // else is a type the FFI boundary cannot carry.
-// The C ABI's spelling of a type, which differs from Plum's in exactly
-// one place: `Bool`. C's `int` is 32 bits wide and Plum's `Bool` is
+// The C ABI uses each integer's declared width rather than a Plum word.
+// Bool also differs: C's `int` is 32 bits wide and Plum's `Bool` is
 // `i1`, so every crossing needs a real CONVERSION -- `zext` going out,
 // a compare-against-zero coming back -- never a bitcast pretending the
 // two are the same width.
@@ -11766,6 +11793,7 @@ let cg_extern_param_tys (ps: Array[parser.ExternParamNode]) (i: Int) (acc: Strin
 // one genuinely subtle piece", which is how it was found.
 let cg_c_ty (t: CgTy): String = match t {
     CgBool => "i32",
+    CgInteger(k) => "i${typecheck.integer_spec(k).bits}",
     _ => cg_llvm_ty(t)
 }
 
@@ -11780,10 +11808,13 @@ let cg_of_ann (t: parser.Ty): CgTy =
             else if name == "CStr" { CgCStr }
             else if name == "RawCStr" { CgRawCStr }
             else if name == "Unit" { CgUnit }
+            else if Option.is_some(cg_c_integer_named(name)) {
+                CgInteger(Option.unwrap_or(cg_c_integer_named(name), IntegerI64))
+            }
             else {
                 {
                     cg_fail(
-                        "extern declarations can only use Int/Float/Bool/CStr/RawCStr/Unit, found ".concat(
+                        "extern declarations can only use integer scalars/Float/Bool/CStr/RawCStr/Unit, found ".concat(
                             name
                         )
                     );
