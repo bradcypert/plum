@@ -67,6 +67,7 @@ use Encoding;
 use buildcache;
 use buildmode;
 use freestanding;
+use compiler_metadata;
 
 // `query <project> <path> <line> <col>` -- what is the type of the
 // identifier at that position?
@@ -3012,11 +3013,11 @@ let lsp_reply (id: Option[JsonValue]) (result: JsonValue): Unit =
         None => ()
     }
 
-// THE version string, and the only one. `bootstrap/check-version`
+// The version comes from bootstrap/compiler-metadata.json. `bootstrap/check-version`
 // fails if a release tag disagrees with it, so a `v0.0.2` tag can
 // never ship a binary that says 0.0.1 -- the same class of drift this
 // project has been closing everywhere else.
-pub let plum_version (): String = "0.0.41"
+pub let plum_version (): String = compiler_metadata.version()
 
 let usage (): Unit = {
     println("plum ".concat(plum_version()));

@@ -2,8 +2,8 @@
 # Proves a release TAG and the version the binary REPORTS are the same
 # thing.
 #
-# There is one version string, `plum_version` in
-# `bootstrap/self_host/main.plum`. Everything else derives from it: the
+# There is one version string in `bootstrap/compiler-metadata.json`.
+# Generated compiler declarations and bootstrap checks derive from it: the
 # `version` command, the usage banner, and the release artifact's name.
 # The one thing that cannot derive from it is the git tag, because a
 # human types that -- so this compares them.
@@ -36,14 +36,15 @@ cd "$root"
 source_only=0
 if [ "${1:-}" = "--source-only" ]; then source_only=1; shift; fi
 
-declared="$(grep -oE 'pub let plum_version \(\): String = "[^"]+"' bootstrap/self_host/main.plum | grep -oE '"[^"]+"' | tr -d '"')"
-[ -n "$declared" ] || { echo "could not read plum_version from bootstrap/self_host/main.plum" >&2; exit 1; }
+PY_BIN="$(command -v python3 || command -v python)"
+[ -n "$PY_BIN" ] || { echo "check-version: needs python3" >&2; exit 1; }
+declared="$("$PY_BIN" bootstrap/compiler_metadata.py version)" || exit 1
 
 # What the built compiler actually prints, which is the claim that
 # reaches a user. Checking the source alone would miss a stale binary.
 if [ $source_only -eq 0 ]; then
-    reported="$(./sh version 2>/dev/null | awk '{print $2}')"
-    if [ "$reported" != "$declared" ]; then
+    reported="$("${PLUM:-./sh}" version)" || { echo "check-version: compiler version query failed" >&2; exit 1; }
+    if [ "$reported" != "plum $declared" ]; then
         echo "MISMATCH: source says $declared, the built compiler reports ${reported:-<nothing>}" >&2
         echo "the binary is stale -- rebuild with ./sh build bootstrap/self_host -o sh.real" >&2
         exit 1
@@ -70,7 +71,7 @@ fi
 # `v0.0.1` and `0.0.1` are both accepted spellings of the same tag.
 if [ "${tag#v}" != "$declared" ]; then
     echo "MISMATCH: tag $tag but plum_version is $declared" >&2
-    echo "edit plum_version in bootstrap/self_host/main.plum, rebuild, and re-tag" >&2
+    echo "edit bootstrap/compiler-metadata.json, run bootstrap/gen-compiler-metadata, rebuild, and re-tag" >&2
     exit 1
 fi
 

@@ -1,0 +1,19 @@
+{
+  "schema_version": 1,
+  "version": "0.0.41",
+  "stdlib_modules": [
+    "Net",
+    "Http",
+    "Os",
+    "Time",
+    "Process",
+    "Encoding",
+    "Crypto",
+    "Url",
+    "Path",
+    "Json",
+    "Terminal",
+    "Memory",
+    "NativeBuffer"
+  ]
+}

@@ -173,7 +173,7 @@ checks retained parser-span snapshots. Default formatting allocation budgets
 remain unchanged; specialization FIFO/memory and both limit boundaries pass.
 The refreshed seed independently builds an equivalent compiler.
 
-## 4. Formatting-independent tooling — planned
+## 4. Formatting-independent tooling — complete
 
 Audit generators and tools that read Plum source. Use existing compiler query
 outputs where possible; add stable structured metadata for module/version
@@ -184,3 +184,41 @@ Acceptance: generated Plum is checked as a formatter fixed point, metadata
 consumers handle missing/invalid data without passing vacuously, and formatting
 changes do not require edits to source-scraping regular expressions. The shim
 generator regression from PR #554 is the starting example.
+
+`bootstrap/compiler-metadata.json` is now the source of the compiler version
+and ordered standard-library module names. `bootstrap/gen-compiler-metadata`
+validates it and generates the compiler's metadata module without requiring a
+compiler. The parser's module-list API and the version command delegate to
+those declarations. To change either fact, edit the JSON and regenerate.
+`check-version` and `check-doc-names` read the same validated metadata and reject
+stale generated declarations. The early release check still needs no compiler;
+the full version check also rejects a failed or malformed binary response.
+
+The source-reader audit found three layout-sensitive consumers: those two
+metadata readers and `check-builtins`. The builtin check now reads the existing
+`ast` query's normalized S-expressions, examining comparison expressions and
+inventory records independently. It reads completion as JSON, imports every
+standard-library module, and checks parsed dot calls in the regression fixture.
+Comments, literal strings resembling source, indentation, and line wrapping
+cannot masquerade as those constructs. Failed queries, missing modules, empty
+inventories, and malformed completion records fail instead of skipping checks.
+
+The audit retains `check-declares`: it matches LLVM instruction text within
+literal templates and emitted IR, not Plum declaration layout. Whole-file
+source copies in allocation probes, source-location assertions, and intentionally
+byte-sensitive formatter fixtures also retain their existing roles. The shim
+generator already has formatter fixed-point coverage; the new metadata generator
+is checked the same way, including both sides of the array width boundary.
+
+`bootstrap/tooling-metadata-check.py` runs in Linux CI. It checks generated
+declaration freshness, whitespace-independent metadata, parsed inventories with
+every token on a separate line, tabs and CRLF, missing builtin entries, and
+consumer failures for missing/invalid metadata and failed/empty/malformed query
+results. These tests use temporary checkouts rather than modifying compiler
+source during validation.
+
+Validation passed with a compiler built through the checked-in seed: 83 tooling
+regressions, 828 formatter checks, 55 compiler-internal tests, 92 properties,
+43 generated documentation pages, 339 CLI checks, shim consistency,
+builtin/doc-name checks, and both version-check modes. The seed equivalence
+gate passed without a seed refresh.
