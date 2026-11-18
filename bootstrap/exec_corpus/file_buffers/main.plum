@@ -64,19 +64,16 @@ let exercise (path: String): Unit = {
     let alias = b;
     assert(
         unsafe {
-            NativeBuffer.with_mut(
-                b,
-                |ignored_pointer, ignored_capacity| {
-                    assert(f.read_into(alias).is_err());
-                    assert(f.seek(0, Seek.Current) == Ok(0));
-                    // A private-buffer read is independent even on this thread/file.
-                    match f.read(1) {
-                        Ok(bytes) => assert_eq(bytes.to_hex(), "41"),
-                        Err(e) => panic_raw(e)
-                    };
-                    Ok(2)
-                }
-            )
+            NativeBuffer.with_mut(b, |ignored_pointer, ignored_capacity| {
+                assert(f.read_into(alias).is_err());
+                assert(f.seek(0, Seek.Current) == Ok(0));
+                // A private-buffer read is independent even on this thread/file.
+                match f.read(1) {
+                    Ok(bytes) => assert_eq(bytes.to_hex(), "41"),
+                    Err(e) => panic_raw(e)
+                };
+                Ok(2)
+            })
         } == Ok(2)
     );
     assert_eq(copied(alias).to_hex(), "0908");

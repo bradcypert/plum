@@ -39,18 +39,13 @@ let note_type_site_with_annotation
         let off = offset_at(pos + 2 * (segments.len() - 1));
         let path = current_path(());
         if path != "" && off >= 0 {
-            TYPE_SITES.set(
-                TYPE_SITES.get()
-                    .push(
-                        TypeSite {
-                            path: path,
-                            start: offset_at(pos),
-                            offset: off,
-                            segments: segments,
-                            kind: kind,
-                            annotation: annotation
-                        }
-                    )
-            )
+            TYPE_SITES.set(TYPE_SITES.get().push(TypeSite {
+                path: path,
+                start: offset_at(pos),
+                offset: off,
+                segments: segments,
+                kind: kind,
+                annotation: annotation
+            }))
         }
     }

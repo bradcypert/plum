@@ -1,16 +1,14 @@
 // The module and function/associated-function name are separate atoms. The
 // namespace cannot overlap plum_* runtime or generated type-helper symbols.
 let cg_sym (module_name: String) (name: String) (targs: Array[typecheck.ITy]): String =
-    Array.concat_all(
-        [
-            "plum.f.",
-            cg_symbol_atom(module_name),
-            ".",
-            cg_symbol_atom(name),
-            ".",
-            cg_symbol_types(targs)
-        ]
-    )
+    Array.concat_all([
+        "plum.f.",
+        cg_symbol_atom(module_name),
+        ".",
+        cg_symbol_atom(name),
+        ".",
+        cg_symbol_types(targs)
+    ])
 
 let cg_type_symbol (family: String) (t: typecheck.ITy): String =
     Array.concat_all(["@plum.h.", family, ".", cg_ity_mangle(t)])
@@ -129,34 +127,30 @@ pub let test_symbol_identities (): Unit = {
         cg_type_identity(ITStruct("Box", [ITRef(ITVar(17))])),
         ITStruct("Box", [ITRef(ITUnit)])
     );
-    assert(
-        cg_inst_eq(
-            CgInst {
-                module: "",
-                name: "id",
-                targs: [ITVar(3)]
-            },
-            CgInst {
-                module: "",
-                name: "id",
-                targs: [ITUnit]
-            }
-        )
-    );
-    assert(
-        !cg_inst_eq(
-            CgInst {
-                module: "a.b",
-                name: "id",
-                targs: [ITInt]
-            },
-            CgInst {
-                module: "a_b",
-                name: "id",
-                targs: [ITInt]
-            }
-        )
-    );
+    assert(cg_inst_eq(
+        CgInst {
+            module: "",
+            name: "id",
+            targs: [ITVar(3)]
+        },
+        CgInst {
+            module: "",
+            name: "id",
+            targs: [ITUnit]
+        }
+    ));
+    assert(!cg_inst_eq(
+        CgInst {
+            module: "a.b",
+            name: "id",
+            targs: [ITInt]
+        },
+        CgInst {
+            module: "a_b",
+            name: "id",
+            targs: [ITInt]
+        }
+    ));
 
     let leaves = [
         ITInteger(IntegerI8),

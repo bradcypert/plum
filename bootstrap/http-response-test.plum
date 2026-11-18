@@ -101,17 +101,14 @@ let test_expect_continue (): Unit = {
     let listener = test_int(Net.listen_on(18806));
     let peer = spawn {
         let fd = test_int(Net.accept(listener));
-        let result = http_handle_connection(
-            fd,
-            |req| {
-                assert_eq(req.body == "abc".as_bytes(), true);
-                Response {
-                    status: 200,
-                    headers: [],
-                    body: req.body
-                }
+        let result = http_handle_connection(fd, |req| {
+            assert_eq(req.body == "abc".as_bytes(), true);
+            Response {
+                status: 200,
+                headers: [],
+                body: req.body
             }
-        );
+        });
         Net.close(fd);
         result
     };
@@ -194,7 +191,11 @@ let main (): Unit = {
     };
     let interim = "HTTP/1.1 100 Continue\r\nContent-Length: 999999999999\r\n\r\nHTTP/1.1 103 Early Hints\r\n\r\n";
     test_response(
-        test_client("GET", interim.concat("HTTP/1.1 200 OK\r\nContent-Length: 3\r\n\r\nabc"), false),
+        test_client(
+            "GET",
+            interim.concat("HTTP/1.1 200 OK\r\nContent-Length: 3\r\n\r\nabc"),
+            false
+        ),
         200,
         "abc"
     );

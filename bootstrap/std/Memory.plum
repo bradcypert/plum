@@ -44,16 +44,14 @@ pub let snapshot (): Option[Snapshot] = unsafe {
         let live_bytes = plum_heap_snapshot_field(token, 3);
         let peak_allocations = plum_heap_snapshot_field(token, 4);
         let peak_bytes = plum_heap_snapshot_field(token, 5);
-        Some(
-            Snapshot {
-                allocations: allocations,
-                allocated_bytes: allocated_bytes,
-                live_allocations: live_allocations,
-                live_bytes: live_bytes,
-                peak_allocations: peak_allocations,
-                peak_bytes: peak_bytes
-            }
-        )
+        Some(Snapshot {
+            allocations: allocations,
+            allocated_bytes: allocated_bytes,
+            live_allocations: live_allocations,
+            live_bytes: live_bytes,
+            peak_allocations: peak_allocations,
+            peak_bytes: peak_bytes
+        })
     }
 }
 

@@ -92,17 +92,14 @@ let callbacks (): Unit = {
     assert_eq(events.get(), 12);
     assert_eq(out, []);
     assert_eq(closed(1), 1);
-    let out = Array.filter(
-        empty,
-        {
-            events.set(events.get() * 10 + 3);
-            let owner = make(2);
-            |x: Int| {
-                events.set(999);
-                unsafe { owner.raw() } == x
-            }
+    let out = Array.filter(empty, {
+        events.set(events.get() * 10 + 3);
+        let owner = make(2);
+        |x: Int| {
+            events.set(999);
+            unsafe { owner.raw() } == x
         }
-    );
+    });
     assert_eq(events.get(), 123);
     assert_eq(out, []);
     assert_eq(closed(2), 1);

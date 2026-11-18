@@ -14,26 +14,20 @@ use Os;
 // a random name, and a fixture compares exact output.
 
 let show (label: String) (r: Result[Bytes, String]): Unit =
-    println(
-        label.concat(": ")
-            .concat(
-                match r {
-                    Ok(b) => b.to_hex(),
-                    Err(e) => e
-                }
-            )
-    )
+    println(label.concat(": ").concat(
+        match r {
+            Ok(b) => b.to_hex(),
+            Err(e) => e
+        }
+    ))
 
 let position (label: String) (r: Result[Int, String]): Unit =
-    println(
-        label.concat(": ")
-            .concat(
-                match r {
-                    Ok(n) => n.to_string(),
-                    Err(e) => e
-                }
-            )
-    )
+    println(label.concat(": ").concat(
+        match r {
+            Ok(n) => n.to_string(),
+            Err(e) => e
+        }
+    ))
 
 let main (): Unit = match Os.temp_dir() {
     Err(e) => println(e),

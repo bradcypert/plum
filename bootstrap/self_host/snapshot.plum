@@ -202,15 +202,13 @@ let snapshot_write_manifest (root: SnapshotRoot) (deps: Array[pkg.Dep]): Unit = 
         "plum.pkg",
         root.manifest.symlinks == "reject"
     );
-    snapshot_require(
-        treefs.write_text(
-            root.destination,
-            "plum.pkg",
-            root.manifest.symlinks == "reject",
-            expected,
-            snapshot_manifest(root.manifest, deps)
-        )
-    )
+    snapshot_require(treefs.write_text(
+        root.destination,
+        "plum.pkg",
+        root.manifest.symlinks == "reject",
+        expected,
+        snapshot_manifest(root.manifest, deps)
+    ))
 }
 
 let snapshot_logical (files: Array[SourceFile]) (identity: String): String = {
@@ -253,13 +251,10 @@ let snapshot_original_sources (roots: Array[SnapshotRoot]) (files: Array[SourceF
 }
 
 let snapshot_buffers (value: JsonValue): Array[SnapshotBuffer] = match value {
-    JsonArray(items) => Array.map(
-        items,
-        |item| SnapshotBuffer {
-            path: source_absolute(lsp.uri_to_path(lsp.json_field_str(item, "uri"))),
-            text: lsp.json_field_str(item, "text")
-        }
-    ),
+    JsonArray(items) => Array.map(items, |item| SnapshotBuffer {
+        path: source_absolute(lsp.uri_to_path(lsp.json_field_str(item, "uri"))),
+        text: lsp.json_field_str(item, "text")
+    }),
     _ => {
         panic_raw("invalid editor snapshot request");
         []
@@ -288,16 +283,14 @@ let lsp_snapshot_worker (unit: Unit): Unit = {
         let cloned = snapshot_clone(source_absolute(deps[i].path), copied);
         if deps[i].git != "" { pkg.verify_cached(deps[i], copied) };
         roots = roots.push(cloned);
-        rebound = rebound.push(
-            pkg.Dep {
-                name: deps[i].name,
-                path: copied,
-                git: "",
-                rev: "",
-                sha256: "",
-                hash_version: 1
-            }
-        );
+        rebound = rebound.push(pkg.Dep {
+            name: deps[i].name,
+            path: copied,
+            git: "",
+            rev: "",
+            sha256: "",
+            hash_version: 1
+        });
     };
     snapshot_overlay(roots, buffers);
     snapshot_write_manifest(roots[0], rebound);
@@ -324,17 +317,13 @@ let lsp_snapshot_worker (unit: Unit): Unit = {
                 )
             );
             if logical != "" {
-                mappings = mappings.push(
-                    JsonObject(
-                        [
-                            JsonEntry { key: "copied", value: JsonString(lsp.path_to_uri(logical)) },
-                            JsonEntry {
-                                key: "original",
-                                value: JsonString(lsp.path_to_uri(buffer.path))
-                            }
-                        ]
-                    )
-                );
+                mappings = mappings.push(JsonObject([
+                    JsonEntry { key: "copied", value: JsonString(lsp.path_to_uri(logical)) },
+                    JsonEntry {
+                        key: "original",
+                        value: JsonString(lsp.path_to_uri(buffer.path))
+                    }
+                ]));
             };
         };
     };
@@ -360,89 +349,65 @@ let lsp_snapshot_worker (unit: Unit): Unit = {
             "requested document is not a discovered source: ${path}\n  requested identity: ${requested_id}; discovered ${inputs.files.len()} source(s): ${identities}"
         )
     };
-    mappings = mappings.push(
-        JsonObject(
-            [
-                JsonEntry { key: "copied", value: JsonString(lsp.path_to_uri(target)) },
-                JsonEntry {
-                    key: "original",
-                    value: JsonString(lsp.path_to_uri(source_absolute(path)))
-                }
-            ]
-        )
-    );
-    print(
-        lsp.encode_json(
-            JsonObject(
-                [
-                    JsonEntry { key: "root", value: JsonString(lsp.path_to_uri(root)) },
-                    JsonEntry { key: "target", value: JsonString(lsp.path_to_uri(target)) },
+    mappings = mappings.push(JsonObject([
+        JsonEntry { key: "copied", value: JsonString(lsp.path_to_uri(target)) },
+        JsonEntry {
+            key: "original",
+            value: JsonString(lsp.path_to_uri(source_absolute(path)))
+        }
+    ]));
+    print(lsp.encode_json(JsonObject([
+        JsonEntry { key: "root", value: JsonString(lsp.path_to_uri(root)) },
+        JsonEntry { key: "target", value: JsonString(lsp.path_to_uri(target)) },
+        JsonEntry {
+            key: "roots",
+            value: JsonArray(Array.map(roots, |item|
+                JsonObject([
                     JsonEntry {
-                        key: "roots",
-                        value: JsonArray(
-                            Array.map(
-                                roots,
-                                |item| JsonObject(
-                                    [
-                                        JsonEntry {
-                                            key: "copied",
-                                            value: JsonString(lsp.path_to_uri(item.copied))
-                                        },
-                                        JsonEntry {
-                                            key: "original",
-                                            value: JsonString(lsp.path_to_uri(item.original))
-                                        },
-                                        JsonEntry {
-                                            key: "reject",
-                                            value: JsonBool(item.manifest.symlinks == "reject")
-                                        }
-                                    ]
-                                )
-                            )
-                        )
+                        key: "copied",
+                        value: JsonString(lsp.path_to_uri(item.copied))
                     },
-                    JsonEntry { key: "paths", value: JsonArray(mappings) },
-                ]
-            )
-        )
-    )
+                    JsonEntry {
+                        key: "original",
+                        value: JsonString(lsp.path_to_uri(item.original))
+                    },
+                    JsonEntry {
+                        key: "reject",
+                        value: JsonBool(item.manifest.symlinks == "reject")
+                    }
+                ])))
+        },
+        JsonEntry { key: "paths", value: JsonArray(mappings) },
+    ])))
 }
 
 let snapshot_decode (container: String) (value: JsonValue): Option[LspSnapshot] = {
     let root = lsp.uri_to_path(lsp.json_field_str(value, "root"));
     let target = lsp.uri_to_path(lsp.json_field_str(value, "target"));
     let roots = match lsp.json_field(value, "roots") {
-        Some(JsonArray(items)) => Array.map(
-            items,
-            |item| LspRootMap {
-                original: lsp.uri_to_path(lsp.json_field_str(item, "original")),
-                copied: lsp.uri_to_path(lsp.json_field_str(item, "copied")),
-                reject: lsp.json_field(item, "reject") == Some(JsonBool(true))
-            }
-        ),
+        Some(JsonArray(items)) => Array.map(items, |item| LspRootMap {
+            original: lsp.uri_to_path(lsp.json_field_str(item, "original")),
+            copied: lsp.uri_to_path(lsp.json_field_str(item, "copied")),
+            reject: lsp.json_field(item, "reject") == Some(JsonBool(true))
+        }),
         _ => [],
     };
     let paths = match lsp.json_field(value, "paths") {
-        Some(JsonArray(items)) => Array.map(
-            items,
-            |item| LspPathMap {
-                original: lsp.uri_to_path(lsp.json_field_str(item, "original")),
-                copied: lsp.uri_to_path(lsp.json_field_str(item, "copied"))
-            }
-        ),
+        Some(JsonArray(items)) => Array.map(items, |item| LspPathMap {
+            original: lsp.uri_to_path(lsp.json_field_str(item, "original")),
+            copied: lsp.uri_to_path(lsp.json_field_str(item, "copied"))
+        }),
         _ => [],
     };
     if root == "" || target == "" || roots.len() == 0 { None }
     else {
-        Some(
-            LspSnapshot {
-                container: container,
-                root: root,
-                target: target,
-                roots: roots,
-                paths: paths
-            }
-        )
+        Some(LspSnapshot {
+            container: container,
+            root: root,
+            target: target,
+            roots: roots,
+            paths: paths
+        })
     }
 }
 
@@ -510,22 +475,16 @@ let snapshot_read (snapshot: LspSnapshot) (path: String): Result[String, String]
 // ASCII envelopes avoid narrow Windows argv conversions and retain native
 // filename bytes. Only the internal dispatcher decodes these arguments.
 let lsp_run (argv: Array[String]): Result[Process.ProcessResult, String] =
-    Process.run(
-        Process.Options {
-            program: self_exe(),
-            args: ["__lsp_command"],
-            env: [],
-            stdin: Some(
-                lsp.frame(
-                    lsp.encode_json(
-                        JsonArray(
-                            Array.map(argv, |arg| JsonString(Encoding.hex_encode(arg.as_bytes())))
-                        )
-                    )
-                )
+    Process.run(Process.Options {
+        program: self_exe(),
+        args: ["__lsp_command"],
+        env: [],
+        stdin: Some(lsp.frame(
+            lsp.encode_json(
+                JsonArray(Array.map(argv, |arg| JsonString(Encoding.hex_encode(arg.as_bytes()))))
             )
-        }
-    )
+        ))
+    })
 
 let lsp_command_args (unit: Unit): Array[String] =
     match json_parse(lsp_read_message(())) {

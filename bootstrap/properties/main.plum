@@ -203,12 +203,7 @@ let sep_string (seed: Int) (left: Int) (acc: String): String =
 let split_join (seed: Int) (left: Int): Unit =
     if left <= 0 { () } else {
         let s = sep_string(seed, rand_between(seed, 0, 12), "");
-        check_eq(
-            "split/join round trip",
-            "[".concat(s).concat("]"),
-            s.split(",").join(","),
-            s
-        );
+        check_eq("split/join round trip", "[".concat(s).concat("]"), s.split(",").join(","), s);
         split_join(next_seed(seed), left - 1)
     }
 
@@ -294,17 +289,11 @@ struct SortItem {
 let sort_items (xs: Array[Int]) (i: Int) (acc: Array[SortItem]): Array[SortItem] =
     if i >= xs.len() { acc }
     else {
-        sort_items(
-            xs,
-            i + 1,
-            acc.push(
-                SortItem {
-                    key: xs[i],
-                    position: i,
-                    payload: i.to_string()
-                }
-            )
-        )
+        sort_items(xs, i + 1, acc.push(SortItem {
+            key: xs[i],
+            position: i,
+            payload: i.to_string()
+        }))
     }
 
 let sort_items_stable (xs: Array[SortItem]) (i: Int): Bool =
@@ -357,13 +346,10 @@ let sort_log_bound (n: Int) (width: Int) (levels: Int): Int =
 
 let sort_comparison_check (xs: Array[Int]): Unit = {
     let calls = ref(0);
-    let sorted = Array.sort_by(
-        xs,
-        |a: Int, b: Int| {
-            calls.set(calls.get() + 1);
-            a <= b
-        }
-    );
+    let sorted = Array.sort_by(xs, |a: Int, b: Int| {
+        calls.set(calls.get() + 1);
+        a <= b
+    });
     check_eq(
         "sort orders large inputs",
         xs.len().to_string(),
@@ -385,37 +371,30 @@ let sort_comparison_check (xs: Array[Int]): Unit = {
 }
 
 pub let test_sorting_comparison_bound (): Unit =
-    Array.fold(
-        [0, 1, 2, 3, 15, 16, 17, 255, 256, 257, 4096],
-        (),
-        |u: Unit, n: Int| {
-            let xs = sort_sequence(n, 0, []);
-            sort_comparison_check(xs);
-            sort_comparison_check(Array.reverse(xs));
-            let (_, shuffled) = Rng.shuffle(Rng.from_seed(217), xs);
-            sort_comparison_check(shuffled);
-            let calls = ref(0);
-            let ties = Array.map(xs, |i: Int| 0);
-            check_eq(
-                "all equal elements survive",
-                n.to_string(),
-                Array.sort_by(
-                    ties,
-                    |a: Int, b: Int| {
-                        calls.set(calls.get() + 1);
-                        a <= b
-                    }
-                ).to_string(),
-                ties.to_string()
-            );
-            check_eq(
-                "equal keys stay within comparison bound",
-                n.to_string(),
-                (calls.get() <= sort_log_bound(n, 1, 0)).to_string(),
-                "true"
-            )
-        }
-    )
+    Array.fold([0, 1, 2, 3, 15, 16, 17, 255, 256, 257, 4096], (), |u: Unit, n: Int| {
+        let xs = sort_sequence(n, 0, []);
+        sort_comparison_check(xs);
+        sort_comparison_check(Array.reverse(xs));
+        let (_, shuffled) = Rng.shuffle(Rng.from_seed(217), xs);
+        sort_comparison_check(shuffled);
+        let calls = ref(0);
+        let ties = Array.map(xs, |i: Int| 0);
+        check_eq(
+            "all equal elements survive",
+            n.to_string(),
+            Array.sort_by(ties, |a: Int, b: Int| {
+                calls.set(calls.get() + 1);
+                a <= b
+            }).to_string(),
+            ties.to_string()
+        );
+        check_eq(
+            "equal keys stay within comparison bound",
+            n.to_string(),
+            (calls.get() <= sort_log_bound(n, 1, 0)).to_string(),
+            "true"
+        )
+    })
 
 // --- Arithmetic ---
 
@@ -471,12 +450,10 @@ let json_value (seed: Int) (depth: Int): JsonValue =
         let pick = random_bits(seed) % 4;
         if pick == 0 { JsonArray(json_items(seed, rand_between(seed, 0, 3), depth - 1, [])) }
         else if pick == 1 {
-            JsonObject(
-                [
-                    JsonEntry { key: "a", value: json_value(next_seed(seed), depth - 1) },
-                    JsonEntry { key: "b", value: json_value(next_seed(next_seed(seed)), depth - 1) },
-                ]
-            )
+            JsonObject([
+                JsonEntry { key: "a", value: json_value(next_seed(seed), depth - 1) },
+                JsonEntry { key: "b", value: json_value(next_seed(next_seed(seed)), depth - 1) },
+            ])
         }
         else { json_leaf(seed) }
     }
@@ -649,12 +626,7 @@ let float_laws (seed: Int) (left: Int): Unit =
 pub let test_float_laws (): Unit = float_laws(2718, 150)
 
 pub let test_float_abs_negative_zero (): Unit =
-    check_eq(
-        "absolute value clears negative zero sign",
-        "-0.0",
-        Float.abs(-0.0).to_string(),
-        "0"
-    )
+    check_eq("absolute value clears negative zero sign", "-0.0", Float.abs(-0.0).to_string(), "0")
 
 // --- String ordering ---
 
@@ -1006,7 +978,9 @@ let url_of (seed: Int): String = {
     // and the other's, which it must keep.
     let port = [0, 80, 443, 8080, 65535][rand_between(next_seed(next_seed(seed)), 0, 4)];
     let path = ["/", "/x", "/a/b/c", "/p%C3%A9"][rand_between(next_seed(seed) + 7, 0, 3)];
-    let query = ["", "q=1", "a=1&b=2", "tag=a&tag=b", "e="][rand_between(next_seed(seed) + 3, 0, 4)];
+    let query = ["", "q=1", "a=1&b=2", "tag=a&tag=b", "e="][
+        rand_between(next_seed(seed) + 3, 0, 4)
+    ];
     let frag = ["", "top", "a-b"][rand_between(next_seed(seed) + 11, 0, 2)];
     scheme.concat("://").concat(host)
         .concat(if port == 0 { "" } else { ":".concat(port.to_string()) })
@@ -1545,7 +1519,12 @@ pub let test_rng_integer_boundaries (): Unit = {
     );
     // These seeds invert SplitMix64 for the exact boundary outputs.
     let (_, lowest) = Rng.int_range(Rng.from_seed(3453682501520545093), min, 0);
-    check_eq("wide range includes minimum Int", "inverse seed", lowest.to_string(), min.to_string());
+    check_eq(
+        "wide range includes minimum Int",
+        "inverse seed",
+        lowest.to_string(),
+        min.to_string()
+    );
     let (_, negative_one) = Rng.int_range(Rng.from_seed(3558559446808474027), -1, max);
     check_eq("wide range includes lo", "inverse seed", negative_one.to_string(), "-1")
 }
@@ -1929,12 +1908,7 @@ pub let test_format_laws (): Unit = {
         Float.to_fixed(0.0 - 0.001, 2),
         "-0.00"
     );
-    check_eq(
-        "precision clamps at 17",
-        "1.0",
-        Float.to_fixed(1.0, 18),
-        Float.to_fixed(1.0, 17)
-    );
+    check_eq("precision clamps at 17", "1.0", Float.to_fixed(1.0, 18), Float.to_fixed(1.0, 17));
     check_eq(
         "negative precision clamps at zero",
         "1.5",
@@ -2547,7 +2521,12 @@ pub let test_path_long_unicode (): Unit = {
         };
         check_eq("hidden UTF-8", "dot", Path.extension_in(windows, ".隐"), "");
         check_eq("trailing dot", "dot", Path.stem_in(windows, "名."), "名");
-        check_eq("all separators", "root", Path.basename_in(windows, String.repeat("/", 4096)), sep);
+        check_eq(
+            "all separators",
+            "root",
+            Path.basename_in(windows, String.repeat("/", 4096)),
+            sep
+        );
         check_eq(
             "drive parent clamp",
             "C:/../../名",
@@ -2669,16 +2648,14 @@ pub let test_json_decoder_literal_paths (): Unit = {
             },
             key
         );
-        let nested = JsonObject(
-            [
-                JsonEntry {
-                    key: "",
-                    value: JsonObject(
-                        [JsonEntry { key: String.slice(key, 1, key.char_len()), value: JsonNull }]
-                    )
-                }
-            ]
-        );
+        let nested = JsonObject([
+            JsonEntry {
+                key: "",
+                value: JsonObject(
+                    [JsonEntry { key: String.slice(key, 1, key.char_len()), value: JsonNull }]
+                )
+            }
+        ]);
         let nested_error = Json.decode(
             Json.at(["", String.slice(key, 1, key.char_len())], Json.string()),
             nested
@@ -2813,7 +2790,10 @@ pub let test_string_slice (): Unit = {
                 );
             };
         };
-        assert_eq(String.slice(text, 0, a).concat(String.slice(text, a, 9223372036854775807)), text);
+        assert_eq(
+            String.slice(text, 0, a).concat(String.slice(text, a, 9223372036854775807)),
+            text
+        );
     }
 }
 
@@ -3393,7 +3373,9 @@ pub let test_hex_decode_laws (): Unit = {
             match Encoding.hex_decode(prefix.concat(suffix)) {
                 Err(e) => assert_eq(
                     e,
-                    "Encoding.hex_decode: not a hex digit at byte ".concat(prefix.len().to_string())
+                    "Encoding.hex_decode: not a hex digit at byte ".concat(
+                        prefix.len().to_string()
+                    )
                 ),
                 Ok(_) => assert(false),
             };
@@ -3580,7 +3562,12 @@ pub let test_padding_placement (): Unit = {
                     String.pad_right(text, width, fill),
                     text.concat(padding)
                 );
-                check_eq("center padding bytes", text, String.pad_center(text, width, fill), center);
+                check_eq(
+                    "center padding bytes",
+                    text,
+                    String.pad_center(text, width, fill),
+                    center
+                );
             };
         };
     }
@@ -3769,7 +3756,10 @@ pub let test_bytes_concat_persistence (): Unit = {
         let out = Bytes.concat(left, right);
         assert_eq(out.len(), left.len() + right.len());
         for i in 0..out.len() {
-            assert_eq(out.at(i), if i < left.len() { left.at(i) } else { right.at(i - left.len()) });
+            assert_eq(
+                out.at(i),
+                if i < left.len() { left.at(i) } else { right.at(i - left.len()) }
+            );
         };
         assert_eq(left.to_array(), original_left);
         assert_eq(right.to_array(), original_right);
@@ -3949,18 +3939,14 @@ pub let test_empty_array_results (): Unit = {
         let empty = source.slice(0, 0);
         let saved = empty;
         let calls = ref(0);
-        let strings = empty.map(
-            |x| {
-                calls.set(calls.get() + 1);
-                x.to_string()
-            }
-        );
-        let filtered = empty.filter(
-            |x| {
-                calls.set(calls.get() + 1);
-                x > 0
-            }
-        );
+        let strings = empty.map(|x| {
+            calls.set(calls.get() + 1);
+            x.to_string()
+        });
+        let filtered = empty.filter(|x| {
+            calls.set(calls.get() + 1);
+            x > 0
+        });
         assert_eq(calls.get(), 0);
         assert_eq(strings, []);
         assert_eq(filtered, []);
@@ -4058,12 +4044,10 @@ pub let test_array_filter_owned_sources (): Unit = {
         for divisor in [1, 2, 3, 5, 16] {
             let calls = ref(0);
             let out = map_words(count)
-                .filter(
-                    |s| {
-                        calls.set(calls.get() + 1);
-                        s.len() % divisor == 0
-                    }
-                ).filter(|s| s != "");
+                .filter(|s| {
+                    calls.set(calls.get() + 1);
+                    s.len() % divisor == 0
+                }).filter(|s| s != "");
             let mut model: Array[String] = [];
             for i in 0..count {
                 let s = i.to_string().repeat(8);

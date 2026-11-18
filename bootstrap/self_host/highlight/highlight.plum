@@ -111,15 +111,7 @@ let HL_UPPER: Array[String] = String.split("ABCDEFGHIJKLMNOPQRSTUVWXYZ", "")
 //
 // Ampersand FIRST, or the escapes escape each other's escapes.
 pub let hl_escape (s: String): String =
-    String.replace(
-        String.replace(
-            String.replace(s, "&", "&amp;"),
-            "<",
-            "&lt;"
-        ),
-        ">",
-        "&gt;"
-    )
+    String.replace(String.replace(String.replace(s, "&", "&amp;"), "<", "&lt;"), ">", "&gt;")
 
 // --- Pieces -------------------------------------------------------
 //

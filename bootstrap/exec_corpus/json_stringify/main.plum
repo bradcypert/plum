@@ -16,15 +16,13 @@ let main (): Unit = {
     for n in [1.0 / zero, -1.0 / zero, zero / zero] {
         let bad = JsonNumber(n);
         println(json_stringify(bad) == Err("non-finite JSON number"));
-        let mixed = JsonObject(
-            [
-                JsonEntry { key: "written", value: JsonString("prefix\nλ") },
-                JsonEntry {
-                    key: "nested",
-                    value: JsonArray([JsonBool(true), bad, JsonString("unvisited")])
-                },
-            ]
-        );
+        let mixed = JsonObject([
+            JsonEntry { key: "written", value: JsonString("prefix\nλ") },
+            JsonEntry {
+                key: "nested",
+                value: JsonArray([JsonBool(true), bad, JsonString("unvisited")])
+            },
+        ]);
         for i in 0..100 {
             assert_eq(json_stringify(mixed), Err("non-finite JSON number"));
         };
@@ -45,20 +43,16 @@ let main (): Unit = {
     println(
         stringify_valid(JsonObject([JsonEntry { key: text, value: JsonString("\"\\/ é λ 😀") }]))
     );
-    println(
-        stringify_valid(
-            JsonArray(
-                [
-                    JsonNull,
-                    JsonBool(false),
-                    JsonNumber(-2.5),
-                    JsonString(""),
-                    JsonArray([]),
-                    JsonObject([])
-                ]
-            )
-        )
-    );
+    println(stringify_valid(JsonArray(
+        [
+            JsonNull,
+            JsonBool(false),
+            JsonNumber(-2.5),
+            JsonString(""),
+            JsonArray([]),
+            JsonObject([])
+        ]
+    )));
     println(stringify_valid(nest(4, JsonBool(true))));
     let value = nest(10000, JsonNull);
     let first = stringify_valid(value);

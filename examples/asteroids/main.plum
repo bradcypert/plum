@@ -214,17 +214,12 @@ let circle_collide (a_pos: Vec2) (a_r: Float) (b_pos: Vec2) (b_r: Float): Bool =
 let make_bullets_acc (n: Int) (acc: Array[Bullet]): Array[Bullet] =
     if n <= 0 { acc }
     else {
-        make_bullets_acc(
-            n - 1,
-            acc.push(
-                Bullet {
-                    position: zero_vec2(),
-                    velocity: zero_vec2(),
-                    lifetime: 0.0,
-                    active: false,
-                }
-            )
-        )
+        make_bullets_acc(n - 1, acc.push(Bullet {
+            position: zero_vec2(),
+            velocity: zero_vec2(),
+            lifetime: 0.0,
+            active: false,
+        }))
     }
 
 let empty_bullets (): Array[Bullet] = make_bullets_acc(MAX_BULLETS, [])
@@ -232,19 +227,14 @@ let empty_bullets (): Array[Bullet] = make_bullets_acc(MAX_BULLETS, [])
 let make_asteroids_acc (n: Int) (acc: Array[Asteroid]): Array[Asteroid] =
     if n <= 0 { acc }
     else {
-        make_asteroids_acc(
-            n - 1,
-            acc.push(
-                Asteroid {
-                    position: zero_vec2(),
-                    velocity: zero_vec2(),
-                    size: Large,
-                    rotation: 0.0,
-                    rotation_speed: 0.0,
-                    active: false,
-                }
-            )
-        )
+        make_asteroids_acc(n - 1, acc.push(Asteroid {
+            position: zero_vec2(),
+            velocity: zero_vec2(),
+            size: Large,
+            rotation: 0.0,
+            rotation_speed: 0.0,
+            active: false,
+        }))
     }
 
 let empty_asteroids (): Array[Asteroid] = make_asteroids_acc(MAX_ASTEROIDS, [])
@@ -325,25 +315,23 @@ let spawn_wave_loop (g: Game) (remaining: Int): Game =
 let spawn_wave (g: Game): Game = spawn_wave_loop(g, STARTING_ASTEROIDS + (g.wave - 1))
 
 let init_game (): Game =
-    spawn_wave(
-        Game {
-            ship: Ship {
-                position: Vec2 { x: SCREEN_WIDTH_F / 2.0, y: SCREEN_HEIGHT_F / 2.0 },
-                velocity: zero_vec2(),
-                rotation: 0.0,
-                alive: true,
-                invulnerable_timer: INVULNERABILITY_TIME,
-            },
-            bullets: empty_bullets(),
-            asteroids: empty_asteroids(),
-            score: 0,
-            lives: STARTING_LIVES,
-            wave: 1,
-            fire_cooldown: 0.0,
-            respawn_timer: 0.0,
-            state: Playing,
-        }
-    )
+    spawn_wave(Game {
+        ship: Ship {
+            position: Vec2 { x: SCREEN_WIDTH_F / 2.0, y: SCREEN_HEIGHT_F / 2.0 },
+            velocity: zero_vec2(),
+            rotation: 0.0,
+            alive: true,
+            invulnerable_timer: INVULNERABILITY_TIME,
+        },
+        bullets: empty_bullets(),
+        asteroids: empty_asteroids(),
+        score: 0,
+        lives: STARTING_LIVES,
+        wave: 1,
+        fire_cooldown: 0.0,
+        respawn_timer: 0.0,
+        state: Playing,
+    })
 
 let fire_bullet (g: Game): Game =
     if g.fire_cooldown > 0.0 { g } else {

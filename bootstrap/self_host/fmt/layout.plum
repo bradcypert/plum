@@ -63,18 +63,12 @@ let plan_break (x: Expansion) (offset: Int) (anchor: Int) (indent: Int) (blank: 
     if offset < 0 { () }
     else {
         x.generation.set(x.generation.get() + 1);
-        x.breaks.set(
-            Map.insert(
-                x.breaks.get(),
-                offset,
-                LineBreak {
-                    anchor: anchor,
-                    indent: indent,
-                    blank: blank,
-                    closing: false
-                }
-            )
-        )
+        x.breaks.set(Map.insert(x.breaks.get(), offset, LineBreak {
+            anchor: anchor,
+            indent: indent,
+            blank: blank,
+            closing: false
+        }))
     }
 
 // Keep imports together. Separate other definitions before their attached
@@ -240,18 +234,12 @@ let expand_boundaries (x: Expansion) (open: Int) (starts: Array[Int]) (close: In
     for start in starts {
         plan_break(x, start, open, 4, false);
     };
-    x.breaks.set(
-        Map.insert(
-            x.breaks.get(),
-            close,
-            LineBreak {
-                anchor: open,
-                indent: 0,
-                blank: false,
-                closing: true
-            }
-        )
-    )
+    x.breaks.set(Map.insert(x.breaks.get(), close, LineBreak {
+        anchor: open,
+        indent: 0,
+        blank: false,
+        closing: true
+    }))
 }
 
 // Use group size rather than its current column: moving an enclosing arm or

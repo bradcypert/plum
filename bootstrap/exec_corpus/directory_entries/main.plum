@@ -25,21 +25,15 @@ let repeat_listing (root: String) (n: Int): Unit = {
 }
 
 let main (): Unit = {
-    let root = Result.unwrap_or_else(
-        Os.temp_dir(),
-        |e| {
-            panic_raw(e);
-            ""
-        }
-    );
+    let root = Result.unwrap_or_else(Os.temp_dir(), |e| {
+        panic_raw(e);
+        ""
+    });
     require(
-        Result.unwrap_or_else(
-            Os.list_dir(root),
-            |e| {
-                panic_raw(e);
-                []
-            }
-        ).len() == 0
+        Result.unwrap_or_else(Os.list_dir(root), |e| {
+            panic_raw(e);
+            []
+        }).len() == 0
     );
     println("empty directory: ok");
     require(Result.is_ok(Os.write_file(root.concat("/alpha"), "")));
@@ -47,13 +41,10 @@ let main (): Unit = {
     repeat_listing(root, 256);
     println("repeated listings: ok");
     // Returned strings survive subsequent reads and closing both streams.
-    let saved = Result.unwrap_or_else(
-        Os.list_dir(root),
-        |e| {
-            panic_raw(e);
-            []
-        }
-    );
+    let saved = Result.unwrap_or_else(Os.list_dir(root), |e| {
+        panic_raw(e);
+        []
+    });
     repeat_listing(root, 2);
     require(Array.contains(saved, "alpha"));
     require(Array.contains(saved, second_name()));

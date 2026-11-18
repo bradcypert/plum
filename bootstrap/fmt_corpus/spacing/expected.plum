@@ -38,7 +38,4 @@ let half (n: Int): Int
 = n / 2
 
 // A gap holding a newline belongs to the indent pass.
-let broken (): Int = pair(
-    1,
-    2
-)
+let broken (): Int = pair(1, 2)

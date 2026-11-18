@@ -1,15 +1,12 @@
 use Json;
 
 let show (text: String): Unit =
-    println(
-        text.concat(" => ")
-            .concat(
-                match Json.decode_string(Json.int(), text) {
-                    Ok(n) => n.to_string(),
-                    Err(e) => "ERR ".concat(e),
-                }
-            )
-    )
+    println(text.concat(" => ").concat(
+        match Json.decode_string(Json.int(), text) {
+            Ok(n) => n.to_string(),
+            Err(e) => "ERR ".concat(e),
+        }
+    ))
 
 let main (): Unit = {
     show("0");

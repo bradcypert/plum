@@ -153,31 +153,17 @@ let infer_expected_block
         Some(t) => {
             set_stmt_pos(block_start_at(block.starts, block.stmts.len()));
             let tr = infer_expected(p2, r.state, r.env, r.subst, t, expected);
-            ir_leaf(
-                tr.ty,
-                tr.subst,
-                tr.state,
-                TBlockE(
-                    TBlock {
-                        stmts: r.tstmts,
-                        tail: Some(tr.texpr),
-                        starts: block.starts
-                    }
-                )
-            )
+            ir_leaf(tr.ty, tr.subst, tr.state, TBlockE(TBlock {
+                stmts: r.tstmts,
+                tail: Some(tr.texpr),
+                starts: block.starts
+            }))
         },
-        None => ir_leaf(
-            ITUnit,
-            r.subst,
-            r.state,
-            TBlockE(
-                TBlock {
-                    stmts: r.tstmts,
-                    tail: None,
-                    starts: block.starts
-                }
-            )
-        ),
+        None => ir_leaf(ITUnit, r.subst, r.state, TBlockE(TBlock {
+            stmts: r.tstmts,
+            tail: None,
+            starts: block.starts
+        })),
     }
 }
 
@@ -312,7 +298,11 @@ let first_fixed_within (ctx: TyContext) (t: ITy) (seen: Array[String]): Option[I
                             ctx,
                             Array.map(
                                 ctx_field_types(ctx, name),
-                                |ft| instantiate_template(ctx_struct_generics(ctx, name), args, ft)
+                                |ft| instantiate_template(
+                                    ctx_struct_generics(ctx, name),
+                                    args,
+                                    ft
+                                )
                             ),
                             seen.push(name),
                             0
@@ -326,7 +316,14 @@ let first_fixed_within (ctx: TyContext) (t: ITy) (seen: Array[String]): Option[I
             else if Array.contains(seen, name) { None }
             else {
                 match ctx_enum_tags(ctx, name) {
-                    Some(tags) => first_fixed_in_variants(ctx, name, tags, args, seen.push(name), 0),
+                    Some(tags) => first_fixed_in_variants(
+                        ctx,
+                        name,
+                        tags,
+                        args,
+                        seen.push(name),
+                        0
+                    ),
                     None => None,
                 }
             }

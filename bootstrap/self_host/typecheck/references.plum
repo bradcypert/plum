@@ -40,18 +40,13 @@ pub let add_reference
     (declaration: Bool): Unit
 =
     if REFERENCES_ON.get() && reference_source_path(path) && off >= 0 {
-        REFERENCES.set(
-            REFERENCES.get()
-                .push(
-                    Reference {
-                        path: path,
-                        offset: off,
-                        name: name,
-                        symbol: symbol,
-                        declaration: declaration
-                    }
-                )
-        )
+        REFERENCES.set(REFERENCES.get().push(Reference {
+            path: path,
+            offset: off,
+            name: name,
+            symbol: symbol,
+            declaration: declaration
+        }))
     } else { () }
 
 // Embedded compiler sources have offsets but no navigable editor file.

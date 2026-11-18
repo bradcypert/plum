@@ -127,16 +127,10 @@ let member_answer
                         let name = ident_text(cs, start, "");
                         match member_detail(items, type_namespace(base_ty), name, 0) {
                             None => None,
-                            Some(detail) => Some(
-                                lsp.encode_json(
-                                    JsonObject(
-                                        [
-                                            JsonEntry { key: "name", value: JsonString(name) },
-                                            JsonEntry { key: "type", value: JsonString(detail) },
-                                        ]
-                                    )
-                                )
-                            ),
+                            Some(detail) => Some(lsp.encode_json(JsonObject([
+                                JsonEntry { key: "name", value: JsonString(name) },
+                                JsonEntry { key: "type", value: JsonString(detail) },
+                            ]))),
                         }
                     },
                 }
@@ -182,22 +176,18 @@ let query_answer (nodes: Array[typecheck.NodeType]) (path: String) (off: Int) (i
     if i >= nodes.len() { "{}" }
     else if nodes[i].path == path && off >= nodes[i].offset && off < nodes[i].offset
         + nodes[i].name.len() {
-            lsp.encode_json(
-                JsonObject(
-                    Array.concat(
-                        [
-                            JsonEntry { key: "name", value: JsonString(nodes[i].name) },
-                            JsonEntry { key: "type", value: JsonString(nodes[i].ty) },
-                        ],
-                        // The BINDING's position, when the checker knows one. A
-                        // top-level name has none here -- the name index answers
-                        // for those, and it knows which file they live in.
-                        if nodes[i].def_offset >= 0 {
-                            def_position_fields(path, nodes[i].def_offset)
-                        } else { [] }
-                    )
-                )
-            )
+            lsp.encode_json(JsonObject(Array.concat(
+                [
+                    JsonEntry { key: "name", value: JsonString(nodes[i].name) },
+                    JsonEntry { key: "type", value: JsonString(nodes[i].ty) },
+                ],
+                // The BINDING's position, when the checker knows one. A
+                // top-level name has none here -- the name index answers
+                // for those, and it knows which file they live in.
+                if nodes[i].def_offset >= 0 {
+                    def_position_fields(path, nodes[i].def_offset)
+                } else { [] }
+            )))
         }
     else { query_answer(nodes, path, off, i + 1) }
 
@@ -260,23 +250,17 @@ let cmd_members (dir: String) (path: String) (line: Int) (col: Int): Unit = {
                 else {
                     match recorded_type_at(typecheck.recorded_types(()), path, start, 0) {
                         None => println("[]"),
-                        Some(ty) => println(
-                            lsp.encode_json(
-                                JsonArray(
-                                    members_of(
-                                        items,
-                                        type_namespace(ty),
-                                        0,
-                                        builtin_members(
-                                            typecheck.builtin_methods(),
-                                            type_namespace(ty),
-                                            0,
-                                            integer_conversion_members(type_namespace(ty), 0, [])
-                                        )
-                                    )
-                                )
+                        Some(ty) => println(lsp.encode_json(JsonArray(members_of(
+                            items,
+                            type_namespace(ty),
+                            0,
+                            builtin_members(
+                                typecheck.builtin_methods(),
+                                type_namespace(ty),
+                                0,
+                                integer_conversion_members(type_namespace(ty), 0, [])
                             )
-                        ),
+                        )))),
                     }
                 }
             }
@@ -371,18 +355,12 @@ let integer_conversion_members (ns: String) (i: Int) (acc: Array[JsonValue]): Ar
 let fields_of (decl: parser.StructDeclNode) (i: Int) (acc: Array[JsonValue]): Array[JsonValue] =
     if i >= decl.fields.len() { acc }
     else {
-        fields_of(
-            decl,
-            i + 1,
-            acc.push(
-                completion_json(
-                    decl.fields[i].name,
-                    "field",
-                    decl.fields[i].name.concat(": ")
-                        .concat(parser.render_type_source(decl.fields[i].ty))
-                )
-            )
-        )
+        fields_of(decl, i + 1, acc.push(completion_json(
+            decl.fields[i].name,
+            "field",
+            decl.fields[i].name.concat(": ")
+                .concat(parser.render_type_source(decl.fields[i].ty))
+        )))
     }
 
 // `String.trim_end` is offered as `trim_end`: the receiver is already
@@ -502,21 +480,13 @@ let locals_acc
     else if nodes[i].path == path && nodes[i].def_offset >= 0
         && nodes[i].def_offset >= span.start && nodes[i].def_offset < span.end
         && nodes[i].def_offset <= off && !seen.contains(nodes[i].name) {
-            locals_acc(
-                nodes,
-                path,
-                off,
-                span,
-                i + 1,
-                seen.push(nodes[i].name),
-                acc.push(
-                    completion_json(
-                        nodes[i].name,
-                        "variable",
-                        nodes[i].name.concat(": ").concat(nodes[i].ty)
-                    )
+            locals_acc(nodes, path, off, span, i + 1, seen.push(nodes[i].name), acc.push(
+                completion_json(
+                    nodes[i].name,
+                    "variable",
+                    nodes[i].name.concat(": ").concat(nodes[i].ty)
                 )
-            )
+            ))
         }
     else { locals_acc(nodes, path, off, span, i + 1, seen, acc) }
 
@@ -670,15 +640,12 @@ let cmd_doc (dir: String) (out: String) (html: Bool) (home: String) (with_deps: 
 
 let dep_count (dir: String): Int =
     if source_is_directory(dir) {
-        dep_closure(
-            dir,
-            DepScan {
-                root: Path.clean(dir),
-                visited: [Path.clean(dir)],
-                found: [],
-                fetch: false
-            }
-        ).found.len()
+        dep_closure(dir, DepScan {
+            root: Path.clean(dir),
+            visited: [Path.clean(dir)],
+            found: [],
+            fetch: false
+        }).found.len()
     } else { 0 }
 
 // The standard library documents itself through the SAME generator.
@@ -774,25 +741,19 @@ let builtin_items (declared: Array[parser.ItemNode]): Array[parser.ItemNode] = {
     )
         .concat(
             builtin_fn_src(
-                Array.filter(
-                    typecheck.builtin_functions(),
-                    |f|
-                        !Array.contains(names, f.name)
-                ),
+                Array.filter(typecheck.builtin_functions(), |f| !Array.contains(names, f.name)),
                 0,
                 ""
             )
         )
-        .concat(
-            Array.join(
-                Array.map(
-                    typecheck.integer_conversion_builtins(),
-                    |f|
-                        "/// ${f.doc}\n${BUILTIN_NOTE(())}\npub ${f.detail} = ()\n"
-                ),
-                "\n"
-            )
-        );
+        .concat(Array.join(
+            Array.map(
+                typecheck.integer_conversion_builtins(),
+                |f|
+                    "/// ${f.doc}\n${BUILTIN_NOTE(())}\npub ${f.detail} = ()\n"
+            ),
+            "\n"
+        ));
     let lexed = lexer.tokenize_spanned(src);
     parser.set_source_context("<builtins>", src, lexed.starts, lexed.ends);
     let items = parser.parse_program(lexed.tokens).items;
@@ -1231,17 +1192,9 @@ let doc_index_links_in
             } else {
                 match doc_entry_signature(items[i]) {
                     None => doc_index_links_in(items, m, nss, ns, page, i + 1, acc),
-                    Some(sig) => doc_index_links_in(
-                        items,
-                        m,
-                        nss,
-                        ns,
-                        page,
-                        i + 1,
-                        acc.concat(
-                            "- [`${sig}`](${page}#${Encoding.percent_encode(doc_anchor(sig).as_bytes())})\n"
-                        )
-                    ),
+                    Some(sig) => doc_index_links_in(items, m, nss, ns, page, i + 1, acc.concat(
+                        "- [`${sig}`](${page}#${Encoding.percent_encode(doc_anchor(sig).as_bytes())})\n"
+                    )),
                 }
             }
     }
@@ -1481,29 +1434,18 @@ let doc_html_nav
     else {
         let nss = sorted_namespaces(doc_namespaces(items, mods[i], 0, []), 0);
         let subs = doc_html_nav_ns(mods[i], nss, 0, "");
-        doc_html_nav(
-            home,
-            mods,
-            items,
-            i + 1,
-            acc.concat(
-                "<li><a href=\"${doc_page_url(mods[i], "", "html")}\">${doc_html_escape(mods[i])}</a>${subs}</li>\n"
-            )
-        )
+        doc_html_nav(home, mods, items, i + 1, acc.concat(
+            "<li><a href=\"${doc_page_url(mods[i], "", "html")}\">${doc_html_escape(mods[i])}</a>${subs}</li>\n"
+        ))
     }
 
 let doc_html_nav_ns (m: String) (nss: Array[String]) (i: Int) (acc: String): String =
     if Array.is_empty(nss) { "" }
     else if i >= nss.len() { "<ul class=\"ns\">\n".concat(acc).concat("</ul>\n") }
     else {
-        doc_html_nav_ns(
-            m,
-            nss,
-            i + 1,
-            acc.concat(
-                "<li><a href=\"${doc_page_url(m, nss[i], "html")}\">${doc_html_escape(nss[i])}</a></li>\n"
-            )
-        )
+        doc_html_nav_ns(m, nss, i + 1, acc.concat(
+            "<li><a href=\"${doc_page_url(m, nss[i], "html")}\">${doc_html_escape(nss[i])}</a></li>\n"
+        ))
     }
 
 // A declaration: its signature as code, its prose beneath. The `id` is
@@ -1663,15 +1605,12 @@ let doc_write_html
     doc_write("${out}/style.css", doc_css(()));
     doc_write("${out}/search-index.js", doc_search_index(items, mods));
     doc_write("${out}/search.js", doc_search_js(()));
-    doc_write(
-        "${out}/index.html",
-        doc_html_page(
-            "API reference",
-            nav,
-            "  <h1>API reference</h1>\n  <p class=\"sub\">Generated by <code>plum doc</code> from the source.</p>\n"
-                .concat(doc_html_index(mods, 0, ""))
-        )
-    );
+    doc_write("${out}/index.html", doc_html_page(
+        "API reference",
+        nav,
+        "  <h1>API reference</h1>\n  <p class=\"sub\">Generated by <code>plum doc</code> from the source.</p>\n"
+            .concat(doc_html_index(mods, 0, ""))
+    ));
     doc_write_html_mods(items, mods, nav, out, 0);
     // Pages, not modules: a module with namespaces writes several, and
     // reporting the module count made the tool understate its own work.
@@ -1687,13 +1626,9 @@ let doc_page_count (items: Array[parser.ItemNode]) (mods: Array[String]) (i: Int
 let doc_html_index (mods: Array[String]) (i: Int) (acc: String): String =
     if i >= mods.len() { "  <ul>\n".concat(acc).concat("  </ul>\n") }
     else {
-        doc_html_index(
-            mods,
-            i + 1,
-            acc.concat(
-                "    <li><a href=\"${doc_page_url(mods[i], "", "html")}\">${doc_html_escape(mods[i])}</a></li>\n"
-            )
-        )
+        doc_html_index(mods, i + 1, acc.concat(
+            "    <li><a href=\"${doc_page_url(mods[i], "", "html")}\">${doc_html_escape(mods[i])}</a></li>\n"
+        ))
     }
 
 let doc_write_html_mods
@@ -1710,7 +1645,10 @@ let doc_write_html_mods
             .concat("  <div class=\"blurb\">\n")
             .concat(doc_html_prose(doc_module_blurb_text(items, mods[i], 0))).concat("  </div>\n")
             .concat(doc_html_entries(items, mods[i], "", 0, ""));
-        doc_write("${out}/${doc_page_file(mods[i], "", "html")}", doc_html_page(mods[i], nav, body));
+        doc_write(
+            "${out}/${doc_page_file(mods[i], "", "html")}",
+            doc_html_page(mods[i], nav, body)
+        );
         doc_write_html_ns(items, mods[i], nss, nav, out, 0);
         doc_write_html_mods(items, mods, nav, out, i + 1)
     }
@@ -1837,32 +1775,20 @@ let doc_index_items
                 Some(sig) => {
                     let ns = doc_ns_of_in(nss, items[i]);
                     let page = doc_page_url(m, ns, "html");
-                    doc_index_items(
-                        items,
-                        m,
-                        nss,
-                        i + 1,
-                        acc.push(
-                            JsonObject(
-                                [
-                                    JsonEntry { key: "n", value: JsonString(doc_anchor(sig)) },
-                                    JsonEntry { key: "s", value: JsonString(sig) },
-                                    JsonEntry {
-                                        key: "u",
-                                        value: JsonString(
-                                            "${page}#${Encoding.percent_encode(doc_anchor(sig).as_bytes())}"
-                                        )
-                                    },
-                                    JsonEntry {
-                                        key: "m",
-                                        value: JsonString(
-                                            if String.is_empty(ns) { m } else { "${m}.${ns}" }
-                                        )
-                                    },
-                                ]
+                    doc_index_items(items, m, nss, i + 1, acc.push(JsonObject([
+                        JsonEntry { key: "n", value: JsonString(doc_anchor(sig)) },
+                        JsonEntry { key: "s", value: JsonString(sig) },
+                        JsonEntry {
+                            key: "u",
+                            value: JsonString(
+                                "${page}#${Encoding.percent_encode(doc_anchor(sig).as_bytes())}"
                             )
-                        )
-                    )
+                        },
+                        JsonEntry {
+                            key: "m",
+                            value: JsonString(if String.is_empty(ns) { m } else { "${m}.${ns}" })
+                        },
+                    ])))
                 },
             }
         }
@@ -1927,9 +1853,7 @@ let doc_search_box (): String =
         .concat(
             "<input id=\"q\" type=\"search\" placeholder=\"Search (/)\" autocomplete=\"off\" spellcheck=\"false\">\n"
         )
-        .concat(
-            "<ul id=\"results\" hidden></ul>\n</form>\n"
-        )
+        .concat("<ul id=\"results\" hidden></ul>\n</form>\n")
 
 let sorted_namespaces (nss: Array[String]) (i: Int): Array[String] =
     if i >= nss.len() { nss } else { sorted_namespaces(bubble_ns(nss, 0), i + 1) }
@@ -1983,18 +1907,14 @@ let cmd_locals (dir: String) (path: String) (line: Int) (col: Int): Unit =
             typecheck.record_types(true);
             let all = codegen.cg_with_prelude(parser.ProgramNode { items: collect_project(dir) }).items;
             typecheck.check_program(parser.ProgramNode { items: all });
-            println(
-                lsp.encode_json(
-                    JsonArray(
-                        locals_in_scope(
-                            all,
-                            typecheck.recorded_types(()),
-                            path,
-                            lexer.offset_of(src, line, col)
-                        )
-                    )
+            println(lsp.encode_json(JsonArray(
+                locals_in_scope(
+                    all,
+                    typecheck.recorded_types(()),
+                    path,
+                    lexer.offset_of(src, line, col)
                 )
-            )
+            )))
         },
     }
 
@@ -2019,13 +1939,10 @@ let builtin_completions (ignored: Unit): Array[JsonValue] =
             completion_json("ref", "function", "ref(value: T): Ref[T]"),
             completion_json("channel", "function", "channel(): (Sender[T], Receiver[T])"),
         ],
-        Array.concat(
-            builtin_method_items(typecheck.builtin_methods(), 0, []),
-            Array.map(
-                typecheck.integer_conversion_builtins(),
-                |f| completion_json(f.name, "function", f.detail)
-            )
-        )
+        Array.concat(builtin_method_items(typecheck.builtin_methods(), 0, []), Array.map(
+            typecheck.integer_conversion_builtins(),
+            |f| completion_json(f.name, "function", f.detail)
+        ))
     )
 
 // The compiler's own methods, offered under the type they belong to:
@@ -2104,17 +2021,13 @@ let push_completion (item: parser.ItemNode) (acc: Array[JsonValue]): Array[JsonV
 let variants_of (decl: parser.EnumDeclNode) (i: Int) (acc: Array[JsonValue]): Array[JsonValue] =
     if i >= decl.variants.len() { acc }
     else {
-        variants_of(
-            decl,
-            i + 1,
-            acc.push(
-                completion_json(
-                    decl.variants[i].name,
-                    "variant",
-                    variant_detail(decl.name, decl.variants[i])
-                )
+        variants_of(decl, i + 1, acc.push(
+            completion_json(
+                decl.variants[i].name,
+                "variant",
+                variant_detail(decl.name, decl.variants[i])
             )
-        )
+        ))
     }
 
 let variant_detail (ename: String) (v: parser.EnumVariantNode): String = {
@@ -2133,13 +2046,11 @@ let payload_list (v: parser.EnumVariantNode) (i: Int) (acc: String): String =
     }
 
 let completion_json (name: String) (kind: String) (detail: String): JsonValue =
-    JsonObject(
-        [
-            JsonEntry { key: "name", value: JsonString(name) },
-            JsonEntry { key: "kind", value: JsonString(kind) },
-            JsonEntry { key: "detail", value: JsonString(detail) },
-        ]
-    )
+    JsonObject([
+        JsonEntry { key: "name", value: JsonString(name) },
+        JsonEntry { key: "kind", value: JsonString(kind) },
+        JsonEntry { key: "detail", value: JsonString(detail) },
+    ])
 
 let defs_of (items: Array[parser.ItemNode]) (i: Int) (acc: Array[JsonValue]): Array[JsonValue] =
     if i >= items.len() { acc }
@@ -2171,17 +2082,15 @@ let def_json (item: parser.ItemNode) (name: String) (kind: String) (detail: Stri
         Ok(src) => lexer.line_col(src, name_offset(src, item.start, item.end, name)),
         Err(_) => lexer.LineCol { line: 1, col: 1 },
     };
-    JsonObject(
-        [
-            JsonEntry { key: "name", value: JsonString(name) },
-            JsonEntry { key: "path", value: JsonString(item.path) },
-            JsonEntry { key: "line", value: JsonNumber(lc.line.to_float()) },
-            JsonEntry { key: "col", value: JsonNumber(lc.col.to_float()) },
-            JsonEntry { key: "kind", value: JsonString(kind) },
-            JsonEntry { key: "detail", value: JsonString(detail) },
-            JsonEntry { key: "doc", value: JsonString(item.doc) },
-        ]
-    )
+    JsonObject([
+        JsonEntry { key: "name", value: JsonString(name) },
+        JsonEntry { key: "path", value: JsonString(item.path) },
+        JsonEntry { key: "line", value: JsonNumber(lc.line.to_float()) },
+        JsonEntry { key: "col", value: JsonNumber(lc.col.to_float()) },
+        JsonEntry { key: "kind", value: JsonString(kind) },
+        JsonEntry { key: "detail", value: JsonString(detail) },
+        JsonEntry { key: "doc", value: JsonString(item.doc) },
+    ])
 }
 
 // Where the item's NAME is written. `item.start` is the `let`, the
@@ -2322,14 +2231,12 @@ let self_exe (): String =
 // `Process` module: generation 1 shipped the API, this generation
 // is the first that can call it from the compiler's own source.
 let run_process (program: String) (args: Array[String]): Result[Process.ProcessResult, String] =
-    Process.run(
-        Process.Options {
-            program: program,
-            args: args,
-            env: [],
-            stdin: None,
-        }
-    )
+    Process.run(Process.Options {
+        program: program,
+        args: args,
+        env: [],
+        stdin: None,
+    })
 
 // Diagnostics come from a SUBPROCESS: `fail_tc` reports by aborting, so
 // checking in-process would take the server down on the first type
@@ -2356,42 +2263,32 @@ let lsp_snapshot (path: String): Option[LspSnapshot] =
             Ok(raw) => {
                 let container = Path.clean(raw);
                 let buffers = BUFFERS.get();
-                let payload = JsonObject(
-                    [
-                        JsonEntry { key: "path", value: JsonString(lsp.path_to_uri(path)) },
-                        JsonEntry {
-                            key: "container",
-                            value: JsonString(lsp.path_to_uri(container))
-                        },
-                        JsonEntry {
-                            key: "buffers",
-                            value: JsonArray(
-                                Array.map(
-                                    Array.sort_string(Map.keys(buffers)),
-                                    |uri| JsonObject(
-                                        [
-                                            JsonEntry { key: "uri", value: JsonString(uri) },
-                                            JsonEntry {
-                                                key: "text",
-                                                value: JsonString(
-                                                    Option.unwrap_or(Map.get(buffers, uri), "")
-                                                )
-                                            },
-                                        ]
-                                    )
-                                )
-                            )
-                        },
-                    ]
-                );
-                let prepared = match Process.run(
-                    Process.Options {
-                        program: self_exe(),
-                        args: ["__lsp_snapshot"],
-                        env: [],
-                        stdin: Some(lsp.frame(lsp.encode_json(payload)))
-                    }
-                ) {
+                let payload = JsonObject([
+                    JsonEntry { key: "path", value: JsonString(lsp.path_to_uri(path)) },
+                    JsonEntry {
+                        key: "container",
+                        value: JsonString(lsp.path_to_uri(container))
+                    },
+                    JsonEntry {
+                        key: "buffers",
+                        value: JsonArray(Array.map(
+                            Array.sort_string(Map.keys(buffers)),
+                            |uri| JsonObject([
+                                JsonEntry { key: "uri", value: JsonString(uri) },
+                                JsonEntry {
+                                    key: "text",
+                                    value: JsonString(Option.unwrap_or(Map.get(buffers, uri), ""))
+                                },
+                            ])
+                        ))
+                    },
+                ]);
+                let prepared = match Process.run(Process.Options {
+                    program: self_exe(),
+                    args: ["__lsp_snapshot"],
+                    env: [],
+                    stdin: Some(lsp.frame(lsp.encode_json(payload)))
+                }) {
                     Err(_) => None,
                     Ok(result) => if result.exit_code != 0 { None }
                     else {
@@ -2588,7 +2485,11 @@ let lsp_dispatch (req: lsp.Request): Unit =
                             }
                         )
                     },
-                    _ => lsp_error(req.id, 0 - 32602, "Expected context.includeDeclaration boolean"),
+                    _ => lsp_error(
+                        req.id,
+                        0 - 32602,
+                        "Expected context.includeDeclaration boolean"
+                    ),
                 },
                 None => lsp_error(req.id, 0 - 32602, "Expected reference context"),
             },
@@ -2605,14 +2506,11 @@ let lsp_dispatch (req: lsp.Request): Unit =
                 Some(position) => {
                     if req.method == "textDocument/completion" {
                         let path = lsp.uri_to_path(lsp.document_uri(req.params));
-                        lsp_reply(
-                            req.id,
-                            lsp_with_snapshot(
-                                path,
-                                JsonArray([]),
-                                |snapshot| lsp_answer_completion(snapshot, position)
-                            )
-                        )
+                        lsp_reply(req.id, lsp_with_snapshot(
+                            path,
+                            JsonArray([]),
+                            |snapshot| lsp_answer_completion(snapshot, position)
+                        ))
                     } else { lsp_reply(req.id, lsp_answer_query(req.method, req.params, position)) }
                 },
             };
@@ -2858,12 +2756,7 @@ let lsp_answer_completion_at (snapshot: LspSnapshot) (at: lexer.LineCol): JsonVa
     else {
         let names = lsp_completions(snapshot.root);
         // Half-written buffers retain static keywords and builtin names.
-        lsp.completion_result(
-            Array.concat(
-                names,
-                lsp_locals(snapshot.root, path, at.line, at.col)
-            )
-        )
+        lsp.completion_result(Array.concat(names, lsp_locals(snapshot.root, path, at.line, at.col)))
     }
 }
 
@@ -3099,19 +2992,12 @@ let rngs_of (text: String) (sp: Array[OffSpan]) (i: Int) (acc: Array[lsp.Rng]): 
     else {
         let a = lexer.line_col(text, sp[i].start);
         let b = lexer.line_col(text, sp[i].end);
-        rngs_of(
-            text,
-            sp,
-            i + 1,
-            acc.push(
-                lsp.Rng {
-                    sl: a.line,
-                    sc: a.col,
-                    el: b.line,
-                    ec: b.col
-                }
-            )
-        )
+        rngs_of(text, sp, i + 1, acc.push(lsp.Rng {
+            sl: a.line,
+            sc: a.col,
+            el: b.line,
+            ec: b.col
+        }))
     }
 
 let lsp_defs (root: String): Array[lsp.Def] =
@@ -3276,16 +3162,11 @@ let run_tests (bin: String) (names: Array[String]) (i: Int) (acc: TestRun): Test
             // message it died with. Captured rather than let through so
             // it lands under the test's name instead of interleaved
             // with the progress lines.
-            run_tests(
-                bin,
-                names,
-                i + 1,
-                TestRun {
-                    failed: acc.failed + 1,
-                    detail: acc.detail.concat("---- ").concat(names[i]).concat(" ----\n")
-                        .concat(outcome.detail).concat("\n"),
-                }
-            )
+            run_tests(bin, names, i + 1, TestRun {
+                failed: acc.failed + 1,
+                detail: acc.detail.concat("---- ").concat(names[i]).concat(" ----\n")
+                    .concat(outcome.detail).concat("\n"),
+            })
         }
     }
 
@@ -3508,13 +3389,11 @@ let native_c_walk
             let info = frame.entries[frame.index];
             let relative = Path.join(frame.relative, info.name);
             let full = source_logical(scope, relative);
-            let pending = rest.push(
-                NativeFrame {
-                    relative: frame.relative,
-                    entries: frame.entries,
-                    index: frame.index + 1
-                }
-            );
+            let pending = rest.push(NativeFrame {
+                relative: frame.relative,
+                entries: frame.entries,
+                index: frame.index + 1
+            });
             // Named target exclusions apply before resolving a directory link.
             if native_known_dir(info.name) && !native_applies(info.name, os) && info.kind != 1 {
                 native_c_walk(scope, os, builder, pending, found)
@@ -3777,21 +3656,15 @@ let compile_two_phase
     (mode: buildmode.Options): String
 = {
     let shim_dir = if srcs.len() > 1 { Path.dirname(srcs[1]) } else { scratch };
-    let flags = Array.concat(
-        target_args(target),
-        Array.concat(
-            buildmode.compile_flags(mode),
-            [
-                "-Wno-override-module",
-                "-I",
-                shim_dir,
-                "-I",
-                shim_dir.concat("/mbedtls/include"),
-                "-I",
-                shim_dir.concat("/mbedtls/library")
-            ]
-        )
-    );
+    let flags = Array.concat(target_args(target), Array.concat(buildmode.compile_flags(mode), [
+        "-Wno-override-module",
+        "-I",
+        shim_dir,
+        "-I",
+        shim_dir.concat("/mbedtls/include"),
+        "-I",
+        shim_dir.concat("/mbedtls/library")
+    ]));
     // Project/dependency C inputs need the same includes and persistent
     // objects as embedded sources. Leaving C in the final link both loses
     // its header search paths and lets Clang delete its debug-map objects.
@@ -3840,23 +3713,15 @@ pub let test_two_phase_native_headers (): Unit = {
     let header = Path.join(scratch, "mbedtls/include/native_fixture.h");
     assert(Result.is_ok(Os.write_file(header, "#define NATIVE_FIXTURE_RESULT 7\n")));
     let c = Path.join(scratch, "native/value.c");
-    assert(
-        Result.is_ok(
-            Os.write_file(
-                c,
-                "#include <native_fixture.h>\nint native_fixture(void) { return NATIVE_FIXTURE_RESULT; }\n"
-            )
-        )
-    );
+    assert(Result.is_ok(Os.write_file(
+        c,
+        "#include <native_fixture.h>\nint native_fixture(void) { return NATIVE_FIXTURE_RESULT; }\n"
+    )));
     let ll = Path.join(scratch, "main.ll");
-    assert(
-        Result.is_ok(
-            Os.write_file(
-                ll,
-                "declare i32 @native_fixture()\ndefine i32 @main() {\n  %r = call i32 @native_fixture()\n  ret i32 %r\n}\n"
-            )
-        )
-    );
+    assert(Result.is_ok(Os.write_file(
+        ll,
+        "declare i32 @native_fixture()\ndefine i32 @main() {\n  %r = call i32 @native_fixture()\n  ret i32 %r\n}\n"
+    )));
     let out = Path.join(scratch, "native-test.exe");
     assert_eq(
         compile_two_phase([ll], out, [c, "-lm"], scratch, native_target(), buildmode.defaults(())),
@@ -3958,7 +3823,9 @@ let compile_cached_objects
                     "${cc_program()} failed to link (exit ${r.exit_code.to_string()}):\n${r.stderr}"
                 }
                 else {
-                    if buildmode.symbols(mode) && target_os(target) == "macos" { run_dsymutil(out) };
+                    if buildmode.symbols(mode) && target_os(target) == "macos" {
+                        run_dsymutil(out)
+                    };
                     let removed = Os.remove_file(ll);
                     ""
                 },
@@ -3983,22 +3850,16 @@ let link_ir_uncached
     }
     else {
         let shim_dir = if cfiles.len() == 0 { scratch } else { Path.dirname(cfiles[0]) };
-        let base = Array.concat(
-            target_args(target),
-            Array.concat(
-                buildmode.compile_flags(mode),
-                [
-                    "-Wno-override-module",
-                    ll,
-                    "-I",
-                    shim_dir,
-                    "-I",
-                    shim_dir.concat("/mbedtls/include"),
-                    "-I",
-                    shim_dir.concat("/mbedtls/library")
-                ]
-            )
-        );
+        let base = Array.concat(target_args(target), Array.concat(buildmode.compile_flags(mode), [
+            "-Wno-override-module",
+            ll,
+            "-I",
+            shim_dir,
+            "-I",
+            shim_dir.concat("/mbedtls/include"),
+            "-I",
+            shim_dir.concat("/mbedtls/library")
+        ]));
         let argv = Array.concat(
             Array.concat(Array.concat(cc_prefix_args(), base), cfiles),
             Array.concat(extra, Array.concat(platform_libs(target), ["-o", out]))
@@ -4298,15 +4159,12 @@ let command_native_tls (argv: Array[String]): Bool = {
 let project_deps (dir: String): Array[pkg.Dep] = {
     let root = source_project_root(dir);
     if source_is_directory(root) {
-        dep_closure(
-            root,
-            DepScan {
-                root: Path.clean(root),
-                visited: [Path.clean(root)],
-                found: [],
-                fetch: false
-            }
-        ).found
+        dep_closure(root, DepScan {
+            root: Path.clean(root),
+            visited: [Path.clean(root)],
+            found: [],
+            fetch: false
+        }).found
     } else { [] }
 }
 
@@ -5125,19 +4983,16 @@ let source_walk (scope: SourceScope) (builder: SourceBuilder) (stack: Array[Sour
                                 )
                             };
                             source_record(builder, entry, full);
-                            source_push(
-                                builder,
-                                SourceFile {
-                                    path: full,
-                                    module_name: module_name,
-                                    owner: scope.owner,
-                                    dep_name: scope.dep_name,
-                                    root: scope.root,
-                                    relative: relative,
-                                    identity: treefs.identity(entry),
-                                    reject_links: scope.reject_links
-                                }
-                            );
+                            source_push(builder, SourceFile {
+                                path: full,
+                                module_name: module_name,
+                                owner: scope.owner,
+                                dep_name: scope.dep_name,
+                                root: scope.root,
+                                relative: relative,
+                                identity: treefs.identity(entry),
+                                reject_links: scope.reject_links
+                            });
                         };
                         source_walk(scope, builder, pending)
                     } else { panic_raw("unsupported source tree entry: ${full}") }
@@ -5193,19 +5048,16 @@ let source_path_policy
     } else if path.ends_with(".plum") {
         if treefs.kind(entry) != 1 { panic_raw("not a regular source file: ${path}") };
         source_record(builder, entry, path);
-        source_push(
-            builder,
-            SourceFile {
-                path: path,
-                module_name: module_name,
-                owner: owner,
-                dep_name: dep_name,
-                root: scope.root,
-                relative: relative,
-                identity: treefs.identity(entry),
-                reject_links: scope.reject_links
-            }
-        )
+        source_push(builder, SourceFile {
+            path: path,
+            module_name: module_name,
+            owner: owner,
+            dep_name: dep_name,
+            root: scope.root,
+            relative: relative,
+            identity: treefs.identity(entry),
+            reject_links: scope.reject_links
+        })
     } else { () }
 }
 
@@ -5397,15 +5249,12 @@ let cmd_fetch (dir: String): Unit = {
     if !source_is_directory(dir) {
         panic_raw("`plum fetch` takes a project directory; ${dir} is not one")
     };
-    let found = dep_closure(
-        dir,
-        DepScan {
-            root: Path.clean(dir),
-            visited: [Path.clean(dir)],
-            found: [],
-            fetch: true
-        }
-    ).found;
+    let found = dep_closure(dir, DepScan {
+        root: Path.clean(dir),
+        visited: [Path.clean(dir)],
+        found: [],
+        fetch: true
+    }).found;
     report_fetched(found, 0);
     // A count, not a list, when there is nothing to say: a project with
     // only path dependencies is a perfectly ordinary thing to run this
@@ -5419,15 +5268,12 @@ let cmd_vendor (dir: String): Unit = {
         panic_raw("`plum vendor` takes a project directory; ${dir} is not one")
     };
     let root = Path.clean(dir);
-    let found = dep_closure(
-        root,
-        DepScan {
-            root: root,
-            visited: [root],
-            found: [],
-            fetch: true
-        }
-    ).found;
+    let found = dep_closure(root, DepScan {
+        root: root,
+        visited: [root],
+        found: [],
+        fetch: true
+    }).found;
     vendor_deps(root, found, 0);
     println("vendor: ${found.len().to_string()} dependency(s) resolved for ${dir}")
 }
@@ -5930,13 +5776,11 @@ let main (): Unit = {
         // Same directory loading `check` and `run` use. A real Plum
         // project is several modules, so a backend that only accepted
         // one file could never compile one.
-        println(
-            emit_program(
-                parser.ProgramNode { items: collect_project(argv[1]) },
-                "main",
-                build_options(argv, native_target())
-            )
-        );
+        println(emit_program(
+            parser.ProgramNode { items: collect_project(argv[1]) },
+            "main",
+            build_options(argv, native_target())
+        ));
     } else if argv[0] == "fmt" {
         cmd_fmt(argv);
     } else if argv[0] == "spans" {
@@ -6004,13 +5848,11 @@ let main (): Unit = {
                     // `builtin_sig` table. That hazard is gone: `check`
                     // prepends the prelude too now, and the table with
                     // it. See DESIGN.md's "One prelude, not two".
-                    println(
-                        emit_program(
-                            parser.parse_program(lexed0.tokens),
-                            "main",
-                            build_options(argv, native_target())
-                        )
-                    );
+                    println(emit_program(
+                        parser.parse_program(lexed0.tokens),
+                        "main",
+                        build_options(argv, native_target())
+                    ));
                 } else if argv[0] == "run" {
                     // A single FILE runs the same way a project does --
                     // compiled. `collect_project` accepts either, so

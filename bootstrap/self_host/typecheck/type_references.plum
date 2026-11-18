@@ -114,7 +114,12 @@ let reference_path_name (path: String) (parts: Array[String]) (start: Int): Opti
     for i in 1..parts.len() {
         site = match site {
             None => None,
-            Some(previous) => reference_member(reference_tokens(path), previous.offset, parts[i], 0),
+            Some(previous) => reference_member(
+                reference_tokens(path),
+                previous.offset,
+                parts[i],
+                0
+            ),
         };
     };
     site

@@ -31,25 +31,15 @@ let main (): Unit = {
     let full: U64 = 18446744073709551615;
     assert_eq(U64.from(full), full);
     assert_eq(U64.try_from(full), Ok(full));
-    assert_eq(
-        Int.try_from(full),
-        Err(
-            IntegerConversionError {
-                source: IntegerKind.Unsigned64,
-                destination: IntegerKind.Signed64
-            }
-        )
-    );
+    assert_eq(Int.try_from(full), Err(IntegerConversionError {
+        source: IntegerKind.Unsigned64,
+        destination: IntegerKind.Signed64
+    }));
     assert_eq(I64.try_from(full), Int.try_from(full));
-    assert_eq(
-        U64.try_from(-1),
-        Err(
-            IntegerConversionError {
-                source: IntegerKind.Signed64,
-                destination: IntegerKind.Unsigned64
-            }
-        )
-    );
+    assert_eq(U64.try_from(-1), Err(IntegerConversionError {
+        source: IntegerKind.Signed64,
+        destination: IntegerKind.Unsigned64
+    }));
     let minimum: Int = -9223372036854775808;
     assert_eq(I64.try_from(minimum), Ok(minimum));
     let calls = ref(0);
@@ -59,15 +49,10 @@ let main (): Unit = {
     };
     assert_eq(U8.try_from(next(255)), Ok(byte));
     assert_eq(calls.get(), 1);
-    assert_eq(
-        U8.try_from(next(-1)),
-        Err(
-            IntegerConversionError {
-                source: IntegerKind.Signed64,
-                destination: IntegerKind.Unsigned8
-            }
-        )
-    );
+    assert_eq(U8.try_from(next(-1)), Err(IntegerConversionError {
+        source: IntegerKind.Signed64,
+        destination: IntegerKind.Unsigned8
+    }));
     assert_eq(calls.get(), 2);
     let get_byte: () -> U8 = || {
         calls.set(calls.get() + 1);

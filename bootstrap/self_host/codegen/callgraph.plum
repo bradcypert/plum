@@ -52,7 +52,15 @@ let cg_reaches_batch
             }
         else {
             match cg_find_tfn(p, head.module, head.name, 0) {
-                None => cg_reaches_batch(p, batch, read + 1, queued, target, seen.push(s), fuel + 1),
+                None => cg_reaches_batch(
+                    p,
+                    batch,
+                    read + 1,
+                    queued,
+                    target,
+                    seen.push(s),
+                    fuel + 1
+                ),
                 Some(def) => {
                     let inner = CgProgram {
                         fns: p.fns,
@@ -176,37 +184,34 @@ pub let test_callgraph_fifo_and_fuel (): Unit = {
     };
     let roots = cg_global_roots(p, 0, [main]);
     let reached = cg_reachable(p, roots, [], 0);
-    assert_eq(
-        reached,
-        [
-            main,
-            CgInst {
-                module: "",
-                name: "id",
-                targs: [ITInt]
-            },
-            CgInst {
-                module: "",
-                name: "left",
-                targs: []
-            },
-            CgInst {
-                module: "",
-                name: "right",
-                targs: []
-            },
-            CgInst {
-                module: "",
-                name: "id",
-                targs: [ITStr]
-            },
-            CgInst {
-                module: "",
-                name: "leaf",
-                targs: []
-            }
-        ]
-    );
+    assert_eq(reached, [
+        main,
+        CgInst {
+            module: "",
+            name: "id",
+            targs: [ITInt]
+        },
+        CgInst {
+            module: "",
+            name: "left",
+            targs: []
+        },
+        CgInst {
+            module: "",
+            name: "right",
+            targs: []
+        },
+        CgInst {
+            module: "",
+            name: "id",
+            targs: [ITStr]
+        },
+        CgInst {
+            module: "",
+            name: "leaf",
+            targs: []
+        }
+    ]);
     let leaf = CgInst {
         module: "",
         name: "leaf",
@@ -215,13 +220,11 @@ pub let test_callgraph_fifo_and_fuel (): Unit = {
     assert_eq(cg_reachable(p, [leaf], [], 10000), [leaf]);
     assert_eq(cg_reachable(p, [], reached, 10001), reached);
 
-    let cycle = cg_build_program(
-        parser.parse_program(
-            lexer.tokenize(
-                "let a (n: Int): Int = if n == 0 { 0 } else { b(n - 1) }\nlet b (n: Int): Int = a(n)\n"
-            )
+    let cycle = cg_build_program(parser.parse_program(
+        lexer.tokenize(
+            "let a (n: Int): Int = if n == 0 { 0 } else { b(n - 1) }\nlet b (n: Int): Int = a(n)\n"
         )
-    );
+    ));
     let a = CgInst {
         module: "",
         name: "a",

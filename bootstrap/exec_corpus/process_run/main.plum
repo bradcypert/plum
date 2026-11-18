@@ -34,14 +34,12 @@ let run_self
     (env: Array[String])
     (stdin: Option[String]): Result[Process.ProcessResult, String]
 =
-    Process.run(
-        Process.Options {
-            program: self,
-            args: args,
-            env: env,
-            stdin: stdin,
-        }
-    )
+    Process.run(Process.Options {
+        program: self,
+        args: args,
+        env: env,
+        stdin: stdin,
+    })
 
 let child (argv: Array[String]): Unit =
     if argv[0] == "--echo" { println(join_acc(Array.drop(argv, 1), 0, "")) }
@@ -87,37 +85,29 @@ let parent (): Unit =
     match Os.self_exe() {
         Err(e) => println("self_exe: ".concat(e)),
         Ok(self) => {
-            show(
-                "echo",
-                run_self(
-                    self,
-                    [
-                        "--echo",
-                        "hello world",
-                        "$HOME",
-                        "a;echo pwned",
-                        "$(whoami)",
-                        "x|y",
-                        "*",
-                        "\"quoted\"",
-                    ],
-                    [],
-                    None
-                )
-            );
+            show("echo", run_self(
+                self,
+                [
+                    "--echo",
+                    "hello world",
+                    "$HOME",
+                    "a;echo pwned",
+                    "$(whoami)",
+                    "x|y",
+                    "*",
+                    "\"quoted\"",
+                ],
+                [],
+                None
+            ));
             show("exit0", run_self(self, ["--exit", "0"], [], None));
             show("exit3", run_self(self, ["--exit", "3"], [], None));
-            show(
-                "missing",
-                Process.run(
-                    Process.Options {
-                        program: "plum_definitely_not_a_program_9f3a",
-                        args: [],
-                        env: [],
-                        stdin: None,
-                    }
-                )
-            );
+            show("missing", Process.run(Process.Options {
+                program: "plum_definitely_not_a_program_9f3a",
+                args: [],
+                env: [],
+                stdin: None,
+            }));
             show("stdin", run_self(self, ["--stdin"], [], Some("hello from stdin")));
             show("env", run_self(self, ["--env"], ["PLUM_PROC_TEST=from-parent"], None));
             show("path", run_self(self, ["--path"], ["PLUM_PROC_TEST=from-parent"], None))

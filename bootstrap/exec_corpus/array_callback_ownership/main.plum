@@ -8,24 +8,18 @@ let predicate (xs: Array[Int]): (Int) -> Bool = |v| v > xs[0]
 
 let rebound_map (initial: Array[Int]): Array[Int] = {
     let mut xs = initial;
-    Array.map(
-        xs,
-        {
-            xs = ints(20);
-            |v| v + xs[0]
-        }
-    )
+    Array.map(xs, {
+        xs = ints(20);
+        |v| v + xs[0]
+    })
 }
 
 let rebound_filter (initial: Array[Int]): Array[Int] = {
     let mut xs = initial;
-    Array.filter(
-        xs,
-        {
-            xs = ints(20);
-            |v| v < xs[0]
-        }
-    )
+    Array.filter(xs, {
+        xs = ints(20);
+        |v| v < xs[0]
+    })
 }
 
 let callbacks (xs: Array[Int]): Array[(Int) -> Int] =
@@ -50,69 +44,51 @@ let main (): Unit = {
     assert_eq(rebound_filter(ints(10)), [10, 11, 12]);
     let xs = ints(10);
     assert_eq(
-        Array.map(
-            xs,
-            {
-                let head = xs[0];
-                |v| v + head
-            }
-        ),
+        Array.map(xs, {
+            let head = xs[0];
+            |v| v + head
+        }),
         [20, 21, 22]
     );
     let xs = ints(10);
     assert_eq(
-        Array.filter(
-            xs,
-            {
-                let head = xs[0];
-                |v| v > head
-            }
-        ),
+        Array.filter(xs, {
+            let head = xs[0];
+            |v| v > head
+        }),
         [11, 12]
     );
     let xs: Array[Int] = [];
     assert_eq(
-        Array.map(
-            xs,
-            {
-                let n = xs.len();
-                |v| v + n
-            }
-        ),
+        Array.map(xs, {
+            let n = xs.len();
+            |v| v + n
+        }),
         []
     );
     let xs: Array[Int] = [];
     assert_eq(
-        Array.filter(
-            xs,
-            {
-                let n = xs.len();
-                |v| v > n
-            }
-        ),
+        Array.filter(xs, {
+            let n = xs.len();
+            |v| v > n
+        }),
         []
     );
 
     // A factory can publish the input without capturing it in the callback.
     let saved = ref(ints(0));
     let xs = ints(10);
-    let out = Array.map(
-        xs,
-        {
-            saved.set(xs);
-            |v| v + 1
-        }
-    );
+    let out = Array.map(xs, {
+        saved.set(xs);
+        |v| v + 1
+    });
     assert_eq(out, [11, 12, 13]);
     assert_eq(saved.get(), [10, 11, 12]);
     let xs = ints(20);
-    let out = Array.filter(
-        xs,
-        {
-            saved.set(xs);
-            |v| v > 20
-        }
-    );
+    let out = Array.filter(xs, {
+        saved.set(xs);
+        |v| v > 20
+    });
     assert_eq(out, [21, 22]);
     assert_eq(saved.get(), [20, 21, 22]);
 

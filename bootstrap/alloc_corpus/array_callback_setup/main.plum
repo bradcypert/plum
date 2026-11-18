@@ -1,13 +1,10 @@
 let mapped (xs: Array[Int]) (n: Int): Array[Int] =
     if n <= 0 { xs } else {
         mapped(
-            Array.map(
-                xs,
-                {
-                    let k = xs.len();
-                    |v| v + k
-                }
-            ),
+            Array.map(xs, {
+                let k = xs.len();
+                |v| v + k
+            }),
             n - 1
         )
     }
@@ -15,13 +12,10 @@ let mapped (xs: Array[Int]) (n: Int): Array[Int] =
 let filtered (xs: Array[Int]) (n: Int): Array[Int] =
     if n <= 0 { xs } else {
         filtered(
-            Array.filter(
-                xs,
-                {
-                    let k = xs.len();
-                    |v| v < k
-                }
-            ),
+            Array.filter(xs, {
+                let k = xs.len();
+                |v| v < k
+            }),
             n - 1
         )
     }

@@ -15,14 +15,12 @@ pub let c_snapshot_safe (program: String) (flags: Array[String]) (input: String)
     let windows = Os.platform(()) == "windows";
     let args = if windows { ["-S", "-emit-llvm", "-o", "-", input] }
     else { ["-Xclang", "-ast-dump=json", "-fsyntax-only", input] };
-    match Process.run(
-        Process.Options {
-            program: program,
-            args: Array.concat(flags, args),
-            env: [],
-            stdin: None
-        }
-    ) {
+    match Process.run(Process.Options {
+        program: program,
+        args: Array.concat(flags, args),
+        env: [],
+        stdin: None
+    }) {
         Err(_) => false,
         Ok(r) => r.exit_code == 0
             && (
@@ -61,22 +59,18 @@ pub let compile_signature
         Some(s) => s,
         None => {
             let args = Array.concat(flags, ["-c", input, "-o", out]);
-            let a = Process.run(
-                Process.Options {
-                    program: program,
-                    args: Array.concat(["-###"], args),
-                    env: [],
-                    stdin: None
-                }
-            );
-            let b = Process.run(
-                Process.Options {
-                    program: program,
-                    args: Array.concat(["--no-default-config", "-###"], args),
-                    env: [],
-                    stdin: None
-                }
-            );
+            let a = Process.run(Process.Options {
+                program: program,
+                args: Array.concat(["-###"], args),
+                env: [],
+                stdin: None
+            });
+            let b = Process.run(Process.Options {
+                program: program,
+                args: Array.concat(["--no-default-config", "-###"], args),
+                env: [],
+                stdin: None
+            });
             let result = match a {
                 Err(_) => "",
                 Ok(r) => match b {
@@ -140,14 +134,12 @@ pub let native_fingerprint (): String = {
         let digest = file_hash(tool);
         if tool == "" || digest == "" { "" }
         else {
-            match Process.run(
-                Process.Options {
-                    program: "ldd",
-                    args: [tool],
-                    env: [],
-                    stdin: None
-                }
-            ) {
+            match Process.run(Process.Options {
+                program: "ldd",
+                args: [tool],
+                env: [],
+                stdin: None
+            }) {
                 Err(_) => "",
                 Ok(r) => if r.exit_code != 0 { "" }
                 else { loader_fingerprint(r.stdout.split("\n"), 0, [frame(tool), digest]) },
@@ -162,14 +154,12 @@ let windows_fingerprint (): String = {
         let tool = tool_path("clang");
         if tool == "" { "" }
         else {
-            match Process.run(
-                Process.Options {
-                    program: tool,
-                    args: ["-dumpmachine"],
-                    env: [],
-                    stdin: None
-                }
-            ) {
+            match Process.run(Process.Options {
+                program: tool,
+                args: ["-dumpmachine"],
+                env: [],
+                stdin: None
+            }) {
                 Err(_) => "",
                 Ok(r) => if r.exit_code != 0 || r.stdout.trim() != "x86_64-w64-windows-gnu" { "" }
                 else {
@@ -223,11 +213,9 @@ pub let test_loader_fingerprint_rejects_unresolved (): Unit = {
 }
 
 pub let test_assembly_ast_classification (): Unit = {
-    assert(
-        safe_ast(
-            "{\"kind\": \"TranslationUnitDecl\", \"inner\": [{\"kind\": \"AsmLabelAttr\"}, {\"mangledName\": \"__xpg_symbol\"}]}"
-        )
-    );
+    assert(safe_ast(
+        "{\"kind\": \"TranslationUnitDecl\", \"inner\": [{\"kind\": \"AsmLabelAttr\"}, {\"mangledName\": \"__xpg_symbol\"}]}"
+    ));
     assert(
         !safe_ast("{\"kind\": \"TranslationUnitDecl\", \"inner\": [{\"kind\": \"GCCAsmStmt\"}]}")
     );
@@ -253,11 +241,9 @@ pub let test_c_ir_assembly_and_labels (): Unit = {
     );
     assert(unsafe { plum_cache_safe_c_ir("module asm \"encoded contents\"\n".as_cstr()) == 0 });
     assert(unsafe { plum_cache_safe_c_ir("declare void @\"\\01bad\\0Aname\"()\n".as_cstr()) == 0 });
-    assert(
-        unsafe {
-            plum_cache_safe_c_ir(
-                "define void @f() { call void asm sideeffect \"\\2eincbin file\", \"\"() ret void }\n".as_cstr()
-            ) == 0
-        }
-    );
+    assert(unsafe {
+        plum_cache_safe_c_ir(
+            "define void @f() { call void asm sideeffect \"\\2eincbin file\", \"\"() ret void }\n".as_cstr()
+        ) == 0
+    });
 }

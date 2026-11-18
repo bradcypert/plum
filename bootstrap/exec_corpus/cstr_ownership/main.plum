@@ -54,13 +54,10 @@ let source_is_shared (): Unit = unsafe {
     assert_eq(inspect(pointer), 32);
     assert_eq(text.len(), 39);
     assert_eq(
-        inspect_pair(
-            text.as_cstr(),
-            {
-                text = "y".repeat(128);
-                0
-            }
-        ),
+        inspect_pair(text.as_cstr(), {
+            text = "y".repeat(128);
+            0
+        }),
         39
     );
     assert_eq(text.len(), 128)

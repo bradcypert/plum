@@ -145,13 +145,11 @@ let read_entries
         let target = plum_tree_dir_link(TreeDirectory.raw(directory)).as_string();
         let mut found = builder.get();
         builder.set([]);
-        found = found.push(
-            EntryInfo {
-                name: name,
-                kind: kind,
-                target: target
-            }
-        );
+        found = found.push(EntryInfo {
+            name: name,
+            kind: kind,
+            target: target
+        });
         builder.set(found);
         read_entries(directory, relative, builder)
     }
@@ -231,7 +229,8 @@ pub let test_owned_tree_io (): Unit = {
         assert(Result.is_ok(hash_bytes(hash, Bytes.from_string("cop"))));
         assert(Result.is_ok(hash_bytes(hash, Bytes.from_string("ied"))));
         assert(
-            hash_finish(hash) == "fb30593ca32df57a8a0f19d551710dc880a98b208b6e180b07e6aff59102d148"
+            hash_finish(hash)
+                == "fb30593ca32df57a8a0f19d551710dc880a98b208b6e180b07e6aff59102d148"
         );
     };
     assert(Result.is_ok(Os.remove_tree(path)));
@@ -413,16 +412,12 @@ pub let remember_source
     let index = SOURCE_INDEX.get();
     SOURCE_INDEX.set(empty_source_index(()));
     SOURCE_INDEX.set(index.insert(path, locations.len()));
-    SOURCE_LOCATIONS.set(
-        locations.push(
-            SourceLocation {
-                root: root,
-                relative: relative,
-                reject_links: reject_links,
-                identity: identity
-            }
-        )
-    );
+    SOURCE_LOCATIONS.set(locations.push(SourceLocation {
+        root: root,
+        relative: relative,
+        reject_links: reject_links,
+        identity: identity
+    }));
 }
 
 pub let read_source (path: String): Result[String, String] =

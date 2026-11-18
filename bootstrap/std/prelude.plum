@@ -2159,14 +2159,12 @@ let json_hex4 (bytes: Bytes) (pos: Int) (left: Int) (acc: Int): Result[Int, Stri
         else { json_hex4(bytes, pos + 1, left - 1, acc * 16 + d) }
     }
 
-let json_codepoint (c: Int): String = str_of_bytes_raw(
-    bytes_from_array_raw(
-        if c < 128 { [c] }
-        else if c < 2048 { [192 + c / 64, 128 + c % 64] }
-        else if c < 65536 { [224 + c / 4096, 128 + (c / 64) % 64, 128 + c % 64] }
-        else { [240 + c / 262144, 128 + (c / 4096) % 64, 128 + (c / 64) % 64, 128 + c % 64] }
-    )
-)
+let json_codepoint (c: Int): String = str_of_bytes_raw(bytes_from_array_raw(
+    if c < 128 { [c] }
+    else if c < 2048 { [192 + c / 64, 128 + c % 64] }
+    else if c < 65536 { [224 + c / 4096, 128 + (c / 64) % 64, 128 + c % 64] }
+    else { [240 + c / 262144, 128 + (c / 4096) % 64, 128 + (c / 64) % 64, 128 + c % 64] }
+))
 
 let json_unicode (bytes: Bytes) (pos: Int): Result[ParseResult[String], String] =
     match json_hex4(bytes, pos, 4, 0) {
@@ -2181,12 +2179,10 @@ let json_unicode (bytes: Bytes) (pos: Int): Result[ParseResult[String], String] 
                         Err("invalid unicode surrogate pair")
                     }
                     else {
-                        Ok(
-                            ParseResult {
-                                value: json_codepoint(65536 + (c - 55296) * 1024 + low - 56320),
-                                next_pos: pos + 10
-                            }
-                        )
+                        Ok(ParseResult {
+                            value: json_codepoint(65536 + (c - 55296) * 1024 + low - 56320),
+                            next_pos: pos + 10
+                        })
                     },
                 }
             }

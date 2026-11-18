@@ -93,12 +93,10 @@ pub let test_pattern_coverage (): Unit = {
 }
 
 pub let test_pattern_shared_bindings (): Unit = {
-    let pattern = TPOr(
-        [
-            TPVariant("Choice", "A", [TPIdent("x", 0), TPIdent("y", 1)]),
-            TPVariant("Choice", "B", [TPIdent("y", 2), TPIdent("x", 3)]),
-        ]
-    );
+    let pattern = TPOr([
+        TPVariant("Choice", "A", [TPIdent("x", 0), TPIdent("y", 1)]),
+        TPVariant("Choice", "B", [TPIdent("y", 2), TPIdent("x", 3)]),
+    ]);
     assert_eq(pattern_names(pattern, ["outer"]), ["outer", "x", "y"]);
     assert_eq(
         pattern_names(

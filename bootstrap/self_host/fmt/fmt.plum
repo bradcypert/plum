@@ -416,15 +416,13 @@ let resolve_candidate
             if col % 4 != 0 || (e.continuation && old % 4 != 0 && old > want) {
                 resolve_candidate(chars, assigned, xs, i + 1)
             } else {
-                Some(
-                    Edit {
-                        line_start: e.line_start,
-                        anchor: -1,
-                        indent: want,
-                        owns_comments: e.owns_comments,
-                        continuation: false
-                    }
-                )
+                Some(Edit {
+                    line_start: e.line_start,
+                    anchor: -1,
+                    indent: want,
+                    owns_comments: e.owns_comments,
+                    continuation: false
+                })
             }
         }
     }

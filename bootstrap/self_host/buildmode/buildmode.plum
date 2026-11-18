@@ -18,40 +18,28 @@ pub let parse (argv: Array[String]): Result[Options, String] = parse_at(argv, 2,
 let parse_at (argv: Array[String]) (i: Int) (mode: Options): Result[Options, String] =
     if i >= argv.len() || argv[i] == "--" { Ok(mode) }
     else if argv[i] == "--release" {
-        parse_at(
-            argv,
-            i + 1,
-            Options {
-                release: true,
-                trace: mode.trace,
-                address: mode.address,
-                heap: mode.heap
-            }
-        )
+        parse_at(argv, i + 1, Options {
+            release: true,
+            trace: mode.trace,
+            address: mode.address,
+            heap: mode.heap
+        })
     }
     else if argv[i] == "--trace" {
-        parse_at(
-            argv,
-            i + 1,
-            Options {
-                release: mode.release,
-                trace: true,
-                address: mode.address,
-                heap: mode.heap
-            }
-        )
+        parse_at(argv, i + 1, Options {
+            release: mode.release,
+            trace: true,
+            address: mode.address,
+            heap: mode.heap
+        })
     }
     else if argv[i] == "--memory-stats" {
-        parse_at(
-            argv,
-            i + 1,
-            Options {
-                release: mode.release,
-                trace: mode.trace,
-                address: mode.address,
-                heap: true
-            }
-        )
+        parse_at(argv, i + 1, Options {
+            release: mode.release,
+            trace: mode.trace,
+            address: mode.address,
+            heap: true
+        })
     }
     else if argv[i] == "--sanitize" {
         if i + 1 >= argv.len() { Err("--sanitize requires a value: address") }
@@ -67,16 +55,12 @@ let parse_sanitizer
     (name: String): Result[Options, String]
 =
     if name == "address" {
-        parse_at(
-            argv,
-            next,
-            Options {
-                release: mode.release,
-                trace: mode.trace,
-                address: true,
-                heap: mode.heap
-            }
-        )
+        parse_at(argv, next, Options {
+            release: mode.release,
+            trace: mode.trace,
+            address: true,
+            heap: mode.heap
+        })
     }
     else { Err("unsupported sanitizer '${name}'; expected address") }
 

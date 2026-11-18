@@ -9,13 +9,10 @@ let escape (): RawCStr = unsafe {
     match NativeBuffer.create(32) {
         Err(e) => panic_raw(e),
         Ok(buffer) => {
-            NativeBuffer.with_mut(
-                buffer,
-                |p, cap| {
-                    pointer.set(p);
-                    Ok(0)
-                }
-            );
+            NativeBuffer.with_mut(buffer, |p, cap| {
+                pointer.set(p);
+                Ok(0)
+            });
             ()
         },
     };

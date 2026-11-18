@@ -164,13 +164,11 @@ let cache_package_dirs
         else {
             let info = frame.entries[frame.index];
             let relative = Path.join(frame.relative, info.name);
-            let pending = rest.push(
-                CacheFrame {
-                    relative: frame.relative,
-                    entries: frame.entries,
-                    index: frame.index + 1
-                }
-            );
+            let pending = rest.push(CacheFrame {
+                relative: frame.relative,
+                entries: frame.entries,
+                index: frame.index + 1
+            });
             if info.kind != 2 || info.name.starts_with(".partial-")
                 || (
                     info.name.ends_with(".partial")
@@ -232,13 +230,11 @@ let cache_usage
         else {
             let info = frame.entries[frame.index];
             let relative = Path.join(frame.relative, info.name);
-            let pending = rest.push(
-                CacheFrame {
-                    relative: frame.relative,
-                    entries: frame.entries,
-                    index: frame.index + 1
-                }
-            );
+            let pending = rest.push(CacheFrame {
+                relative: frame.relative,
+                entries: frame.entries,
+                index: frame.index + 1
+            });
             if info.kind == 2 {
                 if stack.len() >= 128 {
                     panic_raw("cache directory depth exceeds 128 at ${path}/${relative}")
@@ -389,12 +385,10 @@ let package_inventory_walk
                                 "${current.relative}/${entry.name}"
                             };
                             if entry.kind == 2 {
-                                pending = pending.push(
-                                    PackageDirectory {
-                                        relative: relative,
-                                        depth: current.depth + 1
-                                    }
-                                );
+                                pending = pending.push(PackageDirectory {
+                                    relative: relative,
+                                    depth: current.depth + 1
+                                });
                             } else if entry.kind == 3 {
                                 match treefs.validate_link(root, relative) {
                                     Ok(_) => (),
@@ -407,13 +401,11 @@ let package_inventory_walk
                                 failure = "unsupported package entry ${relative}";
                                 ()
                             };
-                            all = all.push(
-                                PackageEntry {
-                                    relative: relative,
-                                    kind: entry.kind,
-                                    target: entry.target
-                                }
-                            );
+                            all = all.push(PackageEntry {
+                                relative: relative,
+                                kind: entry.kind,
+                                target: entry.target
+                            });
                         } else { () };
                     };
                     if failure != "" { Err(failure) }
@@ -679,27 +671,23 @@ let require_git (d: Dep): Unit =
     }
 
 pub let git_available (unit: Unit): Bool =
-    match Process.run(
-        Process.Options {
-            program: "git",
-            args: ["--version"],
-            env: [],
-            stdin: None
-        }
-    ) {
+    match Process.run(Process.Options {
+        program: "git",
+        args: ["--version"],
+        env: [],
+        stdin: None
+    }) {
         Err(_) => false,
         Ok(r) => r.exit_code == 0,
     }
 
 let git_staging (d: Dep) (scratch: String) (args: Array[String]) (what: String): Unit = {
-    let failure = match Process.run(
-        Process.Options {
-            program: "git",
-            args: args,
-            env: [],
-            stdin: None
-        }
-    ) {
+    let failure = match Process.run(Process.Options {
+        program: "git",
+        args: args,
+        env: [],
+        stdin: None
+    }) {
         Err(e) => "dependency `${d.name}`: ${what}\n  git could not be started: ${e}",
         Ok(r) => if r.exit_code != 0 {
             "dependency `${d.name}`: ${what}\n  git exited ${r.exit_code.to_string()}: ${String.trim(r.stderr)}"
@@ -776,14 +764,12 @@ pub let test_package_identity_layout (): Unit = {
         assert_eq(parts.len(), 3);
         assert_eq(parts[0], "v2");
         assert_eq(parts[1].len(), 64);
-        assert(
-            Array.fold(
-                chars_of(parts[1]),
-                true,
-                |ok, c|
-                    ok && Array.contains(chars_of("0123456789abcdef"), c)
-            )
-        );
+        assert(Array.fold(
+            chars_of(parts[1]),
+            true,
+            |ok, c|
+                ok && Array.contains(chars_of("0123456789abcdef"), c)
+        ));
         assert(parts[2] != "" && parts[2] != "." && parts[2] != "..");
     }
 }

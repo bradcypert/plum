@@ -132,13 +132,11 @@ pub let valid_id (id: JsonValue): Bool =
 
 pub let parse_request (body: String): Result[Request, ProtocolError] =
     match json_parse(body) {
-        Err(_) => Err(
-            ProtocolError {
-                id: JsonNull,
-                code: 0 - 32700,
-                message: "Parse error"
-            }
-        ),
+        Err(_) => Err(ProtocolError {
+            id: JsonNull,
+            code: 0 - 32700,
+            message: "Parse error"
+        }),
         Ok(v) => {
             let id = json_field(v, "id");
             let id_ok = match id {
@@ -157,27 +155,23 @@ pub let parse_request (body: String): Result[Request, ProtocolError] =
                 _ => false
             };
             if json_field_str(v, "jsonrpc") != "2.0" || !method_ok || !id_ok || !params_ok {
-                Err(
-                    ProtocolError {
-                        id: match id {
-                            Some(i) => if id_ok { i } else { JsonNull },
-                            None => JsonNull
-                        },
-                        code: 0 - 32600,
-                        message: "Invalid Request",
-                    }
-                )
+                Err(ProtocolError {
+                    id: match id {
+                        Some(i) => if id_ok { i } else { JsonNull },
+                        None => JsonNull
+                    },
+                    code: 0 - 32600,
+                    message: "Invalid Request",
+                })
             } else {
-                Ok(
-                    Request {
-                        method: json_field_str(v, "method"),
-                        id: id,
-                        params: match params {
-                            Some(p) => p,
-                            None => JsonNull
-                        },
-                    }
-                )
+                Ok(Request {
+                    method: json_field_str(v, "method"),
+                    id: id,
+                    params: match params {
+                        Some(p) => p,
+                        None => JsonNull
+                    },
+                })
             }
         },
     }
@@ -185,109 +179,89 @@ pub let parse_request (body: String): Result[Request, ProtocolError] =
 // --- Responses ---
 
 pub let response (id: JsonValue) (result: JsonValue): String =
-    encode_json(
-        JsonObject(
-            [
-                JsonEntry { key: "jsonrpc", value: JsonString("2.0") },
-                JsonEntry { key: "id", value: id },
-                JsonEntry { key: "result", value: result },
-            ]
-        )
-    )
+    encode_json(JsonObject([
+        JsonEntry { key: "jsonrpc", value: JsonString("2.0") },
+        JsonEntry { key: "id", value: id },
+        JsonEntry { key: "result", value: result },
+    ]))
 
 pub let error_response (id: JsonValue) (code: Int) (message: String): String =
-    encode_json(
-        JsonObject(
-            [
-                JsonEntry { key: "jsonrpc", value: JsonString("2.0") },
-                JsonEntry { key: "id", value: id },
-                JsonEntry {
-                    key: "error",
-                    value: JsonObject(
-                        [
-                            JsonEntry { key: "code", value: JsonNumber(Int.to_float(code)) },
-                            JsonEntry { key: "message", value: JsonString(message) },
-                        ]
-                    )
-                },
-            ]
-        )
-    )
+    encode_json(JsonObject([
+        JsonEntry { key: "jsonrpc", value: JsonString("2.0") },
+        JsonEntry { key: "id", value: id },
+        JsonEntry {
+            key: "error",
+            value: JsonObject([
+                JsonEntry { key: "code", value: JsonNumber(Int.to_float(code)) },
+                JsonEntry { key: "message", value: JsonString(message) },
+            ])
+        },
+    ]))
 
 pub let notification (method: String) (params: JsonValue): String =
-    encode_json(
-        JsonObject(
-            [
-                JsonEntry { key: "jsonrpc", value: JsonString("2.0") },
-                JsonEntry { key: "method", value: JsonString(method) },
-                JsonEntry { key: "params", value: params },
-            ]
-        )
-    )
+    encode_json(JsonObject([
+        JsonEntry { key: "jsonrpc", value: JsonString("2.0") },
+        JsonEntry { key: "method", value: JsonString(method) },
+        JsonEntry { key: "params", value: params },
+    ]))
 
 // `textDocumentSync: 1` is FULL sync. Nothing here uses the document
 // text the client sends, but announcing incremental sync would be a
 // promise this server does not keep.
 pub let capabilities (): JsonValue =
-    JsonObject(
-        [
-            JsonEntry {
-                key: "capabilities",
-                value: JsonObject(
-                    [
-                        // 1 = FULL sync: the client sends the whole document on
-                        // every change. That is what makes live diagnostics
-                        // possible without this server keeping its own buffer --
-                        // see `change_text`.
-                        JsonEntry { key: "textDocumentSync", value: JsonNumber(1.0) },
-                        JsonEntry { key: "hoverProvider", value: JsonBool(true) },
-                        JsonEntry { key: "definitionProvider", value: JsonBool(true) },
-                        JsonEntry { key: "referencesProvider", value: JsonBool(true) },
-                        // `plum fmt`, over LSP. The formatter is a pure
-                        // `String -> String`, so the whole of this capability is
-                        // one whole-file `TextEdit` -- see `format_result`.
-                        JsonEntry { key: "documentFormattingProvider", value: JsonBool(true) },
-                        // Expand-selection. The editor asks for a position and gets
-                        // back the chain of constructs around it, innermost first,
-                        // so pressing the key repeatedly grows the selection by one
-                        // real construct at a time rather than by a word or a line.
-                        //
-                        // It is the one request that could not be answered at all
-                        // until expression spans existed -- the chain IS the nesting
-                        // of expressions, and nothing else in the server needs the
-                        // whole of it.
-                        JsonEntry { key: "selectionRangeProvider", value: JsonBool(true) },
-                        // No `triggerCharacters`: this server offers NAMES, so
-                        // completion is invoked the ordinary way -- as an
-                        // identifier is typed, or explicitly. A trigger character
-                        // would be a promise about `.`, which needs the type of
-                        // whatever precedes it and is not implemented.
-                        //
-                        // `resolveProvider: false` says every item is complete as
-                        // sent; there is no second round trip to fill in
-                        // documentation, because the detail IS the signature.
+    JsonObject([
+        JsonEntry {
+            key: "capabilities",
+            value: JsonObject([
+                // 1 = FULL sync: the client sends the whole document on
+                // every change. That is what makes live diagnostics
+                // possible without this server keeping its own buffer --
+                // see `change_text`.
+                JsonEntry { key: "textDocumentSync", value: JsonNumber(1.0) },
+                JsonEntry { key: "hoverProvider", value: JsonBool(true) },
+                JsonEntry { key: "definitionProvider", value: JsonBool(true) },
+                JsonEntry { key: "referencesProvider", value: JsonBool(true) },
+                // `plum fmt`, over LSP. The formatter is a pure
+                // `String -> String`, so the whole of this capability is
+                // one whole-file `TextEdit` -- see `format_result`.
+                JsonEntry { key: "documentFormattingProvider", value: JsonBool(true) },
+                // Expand-selection. The editor asks for a position and gets
+                // back the chain of constructs around it, innermost first,
+                // so pressing the key repeatedly grows the selection by one
+                // real construct at a time rather than by a word or a line.
+                //
+                // It is the one request that could not be answered at all
+                // until expression spans existed -- the chain IS the nesting
+                // of expressions, and nothing else in the server needs the
+                // whole of it.
+                JsonEntry { key: "selectionRangeProvider", value: JsonBool(true) },
+                // No `triggerCharacters`: this server offers NAMES, so
+                // completion is invoked the ordinary way -- as an
+                // identifier is typed, or explicitly. A trigger character
+                // would be a promise about `.`, which needs the type of
+                // whatever precedes it and is not implemented.
+                //
+                // `resolveProvider: false` says every item is complete as
+                // sent; there is no second round trip to fill in
+                // documentation, because the detail IS the signature.
+                JsonEntry {
+                    key: "completionProvider",
+                    value: JsonObject([
+                        JsonEntry { key: "resolveProvider", value: JsonBool(false) },
+                        // `.` is a trigger character now that there is
+                        // something to say about it: the members of whatever
+                        // precedes the dot. Without it an editor only asks
+                        // while an identifier is being typed, and `p.` is not
+                        // an identifier.
                         JsonEntry {
-                            key: "completionProvider",
-                            value: JsonObject(
-                                [
-                                    JsonEntry { key: "resolveProvider", value: JsonBool(false) },
-                                    // `.` is a trigger character now that there is
-                                    // something to say about it: the members of whatever
-                                    // precedes the dot. Without it an editor only asks
-                                    // while an identifier is being typed, and `p.` is not
-                                    // an identifier.
-                                    JsonEntry {
-                                        key: "triggerCharacters",
-                                        value: JsonArray([JsonString(".")])
-                                    },
-                                ]
-                            )
+                            key: "triggerCharacters",
+                            value: JsonArray([JsonString(".")])
                         },
-                    ]
-                )
-            },
-        ]
-    )
+                    ])
+                },
+            ])
+        },
+    ])
 
 // --- Diagnostics ---
 
@@ -342,46 +316,40 @@ let find_arrow (lines: Array[String]) (message: String) (i: Int): Option[Diagnos
     if i >= lines.len() {
         // A message with no `-->` still deserves to be reported; it just
         // has nowhere better to point than the top of the file.
-        Some(
-            Diagnostic {
-                path: "",
-                line: 1,
-                col: 1,
-                end_line: 1,
-                end_col: 1,
-                message: message
-            }
-        )
+        Some(Diagnostic {
+            path: "",
+            line: 1,
+            col: 1,
+            end_line: 1,
+            end_col: 1,
+            message: message
+        })
     } else {
         let t = String.trim_start(lines[i]);
         if t.starts_with("--> ") {
             let rest = String.slice(t, 4, t.len());
             let parts = rest.split(":");
             if parts.len() >= 3 {
-                Some(
-                    Diagnostic {
-                        // Everything before the final two colons. A path may
-                        // contain colons of its own, so this rejoins rather
-                        // than taking `parts[0]`.
-                        path: Array.join(Array.slice(parts, 0, parts.len() - 2), ":"),
-                        line: Result.unwrap_or(String.parse_int(parts[parts.len() - 2]), 1),
-                        col: Result.unwrap_or(String.parse_int(parts[parts.len() - 1]), 1),
-                        end_line: Result.unwrap_or(String.parse_int(parts[parts.len() - 2]), 1),
-                        end_col: Result.unwrap_or(String.parse_int(parts[parts.len() - 1]), 1),
-                        message: message,
-                    }
-                )
+                Some(Diagnostic {
+                    // Everything before the final two colons. A path may
+                    // contain colons of its own, so this rejoins rather
+                    // than taking `parts[0]`.
+                    path: Array.join(Array.slice(parts, 0, parts.len() - 2), ":"),
+                    line: Result.unwrap_or(String.parse_int(parts[parts.len() - 2]), 1),
+                    col: Result.unwrap_or(String.parse_int(parts[parts.len() - 1]), 1),
+                    end_line: Result.unwrap_or(String.parse_int(parts[parts.len() - 2]), 1),
+                    end_col: Result.unwrap_or(String.parse_int(parts[parts.len() - 1]), 1),
+                    message: message,
+                })
             } else {
-                Some(
-                    Diagnostic {
-                        path: "",
-                        line: 1,
-                        col: 1,
-                        end_line: 1,
-                        end_col: 1,
-                        message: message
-                    }
-                )
+                Some(Diagnostic {
+                    path: "",
+                    line: 1,
+                    col: 1,
+                    end_line: 1,
+                    end_col: 1,
+                    message: message
+                })
             }
         } else { find_arrow(lines, message, i + 1) }
     }
@@ -406,20 +374,16 @@ pub struct Rng {
 }
 
 pub let pos_json (line: Int) (col: Int): JsonValue =
-    JsonObject(
-        [
-            JsonEntry { key: "line", value: JsonNumber((line - 1).to_float()) },
-            JsonEntry { key: "character", value: JsonNumber((col - 1).to_float()) },
-        ]
-    )
+    JsonObject([
+        JsonEntry { key: "line", value: JsonNumber((line - 1).to_float()) },
+        JsonEntry { key: "character", value: JsonNumber((col - 1).to_float()) },
+    ])
 
 pub let range_json (r: Rng): JsonValue =
-    JsonObject(
-        [
-            JsonEntry { key: "start", value: pos_json(r.sl, r.sc) },
-            JsonEntry { key: "end", value: pos_json(r.el, r.ec) },
-        ]
-    )
+    JsonObject([
+        JsonEntry { key: "start", value: pos_json(r.sl, r.sc) },
+        JsonEntry { key: "end", value: pos_json(r.el, r.ec) },
+    ])
 
 // A `SelectionRange` is a range plus its PARENT, nested all the way
 // out, so the whole chain is one object. `chain` is innermost first,
@@ -430,12 +394,10 @@ pub let selection_range_json (chain: Array[Rng]) (i: Int): JsonValue =
         let parent = selection_range_json(chain, i + 1);
         match parent {
             JsonNull => JsonObject([JsonEntry { key: "range", value: range_json(chain[i]) }]),
-            p => JsonObject(
-                [
-                    JsonEntry { key: "range", value: range_json(chain[i]) },
-                    JsonEntry { key: "parent", value: p },
-                ]
-            ),
+            p => JsonObject([
+                JsonEntry { key: "range", value: range_json(chain[i]) },
+                JsonEntry { key: "parent", value: p },
+            ]),
         }
     }
 
@@ -446,35 +408,26 @@ pub let selection_range_json (chain: Array[Rng]) (i: Int): JsonValue =
 // diagnostic that underlines nothing is still better than one that
 // underlines the wrong thing.
 pub let diagnostic_json (d: Diagnostic): JsonValue =
-    JsonObject(
-        [
-            JsonEntry {
-                key: "range",
-                value: range_json(
-                    Rng {
-                        sl: d.line,
-                        sc: d.col,
-                        el: d.end_line,
-                        ec: d.end_col
-                    }
-                )
-            },
-            JsonEntry { key: "severity", value: JsonNumber(1.0) },
-            JsonEntry { key: "source", value: JsonString("plum") },
-            JsonEntry { key: "message", value: JsonString(d.message) },
-        ]
-    )
+    JsonObject([
+        JsonEntry {
+            key: "range",
+            value: range_json(Rng {
+                sl: d.line,
+                sc: d.col,
+                el: d.end_line,
+                ec: d.end_col
+            })
+        },
+        JsonEntry { key: "severity", value: JsonNumber(1.0) },
+        JsonEntry { key: "source", value: JsonString("plum") },
+        JsonEntry { key: "message", value: JsonString(d.message) },
+    ])
 
 pub let publish_message (uri: String) (diagnostics: Array[JsonValue]): String =
-    notification(
-        "textDocument/publishDiagnostics",
-        JsonObject(
-            [
-                JsonEntry { key: "uri", value: JsonString(uri) },
-                JsonEntry { key: "diagnostics", value: JsonArray(diagnostics) },
-            ]
-        )
-    )
+    notification("textDocument/publishDiagnostics", JsonObject([
+        JsonEntry { key: "uri", value: JsonString(uri) },
+        JsonEntry { key: "diagnostics", value: JsonArray(diagnostics) },
+    ]))
 
 // --- Paths ---
 
@@ -589,17 +542,11 @@ let parse_completions_acc
 =
     if i >= items.len() { acc }
     else {
-        parse_completions_acc(
-            items,
-            i + 1,
-            acc.push(
-                Completion {
-                    name: json_field_str(items[i], "name"),
-                    kind: json_field_str(items[i], "kind"),
-                    detail: json_field_str(items[i], "detail"),
-                }
-            )
-        )
+        parse_completions_acc(items, i + 1, acc.push(Completion {
+            name: json_field_str(items[i], "name"),
+            kind: json_field_str(items[i], "kind"),
+            detail: json_field_str(items[i], "detail"),
+        }))
     }
 
 // `CompletionItemKind` from the LSP specification. The numbers are the
@@ -620,29 +567,19 @@ let completion_kind (kind: String): Float =
 // asking again on every keystroke. That is what makes returning all of
 // them affordable.
 pub let completion_result (items: Array[Completion]): JsonValue =
-    JsonObject(
-        [
-            JsonEntry { key: "isIncomplete", value: JsonBool(false) },
-            JsonEntry { key: "items", value: JsonArray(completion_items(items, 0, [])) },
-        ]
-    )
+    JsonObject([
+        JsonEntry { key: "isIncomplete", value: JsonBool(false) },
+        JsonEntry { key: "items", value: JsonArray(completion_items(items, 0, [])) },
+    ])
 
 let completion_items (items: Array[Completion]) (i: Int) (acc: Array[JsonValue]): Array[JsonValue] =
     if i >= items.len() { acc }
     else {
-        completion_items(
-            items,
-            i + 1,
-            acc.push(
-                JsonObject(
-                    [
-                        JsonEntry { key: "label", value: JsonString(items[i].name) },
-                        JsonEntry { key: "kind", value: JsonNumber(completion_kind(items[i].kind)) },
-                        JsonEntry { key: "detail", value: JsonString(items[i].detail) },
-                    ]
-                )
-            )
-        )
+        completion_items(items, i + 1, acc.push(JsonObject([
+            JsonEntry { key: "label", value: JsonString(items[i].name) },
+            JsonEntry { key: "kind", value: JsonNumber(completion_kind(items[i].kind)) },
+            JsonEntry { key: "detail", value: JsonString(items[i].detail) },
+        ])))
     }
 
 // `doc` is the `///` block written above the declaration, or "" for one
@@ -672,21 +609,15 @@ pub let parse_defs (text: String): Array[Def] =
 let parse_defs_acc (items: Array[JsonValue]) (i: Int) (acc: Array[Def]): Array[Def] =
     if i >= items.len() { acc }
     else {
-        parse_defs_acc(
-            items,
-            i + 1,
-            acc.push(
-                Def {
-                    name: json_field_str(items[i], "name"),
-                    path: json_field_str(items[i], "path"),
-                    line: json_field_int(items[i], "line"),
-                    col: json_field_int(items[i], "col"),
-                    kind: json_field_str(items[i], "kind"),
-                    detail: json_field_str(items[i], "detail"),
-                    doc: json_field_str(items[i], "doc"),
-                }
-            )
-        )
+        parse_defs_acc(items, i + 1, acc.push(Def {
+            name: json_field_str(items[i], "name"),
+            path: json_field_str(items[i], "path"),
+            line: json_field_int(items[i], "line"),
+            col: json_field_int(items[i], "col"),
+            kind: json_field_str(items[i], "kind"),
+            detail: json_field_str(items[i], "detail"),
+            doc: json_field_str(items[i], "doc"),
+        }))
     }
 
 pub let json_field_int (v: JsonValue) (key: String): Int =
@@ -718,42 +649,34 @@ pub let location_at (path: String) (line: Int) (col: Int) (len: Int): JsonValue 
     location_at_in(Path.separator(), path, line, col, len)
 
 let location_at_in (sep: String) (path: String) (line: Int) (col: Int) (len: Int): JsonValue =
-    JsonObject(
-        [
-            JsonEntry { key: "uri", value: JsonString(path_to_uri_in(sep, path)) },
-            JsonEntry {
-                key: "range",
-                value: range_json(
-                    Rng {
-                        sl: line,
-                        sc: col,
-                        el: line,
-                        ec: col + len
-                    }
-                )
-            },
-        ]
-    )
+    JsonObject([
+        JsonEntry { key: "uri", value: JsonString(path_to_uri_in(sep, path)) },
+        JsonEntry {
+            key: "range",
+            value: range_json(Rng {
+                sl: line,
+                sc: col,
+                el: line,
+                ec: col + len
+            })
+        },
+    ])
 
 // The optional `range` on a hover says WHAT is being described, and
 // editors highlight it while the tooltip is up. Without it the user is
 // told a type and left to guess which of the three names under the
 // pointer it belongs to.
 pub let hover_text (text: String) (r: Rng): JsonValue =
-    JsonObject(
-        [
-            JsonEntry {
-                key: "contents",
-                value: JsonObject(
-                    [
-                        JsonEntry { key: "kind", value: JsonString("plaintext") },
-                        JsonEntry { key: "value", value: JsonString(text) },
-                    ]
-                )
-            },
-            JsonEntry { key: "range", value: range_json(r) },
-        ]
-    )
+    JsonObject([
+        JsonEntry {
+            key: "contents",
+            value: JsonObject([
+                JsonEntry { key: "kind", value: JsonString("plaintext") },
+                JsonEntry { key: "value", value: JsonString(text) },
+            ])
+        },
+        JsonEntry { key: "range", value: range_json(r) },
+    ])
 
 // MARKDOWN when there is documentation to show, plain text when there
 // is not.
@@ -766,38 +689,30 @@ pub let hover_text (text: String) (r: Rng): JsonValue =
 // client that renders fences badly.
 pub let hover_result (d: Def) (r: Rng): JsonValue =
     if String.is_empty(d.doc) {
-        JsonObject(
-            [
-                JsonEntry {
-                    key: "contents",
-                    value: JsonObject(
-                        [
-                            JsonEntry { key: "kind", value: JsonString("plaintext") },
-                            JsonEntry { key: "value", value: JsonString(d.detail) },
-                        ]
-                    )
-                },
-                JsonEntry { key: "range", value: range_json(r) },
-            ]
-        )
+        JsonObject([
+            JsonEntry {
+                key: "contents",
+                value: JsonObject([
+                    JsonEntry { key: "kind", value: JsonString("plaintext") },
+                    JsonEntry { key: "value", value: JsonString(d.detail) },
+                ])
+            },
+            JsonEntry { key: "range", value: range_json(r) },
+        ])
     } else {
-        JsonObject(
-            [
-                JsonEntry {
-                    key: "contents",
-                    value: JsonObject(
-                        [
-                            JsonEntry { key: "kind", value: JsonString("markdown") },
-                            JsonEntry {
-                                key: "value",
-                                value: JsonString("```plum\n${d.detail}\n```\n\n${d.doc}")
-                            },
-                        ]
-                    )
-                },
-                JsonEntry { key: "range", value: range_json(r) },
-            ]
-        )
+        JsonObject([
+            JsonEntry {
+                key: "contents",
+                value: JsonObject([
+                    JsonEntry { key: "kind", value: JsonString("markdown") },
+                    JsonEntry {
+                        key: "value",
+                        value: JsonString("```plum\n${d.detail}\n```\n\n${d.doc}")
+                    },
+                ])
+            },
+            JsonEntry { key: "range", value: range_json(r) },
+        ])
     }
 
 pub let location_result (d: Def): JsonValue = location_at(d.path, d.line, d.col, d.name.len())
@@ -852,12 +767,10 @@ let positions_acc
     }
 
 pub let test_lsp_position_numbers (): Unit = {
-    let at = |line, col| JsonObject(
-        [
-            JsonEntry { key: "line", value: JsonNumber(line) },
-            JsonEntry { key: "character", value: JsonNumber(col) },
-        ]
-    );
+    let at = |line, col| JsonObject([
+        JsonEntry { key: "line", value: JsonNumber(line) },
+        JsonEntry { key: "character", value: JsonNumber(col) },
+    ]);
     assert_eq(parse_position(at(0.0, 0.0)), Some(Position { line: 1, col: 1 }));
     assert_eq(
         parse_position(at(2147483647.0, 2147483647.0)),
@@ -917,27 +830,21 @@ pub let path_to_uri (path: String): String = path_to_uri_in(Path.separator(), pa
 // final line. LSP columns count UTF-16 units, and CRLF is one break.
 pub let format_result (formatted: String) (original: String): JsonValue = {
     let end = document_end(original.as_bytes());
-    JsonArray(
-        [
-            JsonObject(
-                [
+    JsonArray([
+        JsonObject([
+            JsonEntry {
+                key: "range",
+                value: JsonObject([
+                    JsonEntry { key: "start", value: position_json(0, 0) },
                     JsonEntry {
-                        key: "range",
-                        value: JsonObject(
-                            [
-                                JsonEntry { key: "start", value: position_json(0, 0) },
-                                JsonEntry {
-                                    key: "end",
-                                    value: position_json(end.line, end.character)
-                                },
-                            ]
-                        )
+                        key: "end",
+                        value: position_json(end.line, end.character)
                     },
-                    JsonEntry { key: "newText", value: JsonString(formatted) },
-                ]
-            ),
-        ]
-    )
+                ])
+            },
+            JsonEntry { key: "newText", value: JsonString(formatted) },
+        ]),
+    ])
 }
 
 struct DocumentEnd { line: Int, character: Int }
@@ -969,12 +876,10 @@ let document_end (bytes: Bytes): DocumentEnd = {
 }
 
 let position_json (line: Int) (col: Int): JsonValue =
-    JsonObject(
-        [
-            JsonEntry { key: "line", value: JsonNumber(line.to_float()) },
-            JsonEntry { key: "character", value: JsonNumber(col.to_float()) },
-        ]
-    )
+    JsonObject([
+        JsonEntry { key: "line", value: JsonNumber(line.to_float()) },
+        JsonEntry { key: "character", value: JsonNumber(col.to_float()) },
+    ])
 
 pub let change_text (params: JsonValue): Option[String] =
     match json_field(params, "contentChanges") {
