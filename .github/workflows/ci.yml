@@ -83,6 +83,8 @@ jobs:
         run: python3 ./bootstrap/integer-truncating-check.py ./sh.real
       - name: width-aware bit operations and shift boundaries
         run: python3 ./bootstrap/integer-bits-check.py ./sh.real
+      - name: scalar integer C ABI, target attributes and freestanding round trips
+        run: python3 ./bootstrap/integer-ffi-check.py ./sh.real --core
 
   bootstrap_proofs:
     name: Linux compiler self-hosting and memory checks
@@ -449,6 +451,8 @@ jobs:
 
       - name: real programs work on macOS
         run: ./bootstrap/platform-smoke ./sh.real
+      - name: scalar integer C ABI round trips in debug and release
+        run: python3 ./bootstrap/integer-ffi-check.py ./sh.real --native-only
       - name: listeners reserve their port and release failed sockets
         run: python3 bootstrap/listener-test.py
       - name: build cache preserves program behavior
@@ -603,6 +607,8 @@ jobs:
 
       - name: the compiler it built works
         run: ./bootstrap/platform-smoke ./sh.real
+      - name: scalar integer C ABI round trips in debug and release
+        run: python3 ./bootstrap/integer-ffi-check.py ./sh.real --native-only
 
       - name: the language server answers a real session
         run: ./bootstrap/lsp-smoke ./sh.real
@@ -813,6 +819,8 @@ jobs:
         env:
           PLUM_CI_TIMINGS: "1"
         run: ./bootstrap/platform-smoke ./sh.real --shard ${{ matrix.shard }}/2
+      - name: scalar integer C ABI round trips in debug and release
+        run: python3 ./bootstrap/integer-ffi-check.py ./sh.real --native-only
 
   windows-cache:
     name: Windows build cache validation

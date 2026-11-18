@@ -55,5 +55,6 @@ completion. Existing checked conversion and arithmetic checks protect their
 behavior. Source-built compiler, property, documentation, formatting and
 bootstrap checks complete validation.
 
-Width-aware bit operations remain a separate review under #525; existing
-Int shifts retain their current behavior. Scalar C FFI remains in #526.
+Width-aware bit operations have a [separate contract](integer-bit-operations.md);
+existing Int shifts retain their behavior. Scalar C FFI has its own
+[ABI contract](integer-scalar-ffi.md).

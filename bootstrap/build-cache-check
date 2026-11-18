@@ -601,6 +601,10 @@ finally:
     if not WINDOWS_HOST:
         driver = work / "blocking-driver.py"
         driver.write_text('''import os, pathlib, subprocess, sys, time
+# Target discovery precedes IR publication. The barrier must stop the real
+# compilation after shared inputs exist, not the ABI query before they do.
+if "-dumpmachine" in sys.argv:
+    raise SystemExit(subprocess.call(["clang", *sys.argv[1:]]))
 ready = pathlib.Path(os.environ["CACHE_TEST_READY"])
 release = pathlib.Path(os.environ["CACHE_TEST_RELEASE"])
 if not release.exists():

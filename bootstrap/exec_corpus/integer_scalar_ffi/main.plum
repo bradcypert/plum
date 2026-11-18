@@ -1,0 +1,216 @@
+// Scalar C widths are independent of Plum storage. The native fixture also
+// widens inputs in C and returns independent boundaries to test each direction.
+extern "C" {
+    fn ffi_echo_i8(x: I8) -> I8;
+    fn ffi_widen_i8(x: I8) -> Int;
+    fn ffi_min_i8() -> I8;
+    fn ffi_max_i8() -> I8;
+    fn ffi_echo_i16(x: I16) -> I16;
+    fn ffi_widen_i16(x: I16) -> Int;
+    fn ffi_min_i16() -> I16;
+    fn ffi_max_i16() -> I16;
+    fn ffi_echo_i32(x: I32) -> I32;
+    fn ffi_widen_i32(x: I32) -> Int;
+    fn ffi_min_i32() -> I32;
+    fn ffi_max_i32() -> I32;
+    fn ffi_echo_int(x: Int) -> Int;
+    fn ffi_widen_int(x: Int) -> Int;
+    fn ffi_min_int() -> Int;
+    fn ffi_max_int() -> Int;
+    fn ffi_echo_i64(x: I64) -> I64;
+    fn ffi_widen_i64(x: I64) -> Int;
+    fn ffi_min_i64() -> I64;
+    fn ffi_max_i64() -> I64;
+    fn ffi_echo_u8(x: U8) -> U8;
+    fn ffi_widen_u8(x: U8) -> U64;
+    fn ffi_min_u8() -> U8;
+    fn ffi_max_u8() -> U8;
+    fn ffi_echo_u16(x: U16) -> U16;
+    fn ffi_widen_u16(x: U16) -> U64;
+    fn ffi_min_u16() -> U16;
+    fn ffi_max_u16() -> U16;
+    fn ffi_echo_u32(x: U32) -> U32;
+    fn ffi_widen_u32(x: U32) -> U64;
+    fn ffi_min_u32() -> U32;
+    fn ffi_max_u32() -> U32;
+    fn ffi_echo_u64(x: U64) -> U64;
+    fn ffi_widen_u64(x: U64) -> U64;
+    fn ffi_min_u64() -> U64;
+    fn ffi_max_u64() -> U64;
+    fn ffi_mixed(
+        a: U8,
+        b: I16,
+        c: U64,
+        d: I8,
+        e: U32,
+        f: I32,
+        g: U16,
+        h: Int,
+        flag: Bool,
+        scale: Float,
+        text: CStr
+    ) -> U64;
+    fn ffi_byte(text: CStr) -> U8;
+    fn ffi_pointer(text: RawCStr) -> RawCStr;
+    fn ffi_raw_byte(text: RawCStr) -> U8;
+    fn ffi_greeting() -> RawCStr;
+    fn ffi_truth() -> Bool;
+    fn ffi_bool(flag: Bool) -> I16;
+    fn ffi_void() -> Unit;
+    fn ffi_implicit_void();
+}
+
+let main (): Unit = unsafe {
+    assert_eq(ffi_echo_i8(-128), -128);
+    assert_eq(ffi_widen_i8(-128), -128);
+    assert_eq(ffi_echo_i8(-127), -127);
+    assert_eq(ffi_widen_i8(-127), -127);
+    assert_eq(ffi_echo_i8(-1), -1);
+    assert_eq(ffi_widen_i8(-1), -1);
+    assert_eq(ffi_echo_i8(0), 0);
+    assert_eq(ffi_widen_i8(0), 0);
+    assert_eq(ffi_echo_i8(1), 1);
+    assert_eq(ffi_widen_i8(1), 1);
+    assert_eq(ffi_echo_i8(126), 126);
+    assert_eq(ffi_widen_i8(126), 126);
+    assert_eq(ffi_echo_i8(127), 127);
+    assert_eq(ffi_widen_i8(127), 127);
+    assert_eq(ffi_min_i8(), -128);
+    assert_eq(ffi_max_i8(), 127);
+    assert_eq(ffi_echo_i16(-32768), -32768);
+    assert_eq(ffi_widen_i16(-32768), -32768);
+    assert_eq(ffi_echo_i16(-32767), -32767);
+    assert_eq(ffi_widen_i16(-32767), -32767);
+    assert_eq(ffi_echo_i16(-1), -1);
+    assert_eq(ffi_widen_i16(-1), -1);
+    assert_eq(ffi_echo_i16(0), 0);
+    assert_eq(ffi_widen_i16(0), 0);
+    assert_eq(ffi_echo_i16(1), 1);
+    assert_eq(ffi_widen_i16(1), 1);
+    assert_eq(ffi_echo_i16(32766), 32766);
+    assert_eq(ffi_widen_i16(32766), 32766);
+    assert_eq(ffi_echo_i16(32767), 32767);
+    assert_eq(ffi_widen_i16(32767), 32767);
+    assert_eq(ffi_min_i16(), -32768);
+    assert_eq(ffi_max_i16(), 32767);
+    assert_eq(ffi_echo_i32(-2147483648), -2147483648);
+    assert_eq(ffi_widen_i32(-2147483648), -2147483648);
+    assert_eq(ffi_echo_i32(-2147483647), -2147483647);
+    assert_eq(ffi_widen_i32(-2147483647), -2147483647);
+    assert_eq(ffi_echo_i32(-1), -1);
+    assert_eq(ffi_widen_i32(-1), -1);
+    assert_eq(ffi_echo_i32(0), 0);
+    assert_eq(ffi_widen_i32(0), 0);
+    assert_eq(ffi_echo_i32(1), 1);
+    assert_eq(ffi_widen_i32(1), 1);
+    assert_eq(ffi_echo_i32(2147483646), 2147483646);
+    assert_eq(ffi_widen_i32(2147483646), 2147483646);
+    assert_eq(ffi_echo_i32(2147483647), 2147483647);
+    assert_eq(ffi_widen_i32(2147483647), 2147483647);
+    assert_eq(ffi_min_i32(), -2147483648);
+    assert_eq(ffi_max_i32(), 2147483647);
+    assert_eq(ffi_echo_int(-9223372036854775808), -9223372036854775808);
+    assert_eq(ffi_widen_int(-9223372036854775808), -9223372036854775808);
+    assert_eq(ffi_echo_int(-9223372036854775807), -9223372036854775807);
+    assert_eq(ffi_widen_int(-9223372036854775807), -9223372036854775807);
+    assert_eq(ffi_echo_int(-1), -1);
+    assert_eq(ffi_widen_int(-1), -1);
+    assert_eq(ffi_echo_int(0), 0);
+    assert_eq(ffi_widen_int(0), 0);
+    assert_eq(ffi_echo_int(1), 1);
+    assert_eq(ffi_widen_int(1), 1);
+    assert_eq(ffi_echo_int(9223372036854775806), 9223372036854775806);
+    assert_eq(ffi_widen_int(9223372036854775806), 9223372036854775806);
+    assert_eq(ffi_echo_int(9223372036854775807), 9223372036854775807);
+    assert_eq(ffi_widen_int(9223372036854775807), 9223372036854775807);
+    assert_eq(ffi_min_int(), -9223372036854775808);
+    assert_eq(ffi_max_int(), 9223372036854775807);
+    assert_eq(ffi_echo_i64(-9223372036854775808), -9223372036854775808);
+    assert_eq(ffi_widen_i64(-9223372036854775808), -9223372036854775808);
+    assert_eq(ffi_echo_i64(-9223372036854775807), -9223372036854775807);
+    assert_eq(ffi_widen_i64(-9223372036854775807), -9223372036854775807);
+    assert_eq(ffi_echo_i64(-1), -1);
+    assert_eq(ffi_widen_i64(-1), -1);
+    assert_eq(ffi_echo_i64(0), 0);
+    assert_eq(ffi_widen_i64(0), 0);
+    assert_eq(ffi_echo_i64(1), 1);
+    assert_eq(ffi_widen_i64(1), 1);
+    assert_eq(ffi_echo_i64(9223372036854775806), 9223372036854775806);
+    assert_eq(ffi_widen_i64(9223372036854775806), 9223372036854775806);
+    assert_eq(ffi_echo_i64(9223372036854775807), 9223372036854775807);
+    assert_eq(ffi_widen_i64(9223372036854775807), 9223372036854775807);
+    assert_eq(ffi_min_i64(), -9223372036854775808);
+    assert_eq(ffi_max_i64(), 9223372036854775807);
+    assert_eq(ffi_echo_u8(0), 0);
+    assert_eq(ffi_widen_u8(0), 0);
+    assert_eq(ffi_echo_u8(1), 1);
+    assert_eq(ffi_widen_u8(1), 1);
+    assert_eq(ffi_echo_u8(128), 128);
+    assert_eq(ffi_widen_u8(128), 128);
+    assert_eq(ffi_echo_u8(254), 254);
+    assert_eq(ffi_widen_u8(254), 254);
+    assert_eq(ffi_echo_u8(255), 255);
+    assert_eq(ffi_widen_u8(255), 255);
+    assert_eq(ffi_min_u8(), 0);
+    assert_eq(ffi_max_u8(), 255);
+    assert_eq(ffi_echo_u16(0), 0);
+    assert_eq(ffi_widen_u16(0), 0);
+    assert_eq(ffi_echo_u16(1), 1);
+    assert_eq(ffi_widen_u16(1), 1);
+    assert_eq(ffi_echo_u16(32768), 32768);
+    assert_eq(ffi_widen_u16(32768), 32768);
+    assert_eq(ffi_echo_u16(65534), 65534);
+    assert_eq(ffi_widen_u16(65534), 65534);
+    assert_eq(ffi_echo_u16(65535), 65535);
+    assert_eq(ffi_widen_u16(65535), 65535);
+    assert_eq(ffi_min_u16(), 0);
+    assert_eq(ffi_max_u16(), 65535);
+    assert_eq(ffi_echo_u32(0), 0);
+    assert_eq(ffi_widen_u32(0), 0);
+    assert_eq(ffi_echo_u32(1), 1);
+    assert_eq(ffi_widen_u32(1), 1);
+    assert_eq(ffi_echo_u32(2147483648), 2147483648);
+    assert_eq(ffi_widen_u32(2147483648), 2147483648);
+    assert_eq(ffi_echo_u32(4294967294), 4294967294);
+    assert_eq(ffi_widen_u32(4294967294), 4294967294);
+    assert_eq(ffi_echo_u32(4294967295), 4294967295);
+    assert_eq(ffi_widen_u32(4294967295), 4294967295);
+    assert_eq(ffi_min_u32(), 0);
+    assert_eq(ffi_max_u32(), 4294967295);
+    assert_eq(ffi_echo_u64(0), 0);
+    assert_eq(ffi_widen_u64(0), 0);
+    assert_eq(ffi_echo_u64(1), 1);
+    assert_eq(ffi_widen_u64(1), 1);
+    assert_eq(ffi_echo_u64(9223372036854775808), 9223372036854775808);
+    assert_eq(ffi_widen_u64(9223372036854775808), 9223372036854775808);
+    assert_eq(ffi_echo_u64(18446744073709551614), 18446744073709551614);
+    assert_eq(ffi_widen_u64(18446744073709551614), 18446744073709551614);
+    assert_eq(ffi_echo_u64(18446744073709551615), 18446744073709551615);
+    assert_eq(ffi_widen_u64(18446744073709551615), 18446744073709551615);
+    assert_eq(ffi_min_u64(), 0);
+    assert_eq(ffi_max_u64(), 18446744073709551615);
+    assert_eq(
+        ffi_mixed(
+            255,
+            -32768,
+            18446744073709551615,
+            -128,
+            4294967295,
+            -2147483648,
+            65535,
+            -9223372036854775808,
+            true,
+            1.5,
+            "scalar".as_cstr()
+        ),
+        18446744073709551615
+    );
+    assert_eq(ffi_byte("A".as_cstr()), 65);
+    assert_eq(ffi_raw_byte(ffi_pointer(ffi_greeting())), 110);
+    assert(ffi_truth());
+    assert_eq(ffi_bool(true), -123);
+    assert_eq(ffi_bool(false), 123);
+    ffi_void();
+    ffi_implicit_void();
+    println("integer scalar FFI ok");
+}

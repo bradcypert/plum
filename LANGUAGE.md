@@ -122,9 +122,12 @@ for every integer type. Both operands must have that type. Results wrap modulo
 2^N, where N is the type width; signed results use two's-complement
 interpretation. These named operations support checksums, hashes, and binary
 protocols without changing ordinary checked arithmetic. Existing `Int`/`I64`
-wrapping behavior is unchanged. New-width C extern signatures,
-including aggregates containing these types, are rejected until the scalar ABI
-work in #526. `Int`/`I64` retain the existing C ABI.
+wrapping behavior is unchanged. All integer kinds support direct scalar C
+extern parameters and returns on x86-64/arm64 Linux, macOS and Windows, and
+x86_64-unknown-none. Aggregates containing new-width integers remain rejected;
+scalar ABI support does not promise packed storage or C-compatible record
+layout. `Int`/`I64` retain the existing C ABI. See
+[scalar integer FFI](docs/integer-scalar-ffi.md) for mappings and target rules.
 
 ### Integer bit operations
 
@@ -784,9 +787,13 @@ let go (): Int = unsafe { strlen("hello".as_cstr()) }
 Extern calls are only allowed inside an `unsafe { }` block. Extern
 functions require all arguments at the call site; they cannot be used as
 ordinary function values or partially applied. The extern
-type surface is intentionally closed: `Int`/`Float`/`Bool`/`CStr`/`RawCStr`/a
-callback/a qualifying struct. CStr is input-only. There is no general pointer
-arithmetic, no C-variadic functions, and no extern global variables.
+type surface in the self-hosted compiler includes integer scalars, `Float`,
+`Bool`, `CStr`, `RawCStr` and `Unit` returns. Each integer kind maps to its
+matching C `intN_t`/`uintN_t`; `Int`/`I64` map to `int64_t`, `Float` to `double`,
+and `Bool` to C `int`. CStr is input-only. New-width integers inside aggregate
+or callback types are rejected. There are no C-callable Plum exports for these
+types, general pointer arithmetic, C-variadic functions or extern globals.
+See [scalar integer FFI](docs/integer-scalar-ffi.md) for the target ABI contract.
 
 `.as_cstr()` converts `String` or `Bytes` into an **owned CStr**, sharing
 the existing cell without copying bytes or allocating a wrapper. A CStr

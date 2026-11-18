@@ -1,0 +1,87 @@
+// C scalars use their declared width at the boundary; Plum integer registers
+// remain canonical i64 words. Extension attributes describe the platform ABI,
+// separately from the truncation/extension instructions used for our values.
+use parser;
+use typecheck;
+
+let C_ABI_TARGET: Ref[String] = ref("")
+
+pub let set_c_abi_target (target: String): Unit = C_ABI_TARGET.set(target)
+
+pub let cg_has_fixed_externs (program: parser.ProgramNode): Bool =
+    Array.any(
+        program.items,
+        |item| match item.kind {
+            IKExtern(block) => Array.any(
+                block.fns,
+                |f|
+                    Array.any(f.params, |p| cg_fixed_annotation(p.ty)) || match f.ret_ty {
+                        Some(t) => cg_fixed_annotation(t),
+                        None => false,
+                    }
+            ),
+            _ => false,
+        }
+    )
+
+let cg_fixed_annotation (ty: parser.Ty): Bool = match ty {
+    TyPath(parts) => Option.is_some(cg_c_integer_named(parser.join_dot(parts))),
+    _ => false,
+}
+
+let cg_c_integer_named (name: String): Option[typecheck.IntegerKind] = match name {
+    "I8" => Some(IntegerI8),
+    "I16" => Some(IntegerI16),
+    "I32" => Some(IntegerI32),
+    "U8" => Some(IntegerU8),
+    "U16" => Some(IntegerU16),
+    "U32" => Some(IntegerU32),
+    "U64" => Some(IntegerU64),
+    _ => None,
+}
+
+let cg_c_integer_attr (kind: typecheck.IntegerKind): String = {
+    let target = C_ABI_TARGET.get();
+    let arch = target.split("-")[0];
+    let x86 = arch == "x86_64" || arch == "amd64";
+    let arm = arch == "aarch64" || arch == "arm64";
+    let windows = target.contains("windows") || target.contains("mingw");
+    let apple = target.contains("apple") || target.contains("darwin") || target.contains("macos");
+    let linux = target.contains("linux");
+    if !(x86 || arm) || !(windows || apple || linux || target == "x86_64-unknown-none") {
+        cg_fail(
+            "fixed-width scalar C ABI is not supported for target '${target}'; use x86_64/aarch64 Linux, macOS or Windows, or x86_64-unknown-none"
+        );
+    };
+    let spec = typecheck.integer_spec(kind);
+    if spec.bits < 32 && !windows && (x86 || apple) {
+        if spec.signed { "signext " } else { "zeroext " }
+    } else { "" }
+}
+
+let cg_c_ret (ty: CgTy): String = match ty {
+    CgUnit => "void",
+    CgInteger(k) => cg_c_integer_attr(k).concat(cg_c_ty(ty)),
+    _ => cg_c_ty(ty),
+}
+
+let cg_c_param (ty: CgTy): String = match ty {
+    CgInteger(k) => cg_c_ty(ty).concat(" ").concat(cg_c_integer_attr(k)).trim(),
+    _ => cg_c_ty(ty),
+}
+
+let cg_c_integer_return
+    (kind: typecheck.IntegerKind)
+    (name: String)
+    (args: String)
+    (reg: String)
+    (raw: String): String
+= {
+    let spec = typecheck.integer_spec(kind);
+    let call = "call ${cg_c_ret(CgInteger(kind))} @${name}(${args})\n";
+    if spec.bits == 64 { "  ${reg} = ${call}" }
+    else {
+        let extension = if spec.signed { "sext" } else { "zext" };
+        "  ${raw} = ${call}  ${reg} = ${extension} i${spec.bits} ${raw} to i64\n"
+    }
+}

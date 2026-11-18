@@ -305,11 +305,14 @@ let extern_sigs
             None => ITUnit
         };
         for ty in params.push(ret) {
-            match first_fixed_within(ctx, ty, []) {
-                Some(t) => fail_tc(
-                    "extern fixed-width integer ABI is not supported yet: ${render_ty(t)} (see #526)"
-                ),
-                None => (),
+            match ty {
+                ITInteger(_) => (),
+                _ => match first_fixed_within(ctx, ty, []) {
+                    Some(t) => fail_tc(
+                        "extern aggregates and callbacks containing fixed-width integers are not supported: ${render_ty(t)}; only direct scalar parameters and returns have a C ABI"
+                    ),
+                    None => (),
+                },
             };
         };
         match ret {

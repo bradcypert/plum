@@ -63,5 +63,5 @@ raw-name collisions and isolated function-value reachability. Existing integer
 arithmetic/conversion suites, compiler self-tests, properties, bootstrap and
 generated documentation checks protect prior behavior.
 
-Scalar C FFI remains the next separate track in #526. These bit operations
+Scalar C FFI has its own [ABI contract](integer-scalar-ffi.md). These bit operations
 make no promise about C-compatible record layout, raw pointers or storage.

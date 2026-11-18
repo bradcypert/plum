@@ -68,16 +68,15 @@ def main():
             if minimum == 0:
                 reject(f'let main (): Unit = {{ let value: {kind} = 1; let negative = -value; () }}\n',
                        'unsigned integer negation')
-            reject(f'extern "C" {{ fn native(value: {kind}) -> Unit; }}\nlet main (): Unit = ()\n',
-                   'extern fixed-width integer ABI is not supported yet', kind)
-            reject(f'extern "C" {{ fn native() -> {kind}; }}\nlet main (): Unit = ()\n',
-                   'extern fixed-width integer ABI is not supported yet', kind)
+            source.write_text(f'extern "C" {{ fn native(value: {kind}) -> {kind}; }}\nlet main (): Unit = ()\n')
+            run(COMPILER, 'check', project)
+            run(COMPILER, 'emit-llvm', project)
         reject('struct Inner { value: U8 }\nstruct Outer { inner: Inner }\n'
                'extern "C" { fn native(value: Outer) -> Unit; }\nlet main (): Unit = ()\n',
-               'extern fixed-width integer ABI is not supported yet', 'U8')
+               'extern aggregates and callbacks containing fixed-width integers are not supported', 'U8')
         reject('enum Value { Number(U64), Empty }\n'
                'extern "C" { fn native(value: Value) -> Unit; }\nlet main (): Unit = ()\n',
-               'extern fixed-width integer ABI is not supported yet', 'U64')
+               'extern aggregates and callbacks containing fixed-width integers are not supported', 'U64')
         # Expectations specialize fresh variables, never already-typed values
         # or closures whose earlier calls have fixed them to Int.
         for body in (
@@ -202,7 +201,7 @@ int main(void) { plum_kernel_start(); }
             exe = work / 'core'
             run('clang', '-no-pie', obj, hooks, '-o', exe)
             assert run(exe).stdout == (fixture / 'expected.txt').read_text()
-    print(f'fixed-integer-check: type identities, contexts, ranges, ABI rejection and '
+    print(f'fixed-integer-check: type identities, contexts, ranges, scalar/aggregate ABI boundaries and '
           f'{len(failures) * 2} checked failures pass')
 
 
