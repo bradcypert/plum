@@ -125,7 +125,11 @@ let header_parameters
     }
 
 let width_emit (x: WidthLayout) (text: String): Unit = {
-    x.out.set(x.out.get().concat(text));
+    // Drop the Ref's alias before appending, so the owned buffer can grow
+    // in place instead of copying the whole output prefix for every token.
+    let prior = x.out.get();
+    x.out.set("");
+    x.out.set(prior.concat(text));
     if text.contains("\n") {
         let lines = text.split("\n");
         let last = lines[lines.len() - 1];

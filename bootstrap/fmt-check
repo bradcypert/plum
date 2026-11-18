@@ -187,6 +187,10 @@ if ! python3 bootstrap/formatter-width-check.py "$plum"; then
     fail=$((fail + 1))
 fi
 
+if ! python3 bootstrap/formatter-scaling-check.py "$plum"; then
+    fail=$((fail + 1))
+fi
+
 if [ "$fail" -ne 0 ]; then
     printf '\nfmt-check: %d file(s) failed, %d already formatted\n' "$fail" "$ok"
     exit 1

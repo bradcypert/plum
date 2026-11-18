@@ -1711,7 +1711,35 @@ let push_span (sp: ExprSpan): Unit = {
     let cur = SPANS.get();
     let n = cur.len();
     if n > 0 && cur[n - 1].start == sp.start && cur[n - 1].end == sp.end { () }
-    else { SPANS.set(cur.push(sp)) }
+    else {
+        // Release the recorder's reference before growing the array. Retained
+        // snapshots still force copy-on-write; an unshared recorder can reuse.
+        SPANS.set(no_spans(()));
+        SPANS.set(cur.push(sp))
+    }
+}
+
+pub let test_recorded_span_snapshot_ownership (): Unit = {
+    record_spans(true);
+    note_offsets(1, 2);
+    let first = recorded_spans();
+    note_offsets(3, 4);
+    let second = recorded_spans();
+    assert_eq(first.len(), 1);
+    assert_eq(first[0].start, 1);
+    assert_eq(second.len(), 2);
+    note_offsets(3, 4);
+    assert_eq(recorded_spans().len(), 2);
+    note_offsets(5, 6);
+    let third = recorded_spans();
+    assert_eq(second.len(), 2);
+    assert_eq(third.len(), 3);
+    assert_eq(third[2].end, 6);
+    record_spans(false);
+    assert_eq(first[0].end, 2);
+    assert_eq(second[1].start, 3);
+    assert_eq(third.len(), 3);
+    assert(recorded_spans().is_empty())
 }
 
 // Every level of the precedence chain records the extent it returns,
