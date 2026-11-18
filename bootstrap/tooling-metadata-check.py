@@ -10,7 +10,7 @@ import sys
 import tempfile
 
 from compiler_metadata import ROOT, OUTPUT, check_generated, load, render
-from plum_queries import ast, completion_names, parse_ast, query
+from plum_queries import ast, completion_names, function_body, parse_ast, query
 
 builtins = runpy.run_path(str(ROOT / 'bootstrap/check-builtins'))
 compiler = Path(sys.argv[1] if len(sys.argv) > 1 else './sh.real').resolve()
@@ -100,12 +100,28 @@ let main (): Unit = ()
     expect_error(lambda: builtins['inventories'](ast(compiler, fixture)))
     fixture.write_text(source + '\nlet extra (method_name: String): Bool =\n\n// a new case\nmethod_name == "missing"\n')
     expect_error(lambda: builtins['inventories'](ast(compiler, fixture)))
+    # The AST renderer escapes newline/tab/CR, quotes and backslashes, but
+    # leaves other control characters literal. Accept both representations.
+    controls = '\x01\x08\x0b\x0c\x1f\n\t\r"\\'
+    literal = '"' + ''.join(f'\\x{ord(c):02x}' for c in controls) + '"'
+    fixture.write_text('let controls (): String = ' + literal + '\n')
+    assert function_body(ast(compiler, fixture), 'controls') == controls
+    checks += 1
+    for control in map(chr, range(32)):
+        assert parse_ast('("' + control + '")') == [control]
+        checks += 1
     for invalid in ['', '()', '((', '(()))', '((let x "unterminated))']:
         expect_error(lambda: parse_ast(invalid))
     for invalid in ['', '{}', '[]', '[{}]', '[{"name":1}]', '[{"name":""}]']:
         expect_error(lambda: completion_names(invalid))
     fixture.write_text('let main (): Unit = { xs\n. len\n(); println(".fake()"); }\n')
-    assert builtins['dot_calls'](ast(compiler, fixture)) == {'len'}
+    assert builtins['dot_calls'](ast(compiler, fixture), {'Array', 'Option'}) == {'len'}
+    checks += 1
+    fixture.write_text('let main (): Unit = { Array.map(xs, f); Option.map(x, f); tools.Ns.map(xs, f); }\n')
+    assert builtins['dot_calls'](ast(compiler, fixture), {'Array', 'Option', 'tools.Ns'}) == set()
+    checks += 1
+    fixture.write_text('let main (): Unit = { xs.map(f); [1].map(f); "Array".len(); get().map(f); }\n')
+    assert builtins['dot_calls'](ast(compiler, fixture), {'Array', 'Option'}) == {'map', 'len'}
     checks += 1
 
     # Run real consumers in a tiny checkout so missing/corrupt/stale inputs
@@ -138,12 +154,28 @@ let main (): Unit = ()
     run([repo / 'bootstrap/check-version', 'v' + data['version']], env=env, ok=False)
     for response in ['', 'plum 999.0.0', 'plum ' + data['version'] + ' extra']:
         fake('print(' + repr(response) + ')')
-        run([repo / 'bootstrap/check-version', 'v' + data['version']], env=env, ok=False)
+        result = run([repo / 'bootstrap/check-version', 'v' + data['version']], env=env, ok=False)
+        assert str(stub) in result.stderr and 'unset PLUM' in result.stderr
+    shutil.copy2(stub, repo / 'sh')
+    default_env = dict(os.environ)
+    default_env.pop('PLUM', None)
+    result = run([repo / 'bootstrap/check-version', 'v' + data['version']], env=default_env, ok=False)
+    assert 'compiler ./sh' in result.stderr and 'rebuild with ./sh build' in result.stderr
+    assert 'unset PLUM' not in result.stderr
 
     names = [{'name': m + '.example'} for m in data['stdlib_modules']] + [{'name': 'Array.len'}]
     fake('print(' + repr(json.dumps(names, indent=2)) + ')')
     run([repo / 'bootstrap/check-doc-names', stub])
     baseline_ast = query(compiler, 'ast', ROOT / 'bootstrap/self_host/typecheck/infer.plum')
+    fixture_ast = query(compiler, 'ast', ROOT / 'bootstrap/exec_corpus/dot_methods/main.plum')
+    complete = names + [{'name': 'Map.len'}]
+    fake('if sys.argv[1] == "ast":\n    print(' + repr(baseline_ast) + ' if "infer.plum" in sys.argv[2] else ' + repr(fixture_ast)
+         + ')\nelse:\n    print(' + repr(json.dumps(complete)) + ')')
+    path_env = dict(os.environ, PATH=str(work) + os.pathsep + os.environ['PATH'])
+    run([repo / 'bootstrap/check-builtins', stub.name], env=path_env, cwd=work)
+    shutil.copy2(stub, repo / 'sh')
+    run([repo / 'bootstrap/check-builtins', './sh'], cwd=work)
+    run([repo / 'bootstrap/check-builtins'], cwd=work)
     fake('print(' + repr(baseline_ast) + ') if sys.argv[1] == "ast" else print(' + repr(json.dumps(names[1:])) + ')')
     run([repo / 'bootstrap/check-doc-names', stub], ok=False)
     run([repo / 'bootstrap/check-builtins', stub], ok=False)

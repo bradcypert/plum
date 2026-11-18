@@ -33,15 +33,29 @@ def shared_methods(names, methods):
     return {name for name, namespaces in spaces.items() if len(namespaces) > 1 and name in methods}
 
 
-def dot_calls(program):
+def namespace_path(node):
+    if type(node) is str:
+        return node
+    if isinstance(node, list) and len(node) == 3 and node[0] == "field":
+        base = namespace_path(node[1])
+        if base is not None:
+            return base + "." + node[2]
+    return None
+
+
+def dot_calls(program, namespaces):
+    # A field callee can also be Ns.method(...). Exclude the namespaces
+    # reported by completion so they cannot stand in for receiver coverage.
     return {node[1][-1] for node in nodes(program)
             if len(node) >= 2 and node[0] == "call" and isinstance(node[1], list)
-            and len(node[1]) == 3 and node[1][0] == "field"}
+            and len(node[1]) == 3 and node[1][0] == "field"
+            and namespace_path(node[1][1]) not in namespaces}
 
 
 def main():
-    compiler = Path(sys.argv[1] if len(sys.argv) > 1 else "./sh")
-    compiler = (ROOT / compiler).resolve()
+    compiler = sys.argv[1] if len(sys.argv) > 1 else "./sh"
+    if "/" in compiler or "\\" in compiler:
+        compiler = (ROOT / compiler).resolve()
     data = load()
     check_generated(data)
     methods = inventories(ast(compiler, ROOT / "bootstrap/self_host/typecheck/infer.plum"))
@@ -57,7 +71,8 @@ def main():
     shared = shared_methods(names, methods)
     if not shared:
         raise ValueError("no shared builtin names found -- nothing was checked")
-    missing = shared - dot_calls(ast(compiler, ROOT / "bootstrap/exec_corpus/dot_methods/main.plum"))
+    namespaces = {name.rsplit(".", 1)[0] for name in names if "." in name}
+    missing = shared - dot_calls(ast(compiler, ROOT / "bootstrap/exec_corpus/dot_methods/main.plum"), namespaces)
     if missing:
         raise ValueError(f"shared builtin names missing dot-call coverage: {', '.join(sorted(missing))}")
     print(f"check-builtins: {len(methods)} builtin methods inventoried; {len(shared)} shared names exercised")

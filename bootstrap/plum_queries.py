@@ -30,7 +30,7 @@ def parse_ast(text):
                 raise ValueError("unexpected closing AST delimiter")
             stack.pop()
         elif token.startswith('"'):
-            stack[-1].append(Literal(json.loads(token)))
+            stack[-1].append(Literal(json.loads(token, strict=False)))
         else:
             stack[-1].append(token)
     if end != len(text) or len(stack) != 1 or len(roots) != 1 or not isinstance(roots[0], list) or not roots[0]:

@@ -217,7 +217,7 @@ consumer failures for missing/invalid metadata and failed/empty/malformed query
 results. These tests use temporary checkouts rather than modifying compiler
 source during validation.
 
-Validation passed with a compiler built through the checked-in seed: 83 tooling
+Validation passed with a compiler built through the checked-in seed: 122 tooling
 regressions, 828 formatter checks, 55 compiler-internal tests, 92 properties,
 43 generated documentation pages, 339 CLI checks, shim consistency,
 builtin/doc-name checks, and both version-check modes. The seed equivalence

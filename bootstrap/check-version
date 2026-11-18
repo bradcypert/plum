@@ -43,10 +43,15 @@ declared="$("$PY_BIN" bootstrap/compiler_metadata.py version)" || exit 1
 # What the built compiler actually prints, which is the claim that
 # reaches a user. Checking the source alone would miss a stale binary.
 if [ $source_only -eq 0 ]; then
-    reported="$("${PLUM:-./sh}" version)" || { echo "check-version: compiler version query failed" >&2; exit 1; }
+    plum="${PLUM:-./sh}"
+    reported="$("$plum" version)" || { echo "check-version: compiler version query failed: $plum" >&2; exit 1; }
     if [ "$reported" != "plum $declared" ]; then
-        echo "MISMATCH: source says $declared, the built compiler reports ${reported:-<nothing>}" >&2
-        echo "the binary is stale -- rebuild with ./sh build bootstrap/self_host -o sh.real" >&2
+        echo "MISMATCH: source says $declared, compiler $plum reports ${reported:-<nothing>}" >&2
+        if [ -n "${PLUM:-}" ]; then
+            echo "update the compiler selected by PLUM, or unset PLUM to check ./sh after rebuilding sh.real" >&2
+        else
+            echo "the binary is stale -- rebuild with ./sh build bootstrap/self_host -o sh.real" >&2
+        fi
         exit 1
     fi
 fi
