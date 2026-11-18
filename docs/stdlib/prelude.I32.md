@@ -16,6 +16,14 @@ Subtracts modulo 2^32; interprets the result as signed two’s complement. Ordin
 
 Multiplies modulo 2^32; interprets the result as signed two’s complement. Ordinary arithmetic remains checked.
 
+## `let I32.shr_logical (x: I32) (n: Int): I32`
+
+Shifts the low 32 bits right with zero fill. Nonpositive counts return x; counts at least 32 return zero. The result retains I32.
+
+## `let I32.count_ones (x: I32): Int`
+
+Counts one bits within the 32-bit representation, excluding any sign extension. Returns an Int in 0..32 inclusive.
+
 ## `let I32.from (value: S): I32`
 
 Converts an integer whose entire source type range fits the destination. The source type must be known; signed-to-unsigned conversions require try_from. Evaluates value once. Does not introduce general function overloading or numeric generic constraints.

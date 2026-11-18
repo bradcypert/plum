@@ -16,6 +16,14 @@ Subtracts modulo 2^16; interprets the result as signed two’s complement. Ordin
 
 Multiplies modulo 2^16; interprets the result as signed two’s complement. Ordinary arithmetic remains checked.
 
+## `let I16.shr_logical (x: I16) (n: Int): I16`
+
+Shifts the low 16 bits right with zero fill. Nonpositive counts return x; counts at least 16 return zero. The result retains I16.
+
+## `let I16.count_ones (x: I16): Int`
+
+Counts one bits within the 16-bit representation, excluding any sign extension. Returns an Int in 0..16 inclusive.
+
 ## `let I16.from (value: S): I16`
 
 Converts an integer whose entire source type range fits the destination. The source type must be known; signed-to-unsigned conversions require try_from. Evaluates value once. Does not introduce general function overloading or numeric generic constraints.

@@ -43,6 +43,11 @@ let infer_expected
                 },
                 _ => infer_expr(p2, state, env, acc, e),
             },
+            EUnary(UBitNot, inner) => if Option.is_some(integer_kind(expected)) {
+                let r = infer_expected(p2, state, env, acc, inner, expected);
+                let s = constrain_operand(r.subst, r.ty, expected, "bitwise complement: ");
+                ir_leaf(expected, s, r.state, TUnary(UBitNot, r.texpr))
+            } else { infer_expr(p2, state, env, acc, e) },
             EUnsafe(block) => {
                 let was = UNSAFE.get();
                 UNSAFE.set(true);
@@ -58,7 +63,7 @@ let infer_expected
                 parser.desugar_pipe(lhs, rhs),
                 expected
             ),
-            EBinary(op, lhs, rhs) => if integer_arithmetic(op)
+            EBinary(op, lhs, rhs) => if integer_value_operator(op)
                 && Option.is_some(integer_kind(expected)) {
                     infer_binary_expected(p2, state, env, acc, op, lhs, rhs, Some(expected))
                 } else { infer_expr(p2, state, env, acc, e) },
@@ -189,10 +194,40 @@ let integer_arithmetic (op: parser.BOp): Bool = match op {
     _ => false,
 }
 
+let integer_shift (op: parser.BOp): Bool = match op {
+    BShl => true,
+    BShr => true,
+    _ => false
+}
+
+let integer_value_operator (op: parser.BOp): Bool = integer_arithmetic(op) || is_bitwise(op)
+
+// Shift counts have their own type, independent of the value's width. In
+// particular an Int count must never contextualize or widen the left value.
+let infer_integer_shift
+    (p2: Program2)
+    (state: FreshState)
+    (env: TyEnv)
+    (acc: Subst)
+    (op: parser.BOp)
+    (lhs: parser.PExpr)
+    (rhs: parser.PExpr)
+    (expected: Option[ITy]): InferResult
+= {
+    let left = infer_optional_expected(p2, state, env, acc, lhs, expected);
+    let seeded = seed_expected_result(left.subst, left.ty, expected);
+    let right = infer_expected(p2, left.state, env, seeded, rhs, ITInt);
+    let s = constrain_operand(right.subst, right.ty, ITInt, "shift count must be Int: ");
+    let ty = subst_apply(s, left.ty);
+    reject_non_int_bitwise(op, ty);
+    ir_leaf(ty, s, right.state, TBinary(op, left.texpr, right.texpr))
+}
+
 let integer_literal_expression (e: parser.PExpr): Bool = match e {
     EInt(_, _) => true,
     EUnary(UNeg, inner) => integer_literal_expression(inner),
-    EBinary(op, lhs, rhs) => integer_arithmetic(op) && integer_literal_expression(lhs)
+    EUnary(UBitNot, inner) => integer_literal_expression(inner),
+    EBinary(op, lhs, rhs) => integer_value_operator(op) && integer_literal_expression(lhs)
         && integer_literal_expression(rhs),
     _ => false,
 }
@@ -240,8 +275,8 @@ let infer_global_initializer
     (state: FreshState)
     (acc: Subst)
     (def: parser.LetDefNode): InferResult
-=
-    match def.ret_ty {
+= {
+    let r = match def.ret_ty {
         Some(ann) => infer_expected(
             p2,
             state,
@@ -251,7 +286,26 @@ let infer_global_initializer
             resolve_ann_seen(p2.ctx, p2.current, [], ann)
         ),
         None => infer_expr(p2, state, tyenv_empty(()), acc, def.body),
+    };
+    // Retain the annotation's constraints before resolving ambiguous shifts.
+    // A mismatch is reported by the existing global declaration checks.
+    let checked = match def.ret_ty {
+        Some(ann) => match unify(
+            subst_apply(r.subst, r.ty),
+            resolve_ann_seen(p2.ctx, p2.current, [], ann)
+        ) {
+            Ok(s) => subst_compose(s, r.subst),
+            Err(_) => r.subst,
+        },
+        None => r.subst,
+    };
+    let s = resolve_integer_shifts(checked, r.texpr);
+    InferResult {
+        ty: subst_apply(s, r.ty),
+        subst: s,
+        ..r
     }
+}
 
 let infer_variant_call_expected
     (p2: Program2)
@@ -446,12 +500,29 @@ let check_integer_negation (subst: Subst) (operand: ITy): Unit =
         _ => (),
     }
 
+// Delay the Int fallback until the whole body and its result annotation have
+// contributed constraints. A later use of a closure parameter can still pin
+// its width after the shift expression; only truly ambiguous operands default.
+let resolve_integer_shifts (subst: Subst) (expr: TExpr): Subst = {
+    let here = match expr.node {
+        TBinary(op, left, _) => if integer_shift(op) {
+            match subst_apply(subst, left.ty) {
+                ITVar(_) => constrain_operand(subst, left.ty, ITInt, "shift operand: "),
+                _ => subst,
+            }
+        } else { subst },
+        _ => subst,
+    };
+    Array.fold(t_children(expr), here, |s, child| resolve_integer_shifts(s, child))
+}
+
 // Local closure parameters may still be variables at the first negation check.
 // Validate again against the completed body's substitution, before lowering.
 let validate_integer_negations (subst: Subst) (expr: TExpr): Unit = {
     match expr.node {
         TUnary(UNeg, operand) => check_integer_negation(subst, operand.ty),
-        _ => ()
+        TBinary(op, left, _) => reject_non_int_bitwise(op, subst_apply(subst, left.ty)),
+        _ => (),
     };
     for child in t_children(expr) {
         validate_integer_negations(subst, child);

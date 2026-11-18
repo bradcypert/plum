@@ -1,2 +1,2 @@
-error: '&' needs Int operands, found Float
+error: '&' needs integer operands, found Float
 main.plum:7:1

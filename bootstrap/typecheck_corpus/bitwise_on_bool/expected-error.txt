@@ -1,2 +1,2 @@
-error: '&' needs Int operands, found Bool
+error: '&' needs integer operands, found Bool
 main.plum:7:1

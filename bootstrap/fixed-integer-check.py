@@ -62,9 +62,9 @@ def main():
                    kind, 'Int')
             reject(f'let main (): Unit = {{ let value: {kind}[Int] = 1; () }}\n',
                    'type argument')
-            for op in ('&', '|', '^', '<<', '>>'):
+            for op in ('<<', '>>'):
                 reject(f'let main (): Unit = {{ let value: {kind} = 1; let bits = value {op} value; () }}\n',
-                       'needs Int operands')
+                       'shift count must be Int')
             if minimum == 0:
                 reject(f'let main (): Unit = {{ let value: {kind} = 1; let negative = -value; () }}\n',
                        'unsigned integer negation')
