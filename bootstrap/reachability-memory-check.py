@@ -48,8 +48,8 @@ def main():
                 if allocated > ceiling:
                     failed = True
 
-        # The historical limit counts popped occurrences, not distinct
-        # specializations. Array elements avoid a deeply recursive block AST.
+        # Repeated call sites do not spend the distinct-specialization budget.
+        # Array elements avoid a deeply recursive block AST.
         for calls in (10_000, 10_001):
             project = Path(work) / f'fuel-{calls}'
             project.mkdir()
@@ -58,15 +58,27 @@ def main():
             source += '\n]; println(xs.len().to_string()) }\n'
             (project / 'main.plum').write_text(source)
             result = emit(project, ['--release'])
-            if calls == 10_000:
-                if result.returncode:
-                    sys.stderr.buffer.write(result.stdout + result.stderr)
-                    raise RuntimeError('final permitted occurrence failed before empty-queue return')
-            elif result.returncode != 1 or b'monomorphization did not terminate after 10000 instantiations' not in result.stdout + result.stderr:
-                raise RuntimeError('over-limit duplicate occurrences lost the existing monomorphization diagnostic')
+            if result.returncode:
+                sys.stderr.buffer.write(result.stdout + result.stderr)
+                raise RuntimeError('duplicate calls exhausted the specialization budget')
+            if len(re.findall(rb'^define[^\n]*@plum\.f\.\.sink\.0\.\(', result.stdout, re.M)) != 1:
+                raise RuntimeError('shared sink was not emitted exactly once')
+
+        # The guard still rejects too many distinct concrete functions.
+        project = Path(work) / 'distinct-limit'
+        project.mkdir()
+        count = 10_002
+        source = ''.join(f'let f{i} (): Int = {i}\n' for i in range(count))
+        source += 'let main (): Unit = { let xs = [\n'
+        source += ',\n'.join(f'f{i}()' for i in range(count))
+        source += '\n]; println(xs.len().to_string()) }\n'
+        (project / 'main.plum').write_text(source)
+        result = emit(project, ['--release'])
+        if result.returncode != 1 or b'monomorphization did not terminate after 10000 instantiations' not in result.stdout + result.stderr:
+            raise RuntimeError('distinct-specialization limit lost its diagnostic')
         if failed:
             raise RuntimeError('wide graph emission exceeded its allocation budget')
-    print('reachability-memory-check: FIFO discovery, shared callees and fuel boundaries passed')
+    print('reachability-memory-check: FIFO discovery, shared callees and specialization boundaries passed')
 
 
 if __name__ == '__main__':

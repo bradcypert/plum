@@ -1,8 +1,8 @@
 // FIFO traversal in batches. The current batch is read without slicing;
 // newly discovered calls append to a separately owned array. At the end of a
 // batch that array becomes the next batch. Appends use Perceus array reuse.
-// Rotation consumes no fuel: fuel still counts every popped occurrence,
-// including duplicates and runtime calls, in exactly the original order.
+// Discovery fuel counts concrete specializations, skipping repeated/runtime
+// calls. The separate cycle search retains its bounded occurrence policy.
 let cg_pending_push (pending: Array[CgInst]) (added: Array[CgInst]): Array[CgInst] = {
     let mut out = pending;
     for inst in added {
@@ -93,9 +93,9 @@ let cg_reaches_batch
         }
     }
 
-// Follow concrete specializations until no calls remain. Keep the existing
-// 10,000-occurrence limit, including duplicates/runtime calls: changing queue
-// storage must not change either termination policy or its diagnostic.
+// Follow concrete specializations until no calls remain. Bound newly visited
+// specializations, rather than repeated call edges: ordinary finite programs
+// can have many call sites for the same small set of functions.
 let cg_reachable
     (p: CgProgram)
     (pending: Array[CgInst])
@@ -116,27 +116,25 @@ let cg_reachable_batch
         if Array.is_empty(queued) { done }
         else { cg_reachable_batch(p, queued, 0, [], done, fuel) }
     }
-    else if fuel > 10000 {
-        {
+    else {
+        let head = batch[read];
+        if Option.is_some(cg_runtime_fn(head.module, head.name))
+            || cg_is_array_concat(head.module, head.name, head.targs) {
+                cg_reachable_batch(p, batch, read + 1, queued, done, fuel)
+            }
+        else if cg_inst_seen(done, head, 0) {
+            cg_reachable_batch(p, batch, read + 1, queued, done, fuel)
+        }
+        else if fuel > 10000 {
             cg_fail(
                 "monomorphization did not terminate after 10000 instantiations — polymorphic recursion?"
             );
             done
         }
-    }
-    else {
-        let head = batch[read];
-        if Option.is_some(cg_runtime_fn(head.module, head.name))
-            || cg_is_array_concat(head.module, head.name, head.targs) {
-                cg_reachable_batch(p, batch, read + 1, queued, done, fuel + 1)
-            }
-        else if cg_inst_seen(done, head, 0) {
-            cg_reachable_batch(p, batch, read + 1, queued, done, fuel + 1)
-        }
         else {
             match cg_find_tfn(p, head.module, head.name, 0) {
                 None => if Option.is_some(cg_runtime_fn(head.module, head.name)) {
-                    cg_reachable_batch(p, batch, read + 1, queued, done, fuel + 1)
+                    cg_reachable_batch(p, batch, read + 1, queued, done, fuel)
                 } else {
                     cg_fail(
                         "prelude function ${head.name} has no implementation in this backend's runtime yet"
@@ -253,4 +251,31 @@ pub let test_callgraph_fifo_and_fuel (): Unit = {
         targs: []
     };
     assert(!cg_reaches(cycle, [runtime, concat, a], target, [], CYCLE_FUEL - 1));
+}
+
+// Repeated calls must not exhaust a limit meant for distinct specializations.
+pub let test_reachable_duplicate_calls_preserve_specialization_budget (): Unit = {
+    let p = cg_build_program(parser.parse_program(lexer.tokenize("let leaf (): Int = 1\n")));
+    let leaf = CgInst {
+        module: "",
+        name: "leaf",
+        targs: []
+    };
+    let calls: Array[CgInst] = [];
+    for i in 0..10002 {
+        calls = calls.push(leaf);
+    };
+    assert_eq(cg_reachable(p, calls, [], 0), [leaf]);
+    assert_eq(cg_reachable(p, calls, [leaf], 10001), [leaf]);
+    let runtime = CgInst {
+        module: "",
+        name: "bytes_at_raw",
+        targs: []
+    };
+    let concat = CgInst {
+        module: parser.PRELUDE_MODULE(),
+        name: "Array.concat",
+        targs: [ITInt]
+    };
+    assert_eq(cg_reachable(p, [runtime, concat], [], 10001), [])
 }

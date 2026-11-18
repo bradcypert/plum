@@ -106,6 +106,28 @@ The full 391-fixture sanitizer corpus, 43 compiler units, 50 properties,
 pass. A tracked ASan/LSan compiler also emits the entire compiler without
 findings; its IR matches ordinary emission byte for byte.
 
+## Specialization-budget follow-up
+
+The formatter-directive work exposed a limit in the preserved occurrence policy:
+the compiler itself grew from 9,962 call occurrences / 2,300 specializations to
+10,041 occurrences / 2,319 specializations. The old seed and current compiler
+both rejected that finite program, although type checking and a focused module
+build passed. A temporary compiler with a larger occurrence budget measured
+these counts; no profiling hooks remain in production.
+
+Discovery now spends its 10,000 budget only on newly visited concrete
+specializations. Runtime calls and already visited instances are skipped before
+the guard. FIFO order, generated instances, and the separate 400-step bounded
+cycle search keep their existing behavior. The historical occurrence-boundary
+assertions above describe the storage optimization's original policy; current
+checks accept 10,001 repeated calls to a shared function and reject more than
+10,000 distinct specializations with the existing diagnostic.
+
+The checked-in seed is refreshed for this change: its old occurrence guard
+cannot compile the enlarged source. A temporary compiler from the preceding
+source, with only an increased occurrence limit, bridges the refresh. The
+refreshed seed must independently build the final source and pass the seed gate.
+
 ## Measurements
 
 Medians use decimal GB of requested bytes and MiB of peak RSS.
