@@ -1,3 +1,4 @@
+// fmt: off
 let classify n = match n { -1 => true, _ => false }
 //                         ^ operator
 //                          ^ number
@@ -6,3 +7,4 @@ let expression n = -n - -1.5
 //                    ^ operator
 //                      ^ operator
 //                       ^ number.float
+// fmt: on

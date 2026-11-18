@@ -10,21 +10,16 @@ let main (): Unit = {
         assert_eq(actual, expected());
         println("child arguments: ok")
     } else {
-        let self = Result.unwrap_or_else(
-            Os.self_exe(),
-            |e| {
-                panic_raw(e);
-                ""
-            }
-        );
-        let result = Process.run(
-            Process.Options {
-                program: self,
-                args: expected(),
-                env: [],
-                stdin: None
-            }
-        );
+        let self = Result.unwrap_or_else(Os.self_exe(), |e| {
+            panic_raw(e);
+            ""
+        });
+        let result = Process.run(Process.Options {
+            program: self,
+            args: expected(),
+            env: [],
+            stdin: None
+        });
         match result {
             Err(e) => panic_raw(e),
             Ok(r) => {

@@ -61,17 +61,14 @@ let cg_emit_hash_fn (p: CgProgram) (t: typecheck.ITy): String =
             ITStruct(name, args) =>
                 if name == "Array" { cg_emit_array_hash(t, args[0]) }
                 else {
-                    cg_emit_fields_hash(
-                        t,
-                        Array.map(
-                            typecheck.ctx_field_types(p.ctx, name),
-                            |ft| typecheck.instantiate_template(
-                                typecheck.ctx_struct_generics(p.ctx, name),
-                                args,
-                                ft
-                            )
+                    cg_emit_fields_hash(t, Array.map(
+                        typecheck.ctx_field_types(p.ctx, name),
+                        |ft| typecheck.instantiate_template(
+                            typecheck.ctx_struct_generics(p.ctx, name),
+                            args,
+                            ft
                         )
-                    )
+                    ))
                 },
             ITTuple(elems) => cg_emit_fields_hash(t, elems),
             ITEnum(name, args) => {
@@ -180,50 +177,48 @@ let cg_emit_array_hash (t: typecheck.ITy) (elem: typecheck.ITy): String = {
 // SplitMix64's finalizer spreads high bits into low bucket-index bits
 // (important for binary64 values and aligned reference addresses).
 // Arithmetic deliberately wraps; LLVM instructions carry no nsw/nuw.
-let cg_hash_runtime (): String = cg_lines(
-    [
-        "define i64 @plum_hash_word(i64 %x) {",
-        "  %s1 = lshr i64 %x, 30",
-        "  %x1 = xor i64 %x, %s1",
-        "  %m1 = mul i64 %x1, -4658895280553007687",
-        "  %s2 = lshr i64 %m1, 27",
-        "  %x2 = xor i64 %m1, %s2",
-        "  %m2 = mul i64 %x2, -7723592293110705685",
-        "  %s3 = lshr i64 %m2, 31",
-        "  %x3 = xor i64 %m2, %s3",
-        "  %h = and i64 %x3, 9223372036854775807",
-        "  ret i64 %h",
-        "}",
-        "define i64 @plum_hash_combine(i64 %h, i64 %v) {",
-        "  %x = xor i64 %h, %v",
-        "  %m = mul i64 %x, 1099511628211",
-        "  %r = call i64 @plum_hash_word(i64 %m)",
-        "  ret i64 %r",
-        "}",
-        // Same bytewise FNV-1a and sign mask as String.hash, without a
-        // Bytes conversion. Embedded NULs are included, using the length.
-        "define i64 @plum_hash_bytes(ptr %a) {",
-        "entry:",
-        "  %lp = getelementptr i8, ptr %a, i64 8",
-        "  %len = load i64, ptr %lp",
-        "  %bytes = getelementptr i8, ptr %a, i64 16",
-        "  br label %loop",
-        "loop:",
-        "  %i = phi i64 [0, %entry], [%next, %body]",
-        "  %h = phi i64 [-3750763034362895579, %entry], [%mul, %body]",
-        "  %more = icmp ult i64 %i, %len",
-        "  br i1 %more, label %body, label %done",
-        "body:",
-        "  %p = getelementptr i8, ptr %bytes, i64 %i",
-        "  %b = load i8, ptr %p",
-        "  %v = zext i8 %b to i64",
-        "  %x = xor i64 %h, %v",
-        "  %mul = mul i64 %x, 1099511628211",
-        "  %next = add i64 %i, 1",
-        "  br label %loop",
-        "done:",
-        "  %out = and i64 %h, 9223372036854775807",
-        "  ret i64 %out",
-        "}",
-    ]
-)
+let cg_hash_runtime (): String = cg_lines([
+    "define i64 @plum_hash_word(i64 %x) {",
+    "  %s1 = lshr i64 %x, 30",
+    "  %x1 = xor i64 %x, %s1",
+    "  %m1 = mul i64 %x1, -4658895280553007687",
+    "  %s2 = lshr i64 %m1, 27",
+    "  %x2 = xor i64 %m1, %s2",
+    "  %m2 = mul i64 %x2, -7723592293110705685",
+    "  %s3 = lshr i64 %m2, 31",
+    "  %x3 = xor i64 %m2, %s3",
+    "  %h = and i64 %x3, 9223372036854775807",
+    "  ret i64 %h",
+    "}",
+    "define i64 @plum_hash_combine(i64 %h, i64 %v) {",
+    "  %x = xor i64 %h, %v",
+    "  %m = mul i64 %x, 1099511628211",
+    "  %r = call i64 @plum_hash_word(i64 %m)",
+    "  ret i64 %r",
+    "}",
+    // Same bytewise FNV-1a and sign mask as String.hash, without a
+    // Bytes conversion. Embedded NULs are included, using the length.
+    "define i64 @plum_hash_bytes(ptr %a) {",
+    "entry:",
+    "  %lp = getelementptr i8, ptr %a, i64 8",
+    "  %len = load i64, ptr %lp",
+    "  %bytes = getelementptr i8, ptr %a, i64 16",
+    "  br label %loop",
+    "loop:",
+    "  %i = phi i64 [0, %entry], [%next, %body]",
+    "  %h = phi i64 [-3750763034362895579, %entry], [%mul, %body]",
+    "  %more = icmp ult i64 %i, %len",
+    "  br i1 %more, label %body, label %done",
+    "body:",
+    "  %p = getelementptr i8, ptr %bytes, i64 %i",
+    "  %b = load i8, ptr %p",
+    "  %v = zext i8 %b to i64",
+    "  %x = xor i64 %h, %v",
+    "  %mul = mul i64 %x, 1099511628211",
+    "  %next = add i64 %i, 1",
+    "  br label %loop",
+    "done:",
+    "  %out = and i64 %h, 9223372036854775807",
+    "  ret i64 %out",
+    "}",
+])

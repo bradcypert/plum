@@ -120,15 +120,12 @@ pub let read_bytes (fd: Int) (max_len: Int): Result[Bytes, String] =
 /// Positive capacity is required. Ok(0) means peer EOF; Err discards contents.
 /// NativeBuffer's exclusive lease rejects concurrent/reentrant alias access.
 pub let read_into (fd: Int) (buffer: NativeBuffer.Buffer): Result[Int, String] = unsafe {
-    NativeBuffer.with_mut(
-        buffer,
-        |pointer, cap| {
-            let n = unsafe { tcp_recv_into(fd, pointer, cap) };
-            if n < 0 { Err("Net.read_into: recv failed or capacity is not positive") } else {
-                Ok(n)
-            }
+    NativeBuffer.with_mut(buffer, |pointer, cap| {
+        let n = unsafe { tcp_recv_into(fd, pointer, cap) };
+        if n < 0 { Err("Net.read_into: recv failed or capacity is not positive") } else {
+            Ok(n)
         }
-    )
+    })
 }
 
 /// Binary-safe because `tcp_send` takes an explicit length and never

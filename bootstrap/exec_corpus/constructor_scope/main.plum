@@ -62,14 +62,12 @@ let main (): Unit = {
         out
     };
     assert_eq(
-        callable(
-            Callable {
-                run: {
-                    let r = make(3);
-                    || unsafe { r.raw() }
-                }
+        callable(Callable {
+            run: {
+                let r = make(3);
+                || unsafe { r.raw() }
             }
-        ).value,
+        }).value,
         7
     );
     assert_eq(total(), 4);

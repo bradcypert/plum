@@ -20,12 +20,10 @@ let channel_round (): Unit = {
     let mut total = 0;
     for i in 0..64 {
         total = total + rx.recv()
-            .unwrap_or_else(
-                || {
-                    panic_raw("unexpected closed channel");
-                    ""
-                }
-            ).len();
+            .unwrap_or_else(|| {
+                panic_raw("unexpected closed channel");
+                ""
+            }).len();
     };
     sender.join();
     println(total.to_string());

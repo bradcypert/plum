@@ -52,13 +52,10 @@ let main (): Unit = {
     assert_eq(changed, [99, 41, 42, 43]);
     assert_eq(saved.get(), [40, 41, 42, 43]);
     let receiver = ints(50);
-    let changed = receiver.set(
-        1,
-        {
-            saved.set(receiver);
-            100
-        }
-    );
+    let changed = receiver.set(1, {
+        saved.set(receiver);
+        100
+    });
     assert_eq(changed, [50, 100, 52, 53]);
     assert_eq(saved.get(), [50, 51, 52, 53]);
     let receiver = ints(60);

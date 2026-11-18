@@ -39,14 +39,11 @@ pub struct StdModule {
 // name list has exactly one home. A name with no source here is a
 // compiler bug, not a user error, and says so.
 pub let cg_std_modules (): Array[StdModule] =
-    Array.map(
-        parser.std_module_names(()),
-        |n| StdModule {
-            name: n,
-            source: cg_std_source(n),
-            needs: cg_std_needs(n)
-        }
-    )
+    Array.map(parser.std_module_names(()), |n| StdModule {
+        name: n,
+        source: cg_std_source(n),
+        needs: cg_std_needs(n)
+    })
 
 let cg_std_needs (name: String): Array[String] =
     // `Http` parses its URLs with `Url` rather than by hand, and `Url`

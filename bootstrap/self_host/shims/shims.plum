@@ -139,7 +139,9 @@ pub let shim_files (): Array[ShimFile] = [
     },
     ShimFile {
         name: "mbedtls/include/mbedtls/config_adjust_legacy_crypto.h",
-        source: @embed_file("../../../vendor/mbedtls/include/mbedtls/config_adjust_legacy_crypto.h"),
+        source: @embed_file(
+            "../../../vendor/mbedtls/include/mbedtls/config_adjust_legacy_crypto.h"
+        ),
         compile: false,
     },
     ShimFile {

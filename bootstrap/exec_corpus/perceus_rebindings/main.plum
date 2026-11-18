@@ -67,12 +67,10 @@ let nested_rhs (): Unit = {
     };
     xs = xs.push(13);
     assert_eq(xs, [10, 11, 12, 13]);
-    xs = xs.push(
-        {
-            xs = ints(20);
-            xs[0]
-        }
-    );
+    xs = xs.push({
+        xs = ints(20);
+        xs[0]
+    });
     xs = xs.push(21);
     assert_eq(xs, [10, 11, 12, 13, 20, 21])
 }

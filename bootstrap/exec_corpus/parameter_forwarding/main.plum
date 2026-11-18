@@ -96,12 +96,10 @@ let scoped (): Unit = {
         assert_eq(take_function(f), 5);
         assert_eq(total(), 5);
     };
-    forward(
-        {
-            let r = make(5);
-            || unsafe { r.raw() }
-        }
-    );
+    forward({
+        let r = make(5);
+        || unsafe { r.raw() }
+    });
     assert_eq(total(), 6);
 }
 

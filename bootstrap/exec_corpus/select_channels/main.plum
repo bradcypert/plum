@@ -32,21 +32,17 @@ let drain (rx1: Receiver[Int]) (rx2: Receiver[String]) (left: Int) (acc: Int): I
     else {
         let got = select {
             n = rx1 => {
-                let n = n.unwrap_or_else(
-                    || {
-                        panic_raw("unexpected closed channel");
-                        0
-                    }
-                );
+                let n = n.unwrap_or_else(|| {
+                    panic_raw("unexpected closed channel");
+                    0
+                });
                 n
             },
             s = rx2 => {
-                let s = s.unwrap_or_else(
-                    || {
-                        panic_raw("unexpected closed channel");
-                        ""
-                    }
-                );
+                let s = s.unwrap_or_else(|| {
+                    panic_raw("unexpected closed channel");
+                    ""
+                });
                 s.len()
             },
         };
@@ -57,21 +53,17 @@ let drain (rx1: Receiver[Int]) (rx2: Receiver[String]) (left: Int) (acc: Int): I
 let first_word (rx: Receiver[String]) (other: Receiver[Int]): String =
     select {
         s = rx => {
-            let s = s.unwrap_or_else(
-                || {
-                    panic_raw("unexpected closed channel");
-                    ""
-                }
-            );
+            let s = s.unwrap_or_else(|| {
+                panic_raw("unexpected closed channel");
+                ""
+            });
             s.concat("!")
         },
         n = other => {
-            let n = n.unwrap_or_else(
-                || {
-                    panic_raw("unexpected closed channel");
-                    0
-                }
-            );
+            let n = n.unwrap_or_else(|| {
+                panic_raw("unexpected closed channel");
+                0
+            });
             n.to_string()
         },
     }
@@ -95,11 +87,9 @@ let main (): Unit = {
     tx4.send(1);
     println(
         rx4.recv()
-            .unwrap_or_else(
-                || {
-                    panic_raw("unexpected closed channel");
-                    0
-                }
-            ).to_string()
+            .unwrap_or_else(|| {
+                panic_raw("unexpected closed channel");
+                0
+            }).to_string()
     )
 }

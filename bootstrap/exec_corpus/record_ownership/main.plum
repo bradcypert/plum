@@ -139,13 +139,11 @@ let spreads (): Unit = {
     assert_eq(original.right, shared);
     let cloned = copy(p);
     assert_eq(cloned, p);
-    let fresh = copy(
-        Pair {
-            left: make(),
-            right: make(),
-            count: 7
-        }
-    );
+    let fresh = copy(Pair {
+        left: make(),
+        right: make(),
+        count: 7
+    });
     assert_eq(fresh.count, 7);
     assert_eq(fresh.left, fresh.right);
     // Explicit fields run in source order, then evaluate the spread once.
@@ -211,13 +209,11 @@ let spreads (): Unit = {
     };
     assert_eq(increment(bits).right, -2.5);
     assert_eq(
-        copy(
-            Pair {
-                left: true,
-                right: false,
-                count: 0
-            }
-        ).left,
+        copy(Pair {
+            left: true,
+            right: false,
+            count: 0
+        }).left,
         true
     );
 }
@@ -231,14 +227,11 @@ let scopes (): Unit = {
     );
     assert_eq(live(), 0);
     assert_eq(
-        apply_scoped(
-            Scoped { resource: resource(), text: make() },
-            |s| {
-                let out = String.reverse(s.text);
-                assert_eq(live(), 1);
-                out
-            }
-        ),
+        apply_scoped(Scoped { resource: resource(), text: make() }, |s| {
+            let out = String.reverse(s.text);
+            assert_eq(live(), 1);
+            out
+        }),
         "🙂\x00éa".repeat(32)
     );
     assert_eq(live(), 0);
@@ -249,28 +242,24 @@ let scopes (): Unit = {
     };
     assert_eq(live(), 0);
     assert_eq(
-        callable_projection(
-            Callable {
-                run: {
-                    let r = resource();
-                    || unsafe { r.raw() }
-                },
-                text: make()
-            }
-        ),
+        callable_projection(Callable {
+            run: {
+                let r = resource();
+                || unsafe { r.raw() }
+            },
+            text: make()
+        }),
         "🙂\x00éa".repeat(32)
     );
     assert_eq(live(), 0);
     {
-        let out = callable_spread(
-            Callable {
-                run: {
-                    let r = resource();
-                    || unsafe { r.raw() }
-                },
-                text: make()
-            }
-        );
+        let out = callable_spread(Callable {
+            run: {
+                let r = resource();
+                || unsafe { r.raw() }
+            },
+            text: make()
+        });
         assert_eq(live(), 0);
         assert_eq(out.run(), 7);
         assert_eq(out.text, make());

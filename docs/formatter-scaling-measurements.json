@@ -1,0 +1,163 @@
+{
+  "metric": "Cumulative requested Plum-cell allocation bytes, not peak/live memory or native buffers",
+  "method": "One independent CLI process per input and compiler; identical expected output required",
+  "platform": {
+    "system": "Linux",
+    "machine": "x86_64"
+  },
+  "after_compiler_sha256": "6b4c0bfd34efc3407a1f6ed028027f327a1754b3d078f7362ad65d701aa1c251",
+  "growth_limit": 2.6,
+  "cases": {
+    "dense_statements": {
+      "largest_input_budget": 96000000,
+      "samples": [
+        {
+          "count": 1000,
+          "input_bytes": 11026,
+          "output_bytes": 15030,
+          "input_sha256": "51df4ac6b238a6cf19db4d769b6d9be04532f1ef3821d1ce8c221256db5481eb",
+          "output_sha256": "9ed0dd8ce91cfd2d8d1a18365a8d73986dc6c81559ae9d59b2afd5129b078c87",
+          "before": {
+            "allocations": 332922,
+            "allocated_bytes": 107413543
+          },
+          "after": {
+            "allocations": 320927,
+            "allocated_bytes": 15919366
+          }
+        },
+        {
+          "count": 2000,
+          "input_bytes": 22026,
+          "output_bytes": 30030,
+          "input_sha256": "076b691df5e9c921244cd9ca92239d460ecb4cb84fb8eedd389cd70a15471e8e",
+          "output_sha256": "8de75db60021eccff15755ca0ff566d1745a16f2b8c49a0bdac090972826c164",
+          "before": {
+            "allocations": 669858,
+            "allocated_bytes": 397723759
+          },
+          "after": {
+            "allocations": 645868,
+            "allocated_bytes": 32742148
+          }
+        },
+        {
+          "count": 4000,
+          "input_bytes": 44026,
+          "output_bytes": 60030,
+          "input_sha256": "1bd90703c9499e75c5cff197007e994a1bbc6780649fcecf2ac72b23e59dbb7d",
+          "output_sha256": "2d803fdc6b0738e15c50ff8ecbb3ef64562ac3ad1430f2683b94a32ba85cabc6",
+          "before": {
+            "allocations": 1351248,
+            "allocated_bytes": 1525487629
+          },
+          "after": {
+            "allocations": 1303255,
+            "allocated_bytes": 67561928
+          }
+        }
+      ]
+    },
+    "formatted_statements": {
+      "largest_input_budget": 96000000,
+      "samples": [
+        {
+          "count": 1000,
+          "input_bytes": 15030,
+          "output_bytes": 15030,
+          "input_sha256": "9ed0dd8ce91cfd2d8d1a18365a8d73986dc6c81559ae9d59b2afd5129b078c87",
+          "output_sha256": "9ed0dd8ce91cfd2d8d1a18365a8d73986dc6c81559ae9d59b2afd5129b078c87",
+          "before": {
+            "allocations": 287678,
+            "allocated_bytes": 105548491
+          },
+          "after": {
+            "allocations": 275685,
+            "allocated_bytes": 14053394
+          }
+        },
+        {
+          "count": 2000,
+          "input_bytes": 30030,
+          "output_bytes": 30030,
+          "input_sha256": "8de75db60021eccff15755ca0ff566d1745a16f2b8c49a0bdac090972826c164",
+          "output_sha256": "8de75db60021eccff15755ca0ff566d1745a16f2b8c49a0bdac090972826c164",
+          "before": {
+            "allocations": 579624,
+            "allocated_bytes": 394041157
+          },
+          "after": {
+            "allocations": 555633,
+            "allocated_bytes": 29063762
+          }
+        },
+        {
+          "count": 4000,
+          "input_bytes": 60030,
+          "output_bytes": 60030,
+          "input_sha256": "2d803fdc6b0738e15c50ff8ecbb3ef64562ac3ad1430f2683b94a32ba85cabc6",
+          "output_sha256": "2d803fdc6b0738e15c50ff8ecbb3ef64562ac3ad1430f2683b94a32ba85cabc6",
+          "before": {
+            "allocations": 1171121,
+            "allocated_bytes": 1518118839
+          },
+          "after": {
+            "allocations": 1123121,
+            "allocated_bytes": 60194506
+          }
+        }
+      ]
+    },
+    "many_definitions": {
+      "largest_input_budget": 96000000,
+      "samples": [
+        {
+          "count": 250,
+          "input_bytes": 8890,
+          "output_bytes": 11139,
+          "input_sha256": "fc75d8bf10dd046ba504d6de1a7f0680a8ecb92d2641e69898a26047d64f5012",
+          "output_sha256": "1f66f43fe3345df263ccce641878b2e2189dd6ebb0e780e03374a817c650d6cd",
+          "before": {
+            "allocations": 267860,
+            "allocated_bytes": 61462325
+          },
+          "after": {
+            "allocations": 259127,
+            "allocated_bytes": 13584801
+          }
+        },
+        {
+          "count": 500,
+          "input_bytes": 17890,
+          "output_bytes": 22389,
+          "input_sha256": "71cbc30edc7152480846c69a09cacd86b361acb602d1c7e87f038892a61b121a",
+          "output_sha256": "3e03866b0cbc3c408c79821ce4f10ee826608c092c8e8d5fb0cb2ce3c1c92d35",
+          "before": {
+            "allocations": 540252,
+            "allocated_bytes": 220642333
+          },
+          "after": {
+            "allocations": 522782,
+            "allocated_bytes": 28173693
+          }
+        },
+        {
+          "count": 1000,
+          "input_bytes": 35890,
+          "output_bytes": 44889,
+          "input_sha256": "6e487e29b73b73ada758513655e79280a951042035b8ea8987096bcb9cd298b9",
+          "output_sha256": "baaa53a3b9bfa4ea681fbadeead8a21133d5258c73c1c7a32fafb4c38c28079a",
+          "before": {
+            "allocations": 1091373,
+            "allocated_bytes": 830570476
+          },
+          "after": {
+            "allocations": 1056398,
+            "allocated_bytes": 58293278
+          }
+        }
+      ]
+    }
+  },
+  "before_compiler_sha256": "a7e4e198010368d68dbe6304893bb6e2fa00117bc6f56582e73556ebd120e20f"
+}

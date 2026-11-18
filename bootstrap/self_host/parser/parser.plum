@@ -319,18 +319,15 @@ pub struct ItemNode {
 
 // Stamps a module name onto every item parsed from one file.
 pub let with_module (items: Array[ItemNode]) (m: String): Array[ItemNode] =
-    Array.map(
-        items,
-        |it| ItemNode {
-            is_pub: it.is_pub,
-            module: m,
-            kind: it.kind,
-            path: it.path,
-            doc: it.doc,
-            start: it.start,
-            end: it.end
-        }
-    )
+    Array.map(items, |it| ItemNode {
+        is_pub: it.is_pub,
+        module: m,
+        kind: it.kind,
+        path: it.path,
+        doc: it.doc,
+        start: it.start,
+        end: it.end
+    })
 
 pub struct ProgramNode { pub items: Array[ItemNode] }
 
@@ -439,15 +436,13 @@ pub struct SourceContext {
     pub ends: Array[Int]
 }
 
-let CTX: Ref[SourceContext] = ref(
-    SourceContext {
-        path: "",
-        source: "",
-        chars: [],
-        starts: [],
-        ends: []
-    }
-)
+let CTX: Ref[SourceContext] = ref(SourceContext {
+    path: "",
+    source: "",
+    chars: [],
+    starts: [],
+    ends: []
+})
 
 pub let set_source_context
     (path: String)
@@ -455,15 +450,13 @@ pub let set_source_context
     (starts: Array[Int])
     (ends: Array[Int]): Unit
 =
-    CTX.set(
-        SourceContext {
-            path: path,
-            source: source,
-            chars: chars_of(source),
-            starts: starts,
-            ends: ends
-        }
-    )
+    CTX.set(SourceContext {
+        path: path,
+        source: source,
+        chars: chars_of(source),
+        starts: starts,
+        ends: ends
+    })
 
 // The `///` block immediately above the token at `pos`.
 //
@@ -965,32 +958,28 @@ let desugar_contracts
             |c| SExpr(contract_check_call("__contract_require", "precondition failed", c))
         );
         if Array.is_empty(ensures) {
-            EBlock(
-                PBlock {
-                    stmts: require_stmts,
-                    tail: Some(raw_body),
-                    starts: synthetic_starts(require_stmts.len() + 1, 0, []),
-                    ends: synthetic_starts(require_stmts.len() + 1, 0, []),
-                    open: 0 - 1,
-                    close: 0 - 1
-                }
-            )
+            EBlock(PBlock {
+                stmts: require_stmts,
+                tail: Some(raw_body),
+                starts: synthetic_starts(require_stmts.len() + 1, 0, []),
+                ends: synthetic_starts(require_stmts.len() + 1, 0, []),
+                open: 0 - 1,
+                close: 0 - 1
+            })
         } else {
             let with_let = require_stmts.push(SLet(false, PIdent("result", 0 - 1), None, raw_body));
             let ensure_stmts = Array.map(
                 ensures,
                 |c| SExpr(contract_check_call("__contract_ensure", "postcondition failed", c))
             );
-            EBlock(
-                PBlock {
-                    stmts: Array.concat(with_let, ensure_stmts),
-                    tail: Some(EIdent("result", 0 - 1)),
-                    starts: synthetic_starts(with_let.len() + ensure_stmts.len() + 1, 0, []),
-                    ends: synthetic_starts(with_let.len() + ensure_stmts.len() + 1, 0, []),
-                    open: 0 - 1,
-                    close: 0 - 1
-                }
-            )
+            EBlock(PBlock {
+                stmts: Array.concat(with_let, ensure_stmts),
+                tail: Some(EIdent("result", 0 - 1)),
+                starts: synthetic_starts(with_let.len() + ensure_stmts.len() + 1, 0, []),
+                ends: synthetic_starts(with_let.len() + ensure_stmts.len() + 1, 0, []),
+                open: 0 - 1,
+                close: 0 - 1
+            })
         }
     }
 
@@ -1711,7 +1700,35 @@ let push_span (sp: ExprSpan): Unit = {
     let cur = SPANS.get();
     let n = cur.len();
     if n > 0 && cur[n - 1].start == sp.start && cur[n - 1].end == sp.end { () }
-    else { SPANS.set(cur.push(sp)) }
+    else {
+        // Release the recorder's reference before growing the array. Retained
+        // snapshots still force copy-on-write; an unshared recorder can reuse.
+        SPANS.set(no_spans(()));
+        SPANS.set(cur.push(sp))
+    }
+}
+
+pub let test_recorded_span_snapshot_ownership (): Unit = {
+    record_spans(true);
+    note_offsets(1, 2);
+    let first = recorded_spans();
+    note_offsets(3, 4);
+    let second = recorded_spans();
+    assert_eq(first.len(), 1);
+    assert_eq(first[0].start, 1);
+    assert_eq(second.len(), 2);
+    note_offsets(3, 4);
+    assert_eq(recorded_spans().len(), 2);
+    note_offsets(5, 6);
+    let third = recorded_spans();
+    assert_eq(second.len(), 2);
+    assert_eq(third.len(), 3);
+    assert_eq(third[2].end, 6);
+    record_spans(false);
+    assert_eq(first[0].end, 2);
+    assert_eq(second[1].start, 3);
+    assert_eq(third.len(), 3);
+    assert(recorded_spans().is_empty())
 }
 
 // Every level of the precedence chain records the extent it returns,
@@ -1873,22 +1890,19 @@ let compare_op_at (tokens: Array[lexer.Token]) (pos: Int): Option[CompareOp] =
         _ => None,
     }
 
-let parse_compare (tokens: Array[lexer.Token]) (pos: Int) (ns: Bool): ExprResult = spanned(
-    pos,
-    {
-        let lhs = parse_bitor(tokens, pos, ns);
-        match compare_op_at(tokens, lhs.next_pos) {
-            None => lhs,
-            Some(op_r) => {
-                let rhs = parse_bitor(tokens, op_r.next_pos, ns);
-                if Option.is_some(compare_op_at(tokens, rhs.next_pos)) {
-                    fail_at(rhs.next_pos, "comparison operators do not chain")
-                };
-                ExprResult { value: EBinary(op_r.op, lhs.value, rhs.value), next_pos: rhs.next_pos }
-            },
-        }
+let parse_compare (tokens: Array[lexer.Token]) (pos: Int) (ns: Bool): ExprResult = spanned(pos, {
+    let lhs = parse_bitor(tokens, pos, ns);
+    match compare_op_at(tokens, lhs.next_pos) {
+        None => lhs,
+        Some(op_r) => {
+            let rhs = parse_bitor(tokens, op_r.next_pos, ns);
+            if Option.is_some(compare_op_at(tokens, rhs.next_pos)) {
+                fail_at(rhs.next_pos, "comparison operators do not chain")
+            };
+            ExprResult { value: EBinary(op_r.op, lhs.value, rhs.value), next_pos: rhs.next_pos }
+        },
     }
-)
+})
 
 // --- Bitwise, and where it sits ---
 //
@@ -1950,21 +1964,18 @@ let parse_bitand_rest (tokens: Array[lexer.Token]) (pos: Int) (lhs: PExpr) (ns: 
         _ => ExprResult { value: lhs, next_pos: pos },
     }
 
-let parse_range (tokens: Array[lexer.Token]) (pos: Int) (ns: Bool): ExprResult = spanned(
-    pos,
-    {
-        let lhs = parse_add(tokens, pos, ns);
-        let b = bump_if(tokens, lhs.next_pos, TokDotDot);
-        if !b.matched { lhs }
-        else {
-            let rhs = parse_add(tokens, b.next_pos, ns);
-            if check(tokens, rhs.next_pos, TokDotDot) {
-                fail_at(rhs.next_pos, "ranges do not chain")
-            };
-            ExprResult { value: EBinary(BRange, lhs.value, rhs.value), next_pos: rhs.next_pos }
-        }
+let parse_range (tokens: Array[lexer.Token]) (pos: Int) (ns: Bool): ExprResult = spanned(pos, {
+    let lhs = parse_add(tokens, pos, ns);
+    let b = bump_if(tokens, lhs.next_pos, TokDotDot);
+    if !b.matched { lhs }
+    else {
+        let rhs = parse_add(tokens, b.next_pos, ns);
+        if check(tokens, rhs.next_pos, TokDotDot) {
+            fail_at(rhs.next_pos, "ranges do not chain")
+        };
+        ExprResult { value: EBinary(BRange, lhs.value, rhs.value), next_pos: rhs.next_pos }
     }
-)
+})
 
 let parse_add (tokens: Array[lexer.Token]) (pos: Int) (ns: Bool): ExprResult = {
     let lhs = parse_mul(tokens, pos, ns);
@@ -2308,15 +2319,13 @@ let reparse_interp_expr_at (src: String) (start: Int): PExpr = {
     let spanned = if has_source { lexer.tokenize_fragment_at(src, saved.source, saved.path, start) }
     else { lexer.tokenize_spanned(src) };
     if has_source {
-        CTX.set(
-            SourceContext {
-                path: saved.path,
-                source: saved.source,
-                chars: saved.chars,
-                starts: Array.map(spanned.starts, |i| start + i),
-                ends: Array.map(spanned.ends, |i| start + i)
-            }
-        );
+        CTX.set(SourceContext {
+            path: saved.path,
+            source: saved.source,
+            chars: saved.chars,
+            starts: Array.map(spanned.starts, |i| start + i),
+            ends: Array.map(spanned.ends, |i| start + i)
+        });
     } else { () };
     let value = match spanned.tokens[0] {
         TokIf => {
@@ -2557,14 +2566,12 @@ let parse_match_arms_acc
         let arrow_pos = expect(tokens, guard_r.next_pos, TokFatArrow, "'=>'");
         let body_r = parse_expr(tokens, arrow_pos);
         note_offsets(offset_at(pos), end_offset_at(body_r.next_pos - 1));
-        let new_acc = acc.push(
-            MatchArmNode {
-                pattern: pat_r.value,
-                guard: guard_r.value,
-                body: body_r.value,
-                start: offset_at(pos)
-            }
-        );
+        let new_acc = acc.push(MatchArmNode {
+            pattern: pat_r.value,
+            guard: guard_r.value,
+            body: body_r.value,
+            start: offset_at(pos)
+        });
         let comma_b = bump_if(tokens, body_r.next_pos, TokComma);
         if !comma_b.matched { MatchArmsResult { value: new_acc, next_pos: comma_b.next_pos } }
         else { parse_match_arms_acc(tokens, comma_b.next_pos, new_acc) }
@@ -3084,16 +3091,12 @@ pub let render_pattern (p: PPattern): String = match p {
 let render_generic_params (params: Array[GenericParamNode]): String =
     if Array.is_empty(params) { "" }
     else {
-        "[".concat(
-            join_comma(
-                Array.map(
-                    params,
-                    |p| if Array.is_empty(p.bound) { p.name } else {
-                        p.name.concat(":").concat(join_plus(p.bound))
-                    }
-                )
-            )
-        ).concat("]")
+        "[".concat(join_comma(Array.map(
+            params,
+            |p| if Array.is_empty(p.bound) { p.name } else {
+                p.name.concat(":").concat(join_plus(p.bound))
+            }
+        ))).concat("]")
     }
 
 let join_plus (strs: Array[String]): String =
@@ -3123,62 +3126,35 @@ let render_item (item: ItemNode): String = {
             let generics_str = render_generic_params(decl.generics);
             let base1 = ["struct", pub_marker.concat(decl.name)];
             let base2 = if generics_str == "" { base1 } else { base1.push(generics_str) };
-            sexpr(
-                Array.concat(
-                    base2,
-                    Array.map(
-                        decl.fields,
-                        |f| {
-                            let fpub = if f.is_pub { "pub " } else { "" };
-                            fpub.concat(f.name).concat(":").concat(render_type(f.ty))
-                        }
-                    )
-                )
-            )
+            sexpr(Array.concat(base2, Array.map(decl.fields, |f| {
+                let fpub = if f.is_pub { "pub " } else { "" };
+                fpub.concat(f.name).concat(":").concat(render_type(f.ty))
+            })))
         },
         IKEnum(decl) => {
             let generics_str = render_generic_params(decl.generics);
             let base1 = ["enum", pub_marker.concat(decl.name)];
             let base2 = if generics_str == "" { base1 } else { base1.push(generics_str) };
-            sexpr(
-                Array.concat(
-                    base2,
-                    Array.map(
-                        decl.variants,
-                        |v| {
-                            if Array.is_empty(v.payload) { v.name } else {
-                                v.name.concat("(")
-                                    .concat(join_comma(Array.map(v.payload, |t| render_type(t))))
-                                    .concat(")")
-                            }
-                        }
-                    )
-                )
-            )
+            sexpr(Array.concat(base2, Array.map(decl.variants, |v| {
+                if Array.is_empty(v.payload) { v.name } else {
+                    v.name.concat("(")
+                        .concat(join_comma(Array.map(v.payload, |t| render_type(t))))
+                        .concat(")")
+                }
+            })))
         },
         IKExtern(block) => {
             let base = ["extern", quote(block.abi)];
-            sexpr(
-                Array.concat(
-                    base,
-                    Array.map(
-                        block.fns,
-                        |f| {
-                            let params_str = join_comma(
-                                Array.map(
-                                    f.params,
-                                    |p| p.name.concat(":").concat(render_type(p.ty))
-                                )
-                            );
-                            let ret_str = match f.ret_ty {
-                                Some(t) => "->".concat(render_type(t)),
-                                None => ""
-                            };
-                            "fn ${f.name}(${params_str})${ret_str}"
-                        }
-                    )
-                )
-            )
+            sexpr(Array.concat(base, Array.map(block.fns, |f| {
+                let params_str = join_comma(
+                    Array.map(f.params, |p| p.name.concat(":").concat(render_type(p.ty)))
+                );
+                let ret_str = match f.ret_ty {
+                    Some(t) => "->".concat(render_type(t)),
+                    None => ""
+                };
+                "fn ${f.name}(${params_str})${ret_str}"
+            })))
         },
         IKHandle(decl) => sexpr(
             ["handle", pub_marker.concat(decl.name), "on_drop:".concat(decl.on_drop)]

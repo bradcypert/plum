@@ -174,13 +174,11 @@ pub let start (opts: Options): Result[Child, String] = unsafe {
 let result_of (h: Int): Result[ProcessResult, String] = unsafe {
     if process_capture_status(h) != 0 { Err("Process: could not read captured output") }
     else {
-        Ok(
-            ProcessResult {
-                exit_code: process_ex_exit_code_raw(h),
-                stdout: process_ex_stdout_raw(h),
-                stderr: process_ex_stderr_raw(h),
-            }
-        )
+        Ok(ProcessResult {
+            exit_code: process_ex_exit_code_raw(h),
+            stdout: process_ex_stdout_raw(h),
+            stderr: process_ex_stderr_raw(h),
+        })
     }
 }
 

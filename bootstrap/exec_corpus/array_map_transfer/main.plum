@@ -21,30 +21,24 @@ let texts (): Array[String] = ["a".repeat(32), "b".repeat(32)]
 
 let lengths (xs: Array[String]): Array[Int] = xs.map(|s| s.len())
 
-let scoped (xs: Array[Resource]): Array[Int] = xs.map(
-    |r| {
-        assert_eq(unsafe { map_total() }, 0);
-        unsafe { r.raw() }
-    }
-)
+let scoped (xs: Array[Resource]): Array[Int] = xs.map(|r| {
+    assert_eq(unsafe { map_total() }, 0);
+    unsafe { r.raw() }
+})
 
-let nested (xs: Array[Owner]): Array[Int] = xs.map(
-    |o| {
-        assert_eq(unsafe { map_total() }, 2);
-        unsafe { o.resource.raw() }
-    }
-)
+let nested (xs: Array[Owner]): Array[Int] = xs.map(|o| {
+    assert_eq(unsafe { map_total() }, 2);
+    unsafe { o.resource.raw() }
+})
 
 let closures (): Unit = {
     let r = make(4);
     let f = || unsafe { r.raw() };
     let mut xs = [f];
-    xs = xs.map(
-        |g| {
-            assert_eq(unsafe { map_total() }, 4);
-            g
-        }
-    );
+    xs = xs.map(|g| {
+        assert_eq(unsafe { map_total() }, 4);
+        g
+    });
     assert_eq(xs[0](), 4);
     assert_eq(unsafe { map_total() }, 4);
 }
@@ -65,12 +59,10 @@ let round (): Unit = {
     assert_eq(lengths(texts()), [32, 32]);
     let saved = ref("");
     let xs = texts();
-    let out = xs.map(
-        |s| {
-            saved.set(s);
-            s.len()
-        }
-    );
+    let out = xs.map(|s| {
+        saved.set(s);
+        s.len()
+    });
     assert_eq(out, [32, 32]);
     assert_eq(saved.get(), "b".repeat(32));
     let xs = texts();

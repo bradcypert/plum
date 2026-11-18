@@ -11,15 +11,12 @@ use Time;
 // to keep being true.
 
 let report (label: String) (r: Result[Bool, String]): Unit =
-    println(
-        label.concat(": ")
-            .concat(
-                match r {
-                    Ok(b) => b.to_string(),
-                    Err(e) => e
-                }
-            )
-    )
+    println(label.concat(": ").concat(
+        match r {
+            Ok(b) => b.to_string(),
+            Err(e) => e
+        }
+    ))
 
 let main (): Unit = match Os.temp_dir() {
     Err(e) => println(e),

@@ -116,6 +116,76 @@ with tempfile.TemporaryDirectory(prefix="plum-width-") as temp:
     # indivisible, even when they alone exceed the soft line width.
     check('let literal (): String = "' + 'λ🙂, // ; ' * 20 + '"\n')
 
+    # Incidental breaks inside short groups have the same canonical answer.
+    for compact, broken in [
+        ('consume(first, second)', 'consume(\nfirst,\nsecond\n)'),
+        ('outer(inner(1, 2))', 'outer(\ninner(\n1,\n2\n)\n)'),
+        ('consume(|v| produce(v))', 'consume(\n|v|\nproduce(v)\n)'),
+        ('consume(value.first().second())', 'consume(\nvalue\n.first()\n.second()\n)'),
+        ('consume([1, 2])', 'consume(\n[\n1,\n2\n]\n)'),
+        ('consume("λ🙂", "日本語")', 'consume(\n"λ🙂",\n"日本語"\n)'),
+    ]:
+        canonical = 'let short (): Int = ' + compact + '\n'
+        check('let short (): Int = ' + broken + '\n', canonical)
+        check(canonical, canonical)
+
+    # Long source indentation inside a short nested type must not make the
+    # signature appear wider than its canonical form.
+    signature = 'let types (xs: Array[Map[String, Int]]): Int = xs.len()\n'
+    broken_type = 'Array[\n' + ' ' * 100 + 'Map[\nString,\nInt\n]\n]'
+    check('let types (xs: ' + broken_type + '): Int = xs.len()\n', signature)
+
+    fixture = Path(__file__).with_name('fmt_corpus') / 'grouping'
+    grouped = (fixture / 'expected.plum').read_text()
+    check((fixture / 'in.plum').read_text(), grouped)
+    check((fixture / 'in.plum').read_text().replace('\n', '\r\n'), grouped.replace('\n', '\r\n'))
+
+    # Fitting an inner group includes the outer closing delimiters and `;`.
+    for count in range(30, 83):
+        result = check('let boundary (): Unit = { let x = outer(inner("' + 'x' * count + '")); x }\n')
+        assert all(len(line) <= 100 for line in result.splitlines()), result
+
+    # Moving a chain's closing delimiters must not require a second save
+    # to move the method dot. Measure the same canonical link both times.
+    for count in range(20, 84):
+        result = check('let chain (): Unit = { consume("' + 'x' * count
+                       + '"\n.concat(name()).concat("' + 's' * 40 + '")) }\n')
+        assert all(len(line) <= 100 for line in result.splitlines()), result
+
+    # A conditional's final branch is not a wrapper payload. Keep the
+    # control expression in ordinary argument layout rather than joining
+    # everything through its `else {` prefix.
+    conditional = check('let conditional (): Int = choose(0, if flag { 1 } else { produce("'
+                        + 'x' * 60 + '") })\n')
+    assert 'choose(\n' in conditional, conditional
+
+    # An index is not an array-literal payload: move the arguments instead
+    # of splitting a short `values.offsets[index]` at the right margin.
+    indexed = check('let index (): Unit = { consume("' + 'x' * 65
+                    + '", values.offsets[index]); }\n')
+    assert 'values.offsets[index]' in indexed, indexed
+
+    # A short final call belongs on a fresh argument line when the whole
+    # outer call is too wide; do not split its tiny payload instead.
+    short_call = check('let nested (): Unit = { consume("' + 'x' * 65
+                       + '", values.concat(token)); }\n')
+    assert 'values.concat(token)' in short_call, short_call
+
+    # An earlier callback is not the final call's body and stays inline.
+    earlier = check('let earlier (): Int = consume(|v| v, inner('
+                    + ', '.join('"' + v * 35 + '"' for v in 'abc') + '))\n')
+    assert 'consume(|v| v, inner(' in earlier, earlier
+
+    # Comments block contraction at both wrapper joins, including a final
+    # comment inside the payload. Multiline tokens remain indivisible.
+    for text in [
+        'let comment (): R = Ok(\n// before record\nP { x: 1, y: 2, z: 3 })\n',
+        'let comment (): R = Ok(P { x: 1, y: 2, z: 3 } // after record\n)\n',
+        'let comment (): R = Ok(P { x: 1, y: 2, z: 3\n// inside record\n})\n',
+        'let text (): R = Ok(P { value: "λ🙂\n\t// literal", second: 2, third: 3 })\n',
+    ]:
+        check(text)
+
     source.write_text('let main (): Unit = { println("hello"); println("world") }\n')
     result = subprocess.run([compiler, "fmt", "--check", str(source)], capture_output=True)
     assert result.returncode == 1

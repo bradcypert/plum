@@ -17,11 +17,7 @@ let add3 (a: Int) (b: Int) (c: Int): Int = a + b + c
 
 // A call's arguments answer to the CALL, not to the statement.
 let call (a: Int) (b: Int) (c: Int): Int =
-    add3(
-        a,
-        b,
-        c
-    )
+    add3(a, b, c)
 
 // An `else` continues the `if` without going inside it.
 let bump (n: Int) (acc: Int): Int =
@@ -39,11 +35,7 @@ let label (n: Int): String =
 
 let nested (xs: Array[Int]): Int = {
     let total =
-        Array.fold(
-            xs,
-            0,
-            |a, v| a + v
-        );
+        Array.fold(xs, 0, |a, v| a + v);
     total
 }
 

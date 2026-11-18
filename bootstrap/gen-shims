@@ -89,10 +89,10 @@ def render(name: str, compile: bool, path: pathlib.Path) -> str:
     # Emit literal fields in declaration order for static aggregate layout.
     rel = pathlib.Path(os.path.relpath(path, OUT.parent)).as_posix()
     # Match the formatter's soft 100-column call layout without needing a
-    # working compiler to regenerate the manifest. The trailing comma is
-    # outside the call, so it is not part of the group's width decision.
+    # working compiler to regenerate the manifest. Reserve the trailing
+    # comma too, so the complete field stays within 100 columns.
     embed = '        source: @embed_file("%s")' % rel
-    source = (embed + ",\n" if len(embed) <= 100 else
+    source = (embed + ",\n" if len(embed) + 1 <= 100 else
               '        source: @embed_file(\n'
               '            "%s"\n'
               '        ),\n' % rel)

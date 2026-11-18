@@ -137,8 +137,10 @@ let total (): Int = {
 }
 ```
 
-Short records and expression-only guards can stay compact. Existing line
-breaks are retained, indentation uses four spaces, and runs of blank lines
+Short records and expression-only guards can stay compact. Comment-free short
+argument/type groups collapse when they fit; wrappers stay attached to multiline
+payloads. Other existing line breaks are retained. Indentation uses four spaces,
+and runs of blank lines
 collapse to one. Token spacing is normalized, including commas, colons and
 binary operators; a unary minus stays attached to its operand. Contract colons
 retain their leading space, as in `require b != 0 : "message"`.
@@ -148,10 +150,39 @@ text are preserved, and an indivisible identifier, string or deeply nested
 construct can exceed it. Formatting never splits a token or rewrites an
 expression to make it fit.
 
+Preserve intentional layout with standalone comment directives:
+
+```plum fragment
+// fmt: skip
+let aligned (): Array[Int] = [1,   2,
+                             3,   4]
+
+// fmt: off
+let compact (): Int = { let n = 1;    n }
+// fmt: on
+```
+
+`skip` preserves the next definition, statement, or expression, using the widest
+parsed construct that starts at the next token. It includes its leading trivia
+and text through its final token, plus following comments/newlines; indentation
+of the next code is formatted normally. Use `off/on` for fragments such as
+individual field declarations or match patterns.
+
+`off/on` regions can nest. Each `on` closes one `off`; an unmatched `off` extends
+to EOF. A stray `on`, or a `skip` with no following parsed construct, has no
+effect. Overlapping exclusions are combined. Directive lines and preserved text
+keep their original bytes, including tabs, literal contents and CRLF endings.
+The directives must occupy their own lines, with the exact comment body shown;
+leading/trailing whitespace is allowed. Text in strings, documentation comments,
+trailing comments, or comments with additional prose does not activate them.
+Place `skip` above any attached `///` documentation comments. The CLI and editor
+use the same rules.
+
 `bootstrap/fmt-check` checks the repository's formatting, recorded input/output
 fixtures, token preservation, and stability on the next format-on-save.
-Deliberately unformatted inputs and highlighting fixtures with caret assertions
-retain their original layout as test data.
+Deliberately unformatted inputs retain their original layout as test data.
+Highlighting fixtures with caret assertions use `fmt: off/on` directives and
+pass the same fixed-point check as other sources.
 
 **It cannot corrupt a file.** Before writing, `--write` re-lexes its own
 output and compares the token sequence to the original's; whitespace

@@ -41,13 +41,11 @@ pub let parse (s: String): Result[Version, String] = {
                 Err(e) => Err(e),
                 Ok(minor) => match part(parts[2], "patch") {
                     Err(e) => Err(e),
-                    Ok(patch) => Ok(
-                        Version {
-                            major: major,
-                            minor: minor,
-                            patch: patch
-                        }
-                    ),
+                    Ok(patch) => Ok(Version {
+                        major: major,
+                        minor: minor,
+                        patch: patch
+                    }),
                 },
             },
         }

@@ -18,14 +18,12 @@ let run_self
     (argv: Array[String])
     (stdin: Option[String]): Result[Process.ProcessResult, String]
 =
-    Process.run(
-        Process.Options {
-            program: self,
-            args: argv,
-            env: [],
-            stdin: stdin
-        }
-    )
+    Process.run(Process.Options {
+        program: self,
+        args: argv,
+        env: [],
+        stdin: stdin
+    })
 
 // --- The child ---
 
@@ -126,25 +124,21 @@ let parent (): Unit = match Os.self_exe() {
         };
 
         // A directory that is not there is an `Err`, not a silent no-op.
-        println(
-            "chdir to nowhere: ".concat(
-                match Os.chdir("/no/such/dir/here") {
-                    Ok(_) => "UNEXPECTEDLY OK",
-                    Err(_) => "err",
-                }
-            )
-        );
+        println("chdir to nowhere: ".concat(
+            match Os.chdir("/no/such/dir/here") {
+                Ok(_) => "UNEXPECTEDLY OK",
+                Err(_) => "err",
+            }
+        ));
 
         // `$HOME` is set in every environment this runs in; the point is
         // that it is read rather than guessed from a username.
-        println(
-            "home is absolute: ".concat(
-                match Os.home_dir() {
-                    Some(h) => Path.is_absolute(h).to_string(),
-                    None => "unset",
-                }
-            )
-        )
+        println("home is absolute: ".concat(
+            match Os.home_dir() {
+                Some(h) => Path.is_absolute(h).to_string(),
+                None => "unset",
+            }
+        ))
     },
 }
 

@@ -1,3 +1,4 @@
+// fmt: off
 pub handle Res { on_drop: fake_close, }
 //  ^ keyword
 //         ^ type
@@ -29,3 +30,4 @@ handle Other { on_drop: handle }
 handle Third { on_drop: on_drop }
 //             ^ property
 //                      ^ function
+// fmt: on

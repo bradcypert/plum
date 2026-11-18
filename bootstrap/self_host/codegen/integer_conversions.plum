@@ -96,18 +96,14 @@ let cg_conversion_variant
     (n: Int): Emit
 =
     match cg_variant_of(p, name, tag) {
-        Some(v) => cg_variant_build(
-            p,
-            v,
-            ArgVals {
-                code: "",
-                allocas: "",
-                releases: "",
-                globals: "",
-                vals: values,
-                n: n
-            }
-        ),
+        Some(v) => cg_variant_build(p, v, ArgVals {
+            code: "",
+            allocas: "",
+            releases: "",
+            globals: "",
+            vals: values,
+            n: n
+        }),
         None => {
             cg_fail("internal: missing conversion Result variant ${tag}");
             cg_unit_emit(n)
@@ -157,7 +153,10 @@ let cg_conversion_error
             name,
             [
                 typecheck.TFieldInit { name: "source", value: cg_conversion_kind(source) },
-                typecheck.TFieldInit { name: "destination", value: cg_conversion_kind(destination) },
+                typecheck.TFieldInit {
+                    name: "destination",
+                    value: cg_conversion_kind(destination)
+                },
             ],
             None
         )

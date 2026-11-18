@@ -35,57 +35,46 @@ let functions (): Array[() -> Int] = [captured(4), captured(5)]
 let scoped (): Unit = {
     assert_eq(
         resources(0)
-            .filter(
-                |r| {
-                    assert_eq(total(), 0);
-                    unsafe { r.raw() } < 0
-                }
-            ).len(),
+            .filter(|r| {
+                assert_eq(total(), 0);
+                unsafe { r.raw() } < 0
+            }).len(),
         0
     );
     assert_eq(total(), 2);
     assert_eq(
         owners()
-            .filter(
-                |o| {
-                    assert_eq(total(), 2);
-                    unsafe { o.resource.raw() } < 0
-                }
-            ).len(),
+            .filter(|o| {
+                assert_eq(total(), 2);
+                unsafe { o.resource.raw() } < 0
+            }).len(),
         0
     );
     assert_eq(total(), 4);
     assert_eq(
         functions()
-            .filter(
-                |f| {
-                    assert_eq(total(), 4);
-                    f() < 0
-                }
-            ).len(),
+            .filter(|f| {
+                assert_eq(total(), 4);
+                f() < 0
+            }).len(),
         0
     );
     assert_eq(total(), 6);
-    let out = Array.filter(
-        resources(6),
-        {
-            let marker = make(8);
-            |r: Resource| {
-                assert_eq(total(), 6);
-                assert_eq(unsafe { marker.raw() }, 8);
-                unsafe { Resource.raw(r) } < 0
-            }
+    let out = Array.filter(resources(6), {
+        let marker = make(8);
+        |r: Resource| {
+            assert_eq(total(), 6);
+            assert_eq(unsafe { marker.raw() }, 8);
+            unsafe { Resource.raw(r) } < 0
         }
-    );
+    });
     assert_eq(out.len(), 0);
     assert_eq(total(), 9);
     let kept = resources(9)
-        .filter(
-            |r| {
-                assert_eq(total(), 9);
-                unsafe { r.raw() } == 9
-            }
-        );
+        .filter(|r| {
+            assert_eq(total(), 9);
+            unsafe { r.raw() } == 9
+        });
     assert_eq(kept.len(), 1);
     assert_eq(unsafe { kept[0].raw() }, 9);
     assert_eq(total(), 10);
@@ -120,12 +109,10 @@ let round (): Unit = {
     assert_eq(texts().filter(|s| false), []);
     let calls = ref(0);
     let out = ints(20)
-        .filter(
-            |n| {
-                calls.set(calls.get() + 1);
-                n > 20
-            }
-        );
+        .filter(|n| {
+            calls.set(calls.get() + 1);
+            n > 20
+        });
     assert_eq(calls.get(), 2);
     assert_eq(out, [21]);
     let original = texts();
@@ -147,13 +134,10 @@ let round (): Unit = {
     assert_eq(saved.get(), texts());
     assert_eq(original, texts());
     let mut source = texts();
-    let out = Array.filter(
-        { source },
-        {
-            source = ["new"];
-            |s: String| s != ""
-        }
-    );
+    let out = Array.filter({ source }, {
+        source = ["new"];
+        |s: String| s != ""
+    });
     assert_eq(out, texts());
     assert_eq(source, ["new"]);
     let original = "z".repeat(32);
@@ -165,12 +149,10 @@ let round (): Unit = {
     assert_eq(unsafe { view.as_string() }, original);
     let escaped = ref("");
     let out = texts()
-        .filter(
-            |s| {
-                escaped.set(s);
-                false
-            }
-        );
+        .filter(|s| {
+            escaped.set(s);
+            false
+        });
     assert_eq(out, []);
     assert_eq(escaped.get(), "b".repeat(32));
     let shared = texts();

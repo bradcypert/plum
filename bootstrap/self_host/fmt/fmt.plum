@@ -416,15 +416,13 @@ let resolve_candidate
             if col % 4 != 0 || (e.continuation && old % 4 != 0 && old > want) {
                 resolve_candidate(chars, assigned, xs, i + 1)
             } else {
-                Some(
-                    Edit {
-                        line_start: e.line_start,
-                        anchor: -1,
-                        indent: want,
-                        owns_comments: e.owns_comments,
-                        continuation: false
-                    }
-                )
+                Some(Edit {
+                    line_start: e.line_start,
+                    anchor: -1,
+                    indent: want,
+                    owns_comments: e.owns_comments,
+                    continuation: false
+                })
             }
         }
     }
@@ -515,7 +513,7 @@ let text_slice (chars: Array[String]) (from: Int) (to: Int): String =
 // Each stage runs in source order; formatting does not repeat passes until
 // the output stops changing.
 pub let format (path: String) (src: String): String =
-    format_layout(path, src)
+    format_exclusions(path, src)
 
 // --- Spacing between tokens, on one line ---
 //

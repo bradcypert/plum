@@ -6,10 +6,8 @@ pub let round_trip (): String = {
     let (tx, rx) = channel[Message]();
     tx.send(Message { text: "local".concat(" message") });
     rx.recv()
-        .unwrap_or_else(
-            || {
-                panic_raw("unexpected closed channel");
-                Message { text: "" }
-            }
-        ).text
+        .unwrap_or_else(|| {
+            panic_raw("unexpected closed channel");
+            Message { text: "" }
+        }).text
 }

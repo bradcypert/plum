@@ -1,3 +1,4 @@
+// fmt: off
 let require = 1
 //  ^ variable
 let ensure = 2
@@ -13,3 +14,4 @@ let positive (n: Int): Int
     ensure result > 0
 //  ^ keyword
 = n
+// fmt: on

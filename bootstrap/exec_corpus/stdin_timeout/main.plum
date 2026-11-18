@@ -92,14 +92,12 @@ let child (argv: Array[String]): Unit =
     else { println("unknown child mode") }
 
 let run_self (self: String) (mode: String) (input: String): Unit =
-    match Process.run(
-        Process.Options {
-            program: self,
-            args: [mode],
-            env: [],
-            stdin: Some(input),
-        }
-    ) {
+    match Process.run(Process.Options {
+        program: self,
+        args: [mode],
+        env: [],
+        stdin: Some(input),
+    }) {
         Err(e) => println("ERR ".concat(e)),
         Ok(res) => print(res.stdout),
     }

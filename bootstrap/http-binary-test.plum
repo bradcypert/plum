@@ -74,17 +74,14 @@ let main (): Unit = {
     peer.join();
     Net.close(listener);
     let server = spawn {
-        Http.serve_once(
-            18807,
-            |req| {
-                assert_eq(req.body.to_hex(), payload.to_hex());
-                Http.Response {
-                    status: 200,
-                    headers: [],
-                    body: req.body
-                }
+        Http.serve_once(18807, |req| {
+            assert_eq(req.body.to_hex(), payload.to_hex());
+            Http.Response {
+                status: 200,
+                headers: [],
+                body: req.body
             }
-        )
+        })
     };
     let fd = connect_retry(18807, 2000);
     send_all(

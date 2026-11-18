@@ -35,43 +35,34 @@ let functions (): Array[() -> Int] = [captured(4), captured(5)]
 let scoped (): Unit = {
     // A temporary source must retain every scoped child through all callbacks.
     let out = resources(0)
-        .map(
-            |r| {
-                assert_eq(total(), 0);
-                unsafe { r.raw() }
-            }
-        );
+        .map(|r| {
+            assert_eq(total(), 0);
+            unsafe { r.raw() }
+        });
     assert_eq(out, [0, 1]);
     assert_eq(total(), 2);
     let out = owners(2)
-        .map(
-            |o| {
-                assert_eq(total(), 2);
-                unsafe { o.resource.raw() }
-            }
-        );
+        .map(|o| {
+            assert_eq(total(), 2);
+            unsafe { o.resource.raw() }
+        });
     assert_eq(out, [2, 3]);
     assert_eq(total(), 4);
     let out = functions()
-        .map(
-            |f| {
-                assert_eq(total(), 4);
-                f()
-            }
-        );
+        .map(|f| {
+            assert_eq(total(), 4);
+            f()
+        });
     assert_eq(out, [4, 5]);
     assert_eq(total(), 6);
-    let out = Array.map(
-        resources(6),
-        {
-            let marker = make(8);
-            |r: Resource| {
-                assert_eq(total(), 6);
-                assert_eq(unsafe { marker.raw() }, 8);
-                unsafe { Resource.raw(r) }
-            }
+    let out = Array.map(resources(6), {
+        let marker = make(8);
+        |r: Resource| {
+            assert_eq(total(), 6);
+            assert_eq(unsafe { marker.raw() }, 8);
+            unsafe { Resource.raw(r) }
         }
-    );
+    });
     assert_eq(out, [6, 7]);
     assert_eq(total(), 9);
     // Ordinary input storage may become an Array of scoped result values.
@@ -130,13 +121,10 @@ let round (): Unit = {
     assert_eq(original, texts());
     assert_eq(out[0], "a".repeat(32).concat("!"));
     let mut source = texts();
-    let out = Array.map(
-        { source },
-        {
-            source = ["new"];
-            |s| s.concat("!")
-        }
-    );
+    let out = Array.map({ source }, {
+        source = ["new"];
+        |s| s.concat("!")
+    });
     assert_eq(source, ["new"]);
     assert_eq(out[1], "b".repeat(32).concat("!"));
     let original = "z".repeat(32);
@@ -154,12 +142,10 @@ let round (): Unit = {
     assert_eq(unsafe { views[1].as_string() }, "b".repeat(32));
     let escaped = ref("");
     let out = texts()
-        .map(
-            |s| {
-                escaped.set(s);
-                s.len()
-            }
-        );
+        .map(|s| {
+            escaped.set(s);
+            s.len()
+        });
     assert_eq(out, [32, 32]);
     assert_eq(escaped.get(), "b".repeat(32));
     let empty: Array[String] = [];

@@ -98,13 +98,11 @@ pub struct ErrPos {
     pub fn_name: String
 }
 
-let ERR: Ref[ErrPos] = ref(
-    ErrPos {
-        path: "",
-        offset: 0 - 1,
-        fn_name: ""
-    }
-)
+let ERR: Ref[ErrPos] = ref(ErrPos {
+    path: "",
+    offset: 0 - 1,
+    fn_name: ""
+})
 
 // The FUNCTION being checked, recorded alongside the position. It is
 // what a PRELUDE error has instead of a position: prelude source is a
@@ -112,13 +110,11 @@ let ERR: Ref[ErrPos] = ref(
 // "unknown struct: Array" with no further context is nearly useless
 // when the prelude is a thousand lines.
 pub let set_err_pos (path: String) (offset: Int) (fn_name: String): Unit =
-    ERR.set(
-        ErrPos {
-            path: path,
-            offset: offset,
-            fn_name: fn_name
-        }
-    )
+    ERR.set(ErrPos {
+        path: path,
+        offset: offset,
+        fn_name: fn_name
+    })
 
 // A statement offset of -1 means "synthesized, or parsed without a
 // source context" -- keep whatever the enclosing item set instead of
@@ -129,13 +125,11 @@ pub let err_path (unit: Unit): String = ERR.get().path
 
 pub let set_stmt_pos (offset: Int): Unit =
     if offset >= 0 {
-        ERR.set(
-            ErrPos {
-                path: ERR.get().path,
-                offset: offset,
-                fn_name: ERR.get().fn_name
-            }
-        )
+        ERR.set(ErrPos {
+            path: ERR.get().path,
+            offset: offset,
+            fn_name: ERR.get().fn_name
+        })
     } else { () }
 
 // Every checker error goes through here. With a position it renders
@@ -212,25 +206,23 @@ pub let rewrite_type_path (name: String): String = {
 pub let test_qualified_alias_boundaries (): Unit = {
     let saved_uses = USES.get();
     let saved_error = ERR.get();
-    set_uses(
-        [
-            UseBinding {
-                path: "first.plum",
-                local: "é中",
-                module: "package.deep"
-            },
-            UseBinding {
-                path: "second.plum",
-                local: "é中",
-                module: "other"
-            },
-            UseBinding {
-                path: "first.plum",
-                local: "nested.alias",
-                module: "canonical"
-            }
-        ]
-    );
+    set_uses([
+        UseBinding {
+            path: "first.plum",
+            local: "é中",
+            module: "package.deep"
+        },
+        UseBinding {
+            path: "second.plum",
+            local: "é中",
+            module: "other"
+        },
+        UseBinding {
+            path: "first.plum",
+            local: "nested.alias",
+            module: "canonical"
+        }
+    ]);
     set_err_pos("first.plum", 0, "");
     assert_eq(rewrite_type_path("é中.Point"), "package.deep.Point");
     assert_eq(rewrite_type_path("nested.alias.Enum"), "canonical.Enum");
@@ -310,60 +302,42 @@ let collect_names_acc (items: Array[parser.ItemNode]) (i: Int) (ctx: TyContext):
     if i >= items.len() { ctx }
     else {
         match items[i].kind {
-            IKStruct(decl) => collect_names_acc(
-                items,
-                i + 1,
-                TyContext {
-                    structs: ctx.structs.push(
-                        StructInfo {
-                            name: parser.qualify_type(items[i].module, decl.name),
-                            generics: Array.map(decl.generics, |g| g.name),
-                            fields: [],
-                            module: items[i].module,
-                            is_pub: items[i].is_pub
-                        }
-                    ),
-                    enums: ctx.enums,
-                    handles: ctx.handles,
-                }
-            ),
+            IKStruct(decl) => collect_names_acc(items, i + 1, TyContext {
+                structs: ctx.structs.push(StructInfo {
+                    name: parser.qualify_type(items[i].module, decl.name),
+                    generics: Array.map(decl.generics, |g| g.name),
+                    fields: [],
+                    module: items[i].module,
+                    is_pub: items[i].is_pub
+                }),
+                enums: ctx.enums,
+                handles: ctx.handles,
+            }),
             // A handle is a struct with no fields, plus the drop hook.
             // Registering the struct half here is what makes the NAME
             // resolve everywhere a type name can appear.
-            IKHandle(decl) => collect_names_acc(
-                items,
-                i + 1,
-                TyContext {
-                    structs: ctx.structs.push(
-                        StructInfo {
-                            name: parser.qualify_type(items[i].module, decl.name),
-                            generics: [],
-                            fields: [],
-                            module: items[i].module,
-                            is_pub: items[i].is_pub
-                        }
-                    ),
-                    enums: ctx.enums,
-                    handles: ctx.handles.push(handle_info(decl, items[i].module, items[i].is_pub)),
-                }
-            ),
-            IKEnum(decl) => collect_names_acc(
-                items,
-                i + 1,
-                TyContext {
-                    structs: ctx.structs,
-                    enums: ctx.enums.push(
-                        EnumInfo {
-                            name: parser.qualify_type(items[i].module, decl.name),
-                            generics: Array.map(decl.generics, |g| g.name),
-                            variants: [],
-                            module: items[i].module,
-                            is_pub: items[i].is_pub
-                        }
-                    ),
-                    handles: ctx.handles,
-                }
-            ),
+            IKHandle(decl) => collect_names_acc(items, i + 1, TyContext {
+                structs: ctx.structs.push(StructInfo {
+                    name: parser.qualify_type(items[i].module, decl.name),
+                    generics: [],
+                    fields: [],
+                    module: items[i].module,
+                    is_pub: items[i].is_pub
+                }),
+                enums: ctx.enums,
+                handles: ctx.handles.push(handle_info(decl, items[i].module, items[i].is_pub)),
+            }),
+            IKEnum(decl) => collect_names_acc(items, i + 1, TyContext {
+                structs: ctx.structs,
+                enums: ctx.enums.push(EnumInfo {
+                    name: parser.qualify_type(items[i].module, decl.name),
+                    generics: Array.map(decl.generics, |g| g.name),
+                    variants: [],
+                    module: items[i].module,
+                    is_pub: items[i].is_pub
+                }),
+                handles: ctx.handles,
+            }),
             _ => collect_names_acc(items, i + 1, ctx),
         }
     }
@@ -416,24 +390,19 @@ let add_struct
     // FUNCTION signature would (see `infer.plum`'s own top comment for
     // that same reasoning, applied to functions instead of structs).
     let generic_names = Array.map(decl.generics, |g| g.name);
-    let fields = Array.map(
-        decl.fields,
-        |f| StructFieldTemplate {
-            name: f.name,
-            ty: resolve_ann_seen(names, module_name, generic_names, f.ty),
-            is_pub: f.is_pub
-        }
-    );
+    let fields = Array.map(decl.fields, |f| StructFieldTemplate {
+        name: f.name,
+        ty: resolve_ann_seen(names, module_name, generic_names, f.ty),
+        is_pub: f.is_pub
+    });
     TyContext {
-        structs: out.structs.push(
-            StructInfo {
-                name: parser.qualify_type(module_name, decl.name),
-                generics: generic_names,
-                fields: fields,
-                module: module_name,
-                is_pub: is_pub
-            }
-        ),
+        structs: out.structs.push(StructInfo {
+            name: parser.qualify_type(module_name, decl.name),
+            generics: generic_names,
+            fields: fields,
+            module: module_name,
+            is_pub: is_pub
+        }),
         enums: out.enums,
         handles: out.handles
     }
@@ -447,28 +416,20 @@ let add_enum
     (is_pub: Bool): TyContext
 = {
     let generic_names = Array.map(decl.generics, |g| g.name);
-    let variants = Array.map(
-        decl.variants,
-        |v| VariantInfo {
-            tag: v.name,
-            enum_name: parser.qualify_type(module_name, decl.name),
-            payload: Array.map(
-                v.payload,
-                |t| resolve_ann_seen(names, module_name, generic_names, t)
-            ),
-        }
-    );
+    let variants = Array.map(decl.variants, |v| VariantInfo {
+        tag: v.name,
+        enum_name: parser.qualify_type(module_name, decl.name),
+        payload: Array.map(v.payload, |t| resolve_ann_seen(names, module_name, generic_names, t)),
+    });
     TyContext {
         structs: out.structs,
-        enums: out.enums.push(
-            EnumInfo {
-                name: parser.qualify_type(module_name, decl.name),
-                generics: generic_names,
-                variants: variants,
-                module: module_name,
-                is_pub: is_pub
-            }
-        ),
+        enums: out.enums.push(EnumInfo {
+            name: parser.qualify_type(module_name, decl.name),
+            generics: generic_names,
+            variants: variants,
+            module: module_name,
+            is_pub: is_pub
+        }),
         handles: out.handles
     }
 }
@@ -482,15 +443,13 @@ let add_handle
     (is_pub: Bool): TyContext
 =
     TyContext {
-        structs: out.structs.push(
-            StructInfo {
-                name: parser.qualify_type(module_name, decl.name),
-                generics: [],
-                fields: [],
-                module: module_name,
-                is_pub: is_pub
-            }
-        ),
+        structs: out.structs.push(StructInfo {
+            name: parser.qualify_type(module_name, decl.name),
+            generics: [],
+            fields: [],
+            module: module_name,
+            is_pub: is_pub
+        }),
         enums: out.enums,
         handles: out.handles.push(handle_info(decl, module_name, is_pub)),
     }
@@ -735,18 +694,11 @@ let variant_candidates_acc
     if i >= enums.len() { acc }
     else {
         match find_variant_acc(enums[i].variants, tag, 0) {
-            Some(v) => variant_candidates_acc(
-                enums,
-                tag,
-                i + 1,
-                acc.push(
-                    VariantLookup {
-                        enum_name: enums[i].name,
-                        enum_generics: enums[i].generics,
-                        payload: v.payload
-                    }
-                )
-            ),
+            Some(v) => variant_candidates_acc(enums, tag, i + 1, acc.push(VariantLookup {
+                enum_name: enums[i].name,
+                enum_generics: enums[i].generics,
+                payload: v.payload
+            })),
             None => variant_candidates_acc(enums, tag, i + 1, acc),
         }
     }
@@ -781,13 +733,11 @@ pub let find_variant_in (ctx: TyContext) (enum_name: String) (tag: String): Opti
     match find_enum(ctx, enum_name) {
         None => None,
         Some(info) => match find_variant_acc(info.variants, tag, 0) {
-            Some(v) => Some(
-                VariantLookup {
-                    enum_name: info.name,
-                    enum_generics: info.generics,
-                    payload: v.payload
-                }
-            ),
+            Some(v) => Some(VariantLookup {
+                enum_name: info.name,
+                enum_generics: info.generics,
+                payload: v.payload
+            }),
             None => None,
         },
     }
@@ -1044,11 +994,9 @@ pub let test_handle_lookup_names_and_drop_hooks (): Unit = {
         )
     ).items;
     let alpha = parser.with_module(
-        parser.parse_program(
-            lexer.tokenize(
-                "pub handle Shared { on_drop: alpha_close }\npub handle Other { on_drop: other_close }\nstruct Plain {}\n"
-            )
-        ).items,
+        parser.parse_program(lexer.tokenize(
+            "pub handle Shared { on_drop: alpha_close }\npub handle Other { on_drop: other_close }\nstruct Plain {}\n"
+        )).items,
         "alpha"
     );
     let beta = parser.with_module(

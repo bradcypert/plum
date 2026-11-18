@@ -188,15 +188,13 @@ pub let snapshot (): Option[Snapshot] = unsafe {
         let live_capacity = plum_buffer_snapshot_field(token, 3);
         let peak_buffers = plum_buffer_snapshot_field(token, 4);
         let peak_capacity = plum_buffer_snapshot_field(token, 5);
-        Some(
-            Snapshot {
-                allocations: allocations,
-                allocated_capacity: allocated_capacity,
-                live_buffers: live_buffers,
-                live_capacity: live_capacity,
-                peak_buffers: peak_buffers,
-                peak_capacity: peak_capacity
-            }
-        )
+        Some(Snapshot {
+            allocations: allocations,
+            allocated_capacity: allocated_capacity,
+            live_buffers: live_buffers,
+            live_capacity: live_capacity,
+            peak_buffers: peak_buffers,
+            peak_capacity: peak_capacity
+        })
     }
 }

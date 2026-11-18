@@ -71,26 +71,23 @@ pub let validate (opts: Options): String =
     else { "" }
 
 pub let compile_flags (mode: buildmode.Options): Array[String] =
-    Array.concat(
-        buildmode.compile_flags(mode),
-        [
-            "--target=x86_64-unknown-none",
-            "-march=x86-64",
-            "-mcmodel=kernel",
-            "-mno-red-zone",
-            "-mno-avx",
-            "-mno-avx2",
-            "-mno-avx512f",
-            "-ffreestanding",
-            "-fno-builtin",
-            "-fno-stack-protector",
-            "-fno-pic",
-            "-fno-pie",
-            "-fno-unwind-tables",
-            "-fno-asynchronous-unwind-tables",
-            "-Wno-override-module"
-        ]
-    )
+    Array.concat(buildmode.compile_flags(mode), [
+        "--target=x86_64-unknown-none",
+        "-march=x86-64",
+        "-mcmodel=kernel",
+        "-mno-red-zone",
+        "-mno-avx",
+        "-mno-avx2",
+        "-mno-avx512f",
+        "-ffreestanding",
+        "-fno-builtin",
+        "-fno-stack-protector",
+        "-fno-pic",
+        "-fno-pie",
+        "-fno-unwind-tables",
+        "-fno-asynchronous-unwind-tables",
+        "-Wno-override-module"
+    ])
 
 // Linking is never cached: scripts, object contents and linker defaults
 // must be read again on every invocation. Native object keys include the

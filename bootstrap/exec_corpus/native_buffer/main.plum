@@ -72,17 +72,12 @@ let exercise (): Unit = {
         Ok(0)
     );
     let called = ref(false);
-    expect_error(
-        unsafe {
-            NativeBuffer.with_text(
-                zero,
-                |ignored_pointer, ignored_capacity| {
-                    called.set(true);
-                    Ok(())
-                }
-            )
-        }
-    );
+    expect_error(unsafe {
+        NativeBuffer.with_text(zero, |ignored_pointer, ignored_capacity| {
+            called.set(true);
+            Ok(())
+        })
+    });
     assert(!called.get());
     expect_error(NativeBuffer.create(-1));
     let b = buffer(4);
@@ -113,7 +108,9 @@ let exercise (): Unit = {
     expect_error(NativeBuffer.copy_in(b, "does not fit".as_bytes()));
     assert_eq(text(b), "hé");
     assert_eq(
-        unsafe { NativeBuffer.with_mut(b, |pointer, cap| Ok(unsafe { fill_binary(pointer, cap) })) },
+        unsafe {
+            NativeBuffer.with_mut(b, |pointer, cap| Ok(unsafe { fill_binary(pointer, cap) }))
+        },
         Ok(3)
     );
     assert_eq(bytes(b).to_hex(), "410042");
@@ -121,26 +118,19 @@ let exercise (): Unit = {
     assert_eq(text(b).len(), 3);
     assert_eq(original, "hé");
     assert_eq(saved.to_hex(), "68c3a9");
-    expect_error(
-        unsafe {
-            NativeBuffer.with_mut(
-                b,
-                |pointer, cap| {
-                    unsafe { fill_binary(pointer, cap) };
-                    Err("callback failed")
-                }
-            )
-        }
-    );
+    expect_error(unsafe {
+        NativeBuffer.with_mut(b, |pointer, cap| {
+            unsafe { fill_binary(pointer, cap) };
+            Err("callback failed")
+        })
+    });
     assert_eq(NativeBuffer.length(b), 0);
     assert_eq(bytes(b).len(), 0);
     expect_error(unsafe { NativeBuffer.with_mut(b, |ignored_pointer, cap| Ok(cap + 1)) });
     assert_eq(NativeBuffer.length(b), 0);
-    expect_error(
-        unsafe {
-            NativeBuffer.with_text(b, |pointer, cap| Ok(unsafe { no_terminator(pointer, cap) }))
-        }
-    );
+    expect_error(unsafe {
+        NativeBuffer.with_text(b, |pointer, cap| Ok(unsafe { no_terminator(pointer, cap) }))
+    });
     assert_eq(NativeBuffer.length(b), 0);
     assert(
         unsafe {
@@ -158,37 +148,29 @@ let exercise (): Unit = {
     let alias = b;
     assert(
         unsafe {
-            NativeBuffer.with_text(
-                b,
-                |pointer, cap| {
-                    expect_error(NativeBuffer.copy_out(alias));
-                    expect_error(NativeBuffer.copy_in(alias, Bytes.empty()));
-                    expect_error(NativeBuffer.reserve(alias, 100));
-                    expect_error(
-                        unsafe {
-                            NativeBuffer.with_mut(alias, |ignored_pointer, ignored_capacity| Ok(0))
-                        }
-                    );
-                    assert(
-                        unsafe {
-                            NativeBuffer.with_text(other, |p, c| Ok(unsafe { edit_text(p, c) }))
-                        } == Ok((7, "hé"))
-                    );
-                    Ok(unsafe { edit_text(pointer, cap) })
-                }
-            )
+            NativeBuffer.with_text(b, |pointer, cap| {
+                expect_error(NativeBuffer.copy_out(alias));
+                expect_error(NativeBuffer.copy_in(alias, Bytes.empty()));
+                expect_error(NativeBuffer.reserve(alias, 100));
+                expect_error(unsafe {
+                    NativeBuffer.with_mut(alias, |ignored_pointer, ignored_capacity| Ok(0))
+                });
+                assert(
+                    unsafe {
+                        NativeBuffer.with_text(other, |p, c| Ok(unsafe { edit_text(p, c) }))
+                    } == Ok((7, "hé"))
+                );
+                Ok(unsafe { edit_text(pointer, cap) })
+            })
         } == Ok((7, "hé"))
     );
     assert_eq(text(other), "hé");
     assert(
         unsafe {
-            NativeBuffer.with_text(
-                b,
-                |pointer, cap| {
-                    unsafe { edit_text(pointer, cap) };
-                    Ok("owned-result".repeat(4))
-                }
-            )
+            NativeBuffer.with_text(b, |pointer, cap| {
+                unsafe { edit_text(pointer, cap) };
+                Ok("owned-result".repeat(4))
+            })
         } == Ok(("owned-result".repeat(4), "hé"))
     );
     assert_eq(text(b), "hé");

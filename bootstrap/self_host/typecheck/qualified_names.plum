@@ -14,12 +14,10 @@ let qualified_dot_scan (bytes: Bytes) (n: Int) (i: Int) (character: Int) (best: 
         // A dot followed by a continuation is therefore not the single
         // character ".", even for malformed native filename bytes.
         let dot = byte == 46
-            && (
-                i + 1 >= n || {
-                    let next = bytes_at_raw(bytes, i + 1);
-                    next < 128 || next >= 192
-                }
-            );
+            && (i + 1 >= n || {
+                let next = bytes_at_raw(bytes, i + 1);
+                next < 128 || next >= 192
+            });
         qualified_dot_scan(bytes, n, i + 1, position, if dot { position } else { best })
     }
 

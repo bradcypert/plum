@@ -71,24 +71,18 @@ let main (): Unit = {
     };
     assert_eq(state.len(), 640);
     let mut source = buffer(31);
-    let out = Bytes.concat(
-        source,
-        {
-            source = buffer(7);
-            source
-        }
-    );
+    let out = Bytes.concat(source, {
+        source = buffer(7);
+        source
+    });
     assert(out == buffer(38));
     assert(source == buffer(7));
     let published = ref(Bytes.empty());
     let receiver = buffer(31);
-    let out = Bytes.concat(
-        receiver,
-        {
-            published.set(receiver);
-            raw
-        }
-    );
+    let out = Bytes.concat(receiver, {
+        published.set(receiver);
+        raw
+    });
     assert_eq(out.len(), 36);
     assert(published.get() == buffer(31));
     let mut doubled = buffer(31);

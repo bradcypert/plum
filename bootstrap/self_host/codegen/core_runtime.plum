@@ -40,19 +40,11 @@ let cg_core_scan
         else if b == 64 {
             let end = cg_core_symbol_end(bytes, i + 1);
             if end == i + 1 { cg_fail("unsupported LLVM symbol spelling in freestanding runtime") };
-            cg_core_scan(
-                bytes,
-                end,
-                false,
-                false,
-                out.push(
-                    CoreRef {
-                        name: cg_symbol_ascii(bytes, i + 1, end),
-                        start: i + 1,
-                        end: end
-                    }
-                )
-            )
+            cg_core_scan(bytes, end, false, false, out.push(CoreRef {
+                name: cg_symbol_ascii(bytes, i + 1, end),
+                start: i + 1,
+                end: end
+            }))
         } else { cg_core_scan(bytes, i + 1, false, false, out) }
     }
 
@@ -174,14 +166,11 @@ let cg_core_runtime (ir: String) (user: Array[String]): String = {
         let rewritten = cg_core_rewrite(item.text);
         // Old declarations are replaced by the override declarations below.
         if item.name != "malloc" && item.name != "free" && item.name != "malloc_usable_size" {
-            items = items.insert(
-                item.name,
-                CoreItem {
-                    text: rewritten,
-                    deps: cg_core_symbols(rewritten),
-                    ..item
-                }
-            );
+            items = items.insert(item.name, CoreItem {
+                text: rewritten,
+                deps: cg_core_symbols(rewritten),
+                ..item
+            });
         };
     };
     for item in overrides {
@@ -315,25 +304,23 @@ let cg_validate_kernel_entry (p: CgProgram) (entry: String): Unit =
 
 let cg_kernel_entry (entry_sym: String): String = {
     let repeated = "kernel entry called more than once";
-    cg_lines(
-        [
-            "@plum_kernel_entered = internal global i1 false",
-            "@.plum_kernel_reentry = private constant [${repeated.len()} x i8] c\"${repeated}\"",
-            "define void @${cg_kernel_entry_symbol(())}() noreturn {",
-            "entry:",
-            "  %entered = load i1, ptr @plum_kernel_entered",
-            "  br i1 %entered, label %repeat, label %initialize",
-            "repeat:",
-            "  call void @plum_kernel_panic(ptr @.plum_kernel_reentry, i64 ${repeated.len()})",
-            "  unreachable",
-            "initialize:",
-            // One CPU, interrupts disabled: no concurrent callers are supported.
-            "  store i1 true, ptr @plum_kernel_entered",
-            "  call void @plum_init_globals()",
-            "  %r = call i1 ${entry_sym}(i1 false)",
-            "  call void @plum_kernel_halt()",
-            "  unreachable",
-            "}",
-        ]
-    )
+    cg_lines([
+        "@plum_kernel_entered = internal global i1 false",
+        "@.plum_kernel_reentry = private constant [${repeated.len()} x i8] c\"${repeated}\"",
+        "define void @${cg_kernel_entry_symbol(())}() noreturn {",
+        "entry:",
+        "  %entered = load i1, ptr @plum_kernel_entered",
+        "  br i1 %entered, label %repeat, label %initialize",
+        "repeat:",
+        "  call void @plum_kernel_panic(ptr @.plum_kernel_reentry, i64 ${repeated.len()})",
+        "  unreachable",
+        "initialize:",
+        // One CPU, interrupts disabled: no concurrent callers are supported.
+        "  store i1 true, ptr @plum_kernel_entered",
+        "  call void @plum_init_globals()",
+        "  %r = call i1 ${entry_sym}(i1 false)",
+        "  call void @plum_kernel_halt()",
+        "  unreachable",
+        "}",
+    ])
 }

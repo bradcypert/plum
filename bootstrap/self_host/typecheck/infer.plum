@@ -116,18 +116,13 @@ pub let recorded_types (): Array[NodeType] = NODES.get()
 let note_at (name: String) (offset: Int) (ty: ITy) (def_offset: Int): Unit = {
     note_local_reference(err_path(()), name, offset, def_offset);
     if RECORD.get() && offset >= 0 {
-        NODES.set(
-            NODES.get()
-                .push(
-                    NodeType {
-                        path: err_path(()),
-                        offset: offset,
-                        name: name,
-                        ty: render_ty(ty),
-                        def_offset: def_offset
-                    }
-                )
-        )
+        NODES.set(NODES.get().push(NodeType {
+            path: err_path(()),
+            offset: offset,
+            name: name,
+            ty: render_ty(ty),
+            def_offset: def_offset
+        }))
     } else { () }
 }
 
@@ -186,13 +181,11 @@ pub let tyenv_empty (unit: Unit): TyEnv = TyEnv { bindings: [] }
 
 pub let tyenv_extend (env: TyEnv) (name: String) (ty: ITy) (def_offset: Int): TyEnv =
     TyEnv {
-        bindings: env.bindings.push(
-            EnvBinding {
-                name: name,
-                ty: ty,
-                def_offset: def_offset
-            }
-        )
+        bindings: env.bindings.push(EnvBinding {
+            name: name,
+            ty: ty,
+            def_offset: def_offset
+        })
     }
 
 let tyenv_lookup (env: TyEnv) (name: String): Option[EnvBinding] =
@@ -325,22 +318,15 @@ let extern_sigs
             ),
             _ => ()
         };
-        extern_sigs(
-            ctx,
-            fns,
-            i + 1,
-            acc.push(
-                FnSig {
-                    name: fns[i].name,
-                    module: "",
-                    generics: [],
-                    params: params,
-                    ret: ret,
-                    is_extern: true,
-                    is_pub: true
-                }
-            )
-        )
+        extern_sigs(ctx, fns, i + 1, acc.push(FnSig {
+            name: fns[i].name,
+            module: "",
+            generics: [],
+            params: params,
+            ret: ret,
+            is_extern: true,
+            is_pub: true
+        }))
     }
 
 // Every `use` in the program, tagged with the file that wrote it.
@@ -381,13 +367,11 @@ let collect_uses
                                 acc
                             }
                         } else { acc },
-                        None => acc.push(
-                            UseBinding {
-                                path: items[i].path,
-                                local: local,
-                                module: target
-                            }
-                        ),
+                        None => acc.push(UseBinding {
+                            path: items[i].path,
+                            local: local,
+                            module: target
+                        }),
                     }
                 }
             },
@@ -442,21 +426,13 @@ let collect_sigs_acc
         match items[i].kind {
             IKLet(def) => {
                 if Array.is_empty(def.params) {
-                    collect_sigs_acc(
-                        ctx,
-                        items,
-                        i + 1,
-                        sigs,
-                        globals.push(
-                            GlobalDef {
-                                module: items[i].module,
-                                def: def,
-                                is_pub: items[i].is_pub,
-                                path: items[i].path,
-                                offset: items[i].start
-                            }
-                        )
-                    )
+                    collect_sigs_acc(ctx, items, i + 1, sigs, globals.push(GlobalDef {
+                        module: items[i].module,
+                        def: def,
+                        is_pub: items[i].is_pub,
+                        path: items[i].path,
+                        offset: items[i].start
+                    }))
                 }
                 else {
                     check_integer_alias_collision(sigs, items[i], def.name);
@@ -478,17 +454,15 @@ let collect_sigs_acc
                         ctx,
                         items,
                         i + 1,
-                        sigs.push(
-                            FnSig {
-                                name: def.name,
-                                module: items[i].module,
-                                generics: generic_names,
-                                params: params,
-                                ret: ret,
-                                is_extern: false,
-                                is_pub: items[i].is_pub
-                            }
-                        ),
+                        sigs.push(FnSig {
+                            name: def.name,
+                            module: items[i].module,
+                            generics: generic_names,
+                            params: params,
+                            ret: ret,
+                            is_extern: false,
+                            is_pub: items[i].is_pub
+                        }),
                         globals
                     )
                 }
@@ -640,62 +614,54 @@ let builtin_sig (name: String): Option[FnSig] =
     // A built-in ARRAY operation, not a prelude function: there is no
     // `let Array.push` anywhere to read.
     if name == "Array.push" {
-        Some(
-            FnSig {
-                name: name,
-                module: "",
-                generics: ["T"],
-                params: [arr_of(tp("T")), tp("T")],
-                ret: arr_of(tp("T")),
-                is_extern: false,
-                is_pub: true
-            }
-        )
+        Some(FnSig {
+            name: name,
+            module: "",
+            generics: ["T"],
+            params: [arr_of(tp("T")), tp("T")],
+            ret: arr_of(tp("T")),
+            is_extern: false,
+            is_pub: true
+        })
     }
     // Both are runtime primitives the backend intercepts and emits
     // directly (`cg_runtime_fn`), so neither has a Plum body to declare.
     else if name == "chars_of" {
-        Some(
-            FnSig {
-                name: name,
-                module: "",
-                generics: [],
-                params: [ITStr],
-                ret: arr_of(ITStr),
-                is_extern: false,
-                is_pub: true
-            }
-        )
+        Some(FnSig {
+            name: name,
+            module: "",
+            generics: [],
+            params: [ITStr],
+            ret: arr_of(ITStr),
+            is_extern: false,
+            is_pub: true
+        })
     }
     else if name == "panic_raw" {
-        Some(
-            FnSig {
-                name: name,
-                module: "",
-                generics: [],
-                params: [ITStr],
-                ret: ITUnit,
-                is_extern: false,
-                is_pub: true
-            }
-        )
+        Some(FnSig {
+            name: name,
+            module: "",
+            generics: [],
+            params: [ITStr],
+            ret: ITUnit,
+            is_extern: false,
+            is_pub: true
+        })
     }
     // `args()` is written with empty parentheses, which this parser
     // turns into a ZERO-argument call (it implements no `f()`-means-
     // `f(())` sugar), so the signature has to be zero-param to match
     // the real call shape.
     else if name == "args" {
-        Some(
-            FnSig {
-                name: name,
-                module: "",
-                generics: [],
-                params: [],
-                ret: arr_of(ITStr),
-                is_extern: false,
-                is_pub: true
-            }
-        )
+        Some(FnSig {
+            name: name,
+            module: "",
+            generics: [],
+            params: [],
+            ret: arr_of(ITStr),
+            is_extern: false,
+            is_pub: true
+        })
     }
     else { None }
 
@@ -811,20 +777,14 @@ let check_handle_drops (p2: Program2) (items: Array[parser.ItemNode]) (i: Int): 
         set_err_pos(items[i].path, items[i].start, "");
         match items[i].kind {
             IKHandle(decl) => match find_sig(p2, decl.on_drop) {
-                None => fail_tc(
-                    "handle ${decl.name}: on_drop names '${decl.on_drop}"
-                        .concat(
-                            "', which is not declared. It must be an `extern \"C\"` function taking one Int."
-                        )
-                ),
+                None => fail_tc("handle ${decl.name}: on_drop names '${decl.on_drop}".concat(
+                    "', which is not declared. It must be an `extern \"C\"` function taking one Int."
+                )),
                 Some(sig) =>
                     if !sig.is_extern {
-                        fail_tc(
-                            "handle ${decl.name}: on_drop '${decl.on_drop}"
-                                .concat(
-                                    "' must be an `extern \"C\"` function, not a Plum one -- it runs while a value is being freed"
-                                )
-                        )
+                        fail_tc("handle ${decl.name}: on_drop '${decl.on_drop}".concat(
+                            "' must be an `extern \"C\"` function, not a Plum one -- it runs while a value is being freed"
+                        ))
                     } else if sig.params.len() != 1 {
                         fail_tc(
                             "handle ${decl.name}: on_drop '${decl.on_drop}"
@@ -979,21 +939,12 @@ let bound_names
         bound_names(module_name, fn_name, param, bs, i + 1, acc)
     }
     else {
-        bound_names(
-            module_name,
-            fn_name,
-            param,
-            bs,
-            i + 1,
-            acc.push(
-                OrdReq {
-                    module: module_name,
-                    name: fn_name,
-                    param: param,
-                    kind: bs[i]
-                }
-            )
-        )
+        bound_names(module_name, fn_name, param, bs, i + 1, acc.push(OrdReq {
+            module: module_name,
+            name: fn_name,
+            param: param,
+            kind: bs[i]
+        }))
     }
 
 // A requirement PROPAGATES to whoever passes its own type parameter
@@ -1090,14 +1041,12 @@ let add_param_req (f: TFn) (kind: String) (t: ITy) (acc: Array[OrdReq]): Array[O
     match t {
         ITParam(pn) =>
             if Array.contains(f.generics, pn) && !has_req(acc, f.module, f.name, pn, kind, 0) {
-                acc.push(
-                    OrdReq {
-                        module: f.module,
-                        name: f.name,
-                        param: pn,
-                        kind: kind
-                    }
-                )
+                acc.push(OrdReq {
+                    module: f.module,
+                    name: f.name,
+                    param: pn,
+                    kind: kind
+                })
             } else { acc },
         _ => acc,
     }
@@ -1160,14 +1109,12 @@ let ord_req_for (f: TFn) (kind: String) (t: ITy) (acc: Array[OrdReq]): Array[Ord
         ITTuple(elems) => if kind == "Hash" { hash_reqs_for(f, elems, 0, acc) } else { acc },
         ITParam(n) => if Array.contains(f.generics, n)
             && !has_req(acc, f.module, f.name, n, kind, 0) {
-                acc.push(
-                    OrdReq {
-                        module: f.module,
-                        name: f.name,
-                        param: n,
-                        kind: kind
-                    }
-                )
+                acc.push(OrdReq {
+                    module: f.module,
+                    name: f.name,
+                    param: n,
+                    kind: kind
+                })
             } else { acc },
         _ => acc,
     }
@@ -1340,18 +1287,15 @@ let check_fn_typed (p20: Program2) (def: parser.LetDefNode) (module_name: String
         current: module_name,
         generics: []
     };
-    let sig = Option.unwrap_or(
-        find_sig(p2x, def.name),
-        FnSig {
-            name: def.name,
-            module: module_name,
-            generics: [],
-            params: [],
-            ret: ITUnit,
-            is_extern: false,
-            is_pub: true
-        }
-    );
+    let sig = Option.unwrap_or(find_sig(p2x, def.name), FnSig {
+        name: def.name,
+        module: module_name,
+        generics: [],
+        params: [],
+        ret: ITUnit,
+        is_extern: false,
+        is_pub: true
+    });
     let p2 = Program2 {
         sigs: p20.sigs,
         globals: p20.globals,
@@ -1515,24 +1459,17 @@ let typed_globals_acc
             },
         };
         validate_integer_negations(s2, r.texpr);
-        typed_globals_acc(
-            p20,
-            globals,
-            i + 1,
-            acc.push(
-                TFn {
-                    name: globals[i].def.name,
-                    module: globals[i].module,
-                    path: err_path(()),
-                    offset: current_err_offset(()),
-                    generics: [],
-                    params: [],
-                    ret: subst_apply(s2, r.ty),
-                    body: r.texpr,
-                    subst: s2
-                }
-            )
-        )
+        typed_globals_acc(p20, globals, i + 1, acc.push(TFn {
+            name: globals[i].def.name,
+            module: globals[i].module,
+            path: err_path(()),
+            offset: current_err_offset(()),
+            generics: [],
+            params: [],
+            ret: subst_apply(s2, r.ty),
+            body: r.texpr,
+            subst: s2
+        }))
     }
 
 let typed_fns_acc
@@ -2430,17 +2367,14 @@ let reject_handle_equality (p2: Program2) (op: parser.BOp) (t: ITy): Unit =
 let reject_if_handle (p2: Program2) (sym: String) (t: ITy): Unit =
     match first_handle_within(p2.ctx, t, []) {
         None => (),
-        Some(inner) => fail_tc(
-            "'${sym}' is not supported for ${render_ty(t)}"
-                .concat(
-                    if render_ty(inner) == render_ty(t) {
-                        ": a handle has no fields to compare, and its payload is opaque"
-                    }
-                    else {
-                        ": it would have to compare ${render_ty(inner)}, and a handle has no meaningful equality"
-                    }
-                )
-        ),
+        Some(inner) => fail_tc("'${sym}' is not supported for ${render_ty(t)}".concat(
+            if render_ty(inner) == render_ty(t) {
+                ": a handle has no fields to compare, and its payload is opaque"
+            }
+            else {
+                ": it would have to compare ${render_ty(inner)}, and a handle has no meaningful equality"
+            }
+        )),
     }
 
 // A handle ANYWHERE inside `t`, by the same walk `first_function_within`
@@ -2472,7 +2406,11 @@ pub let first_handle_within (ctx: TyContext) (t: ITy) (seen: Array[String]): Opt
                             ctx,
                             Array.map(
                                 ctx_field_types(ctx, name),
-                                |ft| instantiate_template(ctx_struct_generics(ctx, name), args, ft)
+                                |ft| instantiate_template(
+                                    ctx_struct_generics(ctx, name),
+                                    args,
+                                    ft
+                                )
                             ),
                             seen.push(name),
                             0
@@ -2633,17 +2571,14 @@ let reject_function_equality (p2: Program2) (op: parser.BOp) (t: ITy): Unit =
 
 let reject_if_functional (p2: Program2) (sym: String) (t: ITy): Unit =
     match first_function_within(p2.ctx, t, []) {
-        Some(inner) => fail_tc(
-            "'${sym}' is not supported for ${render_ty(t)}"
-                .concat(
-                    if render_ty(inner) == render_ty(t) {
-                        ": a function has no meaningful equality"
-                    }
-                    else {
-                        ": it would have to compare ${render_ty(inner)}, and a function has no meaningful equality"
-                    }
-                )
-        ),
+        Some(inner) => fail_tc("'${sym}' is not supported for ${render_ty(t)}".concat(
+            if render_ty(inner) == render_ty(t) {
+                ": a function has no meaningful equality"
+            }
+            else {
+                ": it would have to compare ${render_ty(inner)}, and a function has no meaningful equality"
+            }
+        )),
         None => (),
     }
 
@@ -3261,17 +3196,10 @@ let infer_variant_ref_v
             state: fr.state,
             texpr: TExpr {
                 ty: fn_ty,
-                node: TClosure(
-                    names,
-                    TExpr {
-                        ty: ret_ty,
-                        node: TVariantNew(
-                            v.enum_name,
-                            tag,
-                            partial_param_refs(names, payload, 0, [])
-                        )
-                    }
-                )
+                node: TClosure(names, TExpr {
+                    ty: ret_ty,
+                    node: TVariantNew(v.enum_name, tag, partial_param_refs(names, payload, 0, []))
+                })
             },
         }
     }
@@ -4230,7 +4158,8 @@ let infer_namespaced_method_expected
                     // getting a second implementation.
                     None => if ns == "Array"
                         && (
-                            method_name == "map" || method_name == "filter" || method_name == "fold"
+                            method_name == "map" || method_name == "filter" || method_name
+                                == "fold"
                         ) {
                             infer_array_ns_call_expected(
                                 p2,
@@ -4454,13 +4383,11 @@ let partial_closure_expr
     else {
         TExpr {
             ty: fn_ty,
-            node: TBlockE(
-                TBlock {
-                    stmts: stmts,
-                    tail: Some(closure),
-                    starts: []
-                }
-            )
+            node: TBlockE(TBlock {
+                stmts: stmts,
+                tail: Some(closure),
+                starts: []
+            })
         }
     }
 }
@@ -5539,31 +5466,17 @@ let infer_block
             // The tail's own position is the last entry in `starts`.
             set_stmt_pos(block_start_at(block.starts, block.stmts.len()));
             let tr = infer_expr(p2, r.state, r.env, r.subst, t);
-            ir_leaf(
-                tr.ty,
-                tr.subst,
-                tr.state,
-                TBlockE(
-                    TBlock {
-                        stmts: r.tstmts,
-                        tail: Some(tr.texpr),
-                        starts: block.starts
-                    }
-                )
-            )
+            ir_leaf(tr.ty, tr.subst, tr.state, TBlockE(TBlock {
+                stmts: r.tstmts,
+                tail: Some(tr.texpr),
+                starts: block.starts
+            }))
         },
-        None => ir_leaf(
-            ITUnit,
-            r.subst,
-            r.state,
-            TBlockE(
-                TBlock {
-                    stmts: r.tstmts,
-                    tail: None,
-                    starts: block.starts
-                }
-            )
-        ),
+        None => ir_leaf(ITUnit, r.subst, r.state, TBlockE(TBlock {
+            stmts: r.tstmts,
+            tail: None,
+            starts: block.starts
+        })),
     }
 }
 
@@ -5924,21 +5837,12 @@ let expand_nested_acc
             value: fields[i].value,
         };
         let inner = EStructLit([inner_name], [inner_field], Some(EField(base, outer)));
-        expand_nested_acc(
-            p2,
-            info,
-            fields,
-            base,
-            i + 1,
-            acc.push(
-                parser.FieldInitNode {
-                    offset: fields[i].offset,
-                    name: outer,
-                    extra_path: [],
-                    value: inner
-                }
-            )
-        )
+        expand_nested_acc(p2, info, fields, base, i + 1, acc.push(parser.FieldInitNode {
+            offset: fields[i].offset,
+            name: outer,
+            extra_path: [],
+            value: inner
+        }))
     }
 
 let infer_struct_lit
@@ -5977,7 +5881,8 @@ let infer_struct_lit_expected
     if ctx_is_handle(p2.ctx, name) {
         fail_tc(
             "handle ${parser.bare_type_name(name)} cannot be built with a struct literal -- use "
-                .concat(parser.bare_type_name(name)).concat(".from_raw(n) inside an `unsafe` block")
+                .concat(parser.bare_type_name(name))
+                .concat(".from_raw(n) inside an `unsafe` block")
         )
     } else { () };
     match best_struct(p2.ctx, p2.current, name) {
@@ -6216,15 +6121,11 @@ let infer_select
         fail_tc("`select` needs at least one arm; a select with none can never proceed");
         ir_unsupported(acc, state, "empty select")
     } else {
-        let shape = select_shape(
-            arms,
-            0,
-            SelectShape {
-                recv: 0,
-                after: 0,
-                other: 0
-            }
-        );
+        let shape = select_shape(arms, 0, SelectShape {
+            recv: 0,
+            after: 0,
+            other: 0
+        });
         // A select with no channel arm is not waiting for anything --
         // `select { else => x }` is `x` written at length, and
         // `select { after d => x }` is a `sleep` written at length.
@@ -6523,7 +6424,14 @@ let infer_match_arms
                 tguard: None
             },
         };
-        let bodyr = infer_optional_expected(p2, gr.state, br.env, gr.subst, arms[i].body, result_ty);
+        let bodyr = infer_optional_expected(
+            p2,
+            gr.state,
+            br.env,
+            gr.subst,
+            arms[i].body,
+            result_ty
+        );
         let combined = match result_ty {
             None => bodyr.subst,
             Some(prev) => match unify(
@@ -6547,13 +6455,11 @@ let infer_match_arms
             arms,
             i + 1,
             Some(new_result),
-            tarms.push(
-                TArm {
-                    pattern: br.pattern,
-                    guard: gr.tguard,
-                    body: bodyr.texpr
-                }
-            )
+            tarms.push(TArm {
+                pattern: br.pattern,
+                guard: gr.tguard,
+                body: bodyr.texpr
+            })
         )
     }
 
@@ -6882,12 +6788,10 @@ let bind_or_alts
 let check_or_unique_bindings (bindings: Array[EnvBinding]) (start: Int): Unit =
     if start >= bindings.len() { () }
     else {
-        if Option.is_some(
-            tyenv_lookup(
-                TyEnv { bindings: Array.slice(bindings, start + 1, bindings.len()) },
-                bindings[start].name
-            )
-        ) {
+        if Option.is_some(tyenv_lookup(
+            TyEnv { bindings: Array.slice(bindings, start + 1, bindings.len()) },
+            bindings[start].name
+        )) {
             fail_tc("or-pattern alternatives must not bind a name more than once")
         } else { () };
         check_or_unique_bindings(bindings, start + 1)
@@ -7041,7 +6945,10 @@ let bind_variant_pattern
                     acc
                 }
             };
-            let payload = Array.map(v.payload, |t| instantiate_template(v.enum_generics, fr.tys, t));
+            let payload = Array.map(
+                v.payload,
+                |t| instantiate_template(v.enum_generics, fr.tys, t)
+            );
             if arg_pats.len() != payload.len() {
                 fail_tc(
                     "variant ${tag} has ${payload.len()} payload(s), pattern binds ${arg_pats.len()}"

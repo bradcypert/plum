@@ -138,24 +138,18 @@ let main (): Unit = {
     };
     assert_eq(state.len(), 128);
     let mut source = ints(20);
-    let out = Array.concat(
-        source,
-        {
-            source = [30, 31];
-            source
-        }
-    );
+    let out = Array.concat(source, {
+        source = [30, 31];
+        source
+    });
     assert_eq(out, [20, 21, 22, 30, 31]);
     assert_eq(source, [30, 31]);
     let published = ref(ints(0));
     let receiver = ints(40);
-    let out = Array.concat(
-        receiver,
-        {
-            published.set(receiver);
-            [50]
-        }
-    );
+    let out = Array.concat(receiver, {
+        published.set(receiver);
+        [50]
+    });
     assert_eq(out, [40, 41, 42, 50]);
     assert_eq(published.get(), ints(40));
     let mut source = ints(60);

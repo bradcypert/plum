@@ -13,30 +13,24 @@ use Encoding;
 // call and stays honest about what it is doing.
 
 let show (label: String) (r: Result[Bytes, String]): Unit =
-    println(
-        label.concat(": ")
-            .concat(
-                match r {
-                    Ok(b) => b.to_hex(),
-                    Err(e) => e,
-                }
-            )
-    )
+    println(label.concat(": ").concat(
+        match r {
+            Ok(b) => b.to_hex(),
+            Err(e) => e,
+        }
+    ))
 
 // A decoded buffer read back as text, for the cases that really are text.
 let show_text (label: String) (r: Result[Bytes, String]): Unit =
-    println(
-        label.concat(": ")
-            .concat(
-                match r {
-                    Ok(b) => match b.as_string() {
-                        Ok(s) => s,
-                        Err(e) => e
-                    },
-                    Err(e) => e,
-                }
-            )
-    )
+    println(label.concat(": ").concat(
+        match r {
+            Ok(b) => match b.as_string() {
+                Ok(s) => s,
+                Err(e) => e
+            },
+            Err(e) => e,
+        }
+    ))
 
 let main (): Unit = {
     // --- Hex ---

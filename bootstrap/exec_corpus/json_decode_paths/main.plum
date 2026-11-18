@@ -41,14 +41,14 @@ let main (): Unit = {
     let bad: Json.Decoder[String] = Json.fail("bad");
     show(Json.decode(Json.field("a.b", bad), dotted));
     show(Json.decode(Json.field("a.b", Json.one_of([Json.string()])), dotted));
-    show(
-        Json.decode(
-            Json.field("outer", Json.field("a.b", Json.index(0, Json.field("", Json.string())))),
-            object("outer", object("a.b", JsonArray([object("", JsonNull)])))
-        )
-    );
+    show(Json.decode(
+        Json.field("outer", Json.field("a.b", Json.index(0, Json.field("", Json.string())))),
+        object("outer", object("a.b", JsonArray([object("", JsonNull)])))
+    ));
     show(Json.decode(Json.list(Json.field("a.b", Json.string())), JsonArray([dotted])));
-    show(Json.decode(Json.field("a.b", Json.index(3, Json.string())), object("a.b", JsonArray([]))));
+    show(
+        Json.decode(Json.field("a.b", Json.index(3, Json.string())), object("a.b", JsonArray([])))
+    );
     show(Json.decode(Json.at(["a.b", "child"], Json.string()), dotted));
     show(Json.decode(Json.string(), JsonNull));
     show(Json.decode(Json.at([], Json.string()), JsonNull));

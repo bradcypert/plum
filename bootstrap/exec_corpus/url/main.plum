@@ -128,68 +128,58 @@ let main (): Unit = {
     // 7230 section 5.4) and what a URL's authority component is -- the
     // same string for the same reason, so `Http` uses this rather than
     // carrying its own copy.
-    println(
-        Array.join(
-            Array.map(
-                [
-                    "http://h/x",
-                    "http://h:80/x",
-                    "http://h:8080/x",
-                    "https://h:443/x",
-                    "https://h:8443/x",
-                    "http://[::1]/x",
-                    "http://[::1]:9000/x",
-                ],
-                |s| match Url.parse(s) {
-                    Ok(u) => Url.authority(u),
-                    Err(e) => e
-                }
-            ),
-            " "
-        )
-    );
+    println(Array.join(
+        Array.map(
+            [
+                "http://h/x",
+                "http://h:80/x",
+                "http://h:8080/x",
+                "https://h:443/x",
+                "https://h:8443/x",
+                "http://[::1]/x",
+                "http://[::1]:9000/x",
+            ],
+            |s| match Url.parse(s) {
+                Ok(u) => Url.authority(u),
+                Err(e) => e
+            }
+        ),
+        " "
+    ));
 
     // --- Query access ---
     match Url.parse("http://h/p?tag=a&tag=b&q=hello%20world&empty=") {
         Err(e) => println(e),
         Ok(u) => {
             // Values come back decoded; `parse` already proved they can be.
-            println(
-                "q: ".concat(
-                    match Url.query_get(u, "q") {
-                        Some(v) => v,
-                        None => "<none>"
-                    }
-                )
-            );
+            println("q: ".concat(
+                match Url.query_get(u, "q") {
+                    Some(v) => v,
+                    None => "<none>"
+                }
+            ));
             // Absent is `None`; present-but-empty is `Some("")`.
-            println(
-                "empty: ".concat(
-                    match Url.query_get(u, "empty") {
-                        Some(v) => "[".concat(v).concat("]"),
-                        None => "<none>"
-                    }
-                )
-            );
-            println(
-                "missing: ".concat(
-                    match Url.query_get(u, "nope") {
-                        Some(v) => v,
-                        None => "<none>"
-                    }
-                )
-            );
+            println("empty: ".concat(
+                match Url.query_get(u, "empty") {
+                    Some(v) => "[".concat(v).concat("]"),
+                    None => "<none>"
+                }
+            ));
+            println("missing: ".concat(
+                match Url.query_get(u, "nope") {
+                    Some(v) => v,
+                    None => "<none>"
+                }
+            ));
             // A key may legitimately repeat, and a single-value lookup
             // cannot say so.
             println("all tag: ".concat(Array.join(Url.query_all(u, "tag"), ",")));
-            println(
-                "first tag: ".concat(
-                    match Url.query_get(u, "tag") {
-                        Some(v) => v,
-                        None => "<none>"
-                    }
-                )
-            );
+            println("first tag: ".concat(
+                match Url.query_get(u, "tag") {
+                    Some(v) => v,
+                    None => "<none>"
+                }
+            ));
 
             // What goes after the method in a request line -- path plus
             // the query exactly as it arrived, and never the fragment.
@@ -210,14 +200,12 @@ let main (): Unit = {
             );
             println("built: ".concat(Url.stringify(with_q)));
             // Round trips through the encoder it just used.
-            println(
-                "read back: ".concat(
-                    match Url.query_get(with_q, "a b") {
-                        Some(v) => v,
-                        None => "<none>"
-                    }
-                )
-            )
+            println("read back: ".concat(
+                match Url.query_get(with_q, "a b") {
+                    Some(v) => v,
+                    None => "<none>"
+                }
+            ))
         },
     }
 }

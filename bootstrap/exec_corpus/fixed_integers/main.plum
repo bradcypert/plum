@@ -72,12 +72,10 @@ let main (): Unit = {
     assert_eq(inline_values[1], inline_byte);
     assert_eq(inline_partial(254), inline_byte);
     let inline_calls = ref(0);
-    let inline_once: U8 = (
-        |unused| {
-            inline_calls.set(inline_calls.get() + 1);
-            255
-        }
-    )(());
+    let inline_once: U8 = (|unused| {
+        inline_calls.set(inline_calls.get() + 1);
+        255
+    })(());
     assert_eq(inline_once, inline_byte);
     assert_eq(inline_calls.get(), 1);
     let late_signed = |x| -x;

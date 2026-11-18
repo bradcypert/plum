@@ -84,7 +84,10 @@ let main (): Unit = {
     let zeros = "0".repeat(65536);
     assert_eq(zeros.parse_int().unwrap_or(-1), 0);
     assert_eq(zeros.concat("9223372036854775807").parse_int().unwrap_or(-1), 9223372036854775807);
-    assert_eq("-".concat(zeros).concat("9223372036854775808").parse_int().unwrap_or(0), ref_min(()));
+    assert_eq(
+        "-".concat(zeros).concat("9223372036854775808").parse_int().unwrap_or(0),
+        ref_min(())
+    );
     let mut source = zeros.concat("7");
     let bytes = source.as_bytes();
     let pointer = unsafe { source.as_cstr() };

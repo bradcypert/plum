@@ -29,14 +29,12 @@ let self_or_fail (): String = match Os.self_exe() {
 }
 
 let start_self (self: String) (args: Array[String]): Result[Process.Child, String] =
-    Process.start(
-        Process.Options {
-            program: self,
-            args: args,
-            env: [],
-            stdin: None
-        }
-    )
+    Process.start(Process.Options {
+        program: self,
+        args: args,
+        env: [],
+        stdin: None
+    })
 
 // --- The child side ---
 
@@ -71,15 +69,13 @@ let poll_says (c: Process.Child): String =
     }
 
 let show_result (label: String) (r: Result[Process.ProcessResult, String]): Unit =
-    println(
-        label.concat(
-            match r {
-                Err(e) => "ERR ".concat(e),
-                Ok(res) => "exit=".concat(res.exit_code.to_string())
-                    .concat(" out=[").concat(String.trim_end(res.stdout)).concat("]"),
-            }
-        )
-    )
+    println(label.concat(
+        match r {
+            Err(e) => "ERR ".concat(e),
+            Ok(res) => "exit=".concat(res.exit_code.to_string())
+                .concat(" out=[").concat(String.trim_end(res.stdout)).concat("]"),
+        }
+    ))
 
 // A child that outlives one poll, then is waited for.
 let case_poll_then_wait (self: String): Unit =
@@ -117,26 +113,22 @@ let case_wait_timeout (self: String): Unit =
                 );
             };
             println("nonpositive:  running");
-            println(
-                "short timeout:".concat(
-                    match c.wait_timeout(ms(20)) {
-                        Ok(None) => " timed out",
-                        Ok(Some(_)) => " finished (too fast to be a real test)",
-                        Err(e) => " ERR ".concat(e),
-                    }
-                )
-            );
+            println("short timeout:".concat(
+                match c.wait_timeout(ms(20)) {
+                    Ok(None) => " timed out",
+                    Ok(Some(_)) => " finished (too fast to be a real test)",
+                    Err(e) => " ERR ".concat(e),
+                }
+            ));
             // Still running, and NOT signalled by the timeout above.
             println("still there:  ".concat(poll_says(c)));
-            println(
-                "long timeout: ".concat(
-                    match c.wait_timeout(Time.seconds(20)) {
-                        Ok(Some(res)) => "exit=".concat(res.exit_code.to_string()),
-                        Ok(None) => "timed out (should not happen)",
-                        Err(e) => "ERR ".concat(e),
-                    }
-                )
-            );
+            println("long timeout: ".concat(
+                match c.wait_timeout(Time.seconds(20)) {
+                    Ok(Some(res)) => "exit=".concat(res.exit_code.to_string()),
+                    Ok(None) => "timed out (should not happen)",
+                    Err(e) => "ERR ".concat(e),
+                }
+            ));
         },
     }
 
@@ -145,31 +137,25 @@ let case_terminate (self: String): Unit =
     match start_self(self, ["--sleep", "20000"]) {
         Err(e) => println("start: ".concat(e)),
         Ok(c) => {
-            println(
-                "terminate:    ".concat(
-                    match c.terminate() {
-                        Ok(_) => "ok",
-                        Err(e) => e
-                    }
-                )
-            );
-            println(
-                "gone:         ".concat(
-                    match c.wait() {
-                        Ok(_) => "true",
-                        Err(e) => "ERR ".concat(e)
-                    }
-                )
-            );
+            println("terminate:    ".concat(
+                match c.terminate() {
+                    Ok(_) => "ok",
+                    Err(e) => e
+                }
+            ));
+            println("gone:         ".concat(
+                match c.wait() {
+                    Ok(_) => "true",
+                    Err(e) => "ERR ".concat(e)
+                }
+            ));
             // Signalling something already dead is success.
-            println(
-                "again:        ".concat(
-                    match c.kill() {
-                        Ok(_) => "ok",
-                        Err(e) => e
-                    }
-                )
-            );
+            println("again:        ".concat(
+                match c.kill() {
+                    Ok(_) => "ok",
+                    Err(e) => e
+                }
+            ));
         },
     }
 
@@ -185,14 +171,12 @@ let case_drop_kills (self: String) (marker: String): Unit = {
     // Longer than the child's own 300ms sleep, so a survivor has had
     // every chance to write the file.
     Time.sleep(ms(1200));
-    println(
-        "marker left:  ".concat(
-            match Os.exists(marker) {
-                Ok(b) => b.to_string(),
-                Err(e) => "ERR ".concat(e),
-            }
-        )
-    );
+    println("marker left:  ".concat(
+        match Os.exists(marker) {
+            Ok(b) => b.to_string(),
+            Err(e) => "ERR ".concat(e),
+        }
+    ));
 }
 
 let parent (): Unit = {
@@ -213,20 +197,15 @@ let parent (): Unit = {
         case_wait_timeout(self);
         case_terminate(self);
         case_drop_kills(self, marker);
-        show_result(
-            "no such prog: ",
-            Result.and_then(
-                Process.start(
-                    Process.Options {
-                        program: "plum_definitely_not_a_program_9f3a",
-                        args: [],
-                        env: [],
-                        stdin: None
-                    }
-                ),
-                |c| c.wait()
-            )
-        );
+        show_result("no such prog: ", Result.and_then(
+            Process.start(Process.Options {
+                program: "plum_definitely_not_a_program_9f3a",
+                args: [],
+                env: [],
+                stdin: None
+            }),
+            |c| c.wait()
+        ));
     }
 }
 

@@ -78,27 +78,23 @@ let cg_stmt (p: CgProgram) (env: Array[CgSlot]) (n: Int) (stmt: typecheck.TStmt)
             let slot = cg_reg(n);
             let r = cg_expr(
                 p,
-                env.push(
-                    CgSlot {
-                        name: lv_self_slot(()),
-                        ptr: slot,
-                        ty: cg_of_ity(vty),
-                        ity: vty
-                    }
-                ),
+                env.push(CgSlot {
+                    name: lv_self_slot(()),
+                    ptr: slot,
+                    ty: cg_of_ity(vty),
+                    ity: vty
+                }),
                 n + 1,
                 value
             );
             let name = cg_let_name(pattern);
             let lty = cg_llvm_ty(r.ty);
             BlockEmit {
-                code: cg_join_text(
-                    [
-                        r.code,
-                        cg_release_slot(vty, slot, "_pre"),
-                        "  store ${lty} ${r.val}, ptr ${slot}\n"
-                    ]
-                ),
+                code: cg_join_text([
+                    r.code,
+                    cg_release_slot(vty, slot, "_pre"),
+                    "  store ${lty} ${r.val}, ptr ${slot}\n"
+                ]),
                 // Slots are null-initialized, released on replacement, and
                 // released at exit. This also handles repeated loop bindings.
                 allocas: cg_join_text(
@@ -106,14 +102,12 @@ let cg_stmt (p: CgProgram) (env: Array[CgSlot]) (n: Int) (stmt: typecheck.TStmt)
                 ),
                 releases: r.releases.concat(cg_release_slot(vty, slot, "_end")),
                 globals: r.globals,
-                env: env.push(
-                    CgSlot {
-                        name: name,
-                        ptr: slot,
-                        ty: r.ty,
-                        ity: vty
-                    }
-                ),
+                env: env.push(CgSlot {
+                    name: name,
+                    ptr: slot,
+                    ty: r.ty,
+                    ity: vty
+                }),
                 n: r.n,
             }
         },

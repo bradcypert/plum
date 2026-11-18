@@ -326,15 +326,12 @@ pub let File.read (f: File) (max_len: Int): Result[Bytes, String] =
 /// Concurrent operations on one file are serialized by its slot, while
 /// NativeBuffer rejects concurrent/reentrant byte access through aliases.
 pub let File.read_into (f: File) (buffer: NativeBuffer.Buffer): Result[Int, String] = unsafe {
-    NativeBuffer.with_mut(
-        buffer,
-        |pointer, cap| {
-            let n = unsafe { file_read_into(File.raw(f), pointer, cap) };
-            if n < 0 { Err("File.read_into: read failed or capacity is not positive") } else {
-                Ok(n)
-            }
+    NativeBuffer.with_mut(buffer, |pointer, cap| {
+        let n = unsafe { file_read_into(File.raw(f), pointer, cap) };
+        if n < 0 { Err("File.read_into: read failed or capacity is not positive") } else {
+            Ok(n)
         }
-    )
+    })
 }
 
 /// `len` MUST be bound BEFORE `.as_cstr()` runs, the same ordering
@@ -626,13 +623,11 @@ pub let exists (path: String): Result[Bool, String] = unsafe {
 pub let stat (path: String): Result[Metadata, String] = unsafe {
     if os_stat_load(path.as_cstr()) != 0 { Err("Os.stat: cannot stat ".concat(path)) }
     else {
-        Ok(
-            Metadata {
-                is_directory: os_stat_is_dir() == 1,
-                size: os_stat_size(),
-                mtime: os_stat_mtime()
-            }
-        )
+        Ok(Metadata {
+            is_directory: os_stat_is_dir() == 1,
+            size: os_stat_size(),
+            mtime: os_stat_mtime()
+        })
     }
 }
 

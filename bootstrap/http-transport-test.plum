@@ -14,13 +14,10 @@ let test_tcp_read (fd: Int) (max_len: Int): Result[Bytes, String] =
     match NativeBuffer.create(max_len) {
         Err(e) => Err(e),
         Ok(buffer) => match unsafe {
-            NativeBuffer.with_mut(
-                buffer,
-                |pointer, cap| {
-                    let n = unsafe { http_test_recv_into(fd, pointer, cap) };
-                    if n < 0 { Err("Net.read_bytes: recv failed") } else { Ok(n) }
-                }
-            )
+            NativeBuffer.with_mut(buffer, |pointer, cap| {
+                let n = unsafe { http_test_recv_into(fd, pointer, cap) };
+                if n < 0 { Err("Net.read_bytes: recv failed") } else { Ok(n) }
+            })
         } {
             Err(e) => Err(e),
             Ok(_) => NativeBuffer.copy_out(buffer),
@@ -202,14 +199,11 @@ let test_framing (): Unit = {
                 -1
             );
             assert_eq(
-                http_handle_connection(
-                    1,
-                    |req| Response {
-                        status: 200,
-                        headers: [],
-                        body: req.body
-                    }
-                ),
+                http_handle_connection(1, |req| Response {
+                    status: 200,
+                    headers: [],
+                    body: req.body
+                }),
                 Ok(())
             );
             test_bytes(
@@ -226,14 +220,11 @@ let test_framing (): Unit = {
         -1
     );
     assert_eq(
-        http_handle_connection(
-            1,
-            |req| Response {
-                status: 204,
-                headers: [],
-                body: req.body
-            }
-        ),
+        http_handle_connection(1, |req| Response {
+            status: 204,
+            headers: [],
+            body: req.body
+        }),
         Ok(())
     );
     test_bytes(test_output(), "HTTP/1.1 204 No Content\r\nConnection: close\r\n\r\n".as_bytes());
@@ -260,14 +251,11 @@ let test_framing (): Unit = {
         -1
     );
     assert_eq(
-        http_handle_connection(
-            1,
-            |req| Response {
-                status: 200,
-                headers: [],
-                body: req.body
-            }
-        ),
+        http_handle_connection(1, |req| Response {
+            status: 200,
+            headers: [],
+            body: req.body
+        }),
         Ok(())
     );
     for name in [
@@ -363,18 +351,15 @@ let main (): Unit = {
     for split in 0..request.len() {
         test_peer(request, split, 7, 0, -1);
         assert_eq(
-            http_handle_connection(
-                1,
-                |req| {
-                    assert_eq(req.path, "/é");
-                    test_bytes(req.body, payload);
-                    Response {
-                        status: 200,
-                        headers: [],
-                        body: req.body
-                    }
+            http_handle_connection(1, |req| {
+                assert_eq(req.path, "/é");
+                test_bytes(req.body, payload);
+                Response {
+                    status: 200,
+                    headers: [],
+                    body: req.body
                 }
-            ),
+            }),
             Ok(())
         );
         test_bytes(
@@ -385,21 +370,17 @@ let main (): Unit = {
     };
     // Invalid UTF-8 belongs in bodies, never in String protocol fields.
     assert_eq(
-        Result.is_err(
-            http_parse_head(
-                "HTTP/1.1 200 OK\r\nX: ".as_bytes().concat(Bytes.from_array([255]))
-                    .concat("\r\n\r\n".as_bytes())
-            )
-        ),
+        Result.is_err(http_parse_head(
+            "HTTP/1.1 200 OK\r\nX: ".as_bytes().concat(Bytes.from_array([255]))
+                .concat("\r\n\r\n".as_bytes())
+        )),
         true
     );
     assert_eq(
-        Result.is_err(
-            http_parse_request_head(
-                "GET / HTTP/1.1\r\nHost:a\r\nX: ".as_bytes().concat(Bytes.from_array([255]))
-                    .concat("\r\n\r\n".as_bytes())
-            )
-        ),
+        Result.is_err(http_parse_request_head(
+            "GET / HTTP/1.1\r\nHost:a\r\nX: ".as_bytes().concat(Bytes.from_array([255]))
+                .concat("\r\n\r\n".as_bytes())
+        )),
         true
     );
     // Bounded slices on sends also cover bodies larger than the chunk cap.
@@ -416,16 +397,11 @@ let main (): Unit = {
     assert_eq(request_cost < 4096, true);
     assert_eq(outgoing_request.body.len(), 65536);
     let before_response = unsafe { http_test_allocated_bytes() };
-    let outgoing_response = test_wire(
-        http_response_to_wire(
-            "GET",
-            Response {
-                status: 200,
-                headers: [],
-                body: big
-            }
-        )
-    );
+    let outgoing_response = test_wire(http_response_to_wire("GET", Response {
+        status: 200,
+        headers: [],
+        body: big
+    }));
     let response_cost = unsafe { http_test_allocated_bytes() } - before_response;
     assert_eq(response_cost < 4096, true);
     assert_eq(outgoing_response.body.len(), 65536);

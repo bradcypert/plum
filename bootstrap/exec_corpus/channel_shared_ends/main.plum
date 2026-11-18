@@ -7,20 +7,15 @@
 
 let sender_round (): Unit = {
     let (tx, rx) = channel[Int]();
-    let tasks = Array.map(
-        [0, 1, 2, 3, 4, 5, 6, 7],
-        |t| spawn {
-            for i in 0..10000 { tx.send(i) }
-        }
-    );
+    let tasks = Array.map([0, 1, 2, 3, 4, 5, 6, 7], |t| spawn {
+        for i in 0..10000 { tx.send(i) }
+    });
     for i in 0..80000 {
         rx.recv()
-            .unwrap_or_else(
-                || {
-                    panic_raw("unexpected closed channel");
-                    0
-                }
-            )
+            .unwrap_or_else(|| {
+                panic_raw("unexpected closed channel");
+                0
+            })
     };
     for task in tasks { task.join() };
     println("senders done")
@@ -28,20 +23,15 @@ let sender_round (): Unit = {
 
 let receiver_round (): Unit = {
     let (tx, rx) = channel[Int]();
-    let tasks = Array.map(
-        [0, 1, 2, 3, 4, 5, 6, 7],
-        |t| spawn {
-            for i in 0..10000 {
-                rx.recv()
-                    .unwrap_or_else(
-                        || {
-                            panic_raw("unexpected closed channel");
-                            0
-                        }
-                    )
-            }
+    let tasks = Array.map([0, 1, 2, 3, 4, 5, 6, 7], |t| spawn {
+        for i in 0..10000 {
+            rx.recv()
+                .unwrap_or_else(|| {
+                    panic_raw("unexpected closed channel");
+                    0
+                })
         }
-    );
+    });
     for i in 0..80000 { tx.send(i) };
     for task in tasks { task.join() };
     println("receivers done")

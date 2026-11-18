@@ -47,7 +47,9 @@ let lsp_remove_diagnostics (project: String): Unit = {
     let previous = Map.get(LSP_DIAGNOSTICS.get(), project);
     let remaining = Map.remove(LSP_DIAGNOSTICS.get(), project);
     // Map.remove keeps bucket capacity; release it after the final project.
-    LSP_DIAGNOSTICS.set(if Map.len(remaining) == 0 { empty_lsp_diagnostics(()) } else { remaining });
+    LSP_DIAGNOSTICS.set(
+        if Map.len(remaining) == 0 { empty_lsp_diagnostics(()) } else { remaining }
+    );
     match previous {
         Some(old) => lsp_publish_target(old.target),
         None => ()

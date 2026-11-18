@@ -97,22 +97,18 @@ let main (): Unit = {
     assert_eq(unsafe { view.as_string() }, "0");
     assert_eq(bytes.to_hex(), "30");
     let mut source = ints(0);
-    let out = source.push(
-        {
-            source = ints(10);
-            99
-        }
-    );
+    let out = source.push({
+        source = ints(10);
+        99
+    });
     assert_eq(out, [0, 1, 2, 3, 99]);
     assert_eq(source, ints(10));
     let published = ref(ints(0));
     let receiver = ints(20);
-    let out = receiver.push(
-        {
-            published.set(receiver);
-            99
-        }
-    );
+    let out = receiver.push({
+        published.set(receiver);
+        99
+    });
     assert_eq(out, [20, 21, 22, 23, 99]);
     assert_eq(published.get(), ints(20));
     assert_eq([true, false].push(true), [true, false, true]);

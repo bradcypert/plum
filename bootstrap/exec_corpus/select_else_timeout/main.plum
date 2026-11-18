@@ -28,12 +28,10 @@ let main (): Unit = {
     println(
         select {
             n = rx => {
-                let n = n.unwrap_or_else(
-                    || {
-                        panic_raw("unexpected closed channel");
-                        0
-                    }
-                );
+                let n = n.unwrap_or_else(|| {
+                    panic_raw("unexpected closed channel");
+                    0
+                });
                 "got ".concat(n.to_string())
             },
             else => "nothing ready",
@@ -47,12 +45,10 @@ let main (): Unit = {
     println(
         select {
             n = rx => {
-                let n = n.unwrap_or_else(
-                    || {
-                        panic_raw("unexpected closed channel");
-                        0
-                    }
-                );
+                let n = n.unwrap_or_else(|| {
+                    panic_raw("unexpected closed channel");
+                    0
+                });
                 "got ".concat(n.to_string())
             },
             else => "nothing ready",
@@ -63,12 +59,10 @@ let main (): Unit = {
     println(
         select {
             n = rx => {
-                let n = n.unwrap_or_else(
-                    || {
-                        panic_raw("unexpected closed channel");
-                        0
-                    }
-                );
+                let n = n.unwrap_or_else(|| {
+                    panic_raw("unexpected closed channel");
+                    0
+                });
                 "got ".concat(n.to_string())
             },
             else => "nothing ready",
@@ -80,12 +74,10 @@ let main (): Unit = {
     println(
         select {
             n = rx => {
-                let n = n.unwrap_or_else(
-                    || {
-                        panic_raw("unexpected closed channel");
-                        0
-                    }
-                );
+                let n = n.unwrap_or_else(|| {
+                    panic_raw("unexpected closed channel");
+                    0
+                });
                 "got ".concat(n.to_string())
             },
             Time.millis(60) => "timed out",
@@ -104,12 +96,10 @@ let main (): Unit = {
     println(
         select {
             n = rx => {
-                let n = n.unwrap_or_else(
-                    || {
-                        panic_raw("unexpected closed channel");
-                        0
-                    }
-                );
+                let n = n.unwrap_or_else(|| {
+                    panic_raw("unexpected closed channel");
+                    0
+                });
                 "got ".concat(n.to_string())
             },
             Time.seconds(30) => "timed out",
@@ -125,12 +115,10 @@ let main (): Unit = {
     println(
         select {
             n = rx => {
-                let n = n.unwrap_or_else(
-                    || {
-                        panic_raw("unexpected closed channel");
-                        0
-                    }
-                );
+                let n = n.unwrap_or_else(|| {
+                    panic_raw("unexpected closed channel");
+                    0
+                });
                 "got ".concat(n.to_string())
             },
             budget => "budget spent",
@@ -144,12 +132,10 @@ let main (): Unit = {
     println(
         select {
             n = rx => {
-                let n = n.unwrap_or_else(
-                    || {
-                        panic_raw("unexpected closed channel");
-                        0
-                    }
-                );
+                let n = n.unwrap_or_else(|| {
+                    panic_raw("unexpected closed channel");
+                    0
+                });
                 "got ".concat(n.to_string())
             },
             Time.zero() => "zero timeout",

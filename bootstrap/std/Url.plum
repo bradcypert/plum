@@ -364,16 +364,14 @@ pub let parse (input: String): Result[Url, String] =
                         Err(e) => Err(e),
                         Ok(_) => match validate_component("fragment", Fragment, frag.after) {
                             Err(e) => Err(e),
-                            Ok(_) => Ok(
-                                Url {
-                                    scheme: base.scheme,
-                                    host: base.host,
-                                    port: base.port,
-                                    path: path,
-                                    raw_query: q.after,
-                                    fragment: frag.after,
-                                }
-                            ),
+                            Ok(_) => Ok(Url {
+                                scheme: base.scheme,
+                                host: base.host,
+                                port: base.port,
+                                path: path,
+                                raw_query: q.after,
+                                fragment: frag.after,
+                            }),
                         },
                     },
                 },

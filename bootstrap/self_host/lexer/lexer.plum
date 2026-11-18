@@ -1033,15 +1033,10 @@ pub let render_at (source: String) (path: String) (offset: Int) (msg: String): S
     let lc = line_col(source, offset);
     // Replace control characters with a single visible scalar so a NUL
     // cannot truncate the diagnostic and the caret keeps its column.
-    let text = Array.concat_all(
-        Array.map(
-            chars_of(line_text(source, offset)),
-            |c| {
-                let n = char_code(c);
-                if (n < 32 && c != "\t") || (n >= 127 && n <= 159) { "�" } else { c }
-            }
-        )
-    );
+    let text = Array.concat_all(Array.map(chars_of(line_text(source, offset)), |c| {
+        let n = char_code(c);
+        if (n < 32 && c != "\t") || (n >= 127 && n <= 159) { "�" } else { c }
+    }));
     let gutter = lc.line.to_string();
     // The bar lines align under the line NUMBER, so their width follows
     // it -- byte-identical to `plum_syntax::error::CompileError`'s own
@@ -1184,18 +1179,16 @@ pub let render_token (t: Token): String = match t {
 // render::render_tokens`'s own doc comment: constant, uninteresting
 // boilerplate every single token stream would otherwise end with.
 pub let render_tokens (tokens: Array[Token]): String =
-    string_join_with_space(
-        Array.map(
-            Array.filter(
-                tokens,
-                |t| match t {
-                    TokEof => false,
-                    _ => true
-                }
-            ),
-            |t| render_token(t)
-        )
-    )
+    string_join_with_space(Array.map(
+        Array.filter(
+            tokens,
+            |t| match t {
+                TokEof => false,
+                _ => true
+            }
+        ),
+        |t| render_token(t)
+    ))
 
 pub let test_source_positions_newlines (): Unit = {
     for newline in ["\n", "\r", "\r\n"] {
