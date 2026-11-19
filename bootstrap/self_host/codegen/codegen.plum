@@ -11985,24 +11985,27 @@ pub let cg_emit_program_entry
     ]);
     buildcache.finish("helper emission", helpers_time);
     let emit_time = buildcache.start(());
-    let functions = cg_emit_insts(p, insts, 0, 0, "");
+    let functions = cg_collect_insts(p, insts, 0, 0, []);
     buildcache.finish("function emission", emit_time);
     let metadata_time = buildcache.start(());
     let metadata = cg_dbg_module(());
     buildcache.finish("debug metadata", metadata_time);
     let join_time = buildcache.start(());
-    let result = Array.concat_all([
+    let prefix = [
         cg_runtime(HEAP_STATS.get()),
         cg_emit_extern_decls(program.items, 0, ""),
         helpers,
         gl.slots,
-        functions,
+    ];
+    let suffix = [
         gl.init,
         cg_entry_named("@".concat(cg_sym("", entry, []))),
         // Last, because the nodes are allocated as functions are
         // emitted and nothing knows the full set until they are.
         metadata,
-    ]);
+    ];
+    // Join function fragments with the rest of the module in one pass.
+    let result = Array.concat_all(Array.concat(Array.concat(prefix, functions), suffix));
     buildcache.finish("IR join", join_time);
     buildcache.count("IR bytes", result.len());
     if CORE_RUNTIME.get() { cg_core_runtime(result, cg_core_user_externs(program0)) } else {
@@ -12644,14 +12647,7 @@ let cg_calls_in_fields
         cg_calls_in_fields(p, fields, i + 1, cg_calls_in(p, fields[i].value, acc))
     }
 
-// Accumulates into an ARRAY and joins once, rather than concatenating
-// onto a growing string. This is the emitter's biggest accumulator --
-// every function body in the program -- and appending to a string makes
-// it quadratic: function N copies the N-1 already there. Compiling this
-// compiler allocated 3.5GB to produce 6MB of IR, most of it here.
-let cg_emit_insts (p: CgProgram) (insts: Array[CgInst]) (i: Int) (n: Int) (acc: String): String =
-    Array.concat_all(cg_collect_insts(p, insts, 0, n, []))
-
+// Keep each function body in its own fragment until the whole module is joined.
 let cg_collect_insts
     (p: CgProgram)
     (insts: Array[CgInst])
