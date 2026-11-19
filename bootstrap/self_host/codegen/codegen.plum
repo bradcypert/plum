@@ -92,6 +92,7 @@ pub enum CgTy {
     // Unmanaged pointer received from native code, with an explicit unsafe
     // lifetime/copy contract. Never reference-count or read a Plum header.
     CgRawCStr,
+    CgRawPtr(typecheck.IntegerKind),
     // A byte buffer. Structurally IDENTICAL to `CgStr` -- the same
     // refcounted `{rc, len, bytes.., NUL}` cell, so it shares
     // `@plum_str_eq`, `@plum_rel_str` and every allocation path -- and a
@@ -156,6 +157,7 @@ let cg_llvm_ty (t: CgTy): String =
         CgStr => "ptr",
         CgCStr => "ptr",
         CgRawCStr => "ptr",
+        CgRawPtr(_) => "ptr",
         CgBytes => "ptr",
         CgStruct(_) => "ptr",
         CgEnum(_) => "ptr",
@@ -176,6 +178,7 @@ let cg_ty_name (t: CgTy): String =
         CgStr => "String",
         CgCStr => "CStr",
         CgRawCStr => "RawCStr",
+        CgRawPtr(k) => "RawPtr[${typecheck.integer_name(k)}]",
         CgBytes => "Bytes",
         CgStruct(name) => name,
         CgEnum(name) => name,
@@ -380,18 +383,19 @@ let cg_inst_seen (done: Array[CgInst]) (x: CgInst) (i: Int): Bool =
         cg_inst_seen(done, x, i + 1)
     }
 
-pub let cg_build_program (program: parser.ProgramNode): CgProgram =
+pub let cg_build_program (program: parser.ProgramNode): CgProgram = {
+    let typed = typecheck.typed_program(program);
     CgProgram {
         // Type-checking and typed-tree construction are one pass —
         // `typed_program` IS `check_program` with the results kept, so
         // the backend cannot compile anything the checker didn't prove.
-        fns: typecheck.typed_program(program),
-        globals: typecheck.typed_globals(program),
+        fns: typed.functions,
+        globals: typed.globals,
         // Field names and field/payload TYPES come straight from the
         // checker's own declaration tables — the backend re-resolves
         // nothing. Only variant TAGS are assigned here, because tag
         // numbering is a layout decision the checker has no opinion on.
-        ctx: typecheck.build_context(program),
+        ctx: typed.ctx,
         enums: cg_collect_enums(program.items, 0, 0, []),
         subst: typecheck.subst_empty(()),
         generics: [],
@@ -405,6 +409,7 @@ pub let cg_build_program (program: parser.ProgramNode): CgProgram =
         tail_observation: None,
         type_facts: ref(cg_empty_type_facts(())),
     }
+}
 
 // `next_tag` runs across the whole program, so every variant in every
 // enum has a distinct id — see `CgVariant`'s own comment.
@@ -1753,6 +1758,7 @@ let cg_expr (p: CgProgram) (env: Array[CgSlot]) (n: Int) (e: typecheck.TExpr): E
         TAsCStr(inner) => cg_as_cstr(p, env, n, inner),
         TAsString(inner) => cg_as_string(p, env, n, inner),
         TIntegerConvert(dest, mode, inner) => cg_integer_convert(p, env, n, dest, mode, inner),
+        TRawPointer(op, args) => cg_raw_pointer(p, env, n, op, args, cg_ty(p, e)),
         TChannelNew => cg_channel_new(p, env, n, cg_ty(p, e)),
         TChannelSend(ch, v) => cg_channel_send(p, env, n, ch, v),
         TChannelRecv(ch) => cg_channel_recv(p, env, n, ch, cg_ty(p, e)),
@@ -1804,6 +1810,7 @@ let cg_of_ity (t: typecheck.ITy): CgTy =
         ITStr => CgStr,
         ITCStr => CgCStr,
         ITRawCStr => CgRawCStr,
+        ITRawPtr(k) => CgRawPtr(k),
         ITBytes => CgBytes,
         ITUnit => CgUnit,
         // A `Task` is a bare handle from `thread_spawn` -- an `Int`'s
@@ -2265,6 +2272,10 @@ let cg_strict_binary
     let globals = a.globals.concat(b.globals);
     let allocas = a.allocas.concat(b.allocas);
     let releases = a.releases.concat(b.releases);
+    match a.ty {
+        CgRawPtr(_) => cg_fail("RawPtr does not support binary operators"),
+        _ => (),
+    };
     if cg_is_equality(op) {
         // Structural, via `cg_eq_code` — which is one instruction for a
         // primitive and a call to a generated function for anything
@@ -3166,6 +3177,7 @@ let cg_reads_max (name: String) (e: typecheck.TExpr): Int =
         TAsCStr(a) => cg_reads_max(name, a),
         TAsString(a) => cg_reads_max(name, a),
         TIntegerConvert(_, _, a) => cg_reads_max(name, a),
+        TRawPointer(_, args) => cg_reads_max_list(name, args, 0, 0),
         TRefNew(a) => cg_reads_max(name, a),
         TBinary(_, a, b) => cg_cap2(cg_reads_max(name, a) + cg_reads_max(name, b)),
         TIndex(a, b) => cg_cap2(cg_reads_max(name, a) + cg_reads_max(name, b)),
@@ -3721,6 +3733,7 @@ let lv_node (ctx: LvCtx) (node: typecheck.TNode): typecheck.TNode =
         TAsCStr(a) => TAsCStr(lv_expr(ctx, a)),
         TAsString(a) => TAsString(lv_expr(ctx, a)),
         TIntegerConvert(dest, mode, a) => TIntegerConvert(dest, mode, lv_expr(ctx, a)),
+        TRawPointer(op, args) => TRawPointer(op, lv_seq(ctx, args, 0, [])),
         TRefNew(a) => TRefNew(lv_expr(ctx, a)),
         TBinary(op, a, b) => TBinary(op, lv_expr(lv_with(ctx, [b]), a), lv_expr(ctx, b)),
         TIndex(a, b) => TIndex(lv_expr(lv_with(ctx, [b]), a), lv_expr(ctx, b)),
@@ -5001,6 +5014,10 @@ let cg_to_string (p: CgProgram) (env: Array[CgSlot]) (n: Int) (base: typecheck.T
         },
         CgRawCStr => {
             cg_fail(".to_string() on a RawCStr isn't supported -- use .as_string()");
+            cg_unit_emit(b.n)
+        },
+        CgRawPtr(_) => {
+            cg_fail(".to_string() on a RawPtr isn't supported");
             cg_unit_emit(b.n)
         },
         // Rejected by `reject_unrenderable` before this can be reached;
@@ -8700,6 +8717,7 @@ let cg_zero_of (t: CgTy): String =
         CgStr => "null",
         CgCStr => "null",
         CgRawCStr => "null",
+        CgRawPtr(_) => "null",
         CgBytes => "null",
         CgStruct(_) => "null",
         CgEnum(_) => "null",
@@ -9837,6 +9855,10 @@ let cg_eq_code (t: typecheck.ITy) (av: String) (bv: String) (n: Int): EqEmit = {
         ITFloat => "  ${reg} = fcmp oeq double ${av}, ${bv}\n",
         ITInt => "  ${reg} = icmp eq i64 ${av}, ${bv}\n",
         ITInteger(_) => "  ${reg} = icmp eq i64 ${av}, ${bv}\n",
+        ITRawPtr(_) => {
+            cg_fail("RawPtr has no structural equality");
+            ""
+        },
         ITBool => "  ${reg} = icmp eq i1 ${av}, ${bv}\n",
         ITUnit => "  ${reg} = icmp eq i1 ${av}, ${bv}\n",
         // A defaulted (unconstrained) type is compared as its defaulted
@@ -10059,6 +10081,12 @@ let cg_render_val (owner: typecheck.ITy) (t: typecheck.ITy) (val: String) (n: In
         ITRawCStr => StrEmit {
             code: "",
             consts: cg_sfmt_const(owner, n, "<raw-cstr>"),
+            val: cg_sfmt_sym(owner, n),
+            n: n + 1
+        },
+        ITRawPtr(_) => StrEmit {
+            code: "",
+            consts: cg_sfmt_const(owner, n, "<raw-ptr>"),
             val: cg_sfmt_sym(owner, n),
             n: n + 1
         },
@@ -10846,6 +10874,7 @@ let cg_is_heap (t: CgTy): Bool =
         // CStr shares String/Bytes ownership. RawCStr belongs to native code.
         CgCStr => true,
         CgRawCStr => false,
+        CgRawPtr(_) => false,
         CgHandle(_) => true,
         CgBytes => true,
         CgStr => true,
@@ -11814,7 +11843,7 @@ let cg_of_ann (t: parser.Ty): CgTy =
             else {
                 {
                     cg_fail(
-                        "extern declarations can only use integer scalars/Float/Bool/CStr/RawCStr/Unit, found ".concat(
+                        "extern declarations can only use integer scalars/Float/Bool/CStr/RawCStr/RawPtr/Unit, found ".concat(
                             name
                         )
                     );
@@ -11822,8 +11851,28 @@ let cg_of_ann (t: parser.Ty): CgTy =
                 }
             }
         },
+        TyGeneric(parts, args) => {
+            if parser.join_dot(parts) == "RawPtr" && args.len() == 1 {
+                match args[0] {
+                    TyPath(pointee) => match typecheck.named_integer_kind(parser.join_dot(pointee)) {
+                        Some(kind) => CgRawPtr(kind),
+                        None => {
+                            cg_fail("invalid RawPtr extern pointee");
+                            CgInt
+                        },
+                    },
+                    _ => {
+                        cg_fail("invalid RawPtr extern pointee");
+                        CgInt
+                    },
+                }
+            } else {
+                cg_fail("extern declarations can only use simple types or RawPtr");
+                CgInt
+            }
+        },
         _ => {
-            cg_fail("extern declarations can only use simple types");
+            cg_fail("extern declarations can only use simple types or RawPtr");
             CgInt
         },
     }
@@ -11861,14 +11910,15 @@ pub let cg_with_prelude (program: parser.ProgramNode): parser.ProgramNode = {
     }
 }
 
-pub let cg_emit_program (program0: parser.ProgramNode): String =
-    cg_emit_program_entry(program0, "main")
-
 // Same emitter, with the entry function named. `test` uses it to
 // compile a project ONCE against a synthesized dispatcher, instead of
 // interpreting each test -- which is what it used to do, and why every
 // test that touched the prelude failed.
-pub let cg_emit_program_entry (program0: parser.ProgramNode) (entry: String): String = {
+pub let cg_emit_program_entry
+    (program0: parser.ProgramNode)
+    (entry: String)
+    (resolve_target: () -> String): String
+= {
     cg_dbg_reset(());
     EQ_TYPES.set(cg_empty_type_set(()));
     HASH_SEEN.set(cg_empty_type_set(()));
@@ -11880,6 +11930,12 @@ pub let cg_emit_program_entry (program0: parser.ProgramNode) (entry: String): St
     let type_time = buildcache.start(());
     let p = cg_build_program(program);
     buildcache.finish("type checking", type_time);
+    let pointers = typecheck.raw_pointer_used();
+    if pointers || cg_has_fixed_externs(program0) {
+        let target = resolve_target();
+        set_c_abi_target(target);
+        if pointers { cg_check_raw_pointer_target(target) };
+    };
     if !cg_has_fn(p, entry) { cg_fail("no top-level '${entry}' function to compile") };
     if CORE_RUNTIME.get() { cg_validate_kernel_entry(p, entry) };
     // Globals are roots too: their bodies can call functions that
@@ -11929,24 +11985,27 @@ pub let cg_emit_program_entry (program0: parser.ProgramNode) (entry: String): St
     ]);
     buildcache.finish("helper emission", helpers_time);
     let emit_time = buildcache.start(());
-    let functions = cg_emit_insts(p, insts, 0, 0, "");
+    let functions = cg_collect_insts(p, insts, 0, 0, []);
     buildcache.finish("function emission", emit_time);
     let metadata_time = buildcache.start(());
     let metadata = cg_dbg_module(());
     buildcache.finish("debug metadata", metadata_time);
     let join_time = buildcache.start(());
-    let result = Array.concat_all([
+    let prefix = [
         cg_runtime(HEAP_STATS.get()),
         cg_emit_extern_decls(program.items, 0, ""),
         helpers,
         gl.slots,
-        functions,
+    ];
+    let suffix = [
         gl.init,
         cg_entry_named("@".concat(cg_sym("", entry, []))),
         // Last, because the nodes are allocated as functions are
         // emitted and nothing knows the full set until they are.
         metadata,
-    ]);
+    ];
+    // Join function fragments with the rest of the module in one pass.
+    let result = Array.concat_all(Array.concat(Array.concat(prefix, functions), suffix));
     buildcache.finish("IR join", join_time);
     buildcache.count("IR bytes", result.len());
     if CORE_RUNTIME.get() { cg_core_runtime(result, cg_core_user_externs(program0)) } else {
@@ -12111,6 +12170,7 @@ let cg_rel_in (p: CgProgram) (e: typecheck.TExpr) (acc: Array[typecheck.ITy]): A
         TAsCStr(a) => cg_rel_in(p, a, here),
         TAsString(a) => cg_rel_in(p, a, here),
         TIntegerConvert(_, _, a) => cg_rel_in(p, a, here),
+        TRawPointer(_, args) => cg_rel_in_list(p, args, 0, here),
         TRefNew(a) => cg_rel_in(p, a, here),
         TUnary(_, a) => cg_rel_in(p, a, here),
         TBinary(_, a, b) => cg_rel_in(p, b, cg_rel_in(p, a, here)),
@@ -12310,6 +12370,7 @@ let cg_eq_in (p: CgProgram) (e: typecheck.TExpr) (acc: Array[typecheck.ITy]): Ar
         TAsCStr(a) => cg_eq_in(p, a, acc),
         TAsString(a) => cg_eq_in(p, a, acc),
         TIntegerConvert(_, _, a) => cg_eq_in(p, a, acc),
+        TRawPointer(_, args) => cg_eq_in_list(p, args, 0, acc),
         TRefNew(a) => cg_eq_in(p, a, acc),
         TUnary(_, a) => cg_eq_in(p, a, acc),
         TFieldGet(a, _) => cg_eq_in(p, a, acc),
@@ -12480,6 +12541,7 @@ let cg_calls_in (p: CgProgram) (e: typecheck.TExpr) (acc: Array[CgInst]): Array[
         TAsCStr(a) => cg_calls_in(p, a, acc),
         TAsString(a) => cg_calls_in(p, a, acc),
         TIntegerConvert(_, _, a) => cg_calls_in(p, a, acc),
+        TRawPointer(_, args) => cg_calls_in_list(p, args, acc),
         TRefNew(a) => cg_calls_in(p, a, acc),
         TUnary(_, a) => cg_calls_in(p, a, acc),
         TBinary(_, a, b) => cg_calls_in(p, b, cg_calls_in(p, a, acc)),
@@ -12585,14 +12647,7 @@ let cg_calls_in_fields
         cg_calls_in_fields(p, fields, i + 1, cg_calls_in(p, fields[i].value, acc))
     }
 
-// Accumulates into an ARRAY and joins once, rather than concatenating
-// onto a growing string. This is the emitter's biggest accumulator --
-// every function body in the program -- and appending to a string makes
-// it quadratic: function N copies the N-1 already there. Compiling this
-// compiler allocated 3.5GB to produce 6MB of IR, most of it here.
-let cg_emit_insts (p: CgProgram) (insts: Array[CgInst]) (i: Int) (n: Int) (acc: String): String =
-    Array.concat_all(cg_collect_insts(p, insts, 0, n, []))
-
+// Keep each function body in its own fragment until the whole module is joined.
 let cg_collect_insts
     (p: CgProgram)
     (insts: Array[CgInst])

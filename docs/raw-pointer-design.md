@@ -1,10 +1,10 @@
-# Proposal for raw pointers and volatile scalar access
+# Raw pointers and volatile scalar access
 
-This design is for review under [#512](https://github.com/bradcypert/plum/issues/512). The proposed syntax and behavior describe a future compiler change.
+This is the scalar pointer contract for [#512](https://github.com/bradcypert/plum/issues/512).
 
 Plum-OS already captures borrowed boot data in its C adapter for later memory management. A first compiler step is to let Plum read and update individual scalars in storage supplied by C. A small application can use the same operations for native buffers it owns outside the Plum heap. The boot adapter can continue to expose scalar views while it owns the boot protocol and the layout of its records. [Plum-OS adapter](https://github.com/bradcypert/plum-os/blob/cfe75db1969410efac04eda887256022a4d719a7/boot/adapter.c)
 
-## Proposed interface
+## Interface
 
 `RawPtr[T]` is an unmanaged, nullable data pointer. For the first implementation, `T` must be a concrete Plum integer kind. `I64` and `Int` identify the same pointee type. The pointee uses the corresponding C integer's width, alignment, and target byte order. Initial conformance targets are hosted x86-64 Linux and the existing `x86_64-unknown-none` profile.
 
@@ -57,11 +57,13 @@ Reserve unqualified `RawPtr` as a built-in type and constructor namespace. A qua
 
 Use LLVM `inttoptr` and `ptrtoint` with `i64` only for the explicit address conversions. Lower byte offsets as `getelementptr i8` without `inbounds` or no-wrap flags. At a load or store, access `i8`, `i16`, `i32`, or `i64` according to the pointee. Extend narrow loaded integers by their signedness to Plum's internal word representation and truncate the already type-checked input on stores. Emit neither stronger alignment assumptions nor inferred alias promises. These operations require LLVM instructions only. [LLVM volatile memory access](https://llvm.org/docs/LangRef.html#volatile-memory-accesses)
 
-## Conformance before release
+## Conformance
 
 - Exercise direct C pointer parameters and returns with static C arrays in hosted and freestanding debug and release builds. Check null, a valid pointer-address round trip, positive and negative byte offsets, signed minima, high-half U64 values, and adjacent sentinels after a narrow store. Keep the test backing storage alive throughout each access.
 - Compare emitted pointer signatures, access widths and alignments with Clang. Check that repeated volatile operations survive release optimization without an atomic operation or fence. Inspect freestanding objects for unexpected runtime or native library dependencies.
 - Reject unsupported pointees and targets, mixed pointer types, attempts to operate outside `unsafe`, first-class use of unsafe operations, and callback or aggregate extern signatures. Cover source diagnostics for bad annotations and incorrect `from_address` type arguments.
 - Pass pointers through a Plum record, closure, and generic function. Instrument native storage and Plum hook allocations to show that ordinary value lifetimes do not retain or free the pointee. Exercise existing CStr, RawCStr, NativeBuffer, and checked integer fixtures with a source-built compiler.
+
+Run the native and core pointer checks with `python3 bootstrap/raw-pointer-check.py ./sh.real` on x86-64 Linux.
 
 Native aggregate layout remains a separate #512 decision. Its design needs explicit representation, verified size and member offsets, and separate rules for how structs cross a C call. C-callable Plum exports likewise need explicit ABI wrappers and an ownership policy for each admitted type. The initial pointer operations use ordinary and volatile memory instructions. An external consumer can identify a future need for an intrinsic or assembly interface by showing an operation these instructions and existing native helpers cannot express.

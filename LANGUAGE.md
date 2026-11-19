@@ -788,11 +788,11 @@ Extern calls are only allowed inside an `unsafe { }` block. Extern
 functions require all arguments at the call site; they cannot be used as
 ordinary function values or partially applied. The extern
 type surface in the self-hosted compiler includes integer scalars, `Float`,
-`Bool`, `CStr`, `RawCStr` and `Unit` returns. Each integer kind maps to its
+`Bool`, `CStr`, `RawCStr`, `RawPtr[T]` and `Unit` returns. Each integer kind maps to its
 matching C `intN_t`/`uintN_t`; `Int`/`I64` map to `int64_t`, `Float` to `double`,
 and `Bool` to C `int`. CStr is input-only. New-width integers inside aggregate
 or callback types are rejected. There are no C-callable Plum exports for these
-types, general pointer arithmetic, C-variadic functions or extern globals.
+types, C-variadic functions or extern globals.
 See [scalar integer FFI](docs/integer-scalar-ffi.md) for the target ABI contract.
 
 `.as_cstr()` converts `String` or `Bytes` into an **owned CStr**, sharing
@@ -837,6 +837,19 @@ Text edits return an owned, UTF-8-validated String before ending the lease;
 binary operations keep an explicit readable length and writable capacity.
 See the [native-buffer contract and reusable widget adapter](docs/native-buffers.md).
 CStr remains an immutable input view, not permission to write shared Plum cells.
+
+### Raw pointers to native integers
+
+`RawPtr[T]` is a nullable, unmanaged pointer to a concrete integer kind on
+x86-64 Linux and `x86_64-unknown-none`. Direct C parameters and results use the
+native pointer ABI. Copying a pointer carries no ownership of the pointee.
+
+`.is_null()` is safe. Explicit `U64` address conversions, `.offset_bytes(Int)`,
+loads and stores require `unsafe`. The caller supplies live, aligned storage
+with the right access permissions. Use `.load_volatile()` and
+`.store_volatile(value)` for volatile accesses at the pointee's native width.
+Synchronization and hardware ordering require separate operations.
+See the [raw pointer contract](docs/raw-pointer-design.md) for syntax and rules.
 
 ### Where the C goes
 

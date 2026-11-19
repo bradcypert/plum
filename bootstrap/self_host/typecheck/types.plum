@@ -34,6 +34,7 @@ pub enum ITy {
     ITCStr,
     // An unmanaged native pointer. Unlike CStr, this carries no Plum owner.
     ITRawCStr,
+    ITRawPtr(IntegerKind),
     // A byte buffer, and the type `ITStr` is a constrained form of.
     //
     // The two share a cell layout exactly -- `{i64 rc, i64 len, bytes..,
@@ -203,6 +204,10 @@ let unify_non_var (a: ITy) (b: ITy): Result[Subst, String] =
             ITRawCStr => Ok(subst_empty(())),
             _ => type_mismatch(a, b)
         },
+        ITRawPtr(k) => match b {
+            ITRawPtr(other) => if k == other { Ok(subst_empty(())) } else { type_mismatch(a, b) },
+            _ => type_mismatch(a, b),
+        },
         // Does NOT unify with `ITStr`, despite the identical runtime
         // cell. That is the entire point of the type: a `Bytes` that
         // silently passed where a `String` was wanted would put the
@@ -330,6 +335,7 @@ pub let render_ty (ty: ITy): String =
         ITUnit => "Unit",
         ITCStr => "CStr",
         ITRawCStr => "RawCStr",
+        ITRawPtr(k) => "RawPtr[${integer_name(k)}]",
         ITBytes => "Bytes",
         ITVar(id) => "T".concat(id.to_string()),
         ITFunction(params, ret) => "(".concat(join_comma_ty(params)).concat(") -> ")

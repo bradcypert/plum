@@ -301,6 +301,18 @@ let builtin_context (unit: Unit): TyContext = TyContext {
 let collect_names_acc (items: Array[parser.ItemNode]) (i: Int) (ctx: TyContext): TyContext =
     if i >= items.len() { ctx }
     else {
+        if items[i].module == "" {
+            let reserved = match items[i].kind {
+                IKStruct(decl) => decl.name == "RawPtr",
+                IKHandle(decl) => decl.name == "RawPtr",
+                IKEnum(decl) => decl.name == "RawPtr",
+                _ => false,
+            };
+            if reserved {
+                set_err_pos(items[i].path, items[i].start, "");
+                fail_tc("RawPtr is a reserved built-in type");
+            };
+        };
         match items[i].kind {
             IKStruct(decl) => collect_names_acc(items, i + 1, TyContext {
                 structs: ctx.structs.push(StructInfo {
@@ -852,6 +864,10 @@ let resolve_named
     else if name == "RawCStr" {
         check_type_arity(name, 0, args.len());
         ITRawCStr
+    }
+    else if name == "RawPtr" {
+        check_type_arity(name, 1, args.len());
+        raw_pointer_type(raw_pointer_kind(args[0]))
     }
     else if name == "Bytes" {
         check_type_arity(name, 0, args.len());

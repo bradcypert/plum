@@ -237,6 +237,12 @@ let integer_named (name: String): Option[ITy] = match name {
     _ => None,
 }
 
+pub let named_integer_kind (name: String): Option[IntegerKind] =
+    match integer_named(name) {
+        Some(t) => integer_kind(t),
+        None => None,
+    }
+
 let integer_kind (ty: ITy): Option[IntegerKind] = match ty {
     ITInt => Some(IntegerI64),
     ITInteger(k) => Some(k),

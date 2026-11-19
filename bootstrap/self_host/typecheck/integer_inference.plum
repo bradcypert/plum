@@ -1,9 +1,10 @@
-// Bidirectional inference only specializes literal expressions. Looking up a
-// bound value always preserves its recorded type; this never inserts casts.
+// Contextual inference specializes literals and seeds closure parameters.
+// Looking up a bound value preserves its recorded type without inserting casts.
 use parser;
 
 let has_fixed_ty (ty: ITy): Bool = match ty {
     ITInteger(_) => true,
+    ITRawPtr(_) => true,
     ITStruct(_, args) => Array.any(args, has_fixed_ty),
     ITEnum(_, args) => Array.any(args, has_fixed_ty),
     ITTuple(args) => Array.any(args, has_fixed_ty),
@@ -334,21 +335,22 @@ let infer_variant_call_expected
     )
 }
 
-let first_fixed_within (ctx: TyContext) (t: ITy) (seen: Array[String]): Option[ITy] =
+let first_restricted_c_type (ctx: TyContext) (t: ITy) (seen: Array[String]): Option[ITy] =
     match t {
         ITInteger(_) => Some(t),
-        ITFunction(params, ret) => first_fixed_in_list(ctx, params.push(ret), seen, 0),
+        ITRawPtr(_) => Some(t),
+        ITFunction(params, ret) => first_restricted_c_type_in_list(ctx, params.push(ret), seen, 0),
         ITStruct(name, args) =>
             {
                 // Arguments are finite type syntax. Only expansion of a
                 // declaration's fields needs the nominal recursion guard.
-                let inner = first_fixed_in_list(ctx, args, seen, 0);
+                let inner = first_restricted_c_type_in_list(ctx, args, seen, 0);
                 if Option.is_some(inner) { inner }
                 else if Array.contains(seen, name) { None }
                 else {
                     match find_struct(ctx, name) {
                         None => None,
-                        Some(_) => first_fixed_in_list(
+                        Some(_) => first_restricted_c_type_in_list(
                             ctx,
                             Array.map(
                                 ctx_field_types(ctx, name),
@@ -365,12 +367,12 @@ let first_fixed_within (ctx: TyContext) (t: ITy) (seen: Array[String]): Option[I
                 }
             },
         ITEnum(name, args) => {
-            let inner = first_fixed_in_list(ctx, args, seen, 0);
+            let inner = first_restricted_c_type_in_list(ctx, args, seen, 0);
             if Option.is_some(inner) { inner }
             else if Array.contains(seen, name) { None }
             else {
                 match ctx_enum_tags(ctx, name) {
-                    Some(tags) => first_fixed_in_variants(
+                    Some(tags) => first_restricted_c_type_in_variants(
                         ctx,
                         name,
                         tags,
@@ -382,12 +384,12 @@ let first_fixed_within (ctx: TyContext) (t: ITy) (seen: Array[String]): Option[I
                 }
             }
         },
-        ITTuple(elems) => first_fixed_in_list(ctx, elems, seen, 0),
-        ITRef(inner) => first_fixed_within(ctx, inner, seen),
+        ITTuple(elems) => first_restricted_c_type_in_list(ctx, elems, seen, 0),
+        ITRef(inner) => first_restricted_c_type(ctx, inner, seen),
         _ => None,
     }
 
-let first_fixed_in_list
+let first_restricted_c_type_in_list
     (ctx: TyContext)
     (ts: Array[ITy])
     (seen: Array[String])
@@ -395,13 +397,13 @@ let first_fixed_in_list
 =
     if i >= ts.len() { None }
     else {
-        match first_fixed_within(ctx, ts[i], seen) {
+        match first_restricted_c_type(ctx, ts[i], seen) {
             Some(x) => Some(x),
-            None => first_fixed_in_list(ctx, ts, seen, i + 1)
+            None => first_restricted_c_type_in_list(ctx, ts, seen, i + 1)
         }
     }
 
-let first_fixed_in_variants
+let first_restricted_c_type_in_variants
     (ctx: TyContext)
     (enum_name: String)
     (tags: Array[String])
@@ -415,9 +417,9 @@ let first_fixed_in_variants
             ctx_variant_payload(ctx, enum_name, tags[i]),
             |pt| instantiate_template(ctx_variant_generics(ctx, enum_name, tags[i]), args, pt)
         );
-        match first_fixed_in_list(ctx, payload, seen, 0) {
+        match first_restricted_c_type_in_list(ctx, payload, seen, 0) {
             Some(f) => Some(f),
-            None => first_fixed_in_variants(ctx, enum_name, tags, args, seen, i + 1),
+            None => first_restricted_c_type_in_variants(ctx, enum_name, tags, args, seen, i + 1),
         }
     }
 
@@ -497,6 +499,7 @@ let check_integer_negation (subst: Subst) (operand: ITy): Unit =
         ITInteger(k) => if !integer_spec(k).signed {
             fail_tc("unsigned integer negation is not supported");
         },
+        ITRawPtr(k) => reject_raw_pointer_arithmetic(ITRawPtr(k)),
         _ => (),
     }
 
