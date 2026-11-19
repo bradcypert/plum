@@ -1048,25 +1048,8 @@ let propagate_call
             n,
             targs,
             i + 1,
-            add_param_req(f, reqs[i].kind, supplied, acc)
+            ord_req_for(f, reqs[i].kind, supplied, acc)
         )
-    }
-
-// Only when the caller passed one of its OWN type parameters. Anything
-// else is either concrete -- and checked at this call directly -- or a
-// variable that will be resolved by the time it is.
-let add_param_req (f: TFn) (kind: String) (t: ITy) (acc: Array[OrdReq]): Array[OrdReq] =
-    match t {
-        ITParam(pn) =>
-            if Array.contains(f.generics, pn) && !has_req(acc, f.module, f.name, pn, kind, 0) {
-                acc.push(OrdReq {
-                    module: f.module,
-                    name: f.name,
-                    param: pn,
-                    kind: kind
-                })
-            } else { acc },
-        _ => acc,
     }
 
 let has_req
@@ -1092,7 +1075,9 @@ let ord_reqs_in (f: TFn) (e: TExpr) (acc: Array[OrdReq]): Array[OrdReq] = {
         TBinary(op, l, r) =>
             if is_ordered_op(op) { ord_req_for(f, "Ord", l.ty, ord_req_for(f, "Ord", r.ty, acc)) }
             else if is_equality_op(op) {
-                ord_req_for(f, "Eq", l.ty, ord_req_for(f, "Eq", r.ty, acc))
+                let left = subst_apply(f.subst, l.ty);
+                let right = subst_apply(f.subst, r.ty);
+                ord_req_for(f, "Eq", left, ord_req_for(f, "Eq", right, acc))
             }
             else if is_bitwise(op) { ord_req_for(f, "Integer", subst_apply(f.subst, l.ty), acc) }
             else if integer_arithmetic(op) && raw_pointer_used() {

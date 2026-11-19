@@ -100,6 +100,14 @@ def fixtures():
         'let compare_int = equal_int;',
         'assert(compare_int(5));',
         'assert(null(native_null()));',
+        'let is_null_pointer: (RawPtr[U8]) -> Bool = |p| p.is_null();',
+        'assert(is_null_pointer(native_null()));',
+        'let cell = ref(native_null());',
+        'assert(equal(cell));',
+        'let show_int = |n| n.to_string();',
+        'assert_eq(show_int(42), "42");',
+        'let show_string = |s| s.to_string();',
+        'assert_eq(show_string("hello"), "hello");',
         'assert(echo_u8(RawPtr.from_address[U8](0)).is_null());',
         'assert_eq(native_null().to_address(), 0);',
         'let reader = make_reader(ptr_u8());',
@@ -206,6 +214,12 @@ def main():
              'let result = eq(unsafe { RawPtr.from_address[U8](0) })', 'requires T'),
             ('let eq[T] (xs: Array[T]): Bool = xs == xs\n'
              'let main (): Unit = { ' + bound + 'eq([p]); () }', 'requires T'),
+            ('let eq[T] (a: T): Bool = { let same = |x| x == x; same(a) }\n'
+             'let main (): Unit = { ' + bound + 'eq(p); () }', 'requires T'),
+            ('let eq[T] (a: T): Bool = a == a\nlet nested[T] (a: T): Bool = eq([a])\n'
+             'let main (): Unit = { ' + bound + 'nested(p); () }', 'requires T'),
+            ('let hash_value[T] (a: T): Int = a.hash()\nlet nested[T] (a: T): Int = hash_value([a])\n'
+             'let main (): Unit = { ' + bound + 'nested(p); () }', 'requires T to support structural hashing'),
             ('let add[T] (a: T): T = a + a\nlet main (): Unit = { ' + bound + 'add(p); () }', 'requires T'),
             ('let eq[T] (a: T): Bool = a == a\nlet alias = eq\n'
              'let main (): Unit = { ' + bound + 'let f = alias; f(p); () }',
@@ -230,6 +244,7 @@ def main():
             ('-p', 'does not support arithmetic'),
             ('[p] == [p]', 'no structural equality'),
             ('let eq = |x| x == x; eq(p)', 'no structural equality'),
+            ('let show = |x| x.to_string(); show(p)', ".to_string() on a RawPtr isn't supported"),
         ]:
             cases.append(('let main (): Unit = { ' + bound + body + '; () }', message))
         for text, message in cases:

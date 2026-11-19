@@ -1,9 +1,10 @@
-// Bidirectional inference only specializes literal expressions. Looking up a
-// bound value always preserves its recorded type; this never inserts casts.
+// Contextual inference specializes literals and seeds closure parameters.
+// Looking up a bound value preserves its recorded type without inserting casts.
 use parser;
 
 let has_fixed_ty (ty: ITy): Bool = match ty {
     ITInteger(_) => true,
+    ITRawPtr(_) => true,
     ITStruct(_, args) => Array.any(args, has_fixed_ty),
     ITEnum(_, args) => Array.any(args, has_fixed_ty),
     ITTuple(args) => Array.any(args, has_fixed_ty),

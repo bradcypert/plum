@@ -102,7 +102,7 @@ let reject_raw_pointer_arithmetic (ty: ITy): Unit =
     if is_raw_pointer(ty) { fail_tc("RawPtr does not support arithmetic; use .offset_bytes()") }
 
 // A later call can assign a closure parameter its pointer type after an
-// operator in the closure body was first inferred.
+// operation in the closure body was first inferred.
 let validate_raw_pointer_uses (p2: Program2) (subst: Subst) (expr: TExpr): Unit = {
     match expr.node {
         TBinary(op, left, _) => {
@@ -117,6 +117,7 @@ let validate_raw_pointer_uses (p2: Program2) (subst: Subst) (expr: TExpr): Unit 
                 fail_tc(".hash() is not supported for ${render_ty(ty)}");
             };
         },
+        TMethodCall("to_string", base, _) => reject_unrenderable(p2, subst_apply(subst, base.ty)),
         _ => (),
     };
     for child in t_children(expr) {
