@@ -49,6 +49,9 @@ def fixtures():
                  'let identity[T] (value: T): T = value',
                  'let equal[T] (value: T): Bool = value == value',
                  'let equal_int: (Int) -> Bool = equal',
+                 'let less[T] (a: T) (b: T): Bool = { let cmp = |x, y| x < y; cmp(a, b) }',
+                 'let show_value[T] (a: T): String = { let show = |x| x.to_string(); show(a) }',
+                 'let hash_value[T] (a: T): Int = { let hash = |x| x.hash(); hash(a) }',
                  'let null (p: RawPtr[U8]): Bool = p.is_null()',
                  'let alias (p: RawPtr[I64]): RawPtr[Int] = identity(p)',
                  'let make_reader (p: RawPtr[U8]): () -> U8 = '
@@ -99,6 +102,11 @@ def fixtures():
     body += [
         'let compare_int = equal_int;',
         'assert(compare_int(5));',
+        'let low: U16 = 41;',
+        'let high: U16 = 42;',
+        'assert(less(low, high));',
+        'assert_eq(show_value(high), "42");',
+        'assert_eq(hash_value(high), high.hash());',
         'assert(null(native_null()));',
         'let is_null_pointer: (RawPtr[U8]) -> Bool = |p| p.is_null();',
         'assert(is_null_pointer(native_null()));',
@@ -220,6 +228,12 @@ def main():
              'let main (): Unit = { ' + bound + 'nested(p); () }', 'requires T'),
             ('let hash_value[T] (a: T): Int = a.hash()\nlet nested[T] (a: T): Int = hash_value([a])\n'
              'let main (): Unit = { ' + bound + 'nested(p); () }', 'requires T to support structural hashing'),
+            ('let less[T] (a: T): Bool = { let cmp = |x| x < x; cmp(a) }\n'
+             'let main (): Unit = { ' + bound + 'less(p); () }', 'requires T to be ordered'),
+            ('let show_value[T] (a: T): String = { let show = |x| x.to_string(); show(a) }\n'
+             'let main (): Unit = { ' + bound + 'show_value(p); () }', 'requires T to have a text form'),
+            ('let hash_value[T] (a: T): Int = { let hash = |x| x.hash(); hash(a) }\n'
+             'let main (): Unit = { ' + bound + 'hash_value(p); () }', 'requires T to support structural hashing'),
             ('let add[T] (a: T): T = a + a\nlet main (): Unit = { ' + bound + 'add(p); () }', 'requires T'),
             ('let eq[T] (a: T): Bool = a == a\nlet alias = eq\n'
              'let main (): Unit = { ' + bound + 'let f = alias; f(p); () }',

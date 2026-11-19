@@ -1072,18 +1072,20 @@ let ord_reqs (fns: Array[TFn]) (i: Int) (acc: Array[OrdReq]): Array[OrdReq] =
 
 let ord_reqs_in (f: TFn) (e: TExpr) (acc: Array[OrdReq]): Array[OrdReq] = {
     let here = match e.node {
-        TBinary(op, l, r) =>
-            if is_ordered_op(op) { ord_req_for(f, "Ord", l.ty, ord_req_for(f, "Ord", r.ty, acc)) }
-            else if is_equality_op(op) {
+        TBinary(op, l, r) => {
+            let ordered = is_ordered_op(op);
+            if ordered || is_equality_op(op) {
+                let kind = if ordered { "Ord" } else { "Eq" };
                 let left = subst_apply(f.subst, l.ty);
                 let right = subst_apply(f.subst, r.ty);
-                ord_req_for(f, "Eq", left, ord_req_for(f, "Eq", right, acc))
+                ord_req_for(f, kind, left, ord_req_for(f, kind, right, acc))
             }
             else if is_bitwise(op) { ord_req_for(f, "Integer", subst_apply(f.subst, l.ty), acc) }
             else if integer_arithmetic(op) && raw_pointer_used() {
                 ord_req_for(f, "NoRawPtr", subst_apply(f.subst, l.ty), acc)
             }
-            else { acc },
+            else { acc }
+        },
         TUnary(UNeg, inner) => if raw_pointer_used() {
             ord_req_for(f, "NoRawPtr", subst_apply(f.subst, inner.ty), acc)
         } else { acc },
@@ -1097,8 +1099,10 @@ let ord_reqs_in (f: TFn) (e: TExpr) (acc: Array[OrdReq]): Array[OrdReq] = {
         //
         // Inside `show` the type is only `T`, so the same answer applies
         // as for `<` and `==`: ask at the CALL, where it is concrete.
-        TMethodCall(m, recv, _) => if m == "to_string" { ord_req_for(f, "Show", recv.ty, acc) } else if m
-            == "hash" { ord_req_for(f, "Hash", recv.ty, acc) } else { acc },
+        TMethodCall(m, recv, _) => if m == "to_string" || m == "hash" {
+            let kind = if m == "to_string" { "Show" } else { "Hash" };
+            ord_req_for(f, kind, subst_apply(f.subst, recv.ty), acc)
+        } else { acc },
         _ => acc,
     };
     ord_reqs_children(f, t_children(e), 0, here)
