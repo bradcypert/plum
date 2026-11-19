@@ -1,6 +1,5 @@
 #!/usr/bin/env python3
-"""Inspect real bare-metal objects/ELFs and cache transitions; never boot or
-claim a working kernel while the hosted runtime is still present (#507)."""
+"""Inspect the freestanding IR, objects, final ELF and build cache."""
 import os
 from pathlib import Path
 import re
@@ -21,6 +20,27 @@ def run(args, *, env=None, ok=True):
                             text=True, timeout=180)
     assert (result.returncode == 0) == ok, (args, result.stdout, result.stderr)
     return result
+
+
+def check_ir(ir, *, release):
+    assert f'target triple = "{TARGET}"' in ir
+    assert re.search(r'^target datalayout = "e-.*-i64:64-.*"$', ir, re.M)
+    model = re.search(r'^!(\d+) = !\{i32 1, !"Code Model", i32 2\}$', ir, re.M)
+    flags = re.search(r'^!llvm\.module\.flags = !\{([^}]+)\}$', ir, re.M)
+    assert model and flags and '!' + model[1] in flags[1].split(', '), (model, flags)
+    assert bool(re.search(r' !dbg !\d+', ir)) == (not release)
+    assert re.search(r'define void @plum_kernel_start\(\).*noreturn', ir)
+    assert not re.search(r'define .*@main\(', ir)
+    assert 'call void @plum_kernel_halt()' in ir
+    for forbidden in ('@plum_locale_init(', '@atexit(', '@srand('):
+        assert forbidden not in ir, forbidden
+
+    definitions = [line for line in ir.splitlines() if line.startswith('define ')]
+    assert definitions
+    for line in definitions:
+        assert ' noredzone ' in line and '"target-cpu"="x86-64"' in line, line
+        features = re.search(r'"target-features"="([^"]+)"', line)
+        assert features and {'+sse2', '-avx', '-avx2', '-avx512f'} <= set(features[1].split(',')), line
 
 
 with tempfile.TemporaryDirectory(prefix='plum-freestanding-') as tmp:
@@ -96,24 +116,25 @@ with tempfile.TemporaryDirectory(prefix='plum-freestanding-') as tmp:
     script.write_text('ENTRY(_start)\nSECTIONS { . = 0xffffffff80000000; '
                       '.text : { *(.text*) } .rodata : { *(.rodata*) } '
                       '.data : { *(.data*) } .bss : { *(.bss*) } }\n')
-    failed = plum('build', app, '--target', TARGET, '--linker-script', script,
-                  '-o', work / 'not-a-kernel', ok=False)
-    assert 'undefined symbol' in failed.stderr and 'IR left at' in failed.stderr
-    ir = (work / 'not-a-kernel.ll').read_text()
-    assert f'target triple = "{TARGET}"' in ir
-    assert 'target datalayout' in ir and '!"Code Model", i32 2' in ir
-    assert re.search(r'define void @plum_kernel_start\(\).*noreturn', ir)
-    assert not re.search(r'define .*@main\(', ir)
-    assert 'call void @plum_kernel_halt()' in ir
-    assert 'call void @plum_locale_init()' not in ir
-    assert '@atexit' not in ir and '@srand' not in ir
+    for mode in ([], ['--release']):
+        # Release has no original DWARF module flags. Check both the direct
+        # emitter and the IR actually retained after a missing-hook link fails.
+        emitted = plum('emit-llvm', app, '--target', TARGET, *mode).stdout
+        check_ir(emitted, release=bool(mode))
+        out = work / ('release-link-failure' if mode else 'debug-link-failure')
+        saved = out.with_suffix('.ll')
+        failed = plum('build', app, '--target', TARGET, '--linker-script', script,
+                      '-o', out, *mode, ok=False)
+        assert 'undefined symbol: plum_kernel_write' in failed.stderr, failed.stderr
+        assert f'IR left at {saved}' in failed.stderr, failed.stderr
+        assert not out.exists(), out
+        check_ir(saved.read_text(), release=bool(mode))
 
-    definitions = [line for line in ir.splitlines() if line.startswith('define ')]
-    assert definitions and all('noredzone' in line and '"target-cpu"="x86-64"' in line
-                               for line in definitions)
-    # Release has no original DWARF module flags; decoration must also work there.
-    plum('build', app, '--target', TARGET, '--release', '--linker-script', script,
-         '-o', work / 'release-link-failure', ok=False)
+    empty = work / 'empty.plum'
+    empty.write_text('let main (): Unit = ()\n')
+    for flag in ('--memory-stats', '--trace'):
+        failed = plum('emit-llvm', empty, '--target', TARGET, flag, ok=False)
+        assert 'freestanding IR emission' in failed.stderr and flag in failed.stderr, failed
 
     start = work / 'start.S'
     start.write_text('.text\n.global _start\n_start:\ncli\nhlt\njmp _start\n')
@@ -159,7 +180,9 @@ with tempfile.TemporaryDirectory(prefix='plum-freestanding-') as tmp:
     # An actual hosted executable still compiles and executes after the target
     # switch. POSIX exclusion applies only to the bare-metal build.
     (native / 'posix' / 'host.c').write_text('long posix_helper(void) { return 0; }\n')
-    assert plum('run', app).stdout.strip() == '9'
+    hosted = plum('run', app)
+    assert hosted.stdout.strip() == '9' and 'IR miss' in hosted.stderr, hosted
+    assert 'IR hit' in plum('run', app).stderr
     assert 'IR hit' in plum(*args).stderr
     print('freestanding-check: object/ELF inspection, IR attributes, native inputs, '
           'cache invalidation, diagnostics and hosted execution passed')
