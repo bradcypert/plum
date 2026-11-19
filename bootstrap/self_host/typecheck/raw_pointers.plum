@@ -1,0 +1,125 @@
+use parser;
+
+// Set while resolving a pointer annotation or constructor. Codegen checks the
+// target after type checking, including pointers that never reach emission.
+let RAW_POINTER_USED: Ref[Bool] = ref(false)
+
+let reset_raw_pointer_usage (): Unit = RAW_POINTER_USED.set(false)
+
+pub let raw_pointer_used (): Bool = RAW_POINTER_USED.get()
+
+let raw_pointer_type (kind: IntegerKind): ITy = {
+    RAW_POINTER_USED.set(true);
+    ITRawPtr(kind)
+}
+
+let raw_pointer_kind (ty: ITy): IntegerKind = match integer_kind(ty) {
+    Some(kind) => kind,
+    None => {
+        fail_tc("RawPtr requires a concrete integer pointee, found ${render_ty(ty)}");
+        IntegerI64
+    },
+}
+
+let raw_pointer_constructor_name (base: parser.PExpr) (name: String): Bool = match base {
+    EIdent("RawPtr", _) => name == "from_address",
+    _ => false,
+}
+
+let raw_pointer_constructor (callee: parser.PExpr): Option[Array[parser.Ty]] = match callee {
+    EGenericInst(EField(base, name), targs) =>
+        if raw_pointer_constructor_name(base, name) { Some(targs) } else { None },
+    EField(base, name) => if raw_pointer_constructor_name(base, name) { Some([]) } else { None },
+    _ => None,
+}
+
+let require_raw_pointer_unsafe (name: String): Unit =
+    if !UNSAFE.get() { fail_tc("${name} requires an 'unsafe' block") } else { () }
+
+let infer_raw_pointer_constructor
+    (p2: Program2)
+    (state: FreshState)
+    (env: TyEnv)
+    (acc: Subst)
+    (targs: Array[parser.Ty])
+    (args: Array[parser.PExpr]): InferResult
+= {
+    if targs.len() != 1 {
+        fail_tc("RawPtr.from_address requires exactly one explicit integer type argument")
+    };
+    require_call_arity("RawPtr.from_address", 1, args.len());
+    require_raw_pointer_unsafe("RawPtr.from_address");
+    let kind = raw_pointer_kind(resolve_ann_seen(p2.ctx, p2.current, p2.generics, targs[0]));
+    let want = ITInteger(IntegerU64);
+    let address = infer_expected(p2, state, env, acc, args[0], want);
+    let s = constrain_operand(address.subst, address.ty, want, "RawPtr.from_address: ");
+    ir_leaf(raw_pointer_type(kind), s, address.state, TRawPointer(PtrFromAddress, [address.texpr]))
+}
+
+let infer_raw_pointer_method
+    (p2: Program2)
+    (env: TyEnv)
+    (base: InferResult)
+    (kind: IntegerKind)
+    (name: String)
+    (args: Array[parser.PExpr]): InferResult
+= {
+    let full = "RawPtr.${name}";
+    let scalar = if kind == IntegerI64 { ITInt } else { ITInteger(kind) };
+    if name == "is_null" {
+        require_call_arity(full, 0, args.len());
+        ir_leaf(ITBool, base.subst, base.state, TRawPointer(PtrIsNull, [base.texpr]))
+    } else if name == "load" || name == "load_volatile" || name == "to_address" {
+        require_call_arity(full, 0, args.len());
+        require_raw_pointer_unsafe(full);
+        let result = if name == "to_address" { ITInteger(IntegerU64) } else { scalar };
+        let op = if name == "to_address" { PtrToAddress } else {
+            PtrLoad(kind, name == "load_volatile")
+        };
+        ir_leaf(result, base.subst, base.state, TRawPointer(op, [base.texpr]))
+    } else if name == "store" || name == "store_volatile" || name == "offset_bytes" {
+        require_call_arity(full, 1, args.len());
+        require_raw_pointer_unsafe(full);
+        let offset = name == "offset_bytes";
+        let want = if offset { ITInt } else { scalar };
+        let value = infer_expected(p2, base.state, env, base.subst, args[0], want);
+        let s = constrain_operand(value.subst, value.ty, want, "${full}: ");
+        let result = if offset { ITRawPtr(kind) } else { ITUnit };
+        let op = if offset { PtrOffsetBytes } else { PtrStore(kind, name == "store_volatile") };
+        ir_leaf(result, s, value.state, TRawPointer(op, [base.texpr, value.texpr]))
+    } else {
+        fail_tc("no method '${name}' on ${render_ty(base.ty)}");
+        base
+    }
+}
+
+let is_raw_pointer (ty: ITy): Bool = match ty {
+    ITRawPtr(_) => true,
+    _ => false,
+}
+
+let reject_raw_pointer_arithmetic (ty: ITy): Unit =
+    if is_raw_pointer(ty) { fail_tc("RawPtr does not support arithmetic; use .offset_bytes()") }
+
+// A later call can assign a closure parameter its pointer type after an
+// operator in the closure body was first inferred.
+let validate_raw_pointer_uses (p2: Program2) (subst: Subst) (expr: TExpr): Unit = {
+    match expr.node {
+        TBinary(op, left, _) => {
+            let ty = subst_apply(subst, left.ty);
+            if integer_arithmetic(op) { reject_raw_pointer_arithmetic(ty) };
+            reject_function_equality(p2, op, ty);
+            reject_unordered_comparison(op, ty);
+        },
+        TMethodCall("hash", base, _) => {
+            let ty = subst_apply(subst, base.ty);
+            if Option.is_some(first_unhashable(p2.ctx, ty, [])) {
+                fail_tc(".hash() is not supported for ${render_ty(ty)}");
+            };
+        },
+        _ => (),
+    };
+    for child in t_children(expr) {
+        validate_raw_pointer_uses(p2, subst, child);
+    };
+}

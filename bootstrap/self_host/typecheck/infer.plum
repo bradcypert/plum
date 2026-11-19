@@ -307,7 +307,11 @@ let extern_sigs
         for ty in params.push(ret) {
             match ty {
                 ITInteger(_) => (),
-                _ => match first_fixed_within(ctx, ty, []) {
+                ITRawPtr(_) => (),
+                _ => match first_restricted_c_type(ctx, ty, []) {
+                    Some(ITRawPtr(k)) => fail_tc(
+                        "extern aggregates and callbacks containing RawPtr are not supported: ${render_ty(ITRawPtr(k))}"
+                    ),
                     Some(t) => fail_tc(
                         "extern aggregates and callbacks containing fixed-width integers are not supported: ${render_ty(t)}; only direct scalar parameters and returns have a C ABI"
                     ),
@@ -747,10 +751,11 @@ let bind_param (env: TyEnv) (p: parser.ParamNode) (ty: ITy): TyEnv =
 // known) signature ---
 
 pub let check_program (program: parser.ProgramNode): Unit = {
+    reset_raw_pointer_usage();
     let ctx = build_context(program);
     let p2 = build_sigs(ctx, program);
     check_handle_drops(p2, program.items, 0);
-    check_ordered_bounds(ctx, program.items, check_all_fns(p2, program.items, 0, []));
+    check_ordered_bounds(p2, check_all_fns(p2, program.items, 0, []), program.items, None);
     if REFERENCES_ON.get() {
         record_type_references(ctx, program.items, parser.recorded_type_sites())
     }
@@ -859,14 +864,22 @@ pub struct OrdReq {
     pub kind: String
 }
 
-let check_ordered_bounds (ctx: TyContext) (items: Array[parser.ItemNode]) (fns: Array[TFn]): Unit = {
+let check_ordered_bounds
+    (p2: Program2)
+    (fns: Array[TFn])
+    (items: Array[parser.ItemNode])
+    (globals: Option[Array[TFn]]): Unit
+= {
     let reqs = close_ord_reqs(fns, ord_reqs(fns, 0, declared_reqs(items, 0, [])), 32);
-    // New integer requirements apply to every call root, including globals.
-    // Only integer-generic programs need this extra initializer traversal.
-    let roots = if Array.any(reqs, |r| r.kind == "Integer") {
-        Array.concat(fns, typed_globals(parser.ProgramNode { items: items }))
+    // Integer and raw pointer requirements also apply to initializers.
+    let roots = if raw_pointer_used() || Array.any(reqs, |r| r.kind == "Integer") {
+        let typed = match globals {
+            Some(xs) => xs,
+            None => typed_globals_acc(p2, p2.globals, 0, []),
+        };
+        Array.concat(fns, typed)
     } else { fns };
-    check_calls_in_fns(ctx, roots, reqs, 0)
+    check_calls_in_fns(p2.ctx, roots, reqs, 0)
 }
 
 // --- Declared bounds: `[T: Ord]` ---
@@ -1082,7 +1095,13 @@ let ord_reqs_in (f: TFn) (e: TExpr) (acc: Array[OrdReq]): Array[OrdReq] = {
                 ord_req_for(f, "Eq", l.ty, ord_req_for(f, "Eq", r.ty, acc))
             }
             else if is_bitwise(op) { ord_req_for(f, "Integer", subst_apply(f.subst, l.ty), acc) }
+            else if integer_arithmetic(op) && raw_pointer_used() {
+                ord_req_for(f, "NoRawPtr", subst_apply(f.subst, l.ty), acc)
+            }
             else { acc },
+        TUnary(UNeg, inner) => if raw_pointer_used() {
+            ord_req_for(f, "NoRawPtr", subst_apply(f.subst, inner.ty), acc)
+        } else { acc },
         TUnary(UBitNot, inner) => ord_req_for(f, "Integer", subst_apply(f.subst, inner.ty), acc),
         // `.to_string()` on a type parameter. The direct case is caught
         // where it is written (`reject_unrenderable`), but one function
@@ -1111,9 +1130,9 @@ let is_equality_op (op: parser.BOp): Bool = match op {
 
 let ord_req_for (f: TFn) (kind: String) (t: ITy) (acc: Array[OrdReq]): Array[OrdReq] =
     match t {
-        ITStruct(_, args) => if kind == "Hash" { hash_reqs_for(f, args, 0, acc) } else { acc },
-        ITEnum(_, args) => if kind == "Hash" { hash_reqs_for(f, args, 0, acc) } else { acc },
-        ITTuple(elems) => if kind == "Hash" { hash_reqs_for(f, elems, 0, acc) } else { acc },
+        ITStruct(_, args) => nested_requirements(f, args, kind, acc),
+        ITEnum(_, args) => nested_requirements(f, args, kind, acc),
+        ITTuple(elems) => nested_requirements(f, elems, kind, acc),
         ITParam(n) => if Array.contains(f.generics, n)
             && !has_req(acc, f.module, f.name, n, kind, 0) {
                 acc.push(OrdReq {
@@ -1126,20 +1145,23 @@ let ord_req_for (f: TFn) (kind: String) (t: ITy) (acc: Array[OrdReq]): Array[Ord
         _ => acc,
     }
 
-// References are leaves: their payload needs no hashing capability.
-let hash_reqs_for (f: TFn) (ts: Array[ITy]) (i: Int) (acc: Array[OrdReq]): Array[OrdReq] =
-    if i >= ts.len() { acc } else {
-        hash_reqs_for(f, ts, i + 1, ord_req_for(f, "Hash", ts[i], acc))
-    }
+// References compare and hash their identity, so they have no child requirements.
+let nested_requirements
+    (f: TFn) (ts: Array[ITy]) (kind: String) (acc: Array[OrdReq]): Array[OrdReq]
+=
+    if kind == "Hash" || (kind == "Eq" && raw_pointer_used()) {
+        Array.fold(ts, acc, |out, t| ord_req_for(f, kind, t, out))
+    } else { acc }
 
 // Whether a concrete type fails `kind`. Both arms delegate to the check
 // that already existed for concrete types, so a generic call and a
 // direct comparison can never disagree about what is allowed.
 let violates_bound (ctx: TyContext) (kind: String) (t: ITy): Bool =
     if kind == "Ord" { is_known_unordered(t) }
-    else if kind == "Eq" { Option.is_some(first_function_within(ctx, t, [])) }
+    else if kind == "Eq" { Option.is_some(first_equality_barrier(ctx, t, [])) }
     else if kind == "Show" { is_unrenderable(ctx, t) }
     else if kind == "Hash" { Option.is_some(first_unhashable(ctx, t, [])) }
+    else if kind == "NoRawPtr" { is_raw_pointer(t) }
     else if kind == "Integer" {
         match t {
             // Named parameters carry the inferred requirement to their callers.
@@ -1158,15 +1180,28 @@ let bound_needs (kind: String): String =
     else if kind == "Show" { " to have a text form, and this one has none" }
     else if kind == "Hash" { " to support structural hashing" }
     else if kind == "Integer" { " to be an integer" }
+    else if kind == "NoRawPtr" { " to support arithmetic" }
     else { " to have equality, and a function has none" }
 
-// And which calls bind one of those parameters to a type that cannot be
-// ordered.
+// Globals have a single initialized type, so later reads cannot resolve
+// an ambiguous specialization in their initializer.
+let has_unresolved_bound_arg (t: ITy): Bool = match t {
+    ITVar(_) => true,
+    ITFunction(params, ret) => Array.any(params, has_unresolved_bound_arg)
+        || has_unresolved_bound_arg(ret),
+    ITTuple(elems) => Array.any(elems, has_unresolved_bound_arg),
+    ITRef(inner) => has_unresolved_bound_arg(inner),
+    ITStruct(_, args) => Array.any(args, has_unresolved_bound_arg),
+    ITEnum(_, args) => Array.any(args, has_unresolved_bound_arg),
+    _ => false,
+}
+
 let check_calls_in_fns (ctx: TyContext) (fns: Array[TFn]) (reqs: Array[OrdReq]) (i: Int): Unit =
     if i >= fns.len() { () }
     else {
         set_err_pos(fns[i].path, fns[i].offset, fns[i].name);
-        check_calls_in(ctx, fns, reqs, fns[i].subst, fns[i].body);
+        let strict_global = Array.is_empty(fns[i].params) && raw_pointer_used();
+        check_calls_in(ctx, fns, reqs, fns[i].subst, strict_global, fns[i].body);
         check_calls_in_fns(ctx, fns, reqs, i + 1)
     }
 
@@ -1181,13 +1216,24 @@ let check_calls_in
     (fns: Array[TFn])
     (reqs: Array[OrdReq])
     (sub: Subst)
+    (strict_global: Bool)
     (e: TExpr): Unit
 = {
     match e.node {
-        TFnCall(m, n, _, targs) => check_call_targs(ctx, fns, reqs, sub, m, n, targs, 0),
+        TFnCall(m, n, _, targs) => check_call_targs(
+            ctx,
+            fns,
+            reqs,
+            sub,
+            strict_global,
+            m,
+            n,
+            targs,
+            0
+        ),
         _ => (),
     };
-    check_calls_children(ctx, fns, reqs, sub, t_children(e), 0)
+    check_calls_children(ctx, fns, reqs, sub, strict_global, t_children(e), 0)
 }
 
 let check_calls_children
@@ -1195,14 +1241,15 @@ let check_calls_children
     (fns: Array[TFn])
     (reqs: Array[OrdReq])
     (sub: Subst)
+    (strict_global: Bool)
     (cs: Array[TExpr])
     (i: Int): Unit
 =
     if i >= cs.len() { () }
     else {
         {
-            check_calls_in(ctx, fns, reqs, sub, cs[i]);
-            check_calls_children(ctx, fns, reqs, sub, cs, i + 1)
+            check_calls_in(ctx, fns, reqs, sub, strict_global, cs[i]);
+            check_calls_children(ctx, fns, reqs, sub, strict_global, cs, i + 1)
         }
     }
 
@@ -1211,6 +1258,7 @@ let check_call_targs
     (fns: Array[TFn])
     (reqs: Array[OrdReq])
     (sub: Subst)
+    (strict_global: Bool)
     (m: String)
     (n: String)
     (targs: Array[ITy])
@@ -1223,23 +1271,35 @@ let check_call_targs
             let got = if idx >= 0 && idx < targs.len() { subst_apply(sub, targs[idx]) } else {
                 ITUnit
             };
-            if idx >= 0 && idx < targs.len() && violates_bound(ctx, reqs[i].kind, got) {
+            let kind = reqs[i].kind;
+            let unresolved = if strict_global { has_unresolved_bound_arg(got) } else {
+                match got {
+                    ITVar(_) => kind == "Integer",
+                    _ => false,
+                }
+            };
+            if idx >= 0 && idx < targs.len() && (unresolved || violates_bound(ctx, kind, got)) {
+                let needs = if unresolved && kind != "Integer" { " to be resolved" }
+                else if kind == "Eq" && raw_pointer_used() {
+                    match first_equality_barrier(ctx, got, []) {
+                        Some(ITRawPtr(_)) => " to have equality, and RawPtr has no structural equality",
+                        _ => bound_needs(kind),
+                    }
+                } else { bound_needs(kind) };
                 fail_tc(
                     "call to ${n}: ${reqs[i].param} is "
                         .concat(render_ty(got)).concat(", but ").concat(n).concat(" requires ")
-                        .concat(reqs[i].param).concat(bound_needs(reqs[i].kind))
+                        .concat(reqs[i].param).concat(needs)
                         .concat(
-                            if reqs[i].kind == "Integer" {
-                                match got {
-                                    ITVar(_) => "; add a concrete type annotation to the function value",
-                                    _ => "",
-                                }
-                            } else { "" }
+                            if unresolved {
+                                "; add a concrete type annotation to the function value"
+                            }
+                            else { "" }
                         )
                 )
             } else { () }
         } else { () };
-        check_call_targs(ctx, fns, reqs, sub, m, n, targs, i + 1)
+        check_call_targs(ctx, fns, reqs, sub, strict_global, m, n, targs, i + 1)
     }
 
 let generic_index (fns: Array[TFn]) (m: String) (n: String) (param: String): Int =
@@ -1348,6 +1408,7 @@ let check_fn_typed (p20: Program2) (def: parser.LetDefNode) (module_name: String
     };
     let resolved = resolve_integer_shifts(checked, r.texpr);
     validate_integer_negations(resolved, r.texpr);
+    if raw_pointer_used() { validate_raw_pointer_uses(p2, resolved, r.texpr) };
     TFn {
         name: def.name,
         module: module_name,
@@ -1407,30 +1468,29 @@ let typed_params
 // the backend's entry point. Fails loudly (`fail_tc`) on any type
 // error, exactly as `check_program` does, because it IS `check_program`
 // with the results kept.
-pub let typed_program (program: parser.ProgramNode): Array[TFn] = {
+pub struct TypedProgram {
+    pub functions: Array[TFn],
+    pub globals: Array[TFn],
+    pub ctx: TyContext,
+}
+
+pub let typed_program (program: parser.ProgramNode): TypedProgram = {
+    reset_raw_pointer_usage();
     let ctx = build_context(program);
     let p2 = build_sigs(ctx, program);
     check_handle_drops(p2, program.items, 0);
     let fns = typed_fns_acc(p2, program.items, 0, []);
-    // Run on the BUILD path too, not only in `check`. A rule the
-    // compiler enforces and the checker does not is the gap that let
-    // `let M: Int = "hello"` through until v0.0.16; a rule the checker
-    // enforces and the compiler does not would be the same gap facing
-    // the other way, and would mean `plum build` compiled a program
-    // `plum check` had rejected.
-    check_ordered_bounds(ctx, program.items, fns);
-    fns
+    let globals = typed_globals_acc(p2, p2.globals, 0, []);
+    check_ordered_bounds(p2, fns, program.items, Some(globals));
+    TypedProgram {
+        functions: fns,
+        globals: globals,
+        ctx: ctx
+    }
 }
 
-// Every top-level 0-parameter binding, typed, in declaration order —
-// which is the order they have to be initialised in, since one may
-// reference another.
-pub let typed_globals (program: parser.ProgramNode): Array[TFn] = {
-    let ctx = build_context(program);
-    let p2 = build_sigs(ctx, program);
-    typed_globals_acc(p2, p2.globals, 0, [])
-}
-
+// Type the globals in declaration order, since an initializer may reference
+// a previously initialized value.
 let typed_globals_acc
     (p20: Program2)
     (globals: Array[GlobalDef])
@@ -1490,6 +1550,7 @@ let typed_globals_acc
             },
         };
         validate_integer_negations(s2, r.texpr);
+        if raw_pointer_used() { validate_raw_pointer_uses(p2, s2, r.texpr) };
         typed_globals_acc(p20, globals, i + 1, acc.push(TFn {
             name: globals[i].def.name,
             module: globals[i].module,
@@ -1624,29 +1685,18 @@ let infer_expr_inner
             fields,
             spread
         ),
-        // `f[T](x)` -- explicit type arguments -- is NOT a feature the
-        // real compiler has either: `GenericInst` parses, but the only
-        // form with meaning anywhere is `channel[T]()`, and everything
-        // else is rejected there too ("type inference not yet
-        // implemented for this expression form"). So this arm is not a
-        // gap versus the real compiler; the `channel` half of it is
-        // simply part of the concurrency scope cut. The message used to
-        // claim a whole missing feature.
-        EGenericInst(callee, _) =>
-            match callee {
-                EIdent(name, _) => if name == "channel" {
-                    fail_tc("channels aren't supported yet");
-                    ir_unsupported(acc, state, "channel")
-                }
-                else {
-                    fail_tc("type inference not yet implemented for this expression form");
-                    ir_unsupported(acc, state, "generic instantiation")
-                },
-                _ => {
-                    fail_tc("type inference not yet implemented for this expression form");
-                    ir_unsupported(acc, state, "generic instantiation")
-                },
-            },
+        // Explicit type arguments are supported by dedicated direct calls
+        // such as channel[T]() and RawPtr.from_address[T](address). The
+        // generic instantiation by itself does not produce a function value.
+        EGenericInst(callee, _) => {
+            if Option.is_some(raw_pointer_constructor(callee)) {
+                fail_tc(
+                    "RawPtr.from_address requires a direct call and cannot be used as a function value"
+                );
+            };
+            fail_tc("type inference not yet implemented for this expression form");
+            ir_unsupported(acc, state, "generic instantiation")
+        },
         EIndex(base, idx) => infer_index(p2, state, env, acc, base, idx),
         EArray(elems) => infer_array_lit(p2, state, env, acc, elems),
         EClosure(params, body) => infer_closure(p2, state, env, acc, params, body),
@@ -1886,6 +1936,7 @@ let check_global (p20: Program2) (def: parser.LetDefNode) (module_name: String):
     };
     let r = infer_global_initializer(p2, fresh_state_new(()), subst_empty(()), def);
     validate_integer_negations(r.subst, r.texpr);
+    if raw_pointer_used() { validate_raw_pointer_uses(p2, r.subst, r.texpr) };
     match def.ret_ty {
         None => (),
         Some(t) => {
@@ -2194,6 +2245,7 @@ let infer_binary_expected
             _ => combined,
         };
         let operand_ty = subst_apply(constrained, lr.ty);
+        if integer_arithmetic(op) { reject_raw_pointer_arithmetic(operand_ty) };
         reject_function_equality(p2, op, operand_ty);
         reject_handle_equality(p2, op, operand_ty);
         reject_unordered_comparison(op, operand_ty);
@@ -2241,7 +2293,7 @@ let is_bitwise (op: parser.BOp): Bool =
 
 // `==`/`!=` on anything CONTAINING a function is a type error, not a
 // backend failure. Mirrors the real compiler's own check (see
-// `plum_types::Infer::first_function_within`), added there and here at
+// `plum_types::Infer::first_equality_barrier`), added there and here at
 // the same time for the same reason: the two backends failed
 // differently, late, and without a source location -- and one step out,
 // for a struct with a closure FIELD, they disagreed outright (a runtime
@@ -2315,6 +2367,7 @@ let reject_unrenderable (p2: Program2) (t: ITy): Unit =
         ITRawCStr => fail_tc(
             ".to_string() on a RawCStr isn't supported -- use .as_string() inside unsafe"
         ),
+        ITRawPtr(_) => fail_tc(".to_string() on a RawPtr isn't supported"),
         // Deliberately refused rather than given a default rendering.
         //
         // Bytes are not text, so there is no honest `String` for them:
@@ -2368,6 +2421,7 @@ let is_unrenderable (ctx: TyContext) (t: ITy): Bool =
         ITUnit => true,
         ITCStr => true,
         ITRawCStr => true,
+        ITRawPtr(_) => true,
         ITBytes => true,
         ITRef(_) => true,
         ITFunction(_, _) => true,
@@ -2417,7 +2471,7 @@ let reject_if_handle (p2: Program2) (sym: String) (t: ITy): Unit =
         )),
     }
 
-// A handle ANYWHERE inside `t`, by the same walk `first_function_within`
+// A handle ANYWHERE inside `t`, by the same walk `first_equality_barrier`
 // does -- and for the same reason. `Result[File, String]` cannot be
 // compared either: its equality would have to compare the `File`, and
 // there is no honest answer for that.
@@ -2521,6 +2575,7 @@ let first_unhashable (ctx: TyContext) (t: ITy) (seen: Array[String]): Option[ITy
     match t {
         ITCStr => Some(t),
         ITRawCStr => Some(t),
+        ITRawPtr(_) => Some(t),
         ITFunction(_, _) => Some(t),
         ITStruct(name, args) => {
             // Always check arguments before the nominal recursion guard:
@@ -2610,7 +2665,10 @@ let reject_function_equality (p2: Program2) (op: parser.BOp) (t: ITy): Unit =
     }
 
 let reject_if_functional (p2: Program2) (sym: String) (t: ITy): Unit =
-    match first_function_within(p2.ctx, t, []) {
+    match first_equality_barrier(p2.ctx, t, []) {
+        Some(ITRawPtr(k)) => fail_tc(
+            "'${sym}' is not supported for ${render_ty(t)}: ${render_ty(ITRawPtr(k))} has no structural equality"
+        ),
         Some(inner) => fail_tc("'${sym}' is not supported for ${render_ty(t)}".concat(
             if render_ty(inner) == render_ty(t) { ": a function has no meaningful equality" }
             else {
@@ -2620,14 +2678,15 @@ let reject_if_functional (p2: Program2) (sym: String) (t: ITy): Unit =
         None => (),
     }
 
-// The first function type reachable inside `t` -- directly, or through
+// The first function or raw pointer reachable inside `t`, directly or through
 // a type argument, a struct field, or a variant payload. `seen` guards
 // recursive declaration expansion by name, after checking type arguments.
-let first_function_within (ctx: TyContext) (t: ITy) (seen: Array[String]): Option[ITy] =
+let first_equality_barrier (ctx: TyContext) (t: ITy) (seen: Array[String]): Option[ITy] =
     match t {
         ITFunction(_, _) => Some(t),
+        ITRawPtr(_) => Some(t),
         ITStruct(name, args) => {
-            let inner = first_function_in_list(ctx, args, seen, 0);
+            let inner = first_equality_barrier_in_list(ctx, args, seen, 0);
             if Option.is_some(inner) { inner }
             else if Array.contains(seen, name) { None }
             else {
@@ -2638,7 +2697,7 @@ let first_function_within (ctx: TyContext) (t: ITy) (seen: Array[String]): Optio
                 // walked just above.
                 match find_struct(ctx, name) {
                     None => None,
-                    Some(_) => first_function_in_list(
+                    Some(_) => first_equality_barrier_in_list(
                         ctx,
                         Array.map(
                             ctx_field_types(ctx, name),
@@ -2651,12 +2710,12 @@ let first_function_within (ctx: TyContext) (t: ITy) (seen: Array[String]): Optio
             }
         },
         ITEnum(name, args) => {
-            let inner = first_function_in_list(ctx, args, seen, 0);
+            let inner = first_equality_barrier_in_list(ctx, args, seen, 0);
             if Option.is_some(inner) { inner }
             else if Array.contains(seen, name) { None }
             else {
                 match ctx_enum_tags(ctx, name) {
-                    Some(tags) => first_function_in_variants(
+                    Some(tags) => first_equality_barrier_in_variants(
                         ctx,
                         name,
                         tags,
@@ -2668,12 +2727,12 @@ let first_function_within (ctx: TyContext) (t: ITy) (seen: Array[String]): Optio
                 }
             }
         },
-        ITTuple(elems) => first_function_in_list(ctx, elems, seen, 0),
+        ITTuple(elems) => first_equality_barrier_in_list(ctx, elems, seen, 0),
         // Ref equality compares identity, so its value is not inspected.
         _ => None,
     }
 
-let first_function_in_list
+let first_equality_barrier_in_list
     (ctx: TyContext)
     (ts: Array[ITy])
     (seen: Array[String])
@@ -2681,13 +2740,13 @@ let first_function_in_list
 =
     if i >= ts.len() { None }
     else {
-        match first_function_within(ctx, ts[i], seen) {
+        match first_equality_barrier(ctx, ts[i], seen) {
             Some(f) => Some(f),
-            None => first_function_in_list(ctx, ts, seen, i + 1),
+            None => first_equality_barrier_in_list(ctx, ts, seen, i + 1),
         }
     }
 
-let first_function_in_variants
+let first_equality_barrier_in_variants
     (ctx: TyContext)
     (enum_name: String)
     (tags: Array[String])
@@ -2701,9 +2760,9 @@ let first_function_in_variants
             ctx_variant_payload(ctx, enum_name, tags[i]),
             |pt| instantiate_template(ctx_variant_generics(ctx, enum_name, tags[i]), args, pt)
         );
-        match first_function_in_list(ctx, payload, seen, 0) {
+        match first_equality_barrier_in_list(ctx, payload, seen, 0) {
             Some(f) => Some(f),
-            None => first_function_in_variants(ctx, enum_name, tags, args, seen, i + 1),
+            None => first_equality_barrier_in_variants(ctx, enum_name, tags, args, seen, i + 1),
         }
     }
 
@@ -2783,7 +2842,7 @@ let infer_field
     (acc: Subst)
     (base: parser.PExpr)
     (name: String): InferResult
-=
+= {
     // `String.len` as a VALUE -- a qualified function name, not a field
     // read. Checked BEFORE the base is inferred, because inferring
     // `String` on its own fails first ("unbound variant/function:
@@ -2798,6 +2857,11 @@ let infer_field
     //
     // A LOCAL shadows this: a capitalized variable is unusual but
     // legal, and `Thing.field` on one must stay a field read.
+    if raw_pointer_constructor_name(base, name) {
+        fail_tc(
+            "RawPtr.from_address requires a direct call and cannot be used as a function value"
+        );
+    } else { () };
     match qualified_fn_ref(p2, env, base, name) {
         Some(sig) => infer_partial_call(p2, state, env, acc, sig, []),
         None => match qualified_global(p2, env, base, name) {
@@ -2811,6 +2875,7 @@ let infer_field
             },
         },
     }
+}
 
 // A dotted expression read back as a NAME: `Shade` from `Shade.Light`,
 // `inner.Shade` from `inner.Shade.Light`. `None` for anything that is
@@ -2952,6 +3017,10 @@ let infer_field_read
     let r = infer_expr(p2, state, env, acc, base);
     let base_ty = subst_apply(r.subst, r.ty);
     match base_ty {
+        ITRawPtr(_) => {
+            fail_tc("RawPtr has no field '${name}'; pointer methods require a direct call");
+            ir_unsupported(r.subst, r.state, "field access on RawPtr")
+        },
         ITStruct(struct_name, args) => match find_struct(p2.ctx, struct_name) {
             Some(info) => match find_field_template(info.fields, name) {
                 Some(field_ty) => {
@@ -3348,14 +3417,17 @@ let infer_call_expected
     (args: Array[parser.PExpr])
     (expected: Option[ITy]): InferResult
 =
-    match channel_elem_ty(p2, callee, args) {
-        Some(elem) => ir_leaf(
-            ITTuple([ITStruct("Sender", [elem]), ITStruct("Receiver", [elem])]),
-            acc,
-            state,
-            TChannelNew
-        ),
-        None => infer_call_shapes(p2, state, env, acc, callee, args, expected),
+    match raw_pointer_constructor(callee) {
+        Some(targs) => infer_raw_pointer_constructor(p2, state, env, acc, targs, args),
+        None => match channel_elem_ty(p2, callee, args) {
+            Some(elem) => ir_leaf(
+                ITTuple([ITStruct("Sender", [elem]), ITStruct("Receiver", [elem])]),
+                acc,
+                state,
+                TChannelNew
+            ),
+            None => infer_call_shapes(p2, state, env, acc, callee, args, expected),
+        }
     }
 
 let infer_call_shapes
@@ -5288,6 +5360,7 @@ let infer_method_call_expected
             let br = infer_expr(p2, state, env, acc, base);
             let base_ty = subst_apply(br.subst, br.ty);
             match base_ty {
+                ITRawPtr(k) => infer_raw_pointer_method(p2, env, br, k, method_name, args),
                 ITStruct(struct_name, gen_args) => match find_struct(p2.ctx, struct_name) {
                     Some(info) => match find_field_template(info.fields, method_name) {
                         Some(field_ty) => {

@@ -1,0 +1,63 @@
+use typecheck;
+
+let cg_check_raw_pointer_target (target: String): Unit = {
+    let arch = target.split("-")[0];
+    let linux = target.contains("linux") && !target.contains("gnux32")
+        && !target.contains("muslx32");
+    if target != "x86_64-unknown-none" && !((arch == "x86_64" || arch == "amd64") && linux) {
+        cg_fail(
+            "RawPtr is not supported for target '${target}'; use x86-64 Linux or x86_64-unknown-none"
+        );
+    };
+}
+
+let cg_raw_pointer
+    (p: CgProgram)
+    (env: Array[CgSlot])
+    (n: Int)
+    (op: typecheck.RawPointerOp)
+    (args: Array[typecheck.TExpr])
+    (ret: CgTy): Emit
+= {
+    // Every operand is a scalar. cg_args evaluates them once, left to right.
+    let a = cg_args(p, env, n, args);
+    let first = cg_arg_val(a.vals[0]);
+    let reg = cg_reg(a.n);
+    let raw = cg_reg(a.n + 1);
+    let code = match op {
+        PtrFromAddress => "  ${reg} = inttoptr i64 ${first} to ptr\n",
+        PtrToAddress => "  ${reg} = ptrtoint ptr ${first} to i64\n",
+        PtrIsNull => "  ${reg} = icmp eq ptr ${first}, null\n",
+        PtrOffsetBytes => "  ${reg} = getelementptr i8, ptr ${first}, i64 ${cg_arg_val(a.vals[1])}\n",
+        PtrLoad(kind, volatile_access) => {
+            let spec = typecheck.integer_spec(kind);
+            let qualifier = if volatile_access { "volatile " } else { "" };
+            let load = "load ${qualifier}i${spec.bits}, ptr ${first}, align ${spec.bits / 8}\n";
+            if spec.bits == 64 { "  ${reg} = ${load}" }
+            else {
+                let extension = if spec.signed { "sext" } else { "zext" };
+                "  ${raw} = ${load}  ${reg} = ${extension} i${spec.bits} ${raw} to i64\n"
+            }
+        },
+        PtrStore(kind, volatile_access) => {
+            let spec = typecheck.integer_spec(kind);
+            let qualifier = if volatile_access { "volatile " } else { "" };
+            let value = cg_arg_val(a.vals[1]);
+            let narrow = spec.bits < 64;
+            let prep = if narrow { "  ${raw} = trunc i64 ${value} to i${spec.bits}\n" } else { "" };
+            let operand = if narrow { raw } else { value };
+            prep.concat(
+                "  store ${qualifier}i${spec.bits} ${operand}, ptr ${first}, align ${spec.bits / 8}\n"
+            )
+        },
+    };
+    Emit {
+        code: a.code.concat(code),
+        val: if cg_ty_eq(ret, CgUnit) { "0" } else { reg },
+        ty: ret,
+        allocas: a.allocas,
+        releases: a.releases,
+        globals: a.globals,
+        n: a.n + 2
+    }
+}

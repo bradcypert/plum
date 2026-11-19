@@ -85,6 +85,8 @@ jobs:
         run: python3 ./bootstrap/integer-bits-check.py ./sh.real
       - name: scalar integer C ABI, target attributes and freestanding round trips
         run: python3 ./bootstrap/integer-ffi-check.py ./sh.real --core
+      - name: raw pointer C ABI, volatile IR and native storage
+        run: python3 ./bootstrap/raw-pointer-check.py ./sh.real
 
   bootstrap_proofs:
     name: Linux compiler self-hosting and memory checks

@@ -35,6 +35,7 @@ let cg_ity_mangle (t: typecheck.ITy): String = match t {
     ITStr => "s",
     ITCStr => "c",
     ITRawCStr => "p",
+    ITRawPtr(k) => "P${typecheck.integer_name(k)}.",
     ITBytes => "y",
     ITUnit => "u",
     ITStruct(name, args) => Array.concat_all(

@@ -179,8 +179,8 @@ back to focused Plum issues.
 - #508: stable entry wrapper, signature validation and one-time initialization.
 - #509: hook support; concrete hardware/allocator implementations now live in Plum-OS.
 - #511: compiler-owned object/ELF and runtime ABI conformance verification.
-- #512: reusable low-level language/FFI design for external consumers. See the
-  [raw pointer and volatile access proposal](raw-pointer-design.md).
+- #512: reusable low-level language/FFI work for external consumers. See the
+  [raw pointer and volatile access contract](raw-pointer-design.md).
 
 OS integration and OS-facility issues are tracked in
 [Plum-OS](https://github.com/bradcypert/plum-os/issues).

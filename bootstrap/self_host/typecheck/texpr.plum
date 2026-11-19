@@ -36,6 +36,15 @@ pub enum IntegerConversionMode {
     IntegerConvertTruncating,
 }
 
+pub enum RawPointerOp {
+    PtrFromAddress,
+    PtrToAddress,
+    PtrIsNull,
+    PtrOffsetBytes,
+    PtrLoad(IntegerKind, Bool),
+    PtrStore(IntegerKind, Bool)
+}
+
 // `starts` mirrors `PBlock.starts`: one character offset per
 // statement, so a backend can say which LINE each one came from.
 // The checker already had these -- it threads them to point an
@@ -218,6 +227,7 @@ pub enum TNode {
     TAsCStr(TExpr),
     TAsString(TExpr),
     TIntegerConvert(IntegerKind, IntegerConversionMode, TExpr),
+    TRawPointer(RawPointerOp, Array[TExpr]),
     // `spawn { .. }` -- the block becomes a zero-parameter CLOSURE (the
     // backend lifts it exactly as it lifts a closure literal, because
     // the body captures locals the same way), and the closure is handed
@@ -346,6 +356,7 @@ pub let t_children (e: TExpr): Array[TExpr] =
         TAsCStr(a) => [a],
         TAsString(a) => [a],
         TIntegerConvert(_, _, a) => [a],
+        TRawPointer(_, args) => args,
         TSpawn(a) => [a],
         TTaskJoin(a) => [a],
         TChannelSend(a, b) => [a, b],

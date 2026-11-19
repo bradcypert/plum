@@ -4340,13 +4340,10 @@ let emit_program
     (mode: buildmode.Options)
     (target: String): String
 = {
-    codegen.set_c_abi_target(
-        if codegen.cg_has_fixed_externs(program) { c_abi_target(target) } else { target }
-    );
     codegen.set_heap_stats(mode.heap);
     codegen.set_debug_frames(mode.trace);
     codegen.set_debug_info(buildmode.symbols(mode));
-    let ir = codegen.cg_emit_program_entry(program, entry);
+    let ir = codegen.cg_emit_program_entry(program, entry, || c_abi_target(target));
     if mode.address { codegen.cg_sanitize_address(ir) } else { ir }
 }
 
