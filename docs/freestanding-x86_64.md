@@ -180,7 +180,8 @@ back to focused Plum issues.
 - #509: hook support; concrete hardware/allocator implementations now live in Plum-OS.
 - #511: compiler-owned object/ELF and runtime ABI conformance verification.
 - #512: reusable low-level language/FFI work for external consumers. See the
-  [raw pointer and volatile access contract](raw-pointer-design.md).
+  [raw pointer and volatile access contract](raw-pointer-design.md) and the
+  [native aggregate layout proposal](native-aggregate-layout.md).
 
 OS integration and OS-facility issues are tracked in
 [Plum-OS](https://github.com/bradcypert/plum-os/issues).
