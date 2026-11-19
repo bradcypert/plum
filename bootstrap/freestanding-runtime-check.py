@@ -32,8 +32,9 @@ static int ready, global_events, finished;
 static jmp_buf halted;
 extern _Noreturn void plum_kernel_start(void);
 long long init_value(void) {
-    if (!ready) exit(89);
-    ++global_events;
+    if (!ready || ++global_events != 1) exit(89);
+    /* Deliberately violate the hook contract to check the entry guard. */
+    if (getenv("PLUM_TEST_RECURSE")) plum_kernel_start();
     return 7;
 }
 void begin(void) {
@@ -58,6 +59,7 @@ _Noreturn void plum_kernel_panic(const uint8_t *p, uint64_t len) {
     fwrite(p,1,len,stderr); fputc('\n',stderr); exit(97);
 }
 _Noreturn void plum_kernel_halt(void) {
+    if (finished != 1 || getenv("PLUM_TEST_RECURSE")) exit(89);
     if (getenv("PLUM_TEST_REENTER")) longjmp(halted, 1);
     exit(0);
 }
@@ -91,6 +93,7 @@ let exercise (): Unit = {
     assert(strings.push("value")[0] == "value" && strings.len() == 0);
     assert(chars_of("").len() == 0);
     println(INITIAL);
+    println("left\\x00é");
     let left = "hello";
     let right = left.concat(" world");
     println(left);
@@ -159,12 +162,15 @@ with tempfile.TemporaryDirectory(prefix='plum-core-runtime-') as tmp:
         exe = work / 'run'
         run(['clang', '-no-pie', obj, hooks, '-o', exe])
         result = run([exe])
-        assert result.stdout == ('7\nhello\nhello world\n@malloc( @free( @malloc_usable_size( "@printf\n'
+        assert result.stdout == ('7\nleft\x00é\nhello\nhello world\n@malloc( @free( @malloc_usable_size( "@printf\n'
             '2\n4\ntrue\nhello world\n616263646566\n616263646566\n0\n2\ntrue\nc\ncaptured\n42\n0\n'
             '-9223372036854775808\n9223372036854775807\n'), result.stdout
         repeated = run([exe], ok=False, env=env | {'PLUM_TEST_REENTER': '1'})
         assert repeated.returncode == 97 and 'kernel entry called more than once' in repeated.stderr, repeated
         assert repeated.stdout == result.stdout, repeated
+        recursive = run([exe], ok=False, env=env | {'PLUM_TEST_RECURSE': '1'})
+        assert recursive.returncode == 97 and recursive.stderr == 'kernel entry called more than once\n', recursive
+        assert not recursive.stdout, recursive
         oom = run([exe], ok=False, env=env | {'PLUM_TEST_OOM': '1'})
         assert oom.returncode == 97 and any(message in oom.stderr for message in ('out of memory', 'cannot allocate storage')), oom
 
@@ -174,7 +180,7 @@ with tempfile.TemporaryDirectory(prefix='plum-core-runtime-') as tmp:
         ('let max = ref(9223372036854775807); println((max.get() + 1).to_string())', 'integer overflow'),
         ('let at = ref(3); println([1][at.get()].to_string())', 'array index out of bounds'),
         ('let shift = ref(-1); println((1 << shift.get()).to_string())', 'negative shift count'),
-        ('panic_raw("explicit panic")', 'explicit panic'),
+        ('panic_raw("explicit\\x00panic")', 'explicit\x00panic'),
     ]:
         source.write_text('let main (): Unit = { ' + body + '; () }\n')
         obj = work / 'panic.o'
@@ -250,12 +256,20 @@ int memcmp(const void *a, const void *b, unsigned long n) {
         '. = ALIGN(4096); .rodata : { *(.rodata*) } :ro '
         '. = ALIGN(4096); .data : { *(.data*) } :data .bss : { *(.bss*) *(COMMON) } :data }\n')
     source.write_text('let main (): Unit = println("core".concat(" runtime"))\n')
-    elf = work / 'kernel.elf'
-    plum('build', project, '--target', TARGET, '--linker-script', script,
-         '--link-c', adapter, '-o', elf)
-    assert not run(['nm', '-u', elf]).stdout.strip()
-    assert 'NEEDED' not in run(['readelf', '-d', elf]).stdout
-    assert 'INTERP' not in run(['readelf', '-l', elf]).stdout
+    for mode in ([], ['--release']):
+        elf = work / ('release.elf' if mode else 'debug.elf')
+        plum('build', project, '--target', TARGET, '--linker-script', script,
+             '--link-c', adapter, '-o', elf, *mode)
+        header = run(['readelf', '-h', elf]).stdout
+        symbols = run(['nm', elf]).stdout
+        entry = re.search(r'Entry point address:\s+0x([0-9a-f]+)', header)
+        start = re.search(r'^([0-9a-f]+) T plum_kernel_start$', symbols, re.M)
+        assert 'EXEC (Executable file)' in header and 'X86-64' in header and 'ELF64' in header, header
+        assert entry and start and int(entry[1], 16) == int(start[1], 16) >= 0xffffffff80000000, header
+        assert not run(['nm', '-u', elf]).stdout.strip()
+        assert 'NEEDED' not in run(['readelf', '-d', elf]).stdout
+        assert 'INTERP' not in run(['readelf', '-l', elf]).stdout
+        assert 'There are no relocations' in run(['readelf', '-r', elf]).stdout
 
     print('freestanding-runtime-check: symbol audit, RC lifetimes, formatting, '
           'checked failures, OOM, entry initialization/halt/re-entry, cache reuse and transitive diagnostics passed')

@@ -151,11 +151,19 @@ Explicit user/dependency externs remain trusted native adapter boundaries.
 
 ## Verification and external consumer
 
-Plum's `bootstrap/freestanding-check.py` verifies object/link constraints and
-cache isolation. `bootstrap/freestanding-runtime-check.py` uses small host-side
-mock hooks to verify core behavior, lifetime handling, checked failures, OOM,
-entry initialization/halt/re-entry and hosted-service diagnostics. Run them with
-a compiler built from current source. They require no bootloader or OS driver.
+Plum's `bootstrap/freestanding-check.py` inspects debug and release LLVM IR,
+including the IR retained after a missing-hook link failure. It also checks
+object format, explicit linking, and cache isolation. Freestanding `emit-llvm`
+rejects tracing and memory statistics, as `build` does.
+
+`bootstrap/freestanding-runtime-check.py` uses host-side mock hooks to verify
+core behavior, ownership, checked failures, OOM, and byte lengths for output
+and panic messages containing NUL bytes. It checks re-entry both during global
+initialization and after halt, and verifies transitive hosted-service diagnostics.
+Its debug and release ELF fixtures check that the ELF entry address matches
+`plum_kernel_start` and that the linked image has no unresolved symbols, dynamic
+dependencies, interpreter, or relocations. Run both checks with a compiler built
+from current source.
 
 [Plum-OS](https://github.com/bradcypert/plum-os) owns hardware-hook tests, its
 QEMU image/smoke checks, boot configuration and OS development. Its tests verify

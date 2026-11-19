@@ -4355,9 +4355,14 @@ let emit_llvm_command (program: parser.ProgramNode) (argv: Array[String]): Unit 
     let target = Option.unwrap_or(find_flag_value(argv, "--target", 0), native_target());
     let bad = target_error(target);
     if bad != "" { fail_cmd(bad) };
-    codegen.set_core_runtime(freestanding.enabled(target));
-    let ir = emit_program(program, "main", build_options(argv, target), target);
-    println(if freestanding.enabled(target) { codegen.cg_freestanding(ir) } else { ir });
+    let core = freestanding.enabled(target);
+    let mode = build_options(argv, target);
+    if core && (mode.trace || mode.heap) {
+        fail_cmd("freestanding IR emission does not support --trace or --memory-stats");
+    };
+    codegen.set_core_runtime(core);
+    let ir = emit_program(program, "main", mode, target);
+    println(if core { codegen.cg_freestanding(ir) } else { ir });
     codegen.set_core_runtime(false);
 }
 
