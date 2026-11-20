@@ -851,6 +851,16 @@ with the right access permissions. Use `.load_volatile()` and
 Synchronization and hardware ordering require separate operations.
 See the [raw pointer contract](docs/raw-pointer-design.md) for syntax and rules.
 
+### Native C records
+
+`extern "C" struct` declares a naturally aligned C layout with integer and
+nested native-record fields. Use `NativeLayout.size_of[T]()`,
+`NativeLayout.align_of[T]()`, and `NativeLayout.offset_of[T]("field")` to query
+layout in bytes. A `RawPtr[T]` to a native record can cross a C call as a data
+pointer. Inside `unsafe`, `.field_ptr("field")` gives a pointer to an accessible
+field, where the scalar load and store methods apply. The caller supplies the
+storage and keeps it alive. [Native aggregate layout](docs/native-aggregate-layout.md)
+
 ### Where the C goes
 
 A project's own C sources live in `native/`, and are compiled and

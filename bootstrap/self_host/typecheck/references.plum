@@ -278,10 +278,21 @@ let reference_type_in_item
             let written = parser.join_dot(site.segments);
             set_err_pos(site.path, site.offset, "");
             let identity = match site.annotation {
-                Some(annotation) => match resolve_ann_seen(ctx, item.module, generics, annotation) {
-                    ITStruct(name, _) => name,
-                    ITEnum(name, _) => name,
-                    _ => "",
+                Some(annotation) => {
+                    let native = match annotation {
+                        TyPath(_) => if Array.contains(generics, written)
+                            || Option.is_some(named_integer_kind(written)) { None }
+                        else { best_native_record(ctx, item.module, written) },
+                        _ => None,
+                    };
+                    match native {
+                        Some(record) => record.name,
+                        None => match resolve_ann_seen(ctx, item.module, generics, annotation) {
+                            ITStruct(name, _) => name,
+                            ITEnum(name, _) => name,
+                            _ => "",
+                        },
+                    }
                 },
                 None => reference_nominal_identity(ctx, item.module, written),
             };

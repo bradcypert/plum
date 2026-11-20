@@ -16,6 +16,16 @@
 // (ditto — `for` loops are handled structurally by this checker, not
 // via a first-class range value). Everything else is present.
 
+pub enum RawPointee {
+    ScalarPointee(IntegerKind),
+    RecordPointee(String)
+}
+
+pub let raw_pointee_name (pointee: RawPointee): String = match pointee {
+    ScalarPointee(kind) => integer_name(kind),
+    RecordPointee(name) => name,
+}
+
 pub enum ITy {
     ITInt,
     ITInteger(IntegerKind),
@@ -34,7 +44,7 @@ pub enum ITy {
     ITCStr,
     // An unmanaged native pointer. Unlike CStr, this carries no Plum owner.
     ITRawCStr,
-    ITRawPtr(IntegerKind),
+    ITRawPtr(RawPointee),
     // A byte buffer, and the type `ITStr` is a constrained form of.
     //
     // The two share a cell layout exactly -- `{i64 rc, i64 len, bytes..,
@@ -335,7 +345,7 @@ pub let render_ty (ty: ITy): String =
         ITUnit => "Unit",
         ITCStr => "CStr",
         ITRawCStr => "RawCStr",
-        ITRawPtr(k) => "RawPtr[${integer_name(k)}]",
+        ITRawPtr(pointee) => "RawPtr[${raw_pointee_name(pointee)}]",
         ITBytes => "Bytes",
         ITVar(id) => "T".concat(id.to_string()),
         ITFunction(params, ret) => "(".concat(join_comma_ty(params)).concat(") -> ")

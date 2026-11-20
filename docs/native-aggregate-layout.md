@@ -1,6 +1,6 @@
-# Native aggregate layout proposal
+# Native aggregate layout
 
-The first layout feature under [#512](https://github.com/bradcypert/plum/issues/512) would let Plum name a C record layout and project fields from native storage. A native library can return a typed pointer to a record or an array of records. Plum can then use declared fields and compiler-computed offsets instead of duplicating byte offsets at each use.
+Plum can name a C record layout and project fields from native storage. A native library can return a typed pointer to a record or an array of records. Plum uses declared fields and compiler-computed offsets to access that storage. [#512](https://github.com/bradcypert/plum/issues/512)
 
 ## Declaration and storage
 
@@ -83,14 +83,16 @@ Direct C arguments and returns of `RawPtr[R]` use the data-pointer ABI. A functi
 
 ## Compiler fit
 
-- Reuse the struct field grammar after `extern "C" struct`. The parser can distinguish the `struct` token from the opening brace of the current extern function block. Preserve the distinction as a declaration kind through formatting, source tooling, name resolution and type checking.
-- Resolve native record fields in a declaration table with qualified type identity, declaration order, visibility, and a cycle check. Check field kinds once and derive sizes, alignments and offsets from one record layout computation. Keep native records out of value representation and managed field layout. Extend the typed `RawPtr` pointee to distinguish an integer from a nominal native record while preserving existing integer identities and specialization symbols.
-- The query call syntax already fits the parser's explicit-type-argument expression nodes. Resolve field names and admission during checking. Fold queries to integer constants at emission using the validated target layout. Reject unsupported effective targets during emission, including declarations that are unused. The first targets share one layout rule. Future target support needs evidence for record layout and scalar access ABI.
-- Lower field projection to a byte `getelementptr` with the computed constant offset and without `inbounds` or no-wrap flags. Lower a projected scalar's access through the existing RawPtr LLVM path at its native width and natural alignment. Preserve the C pointer signature and the backend's non-heap treatment. The record view needs no new runtime helper.
+- The parser reuses the struct field grammar after `extern "C" struct`. Formatting, source tooling, name resolution and type checking recognize a separate declaration kind.
+- A declaration table tracks qualified identity, field order, and visibility. The checker detects inline cycles and computes each record's size, alignment, and field offsets once. Typed `RawPtr` pointees distinguish nominal records from integers and preserve the existing integer specialization symbols.
+- The checker resolves layout queries to integer constants using the layout rule shared by the initial targets. Emission validates the effective target even when a native declaration is unused. Future target support requires layout and scalar ABI conformance.
+- Field projection emits a byte `getelementptr` using the constant offset. It emits no `inbounds` or no-wrap flags. A projected scalar uses the existing RawPtr LLVM path at its native width and natural alignment. Record pointers use the C data pointer ABI and require no runtime helper.
 
-## Conformance for implementation
+## Conformance
 
 - Compare every admitted scalar's size and alignment, and mixed and nested records' `sizeof`, `_Alignof`, and `offsetof`, against Clang on both targets. Include internal and tail padding and a declaration where field order differs from alignment order.
 - Exercise pointer arguments and returns with a real native array. Read a nested field in the second record, write a narrow field, and check neighboring fields and padding sentinels. Verify debug and release execution and inspect optimized LLVM for one correctly aligned volatile operation per scalar access. Check freestanding objects for unexpected symbols or runtime dependencies.
 - Cover module visibility, pointer type identity, unknown or nonliteral fields, cycles, unsupported field types and targets, and layout qualifiers outside the admitted grammar. Reject unsafe calls outside an unsafe block, whole-record access, by-value native record signatures, and implicit conversion from managed records.
 - Keep the scalar RawPtr, scalar C ABI, and ordinary managed record suites passing. Use mock native storage and core runtime hooks for compiler conformance. External consumers own device, protocol, and kernel-specific fixtures.
+
+Run the scalar and native record checks with `python3 bootstrap/raw-pointer-check.py ./sh.real` on x86-64 Linux.

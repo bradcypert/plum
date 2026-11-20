@@ -6,7 +6,7 @@ Plum-OS already captures borrowed boot data in its C adapter for later memory ma
 
 ## Interface
 
-`RawPtr[T]` is an unmanaged, nullable data pointer. For the first implementation, `T` must be a concrete Plum integer kind. `I64` and `Int` identify the same pointee type. The pointee uses the corresponding C integer's width, alignment, and target byte order. Initial conformance targets are hosted x86-64 Linux and the existing `x86_64-unknown-none` profile.
+`RawPtr[T]` is an unmanaged, nullable data pointer. The scalar operations below use a concrete Plum integer pointee. `I64` and `Int` identify the same pointee type. The pointee uses the corresponding C integer's width, alignment, and target byte order. Conformance targets are hosted x86-64 Linux and the existing `x86_64-unknown-none` profile. For pointers to native records, see [native aggregate layout](native-aggregate-layout.md).
 
 | Operation | Result | Requires `unsafe` |
 | --- | --- | --- |
@@ -66,4 +66,4 @@ Use LLVM `inttoptr` and `ptrtoint` with `i64` only for the explicit address conv
 
 Run the native and core pointer checks with `python3 bootstrap/raw-pointer-check.py ./sh.real` on x86-64 Linux.
 
-The [native aggregate layout proposal](native-aggregate-layout.md) extends this contract to pointers to C-layout records. C-callable Plum exports need explicit ABI wrappers and an ownership policy for each admitted type. The initial pointer operations use ordinary and volatile memory instructions. An external consumer can identify a future need for an intrinsic or assembly interface by showing an operation these instructions and existing native helpers cannot express.
+C-callable Plum exports need explicit ABI wrappers and an ownership policy for each admitted type. The pointer operations use ordinary and volatile memory instructions. An external consumer can identify a future need for an intrinsic or assembly interface by showing an operation these instructions and existing native helpers cannot express.

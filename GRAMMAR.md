@@ -97,7 +97,7 @@ Keywords (reserved, cannot be used as `Identifier`): `let`, `mut`, `fn`,
 ```
 Program   ::= { Item }
 Item      ::= [ "pub" ] ItemKind
-ItemKind  ::= LetDef | StructDecl | EnumDecl | ExternBlock | UseDecl
+ItemKind  ::= LetDef | StructDecl | NativeStructDecl | EnumDecl | ExternBlock | UseDecl
 ```
 
 There is no `mod` declaration in this grammar; module boundaries are
@@ -146,6 +146,7 @@ not.
 
 ```
 StructDecl  ::= "struct" Identifier [ GenericParams ] "{" [ FieldList ] "}"
+NativeStructDecl ::= "extern" '"C"' "struct" Identifier "{" FieldList "}"
 FieldList   ::= Field { "," Field } [ "," ]
 Field       ::= [ "pub" ] Identifier ":" Type
 
@@ -153,6 +154,9 @@ EnumDecl    ::= "enum" Identifier [ GenericParams ] "{" [ VariantList ] "}"
 VariantList ::= Variant { "," Variant } [ "," ]
 Variant     ::= Identifier [ "(" Type { "," Type } ")" ]
 ```
+
+Native struct declarations describe C layouts for integer fields and nested
+native structs. [Native aggregate layout](docs/native-aggregate-layout.md)
 
 ### Handle declarations
 

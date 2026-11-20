@@ -94,6 +94,7 @@ let expand_items (x: Expansion) (items: Array[parser.ItemNode]) (i: Int): Unit =
         match it.kind {
             IKLet(def) => expand_expr(x, def.body, true),
             IKStruct(_) => expand_decl(x, token_index(x, it.start), it.end, 2),
+            IKNativeStruct(_) => expand_decl(x, token_index(x, it.start), it.end, 2),
             IKEnum(_) => expand_decl(x, token_index(x, it.start), it.end, 3),
             _ => (),
         };

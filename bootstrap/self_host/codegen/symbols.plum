@@ -35,7 +35,10 @@ let cg_ity_mangle (t: typecheck.ITy): String = match t {
     ITStr => "s",
     ITCStr => "c",
     ITRawCStr => "p",
-    ITRawPtr(k) => "P${typecheck.integer_name(k)}.",
+    ITRawPtr(pointee) => match pointee {
+        ScalarPointee(k) => "P${typecheck.integer_name(k)}.",
+        RecordPointee(name) => "Q${cg_symbol_atom(name)}.",
+    },
     ITBytes => "y",
     ITUnit => "u",
     ITStruct(name, args) => Array.concat_all(

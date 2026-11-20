@@ -17,6 +17,7 @@ let cmd_references (dir: String) (path: String) (line: Int) (col: Int) (include:
                 typecheck.reference_declaration(item, fn_decl.name);
             },
             IKStruct(decl) => typecheck.reference_type_declaration(item, decl.name),
+            IKNativeStruct(decl) => typecheck.reference_type_declaration(item, decl.name),
             IKEnum(decl) => typecheck.reference_type_declaration(item, decl.name),
             _ => (),
         };

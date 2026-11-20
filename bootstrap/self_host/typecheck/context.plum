@@ -78,7 +78,9 @@ let handle_info (decl: parser.HandleDeclNode) (module_name: String) (is_pub: Boo
 pub struct TyContext {
     pub structs: Array[StructInfo],
     pub enums: Array[EnumInfo],
-    handles: Array[HandleInfo]
+    handles: Array[HandleInfo],
+    native_records: Array[NativeRecordDecl],
+    native_layouts: Array[NativeRecordLayout]
 }
 
 // --- Where an error points -------------------------------------------
@@ -272,8 +274,21 @@ pub let module_label (m: String): String =
 // escape: a declaration's shape is only knowable from the declaration
 // itself, so the split is unavoidable here.
 pub let build_context (program: parser.ProgramNode): TyContext = {
+    let saved = ERR.get();
     let names_only = collect_names_acc(program.items, 0, builtin_context(()));
-    resolve_decls_acc(program.items, 0, names_only, builtin_context(()))
+    let out = if Array.is_empty(names_only.native_records) { builtin_context(()) }
+    else {
+        set_uses(collect_uses(program.items, 0, []));
+        let layouts = build_native_layouts(names_only);
+        TyContext {
+            native_layouts: layouts,
+            native_records: names_only.native_records,
+            ..builtin_context(())
+        }
+    };
+    let ctx = resolve_decls_acc(program.items, 0, names_only, out);
+    ERR.set(saved);
+    ctx
 }
 
 // The prelude declares all nine of the types this used to hand-write --
@@ -296,21 +311,26 @@ let builtin_context (unit: Unit): TyContext = TyContext {
     structs: [],
     enums: [],
     handles: [],
+    native_records: [],
+    native_layouts: [],
 }
+
+let reserved_native_namespace (name: String): Bool = name == "RawPtr" || name == "NativeLayout"
 
 let collect_names_acc (items: Array[parser.ItemNode]) (i: Int) (ctx: TyContext): TyContext =
     if i >= items.len() { ctx }
     else {
         if items[i].module == "" {
-            let reserved = match items[i].kind {
-                IKStruct(decl) => decl.name == "RawPtr",
-                IKHandle(decl) => decl.name == "RawPtr",
-                IKEnum(decl) => decl.name == "RawPtr",
-                _ => false,
+            let name = match items[i].kind {
+                IKStruct(decl) => decl.name,
+                IKNativeStruct(decl) => decl.name,
+                IKHandle(decl) => decl.name,
+                IKEnum(decl) => decl.name,
+                _ => "",
             };
-            if reserved {
+            if reserved_native_namespace(name) {
                 set_err_pos(items[i].path, items[i].start, "");
-                fail_tc("RawPtr is a reserved built-in type");
+                fail_tc("${name} is a reserved built-in type");
             };
         };
         match items[i].kind {
@@ -322,9 +342,13 @@ let collect_names_acc (items: Array[parser.ItemNode]) (i: Int) (ctx: TyContext):
                     module: items[i].module,
                     is_pub: items[i].is_pub
                 }),
-                enums: ctx.enums,
-                handles: ctx.handles,
+                ..ctx
             }),
+            IKNativeStruct(decl) => collect_names_acc(
+                items,
+                i + 1,
+                add_native_record(ctx, items[i], decl)
+            ),
             // A handle is a struct with no fields, plus the drop hook.
             // Registering the struct half here is what makes the NAME
             // resolve everywhere a type name can appear.
@@ -336,11 +360,10 @@ let collect_names_acc (items: Array[parser.ItemNode]) (i: Int) (ctx: TyContext):
                     module: items[i].module,
                     is_pub: items[i].is_pub
                 }),
-                enums: ctx.enums,
                 handles: ctx.handles.push(handle_info(decl, items[i].module, items[i].is_pub)),
+                ..ctx
             }),
             IKEnum(decl) => collect_names_acc(items, i + 1, TyContext {
-                structs: ctx.structs,
                 enums: ctx.enums.push(EnumInfo {
                     name: parser.qualify_type(items[i].module, decl.name),
                     generics: Array.map(decl.generics, |g| g.name),
@@ -348,7 +371,7 @@ let collect_names_acc (items: Array[parser.ItemNode]) (i: Int) (ctx: TyContext):
                     module: items[i].module,
                     is_pub: items[i].is_pub
                 }),
-                handles: ctx.handles,
+                ..ctx
             }),
             _ => collect_names_acc(items, i + 1, ctx),
         }
@@ -362,6 +385,9 @@ let resolve_decls_acc
 =
     if i >= items.len() { out }
     else {
+        if !Array.is_empty(names.native_records) {
+            set_err_pos(items[i].path, items[i].start, "");
+        };
         match items[i].kind {
             IKStruct(decl) => resolve_decls_acc(
                 items,
@@ -415,8 +441,7 @@ let add_struct
             module: module_name,
             is_pub: is_pub
         }),
-        enums: out.enums,
-        handles: out.handles
+        ..out
     }
 }
 
@@ -434,7 +459,6 @@ let add_enum
         payload: Array.map(v.payload, |t| resolve_ann_seen(names, module_name, generic_names, t)),
     });
     TyContext {
-        structs: out.structs,
         enums: out.enums.push(EnumInfo {
             name: parser.qualify_type(module_name, decl.name),
             generics: generic_names,
@@ -442,7 +466,7 @@ let add_enum
             module: module_name,
             is_pub: is_pub
         }),
-        handles: out.handles
+        ..out
     }
 }
 
@@ -462,8 +486,8 @@ let add_handle
             module: module_name,
             is_pub: is_pub
         }),
-        enums: out.enums,
         handles: out.handles.push(handle_info(decl, module_name, is_pub)),
+        ..out
     }
 
 // --- Lookups ---
@@ -551,6 +575,7 @@ pub let best_enum (ctx: TyContext) (viewer: String) (name: String): Option[EnumI
 
 let has_type_name (ctx: TyContext) (name: String): Bool =
     Option.is_some(find_struct(ctx, name)) || Option.is_some(find_enum(ctx, name))
+        || (has_native_records(ctx) && Option.is_some(find_native_record(ctx.native_records, name)))
 
 let best_type_name (ctx: TyContext) (viewer: String) (name: String): Option[String] = {
     // A qualified name is exact, even if a relative path could also exist.
@@ -572,7 +597,8 @@ let best_type_name (ctx: TyContext) (viewer: String) (name: String): Option[Stri
                 0,
                 BareTypeNames { visible: None, hidden: None }
             );
-            let found = bare_enum_names(ctx.enums, viewer, suffix, 0, structs);
+            let enums = bare_enum_names(ctx.enums, viewer, suffix, 0, structs);
+            let found = bare_native_names(ctx.native_records, viewer, suffix, enums);
             // Preserve a visibility diagnostic for a private-only name. A private
             // sibling does not compete with a public declaration for fallback.
             match found.visible {
@@ -805,13 +831,21 @@ pub let resolve_ann_seen
         //     let mix (s: b.Shade): a.Shade = s
         //
         // A single-segment name is unaffected: joined, it is itself.
-        TyGeneric(base, args) => resolve_named(
-            ctx,
-            viewer,
-            in_scope,
-            parser.join_dot(base),
-            Array.map(args, |a| resolve_ann_seen(ctx, viewer, in_scope, a))
-        ),
+        TyGeneric(base, args) => {
+            let name = parser.join_dot(base);
+            if name == "RawPtr" {
+                check_type_arity(name, 1, args.len());
+                raw_pointer_type(resolve_raw_pointee(ctx, viewer, in_scope, args[0]))
+            } else {
+                resolve_named(
+                    ctx,
+                    viewer,
+                    in_scope,
+                    name,
+                    Array.map(args, |a| resolve_ann_seen(ctx, viewer, in_scope, a))
+                )
+            }
+        },
         TyPath(segments) => resolve_named(ctx, viewer, in_scope, parser.join_dot(segments), []),
         TyTuple(elems) => ITTuple(Array.map(elems, |e| resolve_ann_seen(ctx, viewer, in_scope, e))),
     }
@@ -867,7 +901,7 @@ let resolve_named
     }
     else if name == "RawPtr" {
         check_type_arity(name, 1, args.len());
-        raw_pointer_type(raw_pointer_kind(args[0]))
+        ITUnit
     }
     else if name == "Bytes" {
         check_type_arity(name, 0, args.len());
@@ -925,6 +959,11 @@ let resolve_named
                     ITEnum(info.name, args)
                 },
                 None => {
+                    if Option.is_some(best_native_record(ctx, viewer, name)) {
+                        fail_ctx(
+                            "native record ${name} is only admitted as a RawPtr pointee or inline native field"
+                        );
+                    };
                     fail_ctx("unknown type: ".concat(name));
                     ITUnit
                 },

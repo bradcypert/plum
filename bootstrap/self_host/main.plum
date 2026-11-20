@@ -1061,6 +1061,7 @@ let doc_ns_of_in (nss: Array[String]) (item: parser.ItemNode): String =
             Some(dot) => String.slice(def.name, 0, dot),
         },
         IKStruct(d) => if Array.contains(nss, d.name) { d.name } else { "" },
+        IKNativeStruct(d) => if Array.contains(nss, d.name) { d.name } else { "" },
         IKEnum(d) => if Array.contains(nss, d.name) { d.name } else { "" },
         IKHandle(d) => if Array.contains(nss, d.name) { d.name } else { "" },
         _ => "",
@@ -1208,6 +1209,7 @@ let doc_entry_signature (item: parser.ItemNode): Option[String] =
     match item.kind {
         IKLet(def) => Some(def_signature(def)),
         IKStruct(d) => Some("struct ${d.name}"),
+        IKNativeStruct(d) => Some("extern \"C\" struct ${d.name}"),
         IKEnum(d) => Some("enum ${d.name}"),
         IKHandle(d) => Some("handle ${d.name}"),
         IKExtern(_) => None,
@@ -1720,6 +1722,7 @@ let doc_signature_of (item: parser.ItemNode): Option[String] =
     match item.kind {
         IKLet(def) => Some(def_signature(def)),
         IKStruct(d) => Some("struct ${d.name}"),
+        IKNativeStruct(d) => Some("extern \"C\" struct ${d.name}"),
         IKEnum(d) => Some("enum ${d.name}"),
         IKHandle(d) => Some("handle ${d.name}"),
         IKExtern(_) => None,
@@ -2002,6 +2005,13 @@ let push_completion (item: parser.ItemNode) (acc: Array[JsonValue]): Array[JsonV
                 "struct ".concat(decl.name)
             )
         ),
+        IKNativeStruct(decl) => acc.push(
+            completion_json(
+                completion_label(item, decl.name),
+                "struct",
+                "extern \"C\" struct ${decl.name}"
+            )
+        ),
         // An enum offers its own name AND each variant. Without the
         // variants you can complete `Shape` and then have to remember
         // `Circle` yourself, which is the half you actually write.
@@ -2066,6 +2076,9 @@ let def_entry (item: parser.ItemNode): Option[JsonValue] =
     match item.kind {
         IKLet(def) => Some(def_json(item, def.name, "function", def_signature(def))),
         IKStruct(decl) => Some(def_json(item, decl.name, "struct", "struct ".concat(decl.name))),
+        IKNativeStruct(decl) => Some(
+            def_json(item, decl.name, "struct", "extern \"C\" struct ${decl.name}")
+        ),
         IKEnum(decl) => Some(def_json(item, decl.name, "enum", "enum ".concat(decl.name))),
         _ => None,
     }
