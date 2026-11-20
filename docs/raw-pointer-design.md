@@ -66,4 +66,4 @@ Use LLVM `inttoptr` and `ptrtoint` with `i64` only for the explicit address conv
 
 Run the native and core pointer checks with `python3 bootstrap/raw-pointer-check.py ./sh.real` on x86-64 Linux.
 
-C-callable Plum exports need explicit ABI wrappers and an ownership policy for each admitted type. The pointer operations use ordinary and volatile memory instructions. An external consumer can identify a future need for an intrinsic or assembly interface by showing an operation these instructions and existing native helpers cannot express.
+C-callable Plum exports extend the pointer contract with an inbound ABI and runtime lifecycle. [C-callable exports proposal](c-callable-exports.md)
