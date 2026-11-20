@@ -1329,7 +1329,8 @@ let doc_entry (item: parser.ItemNode): Option[String] =
 // the page look complete when it is not, and a signature alone is worth
 // more than silence.
 let doc_render (signature: String) (doc: String): String =
-    "\n## `${signature}`\n\n".concat(if String.is_empty(doc) { "" } else { doc.concat("\n") })
+    "\n<a id=\"${doc_html_attr(doc_anchor(signature))}\"></a>\n\n## `${signature}`\n\n"
+        .concat(if String.is_empty(doc) { "" } else { doc.concat("\n") })
 
 // --- HTML output ---
 //
