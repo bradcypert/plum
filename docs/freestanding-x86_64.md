@@ -181,7 +181,8 @@ back to focused Plum issues.
 - #511: compiler-owned object/ELF and runtime ABI conformance verification.
 - #512: reusable low-level language/FFI work for external consumers. See the
   [raw pointer and volatile access contract](raw-pointer-design.md) and the
-  [native aggregate layout contract](native-aggregate-layout.md).
+  [native aggregate layout contract](native-aggregate-layout.md). The
+  [C-callable exports proposal](c-callable-exports.md) builds on both contracts.
 
 OS integration and OS-facility issues are tracked in
 [Plum-OS](https://github.com/bradcypert/plum-os/issues).
