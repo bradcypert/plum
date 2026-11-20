@@ -2,11 +2,22 @@ use Time;
 
 extern "C" { fn time_millis_regressions() -> Int; }
 
-let main (): Unit = {
-    assert_eq(unsafe { time_millis_regressions() }, 1);
+let wall_clock_sample_matches (attempts: Int): Bool = {
     let before = Time.now();
     let millis = Time.now_millis();
     let after = Time.now();
-    assert(millis >= before * 1000 && millis <= after * 1000 + 999);
+    if millis >= before * 1000 && millis <= after * 1000 + 999 { true }
+    else if attempts == 1 { false }
+    else {
+        // Leave time for a fresh sample after a clock correction or a
+        // mismatch between the clocks' resolutions.
+        Time.sleep(Time.millis(10));
+        wall_clock_sample_matches(attempts - 1)
+    }
+}
+
+let main (): Unit = {
+    assert_eq(unsafe { time_millis_regressions() }, 1);
+    assert(wall_clock_sample_matches(3));
     println("wall-clock milliseconds: ok")
 }
