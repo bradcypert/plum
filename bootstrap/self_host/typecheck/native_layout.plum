@@ -1,0 +1,373 @@
+use parser;
+
+struct NativeRecordDecl {
+    name: String,
+    item: parser.ItemNode,
+    fields: Array[parser.StructFieldNode]
+}
+
+struct NativeFieldLayout {
+    name: String,
+    pointee: RawPointee,
+    offset: Int,
+    is_pub: Bool
+}
+
+struct NativeRecordLayout {
+    name: String,
+    alignment: Int,
+    size: Int,
+    fields: Array[NativeFieldLayout]
+}
+
+pub let has_native_records (ctx: TyContext): Bool = !Array.is_empty(ctx.native_records)
+
+let add_native_record
+    (ctx: TyContext)
+    (item: parser.ItemNode)
+    (decl: parser.StructDeclNode): TyContext
+= {
+    set_err_pos(item.path, item.start, "");
+    let name = parser.qualify_type(item.module, decl.name);
+    if !Array.is_empty(decl.generics) {
+        fail_ctx("native record ${name} cannot have type parameters")
+    };
+    if Array.is_empty(decl.fields) {
+        fail_ctx("native record ${name} must have at least one field")
+    };
+    if Option.is_some(find_native_record(ctx.native_records, name)) {
+        fail_ctx("native record ${name} is already declared");
+    };
+    if item.module == ""
+        && (Option.is_some(named_integer_kind(name)) || Array.contains(
+            [
+                "Bool",
+                "Float",
+                "String",
+                "CStr",
+                "RawCStr",
+                "Bytes",
+                "Unit",
+                "Array",
+                "Task",
+                "Sender",
+                "Receiver",
+                "Ref"
+            ],
+            name
+        )) {
+            fail_ctx("${name} is a reserved built-in type");
+        };
+    TyContext {
+        native_records: ctx.native_records.push(NativeRecordDecl {
+            name: name,
+            item: item,
+            fields: decl.fields
+        }),
+        ..ctx
+    }
+}
+
+let find_native_record (records: Array[NativeRecordDecl]) (name: String): Option[NativeRecordDecl] =
+    Array.find(records, |record| record.name == name)
+
+let bare_native_names
+    (records: Array[NativeRecordDecl])
+    (viewer: String)
+    (suffix: String)
+    (found: BareTypeNames): BareTypeNames
+= {
+    let mut matches = found;
+    for record in records {
+        if record.name.ends_with(suffix) {
+            matches = add_bare_type(
+                matches,
+                viewer,
+                record.name,
+                record.item.module,
+                record.item.is_pub
+            );
+        };
+    };
+    matches
+}
+
+let best_native_record
+    (ctx: TyContext)
+    (viewer: String)
+    (written: String): Option[NativeRecordDecl]
+=
+    if !has_native_records(ctx) { None }
+    else {
+        match best_type_name(ctx, viewer, rewrite_type_path(written)) {
+            Some(name) => find_native_record(ctx.native_records, name),
+            None => None,
+        }
+    }
+
+let visible_native_record (record: NativeRecordDecl) (viewer: String): String = {
+    check_type_visible(
+        viewer,
+        record.item.module,
+        record.item.is_pub,
+        "native record",
+        record.name
+    );
+    record.name
+}
+
+let resolve_raw_pointee
+    (ctx: TyContext)
+    (viewer: String)
+    (generics: Array[String])
+    (ann: parser.Ty): RawPointee
+= {
+    let native = match ann {
+        TyPath(parts) => {
+            let written = parser.join_dot(parts);
+            if Option.is_some(named_integer_kind(written)) || Array.contains(generics, written) {
+                None
+            } else { best_native_record(ctx, viewer, written) }
+        },
+        _ => None,
+    };
+    match native {
+        Some(record) => RecordPointee(visible_native_record(record, viewer)),
+        None => {
+            let ty = resolve_ann_seen(ctx, viewer, generics, ann);
+            match integer_kind(ty) {
+                Some(kind) => ScalarPointee(kind),
+                None => {
+                    fail_ctx(
+                        "RawPtr requires a concrete integer pointee or native record, found ${render_ty(ty)}"
+                    );
+                    ScalarPointee(IntegerI64)
+                },
+            }
+        },
+    }
+}
+
+let native_field_pointee
+    (ctx: TyContext)
+    (decl: NativeRecordDecl)
+    (field: parser.StructFieldNode): RawPointee
+= {
+    let viewer = decl.item.module;
+    let pointee = match field.ty {
+        TyPath(parts) => {
+            let written = parser.join_dot(parts);
+            match named_integer_kind(written) {
+                Some(kind) => Some(ScalarPointee(kind)),
+                None => Option.map(
+                    best_native_record(ctx, viewer, written),
+                    |record|
+                        RecordPointee(visible_native_record(record, viewer))
+                ),
+            }
+        },
+        _ => None,
+    };
+    match pointee {
+        Some(ty) => ty,
+        None => {
+            fail_ctx(
+                "native field ${decl.name}.${field.name} requires a concrete integer or native record"
+            );
+            ScalarPointee(IntegerI64)
+        },
+    }
+}
+
+let build_native_layouts (ctx: TyContext): Array[NativeRecordLayout] = {
+    let saved = ERR.get();
+    let mut done = [];
+    for decl in ctx.native_records {
+        set_err_pos(decl.item.path, decl.item.start, "");
+        if Option.is_some(find_struct(ctx, decl.name)) || Option.is_some(find_enum(ctx, decl.name)) {
+            fail_ctx("native record ${decl.name} conflicts with an existing type");
+        };
+        let (_, next) = compute_native_layout(ctx, decl.name, [], done);
+        done = next;
+    };
+    ERR.set(saved);
+    done
+}
+
+let native_size_add (a: Int) (b: Int): Int = {
+    if a > 9223372036854775807 - b { fail_ctx("native record layout exceeds Int size") };
+    a + b
+}
+
+let native_align_up (size: Int) (alignment: Int): Int = {
+    let remainder = size % alignment;
+    if remainder == 0 { size } else { native_size_add(size, alignment - remainder) }
+}
+
+let compute_native_layout
+    (ctx: TyContext)
+    (name: String)
+    (active: Array[String])
+    (done: Array[NativeRecordLayout]): (NativeRecordLayout, Array[NativeRecordLayout])
+= match Array.find(done, |layout| layout.name == name) {
+    Some(layout) => (layout, done),
+    None => {
+        if Array.contains(active, name) {
+            fail_ctx("cycle through inline native field of ${name}")
+        };
+        let decl = match find_native_record(ctx.native_records, name) {
+            Some(record) => record,
+            None => {
+                fail_ctx("internal: missing native record ${name}");
+                ctx.native_records[0]
+            },
+        };
+        let saved = ERR.get();
+        set_err_pos(decl.item.path, decl.item.start, "");
+        let path = active.push(name);
+        let mut cache = done;
+        let mut fields: Array[NativeFieldLayout] = [];
+        let mut alignment = 1;
+        let mut size = 0;
+        for field in decl.fields {
+            if Array.any(fields, |f| f.name == field.name) {
+                fail_ctx("duplicate native field ${name}.${field.name}");
+            };
+            let pointee = native_field_pointee(ctx, decl, field);
+            let (width, natural) = match pointee {
+                ScalarPointee(kind) => {
+                    let bytes = integer_spec(kind).bits / 8;
+                    (bytes, bytes)
+                },
+                RecordPointee(nested) => {
+                    let (layout, next) = compute_native_layout(ctx, nested, path, cache);
+                    cache = next;
+                    (layout.size, layout.alignment)
+                },
+            };
+            let offset = native_align_up(size, natural);
+            fields = fields.push(NativeFieldLayout {
+                name: field.name,
+                pointee: pointee,
+                offset: offset,
+                is_pub: field.is_pub
+            });
+            alignment = Int.max(alignment, natural);
+            size = native_size_add(offset, width);
+        };
+        let layout = NativeRecordLayout {
+            name: name,
+            alignment: alignment,
+            size: native_align_up(size, alignment),
+            fields: fields
+        };
+        ERR.set(saved);
+        (layout, cache.push(layout))
+    },
+}
+
+let native_record_layout (ctx: TyContext) (name: String): NativeRecordLayout =
+    match Array.find(ctx.native_layouts, |layout| layout.name == name) {
+        Some(layout) => layout,
+        None => {
+            fail_ctx("internal: missing layout for native record ${name}");
+            ctx.native_layouts[0]
+        },
+    }
+
+let native_field_layout
+    (ctx: TyContext)
+    (viewer: String)
+    (name: String)
+    (arg: parser.PExpr): NativeFieldLayout
+= {
+    let field = match arg {
+        EStr(s) => s,
+        _ => {
+            fail_ctx("native field name must be a string literal");
+            ""
+        },
+    };
+    match Array.find(native_record_layout(ctx, name).fields, |f| f.name == field) {
+        Some(f) => {
+            check_type_visible(
+                viewer,
+                module_of_type(name),
+                f.is_pub,
+                "native field",
+                "${name}.${field}"
+            );
+            f
+        },
+        None => {
+            fail_ctx("no native field ${name}.${field}");
+            NativeFieldLayout {
+                name: field,
+                pointee: ScalarPointee(IntegerI64),
+                offset: 0,
+                is_pub: false
+            }
+        },
+    }
+}
+
+struct LayoutQuery { method: String, targs: Array[parser.Ty] }
+
+let is_native_layout_query (base: parser.PExpr) (name: String): Bool = match base {
+    EIdent("NativeLayout", _) => name == "size_of" || name == "align_of" || name == "offset_of",
+    _ => false,
+}
+
+let native_layout_query (callee: parser.PExpr): Option[LayoutQuery] = match callee {
+    EGenericInst(EField(base, method), targs) => if is_native_layout_query(base, method) {
+        Some(LayoutQuery { method: method, targs: targs })
+    } else { None },
+    EField(base, method) => if is_native_layout_query(base, method) {
+        Some(LayoutQuery { method: method, targs: [] })
+    } else { None },
+    _ => None,
+}
+
+let infer_native_layout_query
+    (p2: Program2)
+    (state: FreshState)
+    (acc: Subst)
+    (query: LayoutQuery)
+    (args: Array[parser.PExpr]): InferResult
+= {
+    let method = query.method;
+    let full = "NativeLayout.${method}";
+    if query.targs.len() != 1 {
+        fail_tc("${full} requires one explicit native record type argument")
+    };
+    require_call_arity(full, if method == "offset_of" { 1 } else { 0 }, args.len());
+    let candidate = match query.targs[0] {
+        TyPath(parts) => {
+            let written = parser.join_dot(parts);
+            if Array.contains(p2.generics, written) || Option.is_some(named_integer_kind(written)) {
+                None
+            }
+            else { best_native_record(p2.ctx, p2.current, written) }
+        },
+        _ => None,
+    };
+    let value = match candidate {
+        Some(record) => {
+            let name = visible_native_record(record, p2.current);
+            if method == "offset_of" {
+                native_field_layout(p2.ctx, p2.current, name, args[0]).offset
+            }
+            else {
+                let layout = native_record_layout(p2.ctx, name);
+                if method == "size_of" { layout.size } else { layout.alignment }
+            }
+        },
+        None => {
+            fail_tc("${full} requires a concrete native record type");
+            0
+        },
+    };
+    // The supported targets share this layout. Emission rejects other
+    // targets before emitting the constant, even if the query is unused.
+    ir_leaf(ITInt, acc, state, TInt(value))
+}

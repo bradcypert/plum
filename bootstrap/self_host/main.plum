@@ -1061,6 +1061,7 @@ let doc_ns_of_in (nss: Array[String]) (item: parser.ItemNode): String =
             Some(dot) => String.slice(def.name, 0, dot),
         },
         IKStruct(d) => if Array.contains(nss, d.name) { d.name } else { "" },
+        IKNativeStruct(d) => if Array.contains(nss, d.name) { d.name } else { "" },
         IKEnum(d) => if Array.contains(nss, d.name) { d.name } else { "" },
         IKHandle(d) => if Array.contains(nss, d.name) { d.name } else { "" },
         _ => "",
@@ -1208,6 +1209,7 @@ let doc_entry_signature (item: parser.ItemNode): Option[String] =
     match item.kind {
         IKLet(def) => Some(def_signature(def)),
         IKStruct(d) => Some("struct ${d.name}"),
+        IKNativeStruct(d) => Some("extern \"C\" struct ${d.name}"),
         IKEnum(d) => Some("enum ${d.name}"),
         IKHandle(d) => Some("handle ${d.name}"),
         IKExtern(_) => None,
@@ -1327,7 +1329,8 @@ let doc_entry (item: parser.ItemNode): Option[String] =
 // the page look complete when it is not, and a signature alone is worth
 // more than silence.
 let doc_render (signature: String) (doc: String): String =
-    "\n## `${signature}`\n\n".concat(if String.is_empty(doc) { "" } else { doc.concat("\n") })
+    "\n<a id=\"${doc_html_attr(doc_anchor(signature))}\"></a>\n\n## `${signature}`\n\n"
+        .concat(if String.is_empty(doc) { "" } else { doc.concat("\n") })
 
 // --- HTML output ---
 //
@@ -1461,7 +1464,10 @@ let doc_html_entry (sig: String) (doc: String): String =
 // reader would type and what a link should survive a signature change
 // for. `let Array.map (xs: ...)` becomes `Array.map`.
 let doc_anchor (sig: String): String = {
-    let after = doc_after_keyword(sig);
+    let native_prefix = "extern \"C\" struct ";
+    let after = if sig.starts_with(native_prefix) {
+        String.slice(sig, native_prefix.len(), String.char_len(sig))
+    } else { doc_after_keyword(sig) };
     match String.index_of(after, " ") {
         None => after,
         Some(sp) => String.slice(after, 0, sp),
@@ -1720,6 +1726,7 @@ let doc_signature_of (item: parser.ItemNode): Option[String] =
     match item.kind {
         IKLet(def) => Some(def_signature(def)),
         IKStruct(d) => Some("struct ${d.name}"),
+        IKNativeStruct(d) => Some("extern \"C\" struct ${d.name}"),
         IKEnum(d) => Some("enum ${d.name}"),
         IKHandle(d) => Some("handle ${d.name}"),
         IKExtern(_) => None,
@@ -2002,6 +2009,13 @@ let push_completion (item: parser.ItemNode) (acc: Array[JsonValue]): Array[JsonV
                 "struct ".concat(decl.name)
             )
         ),
+        IKNativeStruct(decl) => acc.push(
+            completion_json(
+                completion_label(item, decl.name),
+                "struct",
+                "extern \"C\" struct ${decl.name}"
+            )
+        ),
         // An enum offers its own name AND each variant. Without the
         // variants you can complete `Shape` and then have to remember
         // `Circle` yourself, which is the half you actually write.
@@ -2066,6 +2080,9 @@ let def_entry (item: parser.ItemNode): Option[JsonValue] =
     match item.kind {
         IKLet(def) => Some(def_json(item, def.name, "function", def_signature(def))),
         IKStruct(decl) => Some(def_json(item, decl.name, "struct", "struct ".concat(decl.name))),
+        IKNativeStruct(decl) => Some(
+            def_json(item, decl.name, "struct", "extern \"C\" struct ${decl.name}")
+        ),
         IKEnum(decl) => Some(def_json(item, decl.name, "enum", "enum ".concat(decl.name))),
         _ => None,
     }

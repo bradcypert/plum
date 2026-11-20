@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """Exercise documentation's filename, URL, HTML and browser-DOM boundaries."""
+import json
 from pathlib import Path
 import subprocess
 import sys
@@ -20,7 +21,7 @@ class Page(HTMLParser):
         assert all(not k.startswith('on') or (tag == 'form' and k == 'onsubmit'
                    and v == 'return false;') for k, v in attrs.items()), attrs
         assert tag not in ('img', 'iframe', 'svg'), tag
-        if tag == 'a':
+        if tag == 'a' and 'href' in attrs:
             self.links.append(attrs['href'])
         if 'id' in attrs:
             self.ids.append(attrs['id'])
@@ -45,6 +46,13 @@ def main():
             folder = project / name
             folder.mkdir(parents=True)
             (folder / 'main.plum').write_text('pub let find_me (): Int = 1\npub let Thing.method (): Int = 2\n')
+        (project / 'ordinary' / 'records.plum').write_text(
+            'pub struct Managed { value: Int }\n'
+            'pub extern "C" struct Header { value: U8 }\n'
+            'pub extern "C" struct Reading { value: U16 }\n'
+            'pub enum State { Ready, Waiting }\n'
+            'pub handle Token { on_drop: release_token }\n'
+            'extern "C" { fn release_token(token: Int); }\n')
 
         def doc(source, out, *flags, success=True):
             result = subprocess.run([plum, 'doc', str(source), '-o', str(out), *flags],
@@ -59,6 +67,12 @@ def main():
         html = work / 'html'
         home = '../home?x="quoted"&y=\'single\'#雪'
         doc(project, html, '--html', '--home', 'Docs <img>=' + home)
+        ordinary = Page((html / 'ordinary.html').read_text())
+        for anchor in ['find_me', 'Managed', 'Header', 'Reading']:
+            assert ordinary.ids.count(anchor) == 1, ordinary.ids
+        search = (html / 'search-index.js').read_text().removeprefix('window.PLUM_DOCS = ').removesuffix(';\n')
+        records = {row['n']: row['u'] for row in json.loads(search) if row['s'].startswith('extern "C" struct ')}
+        assert records == {'Header': 'ordinary.html#Header', 'Reading': 'ordinary.html#Reading'}, records
         for name in names:
             for ns in ['', 'Thing']:
                 filename = page_file(name, ns, 'html')
@@ -92,8 +106,15 @@ def main():
 
         markdown = work / 'md'
         doc(project, markdown)
-        for name in names:
-            assert (markdown / (page_file(name, '', 'md'))).is_file()
+        index = (markdown / 'index.md').read_text()
+        declarations = [urlsplit(line.rsplit('](', 1)[1][:-1]) for line in index.splitlines()
+                        if line.startswith('- [`')]
+        assert {link.fragment for link in declarations if link.path == 'ordinary.md'} == {
+            'find_me', 'Managed', 'Header', 'Reading', 'State', 'Token'}
+        for link in declarations:
+            target = markdown / unquote(link.path)
+            anchors = [line for line in target.read_text().splitlines() if line.startswith('<a id=')]
+            assert Page('\n'.join(anchors)).ids.count(unquote(link.fragment)) == 1, link
         # The hostile project also contains index, ~index, foo.Thing and
         # namespace Thing in foo: all identities must survive independently.
         for ext, folder in [('html', html), ('md', markdown)]:

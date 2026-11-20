@@ -92,7 +92,7 @@ pub enum CgTy {
     // Unmanaged pointer received from native code, with an explicit unsafe
     // lifetime/copy contract. Never reference-count or read a Plum header.
     CgRawCStr,
-    CgRawPtr(typecheck.IntegerKind),
+    CgRawPtr(typecheck.RawPointee),
     // A byte buffer. Structurally IDENTICAL to `CgStr` -- the same
     // refcounted `{rc, len, bytes.., NUL}` cell, so it shares
     // `@plum_str_eq`, `@plum_rel_str` and every allocation path -- and a
@@ -178,7 +178,7 @@ let cg_ty_name (t: CgTy): String =
         CgStr => "String",
         CgCStr => "CStr",
         CgRawCStr => "RawCStr",
-        CgRawPtr(k) => "RawPtr[${typecheck.integer_name(k)}]",
+        CgRawPtr(pointee) => "RawPtr[${typecheck.raw_pointee_name(pointee)}]",
         CgBytes => "Bytes",
         CgStruct(name) => name,
         CgEnum(name) => name,
@@ -11752,7 +11752,7 @@ let cg_extern_decl_list
     else if cg_name_in(seen, fns[i].name, 0) { cg_extern_decl_list(fns, i + 1, acc, seen) }
     else {
         let ret = match fns[i].ret_ty {
-            Some(t) => cg_c_ret(cg_of_ann(t)),
+            Some(t) => cg_extern_ty(t, cg_c_ret),
             None => "void"
         };
         let params = cg_extern_param_tys(fns[i].params, 0, "");
@@ -11802,14 +11802,19 @@ let cg_declared_name_of (line: String): Option[String] =
 let cg_extern_param_tys (ps: Array[parser.ExternParamNode]) (i: Int) (acc: String): String =
     if i >= ps.len() { acc }
     else {
-        let t = cg_c_param(cg_of_ann(ps[i].ty));
+        let t = cg_extern_ty(ps[i].ty, cg_c_param);
         cg_extern_param_tys(ps, i + 1, if acc == "" { t } else { acc.concat(", ").concat(t) })
     }
 
-// An extern declaration's types are written directly in the AST and
-// never go through inference, so they are mapped here rather than read
-// off a `TExpr`. Only the C-compatible surface is accepted; anything
-// else is a type the FFI boundary cannot carry.
+// The checker has already resolved the pointee and checked visibility.
+// Every admitted RawPtr crosses C as the same opaque data pointer.
+let cg_extern_ty (t: parser.Ty) (render: (CgTy) -> String): String = match t {
+    TyGeneric(parts, args) => if parts.len() == 1 && parts[0] == "RawPtr" && args.len() == 1 {
+        "ptr"
+    } else { render(cg_of_ann(t)) },
+    _ => render(cg_of_ann(t)),
+}
+
 // The C ABI uses each integer's declared width rather than a Plum word.
 // Bool also differs: C's `int` is 32 bits wide and Plum's `Bool` is
 // `i1`, so every crossing needs a real CONVERSION -- `zext` going out,
@@ -11849,26 +11854,6 @@ let cg_of_ann (t: parser.Ty): CgTy =
                     );
                     CgInt
                 }
-            }
-        },
-        TyGeneric(parts, args) => {
-            if parser.join_dot(parts) == "RawPtr" && args.len() == 1 {
-                match args[0] {
-                    TyPath(pointee) => match typecheck.named_integer_kind(parser.join_dot(pointee)) {
-                        Some(kind) => CgRawPtr(kind),
-                        None => {
-                            cg_fail("invalid RawPtr extern pointee");
-                            CgInt
-                        },
-                    },
-                    _ => {
-                        cg_fail("invalid RawPtr extern pointee");
-                        CgInt
-                    },
-                }
-            } else {
-                cg_fail("extern declarations can only use simple types or RawPtr");
-                CgInt
             }
         },
         _ => {
@@ -11931,10 +11916,12 @@ pub let cg_emit_program_entry
     let p = cg_build_program(program);
     buildcache.finish("type checking", type_time);
     let pointers = typecheck.raw_pointer_used();
-    if pointers || cg_has_fixed_externs(program0) {
+    let native_records = typecheck.has_native_records(p.ctx);
+    if pointers || native_records || cg_has_fixed_externs(program0) {
         let target = resolve_target();
         set_c_abi_target(target);
-        if pointers { cg_check_raw_pointer_target(target) };
+        if native_records { cg_check_raw_pointer_target(target, "native aggregate layout") }
+        else if pointers { cg_check_raw_pointer_target(target, "RawPtr") };
     };
     if !cg_has_fn(p, entry) { cg_fail("no top-level '${entry}' function to compile") };
     if CORE_RUNTIME.get() { cg_validate_kernel_entry(p, entry) };

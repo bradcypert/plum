@@ -1,12 +1,12 @@
 use typecheck;
 
-let cg_check_raw_pointer_target (target: String): Unit = {
+let cg_check_raw_pointer_target (target: String) (feature: String): Unit = {
     let arch = target.split("-")[0];
     let linux = target.contains("linux") && !target.contains("gnux32")
         && !target.contains("muslx32");
     if target != "x86_64-unknown-none" && !((arch == "x86_64" || arch == "amd64") && linux) {
         cg_fail(
-            "RawPtr is not supported for target '${target}'; use x86-64 Linux or x86_64-unknown-none"
+            "${feature} is not supported for target '${target}'; use x86-64 Linux or x86_64-unknown-none"
         );
     };
 }

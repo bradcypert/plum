@@ -16,12 +16,16 @@ Raw mode and the alternate screen come next, as `handle` types, so
 the terminal is restored on every exit path including a panic --
 which is the machinery a TUI otherwise writes in C.
 
+<a id="Stream"></a>
+
 ## `enum Stream`
 
 Which stream to ask about. A closed set of small integers across the
 extern boundary, the same shape `Os.Mode` and `Os.Seek` use: an
 extern taking a file descriptor NUMBER would let a caller pass
 anything at all.
+
+<a id="is_tty"></a>
 
 ## `let is_tty (s: Stream): Bool`
 
@@ -32,9 +36,13 @@ piped somewhere?", and the answer differs per stream: a program in a
 pipeline routinely has a terminal on stderr and a pipe on stdout.
 Asking about the wrong one is how progress bars end up in log files.
 
+<a id="Size"></a>
+
 ## `struct Size`
 
 The size of the terminal, in character cells.
+
+<a id="size"></a>
 
 ## `let size (): Result[Size, String]`
 
@@ -54,6 +62,8 @@ the place to introduce it. Comparing the size between iterations of
 an event loop costs one syscall against a redraw, and works the same
 way on Windows, which has no such signal at all.
 
+<a id="write"></a>
+
 ## `let write (text: String): Result[Unit, String]`
 
 Writes to stdout with NO trailing newline and NO flush.
@@ -66,10 +76,14 @@ hundreds of syscalls. Build a frame, then `flush` it.
 `println` is still the right thing for line-oriented output. This is
 for programs that are drawing.
 
+<a id="flush"></a>
+
 ## `let flush (): Result[Unit, String]`
 
 Makes everything written so far visible. Nothing a terminal program
 draws is on screen until this returns.
+
+<a id="display_width"></a>
 
 ## `let display_width (text: String): Int`
 
@@ -79,6 +93,8 @@ This is Unicode 16.0 display width, not a byte or codepoint count:
 CJK and emoji take two cells, combining marks take none, and ANSI
 escape sequences are ignored. East-Asian ambiguous characters are
 narrow, the portable default when the terminal locale is unknown.
+
+<a id="truncate"></a>
 
 ## `let truncate (text: String) (cells: Int): String`
 
@@ -90,11 +106,15 @@ ANSI escape sequences consume no cells and are retained only when
 they occur before the returned boundary. A non-positive width gives
 the empty string.
 
+<a id="pad_right"></a>
+
 ## `let pad_right (text: String) (cells: Int): String`
 
 `text` followed by spaces until it occupies `cells` terminal cells.
 It never truncates; use `Terminal.truncate` when a fixed column must
 fit. ANSI escapes are preserved and do not affect the added spaces.
+
+<a id="RawMode"></a>
 
 ## `handle RawMode`
 
@@ -104,16 +124,22 @@ including on a panic.
 While it lives, Ctrl+C arrives as a BYTE (0x03) rather than a
 signal — see `Terminal.enter_raw`.
 
+<a id="AltScreen"></a>
+
 ## `handle AltScreen`
 
 The alternate screen, held. The previous screen and the user's
 scrollback come back when this value dies.
+
+<a id="HiddenCursor"></a>
 
 ## `handle HiddenCursor`
 
 A hidden cursor, held. The cursor is shown again when this value
 dies, including on a panic — which is what stops a crash leaving a
 terminal with no cursor.
+
+<a id="enter_raw"></a>
 
 ## `let enter_raw (): Result[RawMode, String]`
 
@@ -132,11 +158,15 @@ program is responsible for noticing 0x03 and quitting.
 raw mode, and pretending otherwise would leave a program reading a
 pipe and waiting for keys that cannot come.
 
+<a id="enter_alt_screen"></a>
+
 ## `let enter_alt_screen (): Result[AltScreen, String]`
 
 The xterm alternate screen: a blank screen that leaves the user's
 scrollback untouched, and gives their shell back exactly as it was.
 What a full-screen program should use instead of clearing.
+
+<a id="hide_cursor"></a>
 
 ## `let hide_cursor (): Result[HiddenCursor, String]`
 

@@ -8,17 +8,9 @@ let reset_raw_pointer_usage (): Unit = RAW_POINTER_USED.set(false)
 
 pub let raw_pointer_used (): Bool = RAW_POINTER_USED.get()
 
-let raw_pointer_type (kind: IntegerKind): ITy = {
+let raw_pointer_type (pointee: RawPointee): ITy = {
     RAW_POINTER_USED.set(true);
-    ITRawPtr(kind)
-}
-
-let raw_pointer_kind (ty: ITy): IntegerKind = match integer_kind(ty) {
-    Some(kind) => kind,
-    None => {
-        fail_tc("RawPtr requires a concrete integer pointee, found ${render_ty(ty)}");
-        IntegerI64
-    },
+    ITRawPtr(pointee)
 }
 
 let raw_pointer_constructor_name (base: parser.PExpr) (name: String): Bool = match base {
@@ -45,48 +37,109 @@ let infer_raw_pointer_constructor
     (args: Array[parser.PExpr]): InferResult
 = {
     if targs.len() != 1 {
-        fail_tc("RawPtr.from_address requires exactly one explicit integer type argument")
+        fail_tc(
+            "RawPtr.from_address requires exactly one explicit integer type argument or native record type argument"
+        )
     };
     require_call_arity("RawPtr.from_address", 1, args.len());
     require_raw_pointer_unsafe("RawPtr.from_address");
-    let kind = raw_pointer_kind(resolve_ann_seen(p2.ctx, p2.current, p2.generics, targs[0]));
+    let pointee = resolve_raw_pointee(p2.ctx, p2.current, p2.generics, targs[0]);
     let want = ITInteger(IntegerU64);
     let address = infer_expected(p2, state, env, acc, args[0], want);
     let s = constrain_operand(address.subst, address.ty, want, "RawPtr.from_address: ");
-    ir_leaf(raw_pointer_type(kind), s, address.state, TRawPointer(PtrFromAddress, [address.texpr]))
+    ir_leaf(
+        raw_pointer_type(pointee),
+        s,
+        address.state,
+        TRawPointer(PtrFromAddress, [address.texpr])
+    )
+}
+
+let raw_scalar_access_kind (pointee: RawPointee) (method: String): IntegerKind = match pointee {
+    ScalarPointee(kind) => kind,
+    RecordPointee(name) => {
+        fail_tc(
+            "${method} cannot access all of native record ${name}; project a scalar field with .field_ptr()"
+        );
+        IntegerI64
+    },
 }
 
 let infer_raw_pointer_method
     (p2: Program2)
     (env: TyEnv)
     (base: InferResult)
-    (kind: IntegerKind)
+    (pointee: RawPointee)
     (name: String)
     (args: Array[parser.PExpr]): InferResult
 = {
     let full = "RawPtr.${name}";
-    let scalar = if kind == IntegerI64 { ITInt } else { ITInteger(kind) };
     if name == "is_null" {
         require_call_arity(full, 0, args.len());
         ir_leaf(ITBool, base.subst, base.state, TRawPointer(PtrIsNull, [base.texpr]))
-    } else if name == "load" || name == "load_volatile" || name == "to_address" {
+    } else if name == "to_address" {
         require_call_arity(full, 0, args.len());
         require_raw_pointer_unsafe(full);
-        let result = if name == "to_address" { ITInteger(IntegerU64) } else { scalar };
-        let op = if name == "to_address" { PtrToAddress } else {
-            PtrLoad(kind, name == "load_volatile")
-        };
-        ir_leaf(result, base.subst, base.state, TRawPointer(op, [base.texpr]))
-    } else if name == "store" || name == "store_volatile" || name == "offset_bytes" {
+        ir_leaf(
+            ITInteger(IntegerU64),
+            base.subst,
+            base.state,
+            TRawPointer(PtrToAddress, [base.texpr])
+        )
+    } else if name == "load" || name == "load_volatile" {
+        require_call_arity(full, 0, args.len());
+        require_raw_pointer_unsafe(full);
+        let kind = raw_scalar_access_kind(pointee, full);
+        let scalar = if kind == IntegerI64 { ITInt } else { ITInteger(kind) };
+        ir_leaf(
+            scalar,
+            base.subst,
+            base.state,
+            TRawPointer(PtrLoad(kind, name == "load_volatile"), [base.texpr])
+        )
+    } else if name == "offset_bytes" {
         require_call_arity(full, 1, args.len());
         require_raw_pointer_unsafe(full);
-        let offset = name == "offset_bytes";
-        let want = if offset { ITInt } else { scalar };
+        let value = infer_expected(p2, base.state, env, base.subst, args[0], ITInt);
+        let s = constrain_operand(value.subst, value.ty, ITInt, "${full}: ");
+        ir_leaf(
+            ITRawPtr(pointee),
+            s,
+            value.state,
+            TRawPointer(PtrOffsetBytes, [base.texpr, value.texpr])
+        )
+    } else if name == "store" || name == "store_volatile" {
+        require_call_arity(full, 1, args.len());
+        require_raw_pointer_unsafe(full);
+        let kind = raw_scalar_access_kind(pointee, full);
+        let want = if kind == IntegerI64 { ITInt } else { ITInteger(kind) };
         let value = infer_expected(p2, base.state, env, base.subst, args[0], want);
         let s = constrain_operand(value.subst, value.ty, want, "${full}: ");
-        let result = if offset { ITRawPtr(kind) } else { ITUnit };
-        let op = if offset { PtrOffsetBytes } else { PtrStore(kind, name == "store_volatile") };
-        ir_leaf(result, s, value.state, TRawPointer(op, [base.texpr, value.texpr]))
+        ir_leaf(
+            ITUnit,
+            s,
+            value.state,
+            TRawPointer(PtrStore(kind, name == "store_volatile"), [base.texpr, value.texpr])
+        )
+    } else if name == "field_ptr" {
+        require_call_arity(full, 1, args.len());
+        require_raw_pointer_unsafe(full);
+        match pointee {
+            RecordPointee(record) => {
+                let field = native_field_layout(p2.ctx, p2.current, record, args[0]);
+                let offset = TExpr { ty: ITInt, node: TInt(field.offset) };
+                ir_leaf(
+                    ITRawPtr(field.pointee),
+                    base.subst,
+                    base.state,
+                    TRawPointer(PtrOffsetBytes, [base.texpr, offset])
+                )
+            },
+            _ => {
+                fail_tc("RawPtr.field_ptr requires a native record pointee");
+                base
+            },
+        }
     } else {
         fail_tc("no method '${name}' on ${render_ty(base.ty)}");
         base

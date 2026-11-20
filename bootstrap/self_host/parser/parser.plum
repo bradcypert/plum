@@ -274,6 +274,7 @@ pub let use_local_name (u: UseDeclNode): String =
 pub enum ItemKindNode {
     IKLet(LetDefNode),
     IKStruct(StructDeclNode),
+    IKNativeStruct(StructDeclNode),
     IKEnum(EnumDeclNode),
     IKExtern(ExternBlockNode),
     IKHandle(HandleDeclNode),
@@ -654,12 +655,13 @@ let parse_item (tokens: Array[lexer.Token]) (pos: Int): ItemResult = {
             }
         },
         TokExtern => {
-            let r = parse_extern_block(tokens, start);
+            let abi = expect_str_tok(tokens, start + 1);
+            let r = parse_extern_kind(tokens, abi);
             ItemResult {
                 value: ItemNode {
                     is_pub: pub_bump.matched,
                     module: "",
-                    kind: IKExtern(r.value),
+                    kind: r.kind,
                     path: current_path(()),
                     doc: doc_before(pos),
                     start: offset_at(pos),
@@ -1220,18 +1222,21 @@ let parse_type_list_acc (tokens: Array[lexer.Token]) (pos: Int) (acc: Array[Ty])
     else { parse_type_list_acc(tokens, b.next_pos, new_acc) }
 }
 
-struct ExternBlockResult { value: ExternBlockNode, next_pos: Int }
+struct ExternKindResult { kind: ItemKindNode, next_pos: Int }
 
-let parse_extern_block (tokens: Array[lexer.Token]) (pos: Int): ExternBlockResult = {
-    let p1 = expect(tokens, pos, TokExtern, "'extern'");
-    let abi_tok = expect_str_tok(tokens, p1);
-    let p2 = expect(tokens, abi_tok.next_pos, TokLBrace, "'{'");
-    let fns_r = parse_extern_fns_acc(tokens, p2, []);
-    ExternBlockResult {
-        value: ExternBlockNode { abi: abi_tok.text, fns: fns_r.value },
-        next_pos: expect(tokens, fns_r.next_pos, TokRBrace, "'}'")
+let parse_extern_kind (tokens: Array[lexer.Token]) (abi: StrTok): ExternKindResult =
+    if check(tokens, abi.next_pos, TokStruct) {
+        if abi.text != "C" { fail_at(abi.next_pos - 1, "native records require the C ABI") };
+        let r = parse_struct_decl(tokens, abi.next_pos);
+        ExternKindResult { kind: IKNativeStruct(r.value), next_pos: r.next_pos }
+    } else {
+        let start = expect(tokens, abi.next_pos, TokLBrace, "'{'");
+        let fns = parse_extern_fns_acc(tokens, start, []);
+        ExternKindResult {
+            kind: IKExtern(ExternBlockNode { abi: abi.text, fns: fns.value }),
+            next_pos: expect(tokens, fns.next_pos, TokRBrace, "'}'")
+        }
     }
-}
 
 struct ExternFnsResult { value: Array[ExternFnNode], next_pos: Int }
 
@@ -3093,6 +3098,16 @@ let render_param (p: ParamNode): String = match p {
     ParamPatternTy(pattern, None) => "(${render_pattern(pattern)})",
 }
 
+let render_struct_item (kind: String) (pub_marker: String) (decl: StructDeclNode): String = {
+    let generics = render_generic_params(decl.generics);
+    let head = [kind, pub_marker.concat(decl.name)];
+    let base = if generics == "" { head } else { head.push(generics) };
+    sexpr(Array.concat(base, Array.map(decl.fields, |f| {
+        let marker = if f.is_pub { "pub " } else { "" };
+        marker.concat(f.name).concat(":").concat(render_type(f.ty))
+    })))
+}
+
 let render_item (item: ItemNode): String = {
     let pub_marker = if item.is_pub { "pub " } else { "" };
     match item.kind {
@@ -3107,15 +3122,8 @@ let render_item (item: ItemNode): String = {
             };
             sexpr(base4.push(render_expr(def.body)))
         },
-        IKStruct(decl) => {
-            let generics_str = render_generic_params(decl.generics);
-            let base1 = ["struct", pub_marker.concat(decl.name)];
-            let base2 = if generics_str == "" { base1 } else { base1.push(generics_str) };
-            sexpr(Array.concat(base2, Array.map(decl.fields, |f| {
-                let fpub = if f.is_pub { "pub " } else { "" };
-                fpub.concat(f.name).concat(":").concat(render_type(f.ty))
-            })))
-        },
+        IKStruct(decl) => render_struct_item("struct", pub_marker, decl),
+        IKNativeStruct(decl) => render_struct_item("extern-struct", pub_marker, decl),
         IKEnum(decl) => {
             let generics_str = render_generic_params(decl.generics);
             let base1 = ["enum", pub_marker.concat(decl.name)];

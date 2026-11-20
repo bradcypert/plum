@@ -293,15 +293,16 @@ let handle_sigs (module_name: String) (decl: parser.HandleDeclNode) (is_pub: Boo
 
 let extern_sigs
     (ctx: TyContext)
+    (viewer: String)
     (fns: Array[parser.ExternFnNode])
     (i: Int)
     (acc: Array[FnSig]): Array[FnSig]
 =
     if i >= fns.len() { acc }
     else {
-        let params = Array.map(fns[i].params, |q| resolve_ann(ctx, [], q.ty));
+        let params = Array.map(fns[i].params, |q| resolve_ann_seen(ctx, viewer, [], q.ty));
         let ret = match fns[i].ret_ty {
-            Some(t) => resolve_ann(ctx, [], t),
+            Some(t) => resolve_ann_seen(ctx, viewer, [], t),
             None => ITUnit
         };
         for ty in params.push(ret) {
@@ -325,7 +326,7 @@ let extern_sigs
             ),
             _ => ()
         };
-        extern_sigs(ctx, fns, i + 1, acc.push(FnSig {
+        extern_sigs(ctx, viewer, fns, i + 1, acc.push(FnSig {
             name: fns[i].name,
             module: "",
             generics: [],
@@ -432,6 +433,11 @@ let collect_sigs_acc
     else {
         match items[i].kind {
             IKLet(def) => {
+                if items[i].module == ""
+                    && (def.name == "NativeLayout" || def.name.starts_with("NativeLayout.")) {
+                        set_err_pos(items[i].path, items[i].start, def.name);
+                        fail_tc("NativeLayout is a reserved built-in namespace");
+                    };
                 if Array.is_empty(def.params) {
                     collect_sigs_acc(ctx, items, i + 1, sigs, globals.push(GlobalDef {
                         module: items[i].module,
@@ -443,6 +449,10 @@ let collect_sigs_acc
                 }
                 else {
                     check_integer_alias_collision(sigs, items[i], def.name);
+                    let saved = ERR.get();
+                    if has_native_records(ctx) {
+                        set_err_pos(items[i].path, items[i].start, def.name);
+                    };
                     let generic_names = Array.map(def.generics, |g| g.name);
                     let params = Array.map(
                         def.params,
@@ -457,6 +467,7 @@ let collect_sigs_acc
                             ITUnit
                         },
                     };
+                    ERR.set(saved);
                     collect_sigs_acc(
                         ctx,
                         items,
@@ -478,13 +489,16 @@ let collect_sigs_acc
             // with no body. Recorded like any other so ordinary call
             // inference resolves it; `is_extern` is what the unsafe gate
             // and the backend key off.
-            IKExtern(block) => collect_sigs_acc(
-                ctx,
-                items,
-                i + 1,
-                Array.concat(sigs, extern_sigs(ctx, block.fns, 0, [])),
-                globals
-            ),
+            IKExtern(block) => {
+                let saved = ERR.get();
+                let viewer = if has_native_records(ctx) {
+                    set_err_pos(items[i].path, items[i].start, "");
+                    items[i].module
+                } else { ANY_MODULE() };
+                let externs = extern_sigs(ctx, viewer, block.fns, 0, []);
+                ERR.set(saved);
+                collect_sigs_acc(ctx, items, i + 1, Array.concat(sigs, externs), globals)
+            },
             // A handle declaration synthesizes its own two conversions.
             // Nothing else can build or read one: the payload is a
             // native number, so there is no literal syntax for it and no
@@ -1683,6 +1697,11 @@ let infer_expr_inner
                     "RawPtr.from_address requires a direct call and cannot be used as a function value"
                 );
             };
+            if Option.is_some(native_layout_query(callee)) {
+                fail_tc(
+                    "NativeLayout queries require a direct call and cannot be used as function values"
+                );
+            };
             fail_tc("type inference not yet implemented for this expression form");
             ir_unsupported(acc, state, "generic instantiation")
         },
@@ -2851,6 +2870,9 @@ let infer_field
             "RawPtr.from_address requires a direct call and cannot be used as a function value"
         );
     } else { () };
+    if is_native_layout_query(base, name) {
+        fail_tc("NativeLayout queries require a direct call and cannot be used as function values");
+    };
     match qualified_fn_ref(p2, env, base, name) {
         Some(sig) => infer_partial_call(p2, state, env, acc, sig, []),
         None => match qualified_global(p2, env, base, name) {
@@ -3408,14 +3430,17 @@ let infer_call_expected
 =
     match raw_pointer_constructor(callee) {
         Some(targs) => infer_raw_pointer_constructor(p2, state, env, acc, targs, args),
-        None => match channel_elem_ty(p2, callee, args) {
-            Some(elem) => ir_leaf(
-                ITTuple([ITStruct("Sender", [elem]), ITStruct("Receiver", [elem])]),
-                acc,
-                state,
-                TChannelNew
-            ),
-            None => infer_call_shapes(p2, state, env, acc, callee, args, expected),
+        None => match native_layout_query(callee) {
+            Some(query) => infer_native_layout_query(p2, state, acc, query, args),
+            None => match channel_elem_ty(p2, callee, args) {
+                Some(elem) => ir_leaf(
+                    ITTuple([ITStruct("Sender", [elem]), ITStruct("Receiver", [elem])]),
+                    acc,
+                    state,
+                    TChannelNew
+                ),
+                None => infer_call_shapes(p2, state, env, acc, callee, args, expected),
+            },
         }
     }
 
@@ -5968,6 +5993,9 @@ let infer_struct_lit_expected
     // field named y" -- an error about the wrong struct, naming a
     // module the author had not written.
     let name = parser.join_dot(path);
+    if Option.is_some(best_native_record(p2.ctx, p2.current, name)) {
+        fail_tc("native record ${name} cannot be built with a struct literal");
+    };
     check_struct_named(p2.ctx, p2.current, name);
     // A handle is registered as a zero-field struct so that every
     // existing name-resolution path works on it. That makes `File {}`
