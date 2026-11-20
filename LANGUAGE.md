@@ -791,8 +791,8 @@ type surface in the self-hosted compiler includes integer scalars, `Float`,
 `Bool`, `CStr`, `RawCStr`, `RawPtr[T]` and `Unit` returns. Each integer kind maps to its
 matching C `intN_t`/`uintN_t`; `Int`/`I64` map to `int64_t`, `Float` to `double`,
 and `Bool` to C `int`. CStr is input-only. New-width integers inside aggregate
-or callback types are rejected. There are no C-callable Plum exports for these
-types, C-variadic functions or extern globals.
+or callback types are rejected. C-variadic functions and extern globals are
+outside this interface.
 See [scalar integer FFI](docs/integer-scalar-ffi.md) for the target ABI contract.
 
 `.as_cstr()` converts `String` or `Bytes` into an **owned CStr**, sharing
@@ -860,6 +860,15 @@ layout in bytes. A `RawPtr[T]` to a native record can cross a C call as a data
 pointer. Inside `unsafe`, `.field_ptr("field")` gives a pointer to an accessible
 field, where the scalar load and store methods apply. The caller supplies the
 storage and keeps it alive. [Native aggregate layout](docs/native-aggregate-layout.md)
+
+### C-callable Plum functions
+
+`extern "C" let` emits a stable C symbol for an ordinary Plum function.
+The export supports scalar parameters and results, `RawPtr[T]` for an
+admitted integer or native record, and `Unit` results. Call it synchronously
+from native code on the Plum entry thread while `main` is active. The
+supported targets are hosted x86-64 Linux and `x86_64-unknown-none`.
+[C-callable exports](docs/c-callable-exports.md)
 
 ### Where the C goes
 

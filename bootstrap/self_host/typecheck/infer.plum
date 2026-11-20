@@ -433,6 +433,12 @@ let collect_sigs_acc
     else {
         match items[i].kind {
             IKLet(def) => {
+                if def.c_export {
+                    let saved = ERR.get();
+                    set_err_pos(items[i].path, items[i].start, def.name);
+                    check_c_export_header(items, i, def);
+                    ERR.set(saved);
+                };
                 if items[i].module == ""
                     && (def.name == "NativeLayout" || def.name.starts_with("NativeLayout.")) {
                         set_err_pos(items[i].path, items[i].start, def.name);
@@ -450,7 +456,7 @@ let collect_sigs_acc
                 else {
                     check_integer_alias_collision(sigs, items[i], def.name);
                     let saved = ERR.get();
-                    if has_native_records(ctx) {
+                    if def.c_export || has_native_records(ctx) {
                         set_err_pos(items[i].path, items[i].start, def.name);
                     };
                     let generic_names = Array.map(def.generics, |g| g.name);
@@ -467,6 +473,7 @@ let collect_sigs_acc
                             ITUnit
                         },
                     };
+                    if def.c_export { check_c_export_types(def, params, ret) };
                     ERR.set(saved);
                     collect_sigs_acc(
                         ctx,
