@@ -32,7 +32,7 @@ int16_t sample_read(struct Sample *sample, int8_t delta);
 
 The native call must supply a non-null, aligned pointer to a live `Sample` with an initialized `reading` and an input whose sum with `delta` fits in `I16`. The checked addition retains its ordinary Plum overflow semantics.
 
-An export requires a plain ASCII C identifier, named and annotated parameters, and an explicit result type. `()` with no named parameters represents a C `void` parameter list. The checker rejects generic exports, name collisions with other imports or exports in the link unit, `main`, and the reserved `plum_` prefix. Emission rejects a collision with a generated or runtime symbol. A duplicate definition in separately compiled native code remains a linker error. The symbol is available to native code linked into the same program or image.
+An export requires a plain ASCII C identifier, named and annotated parameters, and an explicit result type. `()` with no named parameters represents a C `void` parameter list. The checker rejects generic exports, name collisions with other imports or exports in the link unit, `main`, the builtin name `println`, and the reserved `plum_` prefix. Emission rejects a collision with a generated or runtime symbol. A duplicate definition in separately compiled native code remains a linker error. The symbol is available to native code linked into the same program or image.
 
 ## ABI and ownership
 

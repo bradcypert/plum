@@ -14,6 +14,7 @@ let check_c_export_header
     if name == "main" || name.starts_with("plum_") {
         fail_tc("C export name ${name} is reserved");
     };
+    if name == "println" { fail_tc("C export name println is reserved for the builtin") };
     if !Array.is_empty(def.generics) { fail_tc("C export ${name} cannot have type parameters") };
     if Option.is_none(def.ret_ty) { fail_tc("C export ${name} requires an explicit return type") };
     if Array.is_empty(def.params) {

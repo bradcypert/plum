@@ -263,6 +263,7 @@ def main():
             ('extern "C" let dotted.call (): Int = 0', 'plain C identifier'),
             ('extern "C" let return (): Int = 0', 'plain C identifier'),
             ('extern "C" let main (): Unit = ()', 'reserved'),
+            ('extern "C" let println (n: Int): Int = n', 'C export name println is reserved for the builtin'),
             ('extern "C" let plum_kernel_start (): Unit = ()', 'reserved'),
             ('extern "C" let collide (): Int = 0\nextern "C" { fn collide() -> Int; }',
              'conflicts with another declaration'),
