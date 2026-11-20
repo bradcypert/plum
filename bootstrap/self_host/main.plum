@@ -1463,7 +1463,10 @@ let doc_html_entry (sig: String) (doc: String): String =
 // reader would type and what a link should survive a signature change
 // for. `let Array.map (xs: ...)` becomes `Array.map`.
 let doc_anchor (sig: String): String = {
-    let after = doc_after_keyword(sig);
+    let native_prefix = "extern \"C\" struct ";
+    let after = if sig.starts_with(native_prefix) {
+        String.slice(sig, native_prefix.len(), String.char_len(sig))
+    } else { doc_after_keyword(sig) };
     match String.index_of(after, " ") {
         None => after,
         Some(sp) => String.slice(after, 0, sp),

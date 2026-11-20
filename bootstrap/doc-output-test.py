@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """Exercise documentation's filename, URL, HTML and browser-DOM boundaries."""
+import json
 from pathlib import Path
 import subprocess
 import sys
@@ -45,6 +46,10 @@ def main():
             folder = project / name
             folder.mkdir(parents=True)
             (folder / 'main.plum').write_text('pub let find_me (): Int = 1\npub let Thing.method (): Int = 2\n')
+        (project / 'ordinary' / 'records.plum').write_text(
+            'pub struct Managed { value: Int }\n'
+            'pub extern "C" struct Header { value: U8 }\n'
+            'pub extern "C" struct Reading { value: U16 }\n')
 
         def doc(source, out, *flags, success=True):
             result = subprocess.run([plum, 'doc', str(source), '-o', str(out), *flags],
@@ -59,6 +64,12 @@ def main():
         html = work / 'html'
         home = '../home?x="quoted"&y=\'single\'#雪'
         doc(project, html, '--html', '--home', 'Docs <img>=' + home)
+        ordinary = Page((html / 'ordinary.html').read_text())
+        for anchor in ['find_me', 'Managed', 'Header', 'Reading']:
+            assert ordinary.ids.count(anchor) == 1, ordinary.ids
+        search = (html / 'search-index.js').read_text().removeprefix('window.PLUM_DOCS = ').removesuffix(';\n')
+        records = {row['n']: row['u'] for row in json.loads(search) if row['s'].startswith('extern "C" struct ')}
+        assert records == {'Header': 'ordinary.html#Header', 'Reading': 'ordinary.html#Reading'}, records
         for name in names:
             for ns in ['', 'Thing']:
                 filename = page_file(name, ns, 'html')
