@@ -1464,10 +1464,11 @@ let doc_html_entry (sig: String) (doc: String): String =
 // reader would type and what a link should survive a signature change
 // for. `let Array.map (xs: ...)` becomes `Array.map`.
 let doc_anchor (sig: String): String = {
-    let native_prefix = "extern \"C\" struct ";
-    let after = if sig.starts_with(native_prefix) {
+    let native_prefix = "extern \"C\" ";
+    let declaration = if sig.starts_with(native_prefix) {
         String.slice(sig, native_prefix.len(), String.char_len(sig))
-    } else { doc_after_keyword(sig) };
+    } else { sig };
+    let after = doc_after_keyword(declaration);
     match String.index_of(after, " ") {
         None => after,
         Some(sp) => String.slice(after, 0, sp),
@@ -2128,7 +2129,8 @@ let name_offset (src: String) (from: Int) (to: Int) (name: String): Int =
 // What hover shows: the declaration as written, near enough to be
 // recognisable without re-rendering the whole AST.
 let def_signature (def: parser.LetDefNode): String =
-    "let ${def.name} ".concat(param_list(def.params, 0, ""))
+    (if def.c_export { "extern \"C\" " } else { "" }).concat("let ${def.name} ")
+        .concat(param_list(def.params, 0, ""))
         .concat(
             match def.ret_ty {
                 Some(t) => ": ".concat(parser.render_type_source(t)),

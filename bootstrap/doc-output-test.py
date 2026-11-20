@@ -50,6 +50,7 @@ def main():
             'pub struct Managed { value: Int }\n'
             'pub extern "C" struct Header { value: U8 }\n'
             'pub extern "C" struct Reading { value: U16 }\n'
+            'pub extern "C" let exported (): U8 = 1\n'
             'pub enum State { Ready, Waiting }\n'
             'pub handle Token { on_drop: release_token }\n'
             'extern "C" { fn release_token(token: Int); }\n')
@@ -68,7 +69,7 @@ def main():
         home = '../home?x="quoted"&y=\'single\'#雪'
         doc(project, html, '--html', '--home', 'Docs <img>=' + home)
         ordinary = Page((html / 'ordinary.html').read_text())
-        for anchor in ['find_me', 'Managed', 'Header', 'Reading']:
+        for anchor in ['find_me', 'Managed', 'Header', 'Reading', 'exported']:
             assert ordinary.ids.count(anchor) == 1, ordinary.ids
         search = (html / 'search-index.js').read_text().removeprefix('window.PLUM_DOCS = ').removesuffix(';\n')
         records = {row['n']: row['u'] for row in json.loads(search) if row['s'].startswith('extern "C" struct ')}
@@ -110,7 +111,7 @@ def main():
         declarations = [urlsplit(line.rsplit('](', 1)[1][:-1]) for line in index.splitlines()
                         if line.startswith('- [`')]
         assert {link.fragment for link in declarations if link.path == 'ordinary.md'} == {
-            'find_me', 'Managed', 'Header', 'Reading', 'State', 'Token'}
+            'find_me', 'Managed', 'Header', 'Reading', 'State', 'Token', 'exported'}
         for link in declarations:
             target = markdown / unquote(link.path)
             anchors = [line for line in target.read_text().splitlines() if line.startswith('<a id=')]

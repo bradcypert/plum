@@ -1,0 +1,112 @@
+use parser;
+use typecheck;
+
+let cg_c_exports (p: CgProgram) (items: Array[parser.ItemNode]): Array[typecheck.TFn] = {
+    let mut out = [];
+    for item in items {
+        match item.kind {
+            IKLet(def) => if def.c_export {
+                match cg_find_tfn(p, item.module, def.name, 0) {
+                    Some(f) => {
+                        out = out.push(f);
+                    },
+                    None => cg_fail("missing typed body for C export ${def.name}"),
+                };
+            },
+            _ => (),
+        };
+    };
+    out
+}
+
+let cg_emit_c_exports (runtime: String) (exports: Array[typecheck.TFn]): String =
+    if Array.is_empty(exports) { "" }
+    else {
+        // Generated Plum names use the reserved runtime prefix or encoded
+        // symbols containing punctuation. The runtime also declares C names.
+        let runtime_symbols = Array.map(cg_core_items(runtime), |item| item.name);
+        let mut parts = [
+            "@plum_exports_ready = internal global i1 false\n",
+            cg_named_str_constant("@.plum_export_not_ready", "C export called outside Plum main"),
+        ];
+        for f in exports {
+            if Array.contains(runtime_symbols, f.name) {
+                cg_fail("C export symbol ${f.name} conflicts with a runtime symbol");
+            };
+            parts = parts.push(cg_c_export_wrapper(f));
+        };
+        Array.concat_all(parts)
+    }
+
+let cg_call_program_entry (entry_sym: String) (exports: Bool): Array[String] = {
+    let call = "  %r = call i1 ${entry_sym}(i1 false)";
+    if exports {
+        [
+            "  store i1 true, ptr @plum_exports_ready",
+            call,
+            "  store i1 false, ptr @plum_exports_ready"
+        ]
+    } else { [call] }
+}
+
+// The definition carries the C ABI attributes. Only the call to the
+// internal body uses the ordinary Plum types and word representation.
+let cg_c_export_wrapper (f: typecheck.TFn): String = {
+    let mut params = [];
+    let mut args = [];
+    let mut conversions = [];
+    for i in 0..f.params.len() {
+        let ty = cg_of_ity(f.params[i].ty);
+        match ty {
+            CgUnit => {
+                args = args.push("i1 false");
+            },
+            _ => {
+                let arg = "%arg.${i}";
+                let word = "%word.${i}";
+                let (code, value) = cg_c_export_param(ty, arg, word);
+                params = params.push("${cg_c_param(ty)} ${arg}");
+                conversions = conversions.push(code);
+                args = args.push("${cg_llvm_ty(ty)} ${value}");
+            },
+        };
+    };
+    let ret = cg_of_ity(typecheck.subst_apply(f.subst, f.ret));
+    let sym = cg_sym(f.module, f.name, []);
+    cg_lines([
+        "define ${cg_c_ret(ret)} @${f.name}(${Array.join(params, ", ")}) {",
+        "entry:",
+        "  %ready = load i1, ptr @plum_exports_ready",
+        "  br i1 %ready, label %call_body, label %not_ready",
+        "not_ready:",
+        "  call i1 @plum_panic(ptr @.plum_export_not_ready)",
+        "  unreachable",
+        "call_body:",
+    ]).concat(Array.concat_all(conversions))
+        .concat("  %result = call ${cg_llvm_ty(ret)} @${sym}(${Array.join(args, ", ")})\n")
+        .concat(cg_c_export_return(ret)).concat("}\n")
+}
+
+let cg_c_export_param (ty: CgTy) (arg: String) (word: String): (String, String) = match ty {
+    CgBool => ("  ${word} = icmp ne i32 ${arg}, 0\n", word),
+    CgInteger(kind) => {
+        let spec = typecheck.integer_spec(kind);
+        if spec.bits == 64 { ("", arg) }
+        else {
+            let extension = if spec.signed { "sext" } else { "zext" };
+            ("  ${word} = ${extension} i${spec.bits} ${arg} to i64\n", word)
+        }
+    },
+    _ => ("", arg),
+}
+
+let cg_c_export_return (ty: CgTy): String = match ty {
+    CgUnit => "  ret void\n",
+    CgBool => "  %narrow = zext i1 %result to i32\n  ret i32 %narrow\n",
+    CgInteger(kind) => {
+        let bits = typecheck.integer_spec(kind).bits;
+        if bits == 64 { "  ret i64 %result\n" }
+        else { "  %narrow = trunc i64 %result to i${bits}\n  ret i${bits} %narrow\n" }
+    },
+    _ => "  ret ${cg_llvm_ty(ty)} %result\n",
+}

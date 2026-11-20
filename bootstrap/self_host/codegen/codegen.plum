@@ -1211,11 +1211,13 @@ let cg_callee_proto
 let cg_tail_releases (p: CgProgram) (k: Int): String =
     String.replace(p.tail_rel, "_end", "_end.t".concat(k.to_string()))
 
-let cg_str_constant (n: Int) (s: String): String = {
+let cg_str_constant (n: Int) (s: String): String = cg_named_str_constant("@.str${n}", s)
+
+let cg_named_str_constant (symbol: String) (s: String): String = {
     let bytes = s.len();
     let arr = bytes + 1;
     Array.concat_all([
-        "@.str${n} = private global { i64, i64, [${arr} x i8] } { i64 -1, i64 ${bytes}, [${arr} x i8] c\"",
+        "${symbol} = private global { i64, i64, [${arr} x i8] } { i64 -1, i64 ${bytes}, [${arr} x i8] c\"",
         cg_escape_llvm(s),
         "\\00\" }\n",
     ])
@@ -9773,33 +9775,35 @@ let cg_param_slots
 // because `test` compiles a program whose entry is a synthesized
 // dispatcher rather than the project's own `main` -- see main.plum's
 // `cmd_test`.
-let cg_entry_named (entry_sym: String): String =
-    if CORE_RUNTIME.get() { cg_kernel_entry(entry_sym) } else { cg_hosted_entry(entry_sym) }
+let cg_entry_named (entry_sym: String) (exports: Bool): String =
+    if CORE_RUNTIME.get() { cg_kernel_entry(entry_sym, exports) } else {
+        cg_hosted_entry(entry_sym, exports)
+    }
 
-let cg_hosted_entry (entry_sym: String): String = cg_lines([
-    "define i32 @main(i32 %argc, ptr %argv) {",
-    "entry:",
-    "  store i32 %argc, ptr @plum_argc",
-    "  store ptr %argv, ptr @plum_argv",
-    // Before anything else, and for the same reason the real backend
-    // does it here: `towupper`/`towlower` touch ASCII only in the
-    // default "C" locale, so `.to_upper()` would quietly differ from
-    // the real backend on any non-ASCII string.
-    "  call void @plum_locale_init()",
-    "  %reg = call i32 @atexit(ptr @plum_dump_stats)",
-    // Seeded ONCE here, not per call, exactly where the real backend
-    // seeds it (`plumc::emit_main`'s prologue). Seeding per call would
-    // make `Float.random()` return the same value every time within a
-    // second.
-    "  %seed = call i64 @time(ptr null)",
-    "  %seed32 = trunc i64 %seed to i32",
-    "  call void @srand(i32 %seed32)",
-    "  call void @plum_init_globals()",
-    // Both main and the test dispatcher declare an unnamed Unit parameter.
-    "  %r = call i1 ${entry_sym}(i1 false)",
-    "  ret i32 0",
-    "}",
-])
+let cg_hosted_entry (entry_sym: String) (exports: Bool): String = cg_lines(Array.concat(
+    [
+        "define i32 @main(i32 %argc, ptr %argv) {",
+        "entry:",
+        "  store i32 %argc, ptr @plum_argc",
+        "  store ptr %argv, ptr @plum_argv",
+        // Before anything else, and for the same reason the real backend
+        // does it here: `towupper`/`towlower` touch ASCII only in the
+        // default "C" locale, so `.to_upper()` would quietly differ from
+        // the real backend on any non-ASCII string.
+        "  call void @plum_locale_init()",
+        "  %reg = call i32 @atexit(ptr @plum_dump_stats)",
+        // Seeded ONCE here, not per call, exactly where the real backend
+        // seeds it (`plumc::emit_main`'s prologue). Seeding per call would
+        // make `Float.random()` return the same value every time within a
+        // second.
+        "  %seed = call i64 @time(ptr null)",
+        "  %seed32 = trunc i64 %seed to i32",
+        "  call void @srand(i32 %seed32)",
+        "  call void @plum_init_globals()",
+        // Both main and the test dispatcher declare an unnamed Unit parameter.
+    ],
+    cg_call_program_entry(entry_sym, exports).concat(["  ret i32 0", "}"])
+))
 
 // --- Structural equality ---
 //
@@ -11915,31 +11919,37 @@ pub let cg_emit_program_entry
     let type_time = buildcache.start(());
     let p = cg_build_program(program);
     buildcache.finish("type checking", type_time);
+    let exports = cg_c_exports(p, program0.items);
+    let has_exports = !Array.is_empty(exports);
     let pointers = typecheck.raw_pointer_used();
     let native_records = typecheck.has_native_records(p.ctx);
-    if pointers || native_records || cg_has_fixed_externs(program0) {
+    if has_exports || pointers || native_records || cg_has_fixed_externs(program0) {
         let target = resolve_target();
         set_c_abi_target(target);
-        if native_records { cg_check_raw_pointer_target(target, "native aggregate layout") }
-        else if pointers { cg_check_raw_pointer_target(target, "RawPtr") };
+        if has_exports { cg_check_x86_64_native_target(target, "C export ABI") }
+        else if native_records { cg_check_x86_64_native_target(target, "native aggregate layout") }
+        else if pointers { cg_check_x86_64_native_target(target, "RawPtr") };
     };
     if !cg_has_fn(p, entry) { cg_fail("no top-level '${entry}' function to compile") };
     if CORE_RUNTIME.get() { cg_validate_kernel_entry(p, entry) };
     // Globals are roots too: their bodies can call functions that
     // nothing else reaches.
     let reachable_time = buildcache.start(());
-    let insts = cg_reachable(
-        p,
-        cg_global_roots(p, 0, [
-            CgInst {
-                module: "",
-                name: entry,
-                targs: []
-            }
-        ]),
-        [],
-        0
-    );
+    let mut roots = [
+        CgInst {
+            module: "",
+            name: entry,
+            targs: []
+        }
+    ];
+    for f in exports {
+        roots = roots.push(CgInst {
+            module: f.module,
+            name: f.name,
+            targs: []
+        });
+    };
+    let insts = cg_reachable(p, cg_global_roots(p, 0, roots), [], 0);
     buildcache.finish("reachability", reachable_time);
     buildcache.count("instantiations", insts.len());
     // Equality functions are discovered from the SAME reachable set —
@@ -11978,15 +11988,12 @@ pub let cg_emit_program_entry
     let metadata = cg_dbg_module(());
     buildcache.finish("debug metadata", metadata_time);
     let join_time = buildcache.start(());
-    let prefix = [
-        cg_runtime(HEAP_STATS.get()),
-        cg_emit_extern_decls(program.items, 0, ""),
-        helpers,
-        gl.slots,
-    ];
+    let runtime = cg_runtime(HEAP_STATS.get());
+    let prefix = [runtime, cg_emit_extern_decls(program.items, 0, ""), helpers, gl.slots,];
     let suffix = [
         gl.init,
-        cg_entry_named("@".concat(cg_sym("", entry, []))),
+        cg_entry_named("@".concat(cg_sym("", entry, [])), has_exports),
+        cg_emit_c_exports(runtime, exports),
         // Last, because the nodes are allocated as functions are
         // emitted and nothing knows the full set until they are.
         metadata,
@@ -11995,7 +12002,9 @@ pub let cg_emit_program_entry
     let result = Array.concat_all(Array.concat(Array.concat(prefix, functions), suffix));
     buildcache.finish("IR join", join_time);
     buildcache.count("IR bytes", result.len());
-    if CORE_RUNTIME.get() { cg_core_runtime(result, cg_core_user_externs(program0)) } else {
+    if CORE_RUNTIME.get() {
+        cg_core_runtime(result, cg_core_user_externs(program0), Array.map(exports, |f| f.name))
+    } else {
         result
     }
 }

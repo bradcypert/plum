@@ -1,0 +1,133 @@
+use parser;
+
+let check_c_export_header
+    (items: Array[parser.ItemNode])
+    (index: Int)
+    (def: parser.LetDefNode): Unit
+= {
+    let name = def.name;
+    // Identifiers already use ASCII letters, digits and underscores. The
+    // function grammar also accepts Type.method, which is not a C name.
+    if name.contains(".") || is_c_keyword(name) {
+        fail_tc("C export ${name} requires a plain C identifier");
+    };
+    if name == "main" || name.starts_with("plum_") {
+        fail_tc("C export name ${name} is reserved");
+    };
+    if !Array.is_empty(def.generics) { fail_tc("C export ${name} cannot have type parameters") };
+    if Option.is_none(def.ret_ty) { fail_tc("C export ${name} requires an explicit return type") };
+    if Array.is_empty(def.params) {
+        fail_tc("C export ${name} must be a function; use () for no parameters");
+    };
+    if !(def.params.len() == 1 && is_c_void_param(def.params[0])) {
+        for param in def.params {
+            match param {
+                ParamPatternTy(PIdent(_, _), Some(_)) => (),
+                _ => fail_tc("C export ${name} requires named, annotated parameters"),
+            };
+        };
+    };
+    for i in 0..items.len() {
+        if i != index {
+            let conflict = match items[i].kind {
+                IKLet(other) => other.name == name
+                    && (other.c_export || items[i].module == items[index].module),
+                IKExtern(block) => Array.any(block.fns, |f| f.name == name),
+                _ => false,
+            };
+            if conflict { fail_tc("C export symbol ${name} conflicts with another declaration") };
+        };
+    };
+}
+
+let is_c_void_param (param: parser.ParamNode): Bool = match param {
+    ParamPatternTy(PTuple(elems), None) => Array.is_empty(elems),
+    _ => false,
+}
+
+let is_c_keyword (name: String): Bool = Array.contains(
+    [
+        "alignas",
+        "alignof",
+        "auto",
+        "bool",
+        "break",
+        "case",
+        "char",
+        "const",
+        "constexpr",
+        "continue",
+        "default",
+        "do",
+        "double",
+        "else",
+        "enum",
+        "extern",
+        "false",
+        "float",
+        "for",
+        "goto",
+        "if",
+        "inline",
+        "int",
+        "long",
+        "nullptr",
+        "register",
+        "restrict",
+        "return",
+        "short",
+        "signed",
+        "sizeof",
+        "static",
+        "static_assert",
+        "struct",
+        "switch",
+        "thread_local",
+        "true",
+        "typedef",
+        "typeof",
+        "typeof_unqual",
+        "union",
+        "unsigned",
+        "void",
+        "volatile",
+        "while",
+        "_Alignas",
+        "_Alignof",
+        "_Atomic",
+        "_BitInt",
+        "_Bool",
+        "_Complex",
+        "_Decimal32",
+        "_Decimal64",
+        "_Decimal128",
+        "_Generic",
+        "_Imaginary",
+        "_Noreturn",
+        "_Static_assert",
+        "_Thread_local",
+    ],
+    name
+)
+
+let c_export_scalar (ty: ITy): Bool = match ty {
+    ITInt => true,
+    ITInteger(_) => true,
+    ITBool => true,
+    ITFloat => true,
+    ITRawPtr(_) => true,
+    _ => false,
+}
+
+let check_c_export_types (def: parser.LetDefNode) (params: Array[ITy]) (ret: ITy): Unit = {
+    if !(def.params.len() == 1 && is_c_void_param(def.params[0])) {
+        for ty in params {
+            if !c_export_scalar(ty) {
+                fail_tc("unsupported C export parameter type ${render_ty(ty)} in ${def.name}");
+            };
+        };
+    };
+    if !is_unit_ty(ret) && !c_export_scalar(ret) {
+        fail_tc("unsupported C export result type ${render_ty(ret)} in ${def.name}");
+    };
+}

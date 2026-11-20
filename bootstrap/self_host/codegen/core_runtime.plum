@@ -157,8 +157,8 @@ let cg_core_allowed (name: String) (user: Array[String]): Bool =
         )
 
 // Keep ownership/error semantics in the shared runtime; replace the few
-// platform boundaries, then retain only definitions reached from main.
-let cg_core_runtime (ir: String) (user: Array[String]): String = {
+// platform boundaries, then retain definitions reached from main or exports.
+let cg_core_runtime (ir: String) (user: Array[String]) (exports: Array[String]): String = {
     let originals = cg_core_items(ir);
     let overrides = cg_core_items(cg_core_overrides(()));
     let mut items: Map[String, CoreItem] = Map.new(());
@@ -176,15 +176,8 @@ let cg_core_runtime (ir: String) (user: Array[String]): String = {
     for item in overrides {
         items = items.insert(item.name, item);
     };
-    let selected = cg_core_select(
-        items,
-        [cg_kernel_entry_symbol(())],
-        [cg_kernel_entry_symbol(())],
-        0,
-        Set.new(()),
-        Set.new(()),
-        user
-    );
+    let roots = [cg_kernel_entry_symbol(())].concat(exports);
+    let selected = cg_core_select(items, roots, roots, 0, Set.new(()), Set.new(()), user);
     let mut out: Array[String] = [];
     let mut emitted: Set[String] = Set.new(());
     // Preserve deterministic emitter order, preferring replacement bodies.
@@ -302,25 +295,25 @@ let cg_validate_kernel_entry (p: CgProgram) (entry: String): Unit =
         },
     }
 
-let cg_kernel_entry (entry_sym: String): String = {
+let cg_kernel_entry (entry_sym: String) (exports: Bool): String = {
     let repeated = "kernel entry called more than once";
-    cg_lines([
-        "@plum_kernel_entered = internal global i1 false",
-        "@.plum_kernel_reentry = private constant [${repeated.len()} x i8] c\"${repeated}\"",
-        "define void @${cg_kernel_entry_symbol(())}() noreturn {",
-        "entry:",
-        "  %entered = load i1, ptr @plum_kernel_entered",
-        "  br i1 %entered, label %repeat, label %initialize",
-        "repeat:",
-        "  call void @plum_kernel_panic(ptr @.plum_kernel_reentry, i64 ${repeated.len()})",
-        "  unreachable",
-        "initialize:",
-        // One CPU, interrupts disabled: no concurrent callers are supported.
-        "  store i1 true, ptr @plum_kernel_entered",
-        "  call void @plum_init_globals()",
-        "  %r = call i1 ${entry_sym}(i1 false)",
-        "  call void @plum_kernel_halt()",
-        "  unreachable",
-        "}",
-    ])
+    cg_lines(Array.concat(
+        [
+            "@plum_kernel_entered = internal global i1 false",
+            "@.plum_kernel_reentry = private constant [${repeated.len()} x i8] c\"${repeated}\"",
+            "define void @${cg_kernel_entry_symbol(())}() noreturn {",
+            "entry:",
+            "  %entered = load i1, ptr @plum_kernel_entered",
+            "  br i1 %entered, label %repeat, label %initialize",
+            "repeat:",
+            "  call void @plum_kernel_panic(ptr @.plum_kernel_reentry, i64 ${repeated.len()})",
+            "  unreachable",
+            "initialize:",
+            // One CPU, interrupts disabled: no concurrent callers are supported.
+            "  store i1 true, ptr @plum_kernel_entered",
+            "  call void @plum_init_globals()",
+        ],
+        cg_call_program_entry(entry_sym, exports)
+            .concat(["  call void @plum_kernel_halt()", "  unreachable", "}",])
+    ))
 }

@@ -1,4 +1,4 @@
-# C-callable Plum exports proposal
+# C-callable Plum exports
 
 Native adapters can use a C-callable Plum function to send data back into a running Plum program. The export has a stable C symbol and the target's C calling convention. The same source function can be called from Plum using the ordinary Plum calling convention. [#512](https://github.com/bradcypert/plum/issues/512)
 
@@ -65,9 +65,11 @@ An export called during global initialization fails using the selected runtime's
 - Root exported bodies in specialization discovery. Root the C wrappers in freestanding symbol selection so exports reachable only through native code survive. Emit the ready state only for builds with exports. Include the effective target in the cache key and reject unsupported targets at emission.
 - Stable symbols and scalar wrappers use ordinary LLVM instructions. Consider an intrinsic when an external consumer identifies an operation with compiler-visible semantics that existing Plum operations and native helpers cannot express. Inline assembly would also need a target-specific contract for operands, clobbers, and effects. Use that decision for a concrete consumer operation with its own conformance tests.
 
-## Conformance for implementation
+## Conformance
 
 - Compile matching C prototypes and compare Clang's call and definition attributes on both targets. Cover every integer width and signedness, mixed register and stack arguments, signed minima, high-half U64 results, noncanonical C Bool inputs, Float, and Unit.
 - Call a Plum export from a linked native adapter in hosted debug and release builds, and from a freestanding object with mock hooks. Verify a native record pointer round trip, ordinary and volatile field access, synchronous nested calls, and a normal Plum call to the same function. Inspect object symbols for the exact C names, including an export referenced only from native code.
 - Call an export from a native helper reached during global initialization. Check the panic message, lack of body effects, and single initialization. Check ordinary panic and return behavior, then verify normal entry and existing hook allocation tests.
 - Reject duplicate symbols, unsupported signatures and targets, and reserved names. Check matching C layout and lifetime with compiler-owned fixtures. External users supply their own native adapters and hardware-specific checks.
+
+Run the export checks with `python3 bootstrap/c-export-check.py ./sh.real` on x86-64 Linux.

@@ -214,6 +214,7 @@ pub enum ParamNode {
 
 pub struct LetDefNode {
     pub name: String,
+    pub c_export: Bool,
     pub generics: Array[GenericParamNode],
     pub params: Array[ParamNode],
     pub ret_ty: Option[Ty],
@@ -840,6 +841,7 @@ let parse_let_def (tokens: Array[lexer.Token]) (pos: Int): LetDefResult = {
     LetDefResult {
         value: LetDefNode {
             name: name_r.value,
+            c_export: false,
             generics: generics_r.value,
             params: params_r.value,
             ret_ty: ret_r.value,
@@ -1229,6 +1231,13 @@ let parse_extern_kind (tokens: Array[lexer.Token]) (abi: StrTok): ExternKindResu
         if abi.text != "C" { fail_at(abi.next_pos - 1, "native records require the C ABI") };
         let r = parse_struct_decl(tokens, abi.next_pos);
         ExternKindResult { kind: IKNativeStruct(r.value), next_pos: r.next_pos }
+    } else if check(tokens, abi.next_pos, TokLet) {
+        if abi.text != "C" { fail_at(abi.next_pos - 1, "function exports require the C ABI") };
+        let r = parse_let_def(tokens, abi.next_pos);
+        ExternKindResult {
+            kind: IKLet(LetDefNode { c_export: true, ..r.value }),
+            next_pos: r.next_pos
+        }
     } else {
         let start = expect(tokens, abi.next_pos, TokLBrace, "'{'");
         let fns = parse_extern_fns_acc(tokens, start, []);
@@ -3113,7 +3122,8 @@ let render_item (item: ItemNode): String = {
     match item.kind {
         IKLet(def) => {
             let generics_str = render_generic_params(def.generics);
-            let base1 = ["let", pub_marker.concat(def.name)];
+            let kind = if def.c_export { "extern-let" } else { "let" };
+            let base1 = [kind, pub_marker.concat(def.name)];
             let base2 = if generics_str == "" { base1 } else { base1.push(generics_str) };
             let base3 = base2.push(paren(join_space(Array.map(def.params, |p| render_param(p)))));
             let base4 = match def.ret_ty {

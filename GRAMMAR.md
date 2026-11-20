@@ -97,7 +97,7 @@ Keywords (reserved, cannot be used as `Identifier`): `let`, `mut`, `fn`,
 ```
 Program   ::= { Item }
 Item      ::= [ "pub" ] ItemKind
-ItemKind  ::= LetDef | StructDecl | NativeStructDecl | EnumDecl | ExternBlock | UseDecl
+ItemKind  ::= LetDef | StructDecl | NativeStructDecl | EnumDecl | ExternBlock | CExport | UseDecl
 ```
 
 There is no `mod` declaration in this grammar; module boundaries are
@@ -195,6 +195,13 @@ ExternParam     ::= Identifier ":" Type
 `fn` and mandatory type annotations survive here on purpose. See
 DESIGN.md, this is a foreign declaration with no body, so there's
 nothing for inference to work from.
+
+```
+CExport ::= "extern" '"C"' LetDef
+```
+
+An export uses an explicit result type and named, annotated parameters.
+`()` represents a C parameter list with no arguments. [C-callable exports](docs/c-callable-exports.md)
 
 ### Use declarations
 

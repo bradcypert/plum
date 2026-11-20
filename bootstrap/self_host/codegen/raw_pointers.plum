@@ -1,6 +1,6 @@
 use typecheck;
 
-let cg_check_raw_pointer_target (target: String) (feature: String): Unit = {
+let cg_check_x86_64_native_target (target: String) (feature: String): Unit = {
     let arch = target.split("-")[0];
     let linux = target.contains("linux") && !target.contains("gnux32")
         && !target.contains("muslx32");

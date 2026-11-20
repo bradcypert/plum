@@ -62,11 +62,10 @@ the C driver too.
 ## Boundaries kept closed
 
 This support covers direct scalar calls. Extern functions still cannot be
-ordinary Plum function values or partially applied. The self-hosted compiler
-does not expose C-callable Plum exports or C callbacks for these types;
-function signatures containing new-width integers are explicitly rejected at
-the extern boundary. A `pub let` remains an ordinary Plum function with Plum's
-calling convention and symbol naming.
+ordinary Plum function values or partially applied. Function types containing
+new-width integers are rejected at the extern boundary. A `pub let` uses
+Plum's calling convention and symbol naming. Use an explicit C export to
+expose a function to native callers. [C-callable exports](c-callable-exports.md)
 
 Records, tuples, enums, arrays, references and other aggregates containing
 new-width integers are also rejected at the extern boundary. Scalar ABI support
