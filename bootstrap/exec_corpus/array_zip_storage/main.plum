@@ -1,0 +1,70 @@
+extern "C" {
+    fn zip_close(n: Int) -> Unit;
+    fn zip_closed() -> Int;
+}
+
+handle Resource { on_drop: zip_close }
+
+let make (n: Int): Resource = unsafe { Resource.from_raw(n) }
+
+let closed (): Int = unsafe { zip_closed() }
+
+let captured (n: Int): () -> Int = {
+    let resource = make(n);
+    || unsafe { resource.raw() }
+}
+
+let exercise_scoped (): Unit = {
+    let pairs = Array.zip([make(0), make(1)], [captured(2)]);
+    // The unpaired tail has been released, but both result fields still own
+    // their resources. The callback must keep the right element callable.
+    assert_eq(closed(), 2);
+    assert_eq(unsafe { pairs[0].first.raw() }, 0);
+    assert_eq(pairs[0].second(), 2);
+}
+
+let main (): Unit = {
+    let empty: Array[String] = [];
+    assert_eq(Array.zip(empty, [1]).len(), 0);
+    assert_eq(Array.zip([1], empty).len(), 0);
+
+    let trace = ref(0);
+    let byte: U8 = 255;
+    let floats = Array.zip(
+        {
+            trace.set(1);
+            [-0.0, 1.25]
+        },
+        {
+            assert_eq(trace.get(), 1);
+            trace.set(2);
+            [byte]
+        }
+    );
+    assert_eq(trace.get(), 2);
+    assert_eq(floats.len(), 1);
+    assert_eq(floats[0].first.to_string(), "-0");
+    assert_eq(floats[0].second, byte);
+
+    let text = "ab".repeat(32);
+    let left = [[text], ["other"]];
+    let right = [text, "a".repeat(32), "omitted"];
+    let partial = Array.zip(left);
+    let pairs = partial(right);
+    assert_eq(pairs.len(), 2);
+    assert_eq(pairs[0].first, [text]);
+    assert_eq(pairs[1].second, "a".repeat(32));
+    assert_eq(left, [[text], ["other"]]);
+    assert_eq(right[2], "omitted");
+
+    let alias = [text, String.reverse(text)];
+    let pairs = Array.zip(alias, alias);
+    for i in 0..2 {
+        assert_eq(pairs[i].first, alias[i]);
+        assert_eq(pairs[i].second, alias[i]);
+    };
+
+    exercise_scoped();
+    assert_eq(closed(), 7);
+    println("Array.zip pairs typed values and preserves shared and scoped owners")
+}

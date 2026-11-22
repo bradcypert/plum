@@ -47,7 +47,8 @@ let cg_reaches_batch
             cg_reaches_batch(p, batch, read + 1, queued, target, seen, fuel + 1)
         }
         else if Option.is_some(cg_runtime_fn(head.module, head.name))
-            || cg_is_array_concat(head.module, head.name, head.targs) {
+            || cg_is_array_concat(head.module, head.name, head.targs)
+            || cg_is_array_zip_with(head.module, head.name) {
                 cg_reaches_batch(p, batch, read + 1, queued, target, seen.push(s), fuel + 1)
             }
         else {
@@ -119,7 +120,8 @@ let cg_reachable_batch
     else {
         let head = batch[read];
         if Option.is_some(cg_runtime_fn(head.module, head.name))
-            || cg_is_array_concat(head.module, head.name, head.targs) {
+            || cg_is_array_concat(head.module, head.name, head.targs)
+            || cg_is_array_zip_with(head.module, head.name) {
                 cg_reachable_batch(p, batch, read + 1, queued, done, fuel)
             }
         else if cg_inst_seen(done, head, 0) {
