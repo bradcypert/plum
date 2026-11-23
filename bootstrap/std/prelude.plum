@@ -2102,20 +2102,30 @@ pub let Map.values[K, V] (m: Map[K, V]): Array[V] = match m {
     Map { root, size } => map_node_collect(root, plum__array_reserve_empty_raw(size), |k, v| v),
 }
 
-let map_from_arrays_acc[K: Eq + Hash, V]
-    (keys: Array[K])
-    (values: Array[V])
-    (i: Int)
-    (acc: Map[K, V]): Map[K, V]
-=
-    if i >= keys.len() || i >= values.len() { acc } else {
-        map_from_arrays_acc(keys, values, i + 1, Map.insert(acc, keys[i], values[i]))
-    }
+// The compiler folds both arrays directly, transferring eligible slots.
+// Older bootstrap compilers can read the same bounded prefix by index.
+let plum__array_fold_pair_raw[T, U, A]
+    (left: Array[T])
+    (right: Array[U])
+    (init: A)
+    (step: (A, T, U) -> A): A
+= {
+    let mut out = init;
+    for i in 0..Int.min(left.len(), right.len()) {
+        out = step(out, left[i], right[i]);
+    };
+    out
+}
 
 /// A map from parallel arrays, stopping at the shorter. A repeated
 /// key keeps the LAST value.
 pub let Map.from_arrays[K: Eq + Hash, V] (keys: Array[K]) (values: Array[V]): Map[K, V] =
-    map_from_arrays_acc(keys, values, 0, Map.new(()))
+    plum__array_fold_pair_raw(
+        keys,
+        values,
+        Map.new(()),
+        |acc, key, value| Map.insert(acc, key, value)
+    )
 
 /// A set of `T`, persistent like `Map` — `Set.insert` returns a new
 /// set. Members need `Eq` and `Hash`. Equal keys hash identically.
@@ -2213,12 +2223,9 @@ pub let Set.intersection[T: Eq + Hash] (a: Set[T]) (b: Set[T]): Set[T] =
 pub let Set.difference[T: Eq + Hash] (a: Set[T]) (b: Set[T]): Set[T] =
     Set { inner: set_collect(set_root(a), Map.new(()), b.inner.root, SetAbsent) }
 
-let set_from_array_acc[T: Eq + Hash] (arr: Array[T]) (i: Int) (acc: Set[T]): Set[T] =
-    if i >= arr.len() { acc } else { set_from_array_acc(arr, i + 1, Set.insert(acc, arr[i])) }
-
 /// A set of the array's elements, discarding duplicates.
 pub let Set.from_array[T: Eq + Hash] (arr: Array[T]): Set[T] =
-    set_from_array_acc(arr, 0, Set.new(()))
+    Set { inner: Array.fold(arr, Map.new(()), |acc, elem| Map.insert(acc, elem, ())) }
 
 // --- JSON ---
 

@@ -4480,11 +4480,13 @@ let cg_fn_call
             p,
             env,
             n,
-            args[0],
+            [args[0]],
             args[1],
             Array.slice(args, 2, args.len() - 1),
             args[args.len() - 1]
         ))
+    } else if cg_is_array_fold_pair(module_name, name) {
+        cg_leaf_tail(p, tail, cg_array_fold(p, env, n, [args[0], args[1]], args[2], [], args[3]))
     } else if cg_is_array_update(module_name, name) {
         cg_leaf_tail(p, tail, cg_array_update(
             p,
@@ -6879,6 +6881,12 @@ let cg_invoke (clo_val: String) (ret: CgTy) (arg_ops: String) (n: Int): String =
 let cg_is_array_zip_with (module_name: String) (name: String): Bool =
     module_name == "<prelude>" && name == "plum__array_zip_with_raw"
 
+let cg_array_pair_length (left: String) (right: String) (len: String): String =
+    "  ${len}_a = call i64 @plum_array_len(ptr ${left})\n"
+        .concat("  ${len}_b = call i64 @plum_array_len(ptr ${right})\n")
+        .concat("  ${len}_left = icmp slt i64 ${len}_a, ${len}_b\n")
+        .concat("  ${len} = select i1 ${len}_left, i64 ${len}_a, i64 ${len}_b\n")
+
 // Own both inputs through the fill. A reused input transfers each old slot
 // into the callback before the result overwrites it. The other input retains
 // its own reference. Only the result type may release the reused array.
@@ -6907,17 +6915,14 @@ let cg_array_zip_with
     let l = cg_reg(i);
     let r = cg_reg(i + 1);
     let slot = cg_reg(i + 4);
-    let bounds = "  ${len}_a = call i64 @plum_array_len(ptr ${left.val})\n"
-        .concat("  ${len}_b = call i64 @plum_array_len(ptr ${right.val})\n")
-        .concat("  ${len}_left = icmp slt i64 ${len}_a, ${len}_b\n")
-        .concat("  ${len} = select i1 ${len}_left, i64 ${len}_a, i64 ${len}_b\n");
+    let bounds = cg_array_pair_length(left.val, right.val, len);
     let storage = if reuse_left || reuse_right {
         let a = if reuse_left { left.val } else { "null" };
         let b = if reuse_right { right.val } else { "null" };
         "  ${out} = call ptr @plum_array_zip_result(i64 ${len}, ptr ${a}, ptr ${b})\n"
     } else { "  ${out} = call ptr @plum_array_new_result(i64 ${len})\n" };
-    let body = cg_zip_arg(left, left_ty, index, l, reuse_left)
-        .concat(cg_zip_arg(right, right_ty, index, r, reuse_right))
+    let body = cg_array_owned_element(left, left_ty, index, l, reuse_left)
+        .concat(cg_array_owned_element(right, right_ty, index, r, reuse_right))
         .concat(
             cg_invoke(
                 pair.val,
@@ -6951,10 +6956,16 @@ let cg_array_zip_with
 let cg_zip_can_reuse (p: CgProgram) (src: typecheck.TExpr): Bool =
     cg_rc_enabled(()) && cg_can_release_early(p, cg_concrete(p, typecheck.texpr_ty(p.subst, src)))
 
-let cg_zip_arg (src: BorrowEmit) (ty: CgTy) (idx: String) (reg: String) (reuse: Bool): String =
+let cg_array_owned_element
+    (src: BorrowEmit)
+    (ty: CgTy)
+    (idx: String)
+    (reg: String)
+    (can_move: Bool): String
+=
     cg_elem_ptr_lines_at(src.val, idx, reg.concat("_slot"))
         .concat(
-            if reuse && cg_is_heap(ty) {
+            if can_move && cg_is_heap(ty) {
                 "  ${reg} = call ptr @plum_array_owned_arg(ptr ${reg}_slot, i1 ${reg}_move)\n"
             } else {
                 "  ${reg} = load ${cg_llvm_ty(ty)}, ptr ${reg}_slot\n".concat(cg_inc(ty, reg))
@@ -6983,7 +6994,7 @@ let cg_array_ns_call
 =
     if fn_name == "map" { cg_array_map(p, env, n, args[0], args[1]) }
     else if fn_name == "filter" { cg_array_filter(p, env, n, args[0], args[1]) }
-    else if fn_name == "fold" { cg_array_fold(p, env, n, args[0], args[1], [], args[2]) }
+    else if fn_name == "fold" { cg_array_fold(p, env, n, [args[0]], args[1], [], args[2]) }
     else {
         {
             cg_fail("Array.${fn_name}(..) isn't supported yet");
@@ -7349,20 +7360,36 @@ let cg_array_filter
 let cg_is_array_fold_context (module_name: String) (name: String): Bool =
     module_name == "<prelude>" && name == "plum__array_fold_context_raw"
 
+let cg_is_array_fold_pair (module_name: String) (name: String): Bool =
+    module_name == "<prelude>" && name == "plum__array_fold_pair_raw"
+
 let cg_array_fold
     (p: CgProgram)
     (env: Array[CgSlot])
     (n: Int)
-    (arr_e: typecheck.TExpr)
+    (sources: Array[typecheck.TExpr])
     (init_e: typecheck.TExpr)
     (context: Array[typecheck.TExpr])
     (f_e: typecheck.TExpr): Emit
 = {
-    let a = cg_expr(p, env, n, arr_e);
-    let elem = cg_elem_ty(a.ty);
-    let arr_ity = cg_concrete(p, typecheck.texpr_ty(p.subst, arr_e));
-    let move_elem = cg_is_heap(elem) && cg_can_release_early(p, cg_array_elem_ity(p, arr_ity));
-    let init = cg_expr(p, env, a.n, init_e);
+    let mut inputs: Array[BorrowEmit] = [];
+    let mut prepare = "";
+    let mut allocas = "";
+    let mut releases = "";
+    let mut globals = "";
+    let mut drop_inputs = "";
+    let mut next = n;
+    for source in sources {
+        let input = cg_borrow_owned(p, env, next, source);
+        inputs = inputs.push(input);
+        prepare = prepare.concat(input.code);
+        allocas = allocas.concat(input.allocas);
+        releases = releases.concat(input.releases);
+        globals = globals.concat(input.globals);
+        drop_inputs = input.drop.concat(drop_inputs);
+        next = input.n;
+    };
+    let init = cg_expr(p, env, next, init_e);
     let ctx = cg_args(p, env, init.n, context);
     let f = cg_expr(p, env, ctx.n, f_e);
     let mut retain_context = "";
@@ -7374,68 +7401,69 @@ let cg_array_fold
     else { ", ".concat(cg_join_commas(ctx.vals)) };
     let acc_ty = cg_llvm_ty(init.ty);
     let len = cg_reg(f.n);
-    let move = len.concat("_move");
     let acc = cg_reg(f.n + 1);
     let iv = cg_reg(f.n + 2);
     let lp = cg_array_loop(iv, len, f.n + 3);
     let b = lp.body_n;
-    let ev = cg_reg(b + 3);
-    let cur_acc = cg_reg(b + 4);
-    let slot_ptr = cg_elem_ptr_reg(b);
-    let body = cg_elem_ptr_lines(a.val, lp.idx_reg, b)
-        .concat(
-            if move_elem {
-                "  ${ev} = call ptr @plum_array_owned_arg(ptr ${slot_ptr}, i1 ${move})\n"
-            }
-            else {
-                "  ${ev} = load ${cg_llvm_ty(elem)}, ptr ${slot_ptr}\n".concat(cg_inc(elem, ev))
-            }
-        )
+    let left = inputs[0].val;
+    let bounds = if inputs.len() == 1 { "  ${len} = call i64 @plum_array_len(ptr ${left})\n" }
+    else { cg_array_pair_length(left, inputs[1].val, len) };
+    let mut move_checks = "";
+    let mut read_elements = "";
+    let mut element_ops = "";
+    for i in 0..inputs.len() {
+        let input = inputs[i];
+        let elem = cg_elem_ty(input.ty);
+        let arr_ity = cg_concrete(p, typecheck.texpr_ty(p.subst, sources[i]));
+        let move = cg_is_heap(elem) && cg_can_release_early(p, cg_array_elem_ity(p, arr_ity));
+        let value = cg_reg(b + i);
+        // Test each source after evaluating every operand. If two input
+        // arrays alias, both references are still live during these checks.
+        if move {
+            move_checks = move_checks.concat(
+                "  ${value}_move = call i1 @plum_rc_unique(ptr ${input.val})\n"
+            );
+        };
+        read_elements = read_elements.concat(
+            cg_array_owned_element(input, elem, lp.idx_reg, value, move)
+        );
+        element_ops = element_ops.concat(", ${cg_llvm_ty(elem)} ${value}");
+    };
+    let cur_acc = cg_reg(b + 2);
+    let body = read_elements
         .concat("  ").concat(cur_acc).concat(" = load ").concat(acc_ty).concat(", ptr ").concat(acc)
         .concat("\n")
-        // Both operands are consumed by the closure. The accumulator
-        // slot's own reference is replaced by the result immediately
-        // below, so it is released rather than incremented.
+        // Each call consumes the accumulator and element arguments.
         // The context stays owned by the loop and each call gets a copy.
         .concat(retain_context)
         .concat(cg_invoke(
             f.val,
             init.ty,
-            ", ${acc_ty} ${cur_acc}, ${cg_llvm_ty(elem)} ${ev}".concat(context_ops),
-            b + 5
+            ", ${acc_ty} ${cur_acc}".concat(element_ops).concat(context_ops),
+            b + 3
         ))
-        .concat("  store ").concat(acc_ty).concat(" ").concat(cg_reg(b + 6)).concat(", ptr ")
+        .concat("  store ").concat(acc_ty).concat(" ").concat(cg_reg(b + 4)).concat(", ptr ")
         .concat(acc).concat("\n");
-    let out = cg_reg(b + 7);
-    let code = a.code.concat(init.code).concat(ctx.code).concat(f.code)
-        .concat("  ").concat(len).concat(" = call i64 @plum_array_len(ptr ").concat(a.val)
-        .concat(")\n")
-        // Later operands may publish or capture the source. Observe their
-        // aliases before transferring any ordinary child references. Scoped
-        // children keep the original source lifetime through every callback.
-        .concat(
-            if move_elem {
-                "  ${len}_rc = load atomic i64, ptr ${a.val} acquire, align 8\n  ${move} = icmp eq i64 ${len}_rc, 1\n"
-            } else { "" }
-        )
+    let out = cg_reg(b + 5);
+    let code = prepare.concat(init.code).concat(ctx.code).concat(f.code)
+        .concat(bounds).concat(move_checks)
         .concat("  store ").concat(acc_ty).concat(" ").concat(init.val).concat(", ptr ").concat(acc)
         .concat("\n")
         .concat(lp.pre).concat(body).concat(lp.post)
         .concat("  ").concat(out).concat(" = load ").concat(acc_ty).concat(", ptr ").concat(acc)
         .concat("\n")
-        // The result owns the final accumulator. The loop releases the
-        // source array, its own context references, and the closure.
-        .concat(cg_dec(arr_ity, a.val))
+        // The source releases also drop any unpaired tail elements.
+        .concat(drop_inputs)
         .concat(cg_dec_args(p, context, ctx.vals, 0, ""))
         .concat(cg_dec_cg(f.ty, f.val));
     Emit {
         code: code,
-        allocas: "  ${iv} = alloca i64\n  ${acc} = alloca ${acc_ty}\n${a.allocas}${init.allocas}${ctx.allocas}${f.allocas}",
-        releases: a.releases.concat(init.releases).concat(ctx.releases).concat(f.releases),
-        globals: a.globals.concat(init.globals).concat(ctx.globals).concat(f.globals),
+        allocas: "  ${iv} = alloca i64\n  ${acc} = alloca ${acc_ty}\n${allocas}${init.allocas}${ctx.allocas}${f.allocas}",
+        releases: releases.concat(init.releases).concat(ctx.releases).concat(f.releases),
+        globals: globals.concat(init.globals).concat(ctx.globals).concat(f.globals),
         val: out,
         ty: init.ty,
-        n: b + 8,
+        n: b + 6,
     }
 }
 
