@@ -8,6 +8,24 @@ let main (): Unit = {
     assert_eq(a.hash(), b.hash());
     assert_eq(a.hash(), 0);
     assert_eq(deep.hash(), 1152921504606846976);
+    // These hashes share the first twelve trie levels. Test each kind
+    // of collapse in isolation, including removal from a shared root.
+    let path = Map.insert(Map.insert(Map.insert(Map.new(()), a, "a"), b, "b"), deep, "deep");
+    let no_deep = Map.remove(path, deep);
+    assert_eq(Map.len(no_deep), 2);
+    assert_eq(Map.get(no_deep, a), Some("a"));
+    assert_eq(Map.get(no_deep, b), Some("b"));
+    assert_eq(Map.get(no_deep, deep), None);
+    let last = Map.remove(no_deep, a);
+    assert_eq(Map.keys(last), [b]);
+    assert_eq(Map.values(last), ["b"]);
+    let no_a = Map.remove(path, a);
+    assert_eq(Map.get(no_a, b), Some("b"));
+    assert_eq(Map.get(no_a, deep), Some("deep"));
+    assert_eq(Map.get(no_a, a), None);
+    assert_eq(Map.get(path, a), Some("a"));
+    assert_eq(Map.get(path, deep), Some("deep"));
+
     let keys = [
         a,
         b,

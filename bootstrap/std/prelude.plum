@@ -1957,46 +1957,52 @@ let map_node_put[K: Eq, V]
     },
 }
 
-// Branches encode their depth implicitly: only a leaf or collision node can
-// be lifted through a singleton branch without changing the routing shift.
-let map_node_remove[K: Eq, V]
+// The caller has proved the key exists. This lets the match release or
+// reset the old node before handing its children into the update.
+let map_node_remove_present[K: Eq, V]
     (node: MapNode[K, V])
     (hash: Int)
     (key: K)
     (shift: Int): MapNode[K, V]
 = match node {
-    MapEmpty => node,
-    MapLeaf(h, k, _) => if h == hash && k == key { MapEmpty } else { node },
-    MapCollision(h, entries) => if h != hash { node } else {
+    MapEmpty => MapEmpty,
+    MapLeaf(_, _, _) => MapEmpty,
+    MapCollision(h, entries) => {
         let i = map_bucket_find_index(entries, key, 0);
-        if i < 0 { node } else {
-            let rest = entries.remove(i);
-            if rest.len() == 1 { MapLeaf(h, rest[0].key, rest[0].value) }
-            else { MapCollision(h, rest) }
-        }
+        let rest = entries.remove(i);
+        if rest.len() == 1 { MapLeaf(h, rest[0].key, rest[0].value) }
+        else { MapCollision(h, rest) }
     },
     MapBranch(bits, children) => {
         let bit = map_bit(hash, shift);
-        if (bits & bit) == 0 { node } else {
-            let i = map_rank(bits, bit);
-            let child = map_node_remove(children[i], hash, key, shift + 5);
-            let rest = match child {
-                MapEmpty => children.remove(i),
-                _ => children.set(i, child)
-            };
-            let new_bits = match child {
-                MapEmpty => bits & ~bit,
-                _ => bits
-            };
-            if rest.len() == 0 { MapEmpty }
-            else if rest.len() == 1 {
-                match rest[0] {
-                    MapLeaf(_, _, _) => rest[0],
-                    MapCollision(_, _) => rest[0],
-                    _ => MapBranch(new_bits, rest),
-                }
-            } else { MapBranch(new_bits, rest) }
-        }
+        let i = map_rank(bits, bit);
+        let leaf = match children[i] {
+            MapLeaf(_, _, _) => true,
+            _ => false,
+        };
+        // A branch or collision represents at least two entries. Only a
+        // leaf child disappears when we remove a single key.
+        let rest = if leaf { children.remove(i) } else {
+            plum__array_update_raw(
+                children,
+                i,
+                hash,
+                key,
+                shift + 5,
+                (),
+                |child, h, k, next, ignored| map_node_remove_present(child, h, k, next)
+            )
+        };
+        let new_bits = if leaf { bits & ~bit } else { bits };
+        // This branch had at least two entries, so at least one survives.
+        // Only a terminal node can cross a level without losing its shift.
+        if rest.len() == 1 {
+            match rest[0] {
+                MapLeaf(_, _, _) => rest[0],
+                MapCollision(_, _) => rest[0],
+                _ => MapBranch(new_bits, rest),
+            }
+        } else { MapBranch(new_bits, rest) }
     },
 }
 
@@ -2030,7 +2036,10 @@ pub let Map.remove[K: Eq + Hash, V] (m: Map[K, V]) (k: K): Map[K, V] = {
     let hash = value_hash(k);
     if map_node_contains(m.root, hash, k, 0) {
         match m {
-            Map { root, size } => Map { root: map_node_remove(root, hash, k, 0), size: size - 1 },
+            Map { root, size } => Map {
+                root: map_node_remove_present(root, hash, k, 0),
+                size: size - 1
+            },
         }
     } else { m }
 }
