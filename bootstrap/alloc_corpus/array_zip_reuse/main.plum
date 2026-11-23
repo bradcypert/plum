@@ -1,0 +1,25 @@
+let check_left (): Unit = {
+    let left = "a".repeat(4094).as_bytes().to_array();
+    let right = "b".repeat(5000).as_bytes().to_array();
+    let pairs = Array.zip(left, right);
+    assert_eq(pairs.len(), 4094);
+    assert_eq(pairs[4093].first, 97);
+    assert_eq(pairs[4093].second, 98);
+}
+
+let check_right (): Unit = {
+    let left = "c".repeat(4094).as_bytes().to_array();
+    let right = "d".repeat(4094).as_bytes().to_array();
+    // The left array is shared despite having the right length. The
+    // second candidate can still supply the result cell.
+    let pairs = Array.zip(left, right);
+    assert_eq(left[4093], 99);
+    assert_eq(pairs.len(), 4094);
+    assert_eq(pairs[4093].first, 99);
+    assert_eq(pairs[4093].second, 100);
+}
+
+let main (): Unit = {
+    check_left();
+    check_right();
+}

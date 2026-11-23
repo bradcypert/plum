@@ -4,6 +4,9 @@ let main (): Unit = {
     let right = "b".repeat(5000).as_bytes().to_array();
     let pairs = Array.zip(left, right);
     assert_eq(pairs.len(), 4097);
+    // Keep both input owners live to guard the exact-allocation fallback.
+    assert_eq(left.len(), 4097);
+    assert_eq(right.len(), 5000);
     for pair in pairs {
         assert_eq(pair.first, 97);
         assert_eq(pair.second, 98);
