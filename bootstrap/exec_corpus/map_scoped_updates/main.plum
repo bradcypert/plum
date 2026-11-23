@@ -1,3 +1,5 @@
+use Memory;
+
 extern "C" {
     fn map_scoped_close(id: Int) -> Unit;
     fn map_scoped_closed() -> Int;
@@ -39,6 +41,19 @@ let exercise (): Unit = {
 let key_at (slot: Int) (key: Int): Int =
     if (key.hash() & 31) == slot { key } else { key_at(slot, key + 1) }
 
+let array_bytes (): Int = match Memory.by_origin() {
+    None => -1,
+    Some(profile) => {
+        let mut result = -1;
+        for row in profile.rows {
+            if row.origin == Memory.Origin.ArrayStorage {
+                result = row.stats.live_bytes;
+            };
+        };
+        result
+    },
+}
+
 let insert_shared_children (): Unit = {
     let mut snapshot: Map[Int, Owner] = Map.new(());
     for i in 1..16 {
@@ -61,10 +76,32 @@ let insert_shared_children (): Unit = {
     };
 }
 
+let compact_owned_children (): Unit = {
+    let before = array_bytes();
+    let mut m: Map[Int, String] = Map.new(());
+    for slot in 0..32 {
+        m = Map.insert(m, key_at(slot, 0), slot.to_string());
+    };
+    for slot in 4..32 {
+        m = Map.remove(m, key_at(slot, 0));
+    };
+    let after = array_bytes();
+    if before >= 0 {
+        // Four entries share one root array. A retained dense buffer would
+        // still occupy at least 272 bytes, even without growth reserve.
+        assert(after > before && after - before <= 144);
+    };
+    assert_eq(Map.len(m), 4);
+    for slot in 0..4 {
+        assert_eq(Map.get(m, key_at(slot, 0)), Some(slot.to_string()));
+    };
+}
+
 let main (): Unit = {
     exercise();
     assert_eq(closed(), 49);
     insert_shared_children();
     assert_eq(closed(), 67);
+    compact_owned_children();
     println("Map updates preserve shared resource owners and release each exactly once")
 }

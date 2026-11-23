@@ -4471,6 +4471,8 @@ let cg_fn_call
         cg_leaf_tail(p, tail, cg_array_zip_with(p, env, n, args[0], args[1], args[2]))
     } else if cg_is_array_insert(module_name, name) {
         cg_leaf_tail(p, tail, cg_array_insert(p, env, n, args[0], args[1], args[2]))
+    } else if cg_is_array_remove_compact(module_name, name) {
+        cg_leaf_tail(p, tail, cg_array_remove(p, env, n, args[0], args[1], ret, true))
     } else if cg_is_array_update(module_name, name) {
         cg_leaf_tail(p, tail, cg_array_update(
             p,
@@ -4918,7 +4920,7 @@ let cg_method_call
     else if method_name == "concat" { cg_concat(p, env, n, base, args[0]) }
     else if method_name == "len" { cg_len(p, env, n, base) }
     else if method_name == "push" { cg_array_push(p, env, n, base, args[0], ty) }
-    else if method_name == "remove" { cg_array_remove(p, env, n, base, args[0], ty) }
+    else if method_name == "remove" { cg_array_remove(p, env, n, base, args[0], ty, false) }
     else if method_name == "set" && args.len() == 2 {
         cg_array_set(p, env, n, base, args[0], args[1], ty)
     }
@@ -5871,6 +5873,9 @@ let cg_array_set
     }
 }
 
+let cg_is_array_remove_compact (module_name: String) (name: String): Bool =
+    module_name == "<prelude>" && name == "plum__array_remove_compact_raw"
+
 // Prepare both operands before the consuming runtime checks uniqueness. Ordinary
 // evaluation preserves scoped handle/closure owners; removal must not shorten
 // their payload lifetimes through a payload-preserving self-assignment hint.
@@ -5880,7 +5885,8 @@ let cg_array_remove
     (n: Int)
     (base: typecheck.TExpr)
     (idx: typecheck.TExpr)
-    (ty: CgTy): Emit
+    (ty: CgTy)
+    (compact: Bool): Emit
 = {
     let b = cg_expr(p, env, n, base);
     let i = cg_expr(p, env, b.n, idx);
@@ -5892,7 +5898,8 @@ let cg_array_remove
         .concat("  ${cell} = call ptr @plum_array_remove(ptr ${b.val}, i64 ${i.val}, i1 ")
         .concat(if heap { "1" } else { "0" })
         .concat(", ptr ${cg_rel_sym(bty)}, ptr ")
-        .concat(if heap { cg_rel_sym(ety) } else { "null" }).concat(")\n");
+        .concat(if heap { cg_rel_sym(ety) } else { "null" })
+        .concat(if compact { ", i1 true)\n" } else { ", i1 false)\n" });
     Emit {
         code: code,
         allocas: b.allocas.concat(i.allocas),
