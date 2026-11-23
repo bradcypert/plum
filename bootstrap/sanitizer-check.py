@@ -106,6 +106,7 @@ def main():
                                   ('parameter_forwarding', 'Parameter forwarding: owned reads, prompt release, constructors, aliases and scoped cleanup'),
                                   ('closure_last_use', 'Closure last use: parameters, captures, aliases, constructors and paths'),
                                   ('record_ownership', 'Records: projected ownership, spread reuse, immutable aliases, operand order and scoped cleanup'),
+                                  ('map_scoped_updates', 'Map updates preserve shared resource owners and release each exactly once'),
                                   ('constructor_scope', 'Constructor reuse preserves scoped closure parameter lifetimes'),
                                   ('string_transform_reuse', 'String transforms: owned reuse, aliases, evaluation order and Unicode widths'),
                                   ('string_char_len', 'character counts preserve UTF-8, NULs, aliases and bounded stack'),

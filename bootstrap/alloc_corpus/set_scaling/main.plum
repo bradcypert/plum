@@ -1,0 +1,19 @@
+let main (): Unit = {
+    let mut s: Set[Int] = Set.new(());
+    for i in 0..4096 {
+        s = Set.insert(s, i);
+    };
+    let snapshot = s;
+    for i in 0..64 {
+        s = Set.remove(s, i);
+        s = Set.insert(s, i + 4096);
+    };
+    assert_eq(Set.len(s), 4096);
+    assert_eq(Set.len(snapshot), 4096);
+    for i in 0..64 {
+        assert(!Set.contains(s, i));
+        assert(Set.contains(s, i + 4096));
+        assert(Set.contains(snapshot, i));
+        assert(!Set.contains(snapshot, i + 4096));
+    };
+}
