@@ -34,6 +34,29 @@ let check_set_traversal (): Unit = {
         // would allocate thousands of bytes.
         assert(after - before < 1024);
     };
+    let empty: Set[Int] = Set.new(());
+    let before_empty = allocation_bytes();
+    let same = Set.difference(source, empty);
+    let after_empty = allocation_bytes();
+    assert_eq(Set.len(same), 4096);
+    if before_empty >= 0 {
+        assert(after_empty - before_empty < 1024);
+    };
+
+    let exclusions = Set.from_array([0, 1024, 4095, 8192]);
+    let before_cut = allocation_bytes();
+    let cut = Set.difference(source, exclusions);
+    let after_cut = allocation_bytes();
+    if before_cut >= 0 {
+        // A shared input needs only the affected paths copied.
+        assert(after_cut - before_cut < 16384);
+    };
+    assert_eq(Set.len(cut), 4093);
+    assert_eq(Set.len(source), 4096);
+    for i in 0..4096 {
+        assert(Set.contains(source, i));
+        assert_eq(Set.contains(cut, i), i != 0 && i != 1024 && i != 4095);
+    };
 }
 
 let check_set_snapshots (a: Int) (b: Int) (deep: Int): Unit = {
@@ -64,6 +87,9 @@ let check_set_snapshots (a: Int) (b: Int) (deep: Int): Unit = {
     let pos = Set.from_array([0.0]);
     assert_eq(Set.to_array(Set.union(neg, pos))[0].to_string(), "-0");
     assert_eq(Set.to_array(Set.intersection(neg, pos))[0].to_string(), "-0");
+    let signed = Set.from_array([-0.0, 1.0, 2.0]);
+    let remainder = Set.difference(signed, Set.from_array([1.0]));
+    assert(Array.any(Set.to_array(remainder), |x| x.to_string() == "-0"));
 }
 
 // Inverting the two reversible word-mixer rounds supplies real complete-hash
@@ -171,7 +197,10 @@ let main (): Unit = {
     assert_eq(Map.get(floats, 0.0), Some("zero"));
     let set = Set.from_array(keys);
     assert_eq(Set.len(set), keys.len());
-    assert_eq(Set.len(Set.difference(set, Set.from_array([a, b]))), keys.len() - 2);
+    let without_collision = Set.difference(set, Set.from_array([a, b]));
+    let survivors = Set.from_array(Array.slice(keys, 2, keys.len()));
+    assert_eq(without_collision, survivors);
+    assert_eq(without_collision.hash(), survivors.hash());
     assert_eq(Set.len(Set.intersection(set, Set.from_array([a, b]))), 2);
     assert_eq(Set.len(Set.union(set, Set.from_array([a, b]))), keys.len());
     // Preserve generic structural equality and hashing for shared values.
