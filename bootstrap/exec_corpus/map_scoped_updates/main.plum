@@ -36,8 +36,35 @@ let exercise (): Unit = {
     assert_eq(closed(), 0);
 }
 
+let key_at (slot: Int) (key: Int): Int =
+    if (key.hash() & 31) == slot { key } else { key_at(slot, key + 1) }
+
+let insert_shared_children (): Unit = {
+    let mut snapshot: Map[Int, Owner] = Map.new(());
+    for i in 1..16 {
+        snapshot = Map.insert(snapshot, key_at(i * 2, 0), make(48 + i));
+    };
+    let slots = [1, 15, 31];
+    for i in 0..slots.len() {
+        // These hash slots insert at the start, middle, and end of the
+        // same shared child array. Each output must own every old child.
+        let key = key_at(slots[i], 0);
+        let updated = Map.insert(snapshot, key, make(64 + i));
+        assert_eq(Map.len(updated), 16);
+        assert_eq(raw(Map.get(updated, key)), 64 + i);
+        assert_eq(raw(Map.get(snapshot, key)), -1);
+        for j in 1..16 {
+            let retained_key = key_at(j * 2, 0);
+            assert_eq(raw(Map.get(updated, retained_key)), 48 + j);
+            assert_eq(raw(Map.get(snapshot, retained_key)), 48 + j);
+        };
+    };
+}
+
 let main (): Unit = {
     exercise();
     assert_eq(closed(), 49);
+    insert_shared_children();
+    assert_eq(closed(), 67);
     println("Map updates preserve shared resource owners and release each exactly once")
 }
