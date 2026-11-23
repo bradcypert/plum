@@ -2047,9 +2047,7 @@ pub let Map.get[K: Eq + Hash, V] (m: Map[K, V]) (k: K): Option[V] =
 pub let Map.contains[K: Eq + Hash, V] (m: Map[K, V]) (k: K): Bool =
     map_node_contains(m.root, value_hash(k), k, 0)
 
-/// A new map without `k`. Removing an absent key is not an error.
-pub let Map.remove[K: Eq + Hash, V] (m: Map[K, V]) (k: K): Map[K, V] = {
-    let hash = value_hash(k);
+let map_remove_hashed[K: Eq, V] (m: Map[K, V]) (hash: Int) (k: K): Map[K, V] =
     if map_node_contains(m.root, hash, k, 0) {
         match m {
             Map { root, size } => Map {
@@ -2058,7 +2056,10 @@ pub let Map.remove[K: Eq + Hash, V] (m: Map[K, V]) (k: K): Map[K, V] = {
             },
         }
     } else { m }
-}
+
+/// A new map without `k`. Removing an absent key is not an error.
+pub let Map.remove[K: Eq + Hash, V] (m: Map[K, V]) (k: K): Map[K, V] =
+    map_remove_hashed(m, value_hash(k), k)
 
 /// How many entries.
 pub let Map.len[K, V] (m: Map[K, V]): Int = m.size
@@ -2155,21 +2156,27 @@ pub let Set.len[T] (s: Set[T]): Int = Map.len(s.inner)
 /// Every member, in no particular order.
 pub let Set.to_array[T] (s: Set[T]): Array[T] = Map.keys(s.inner)
 
-enum SetSelection { SetAll, SetPresent, SetAbsent }
+enum SetOperation {
+    SetAll,
+    SetPresent,
+    SetAbsent,
+    SetErase
+}
 
-let set_insert_selected[T: Eq]
+let set_apply_key[T: Eq]
     (acc: Map[T, Unit])
     (other: MapNode[T, Unit])
-    (selection: SetSelection)
+    (operation: SetOperation)
     (hash: Int)
     (key: T): Map[T, Unit]
-= {
-    let keep = match selection {
-        SetAll => true,
-        SetPresent => map_node_contains(other, hash, key, 0),
-        SetAbsent => !map_node_contains(other, hash, key, 0),
-    };
-    if keep { map_insert_hashed(acc, hash, key, ()) } else { acc }
+= match operation {
+    SetAll => map_insert_hashed(acc, hash, key, ()),
+    SetPresent => if map_node_contains(other, hash, key, 0) {
+        map_insert_hashed(acc, hash, key, ())
+    } else { acc },
+    SetAbsent => if map_node_contains(other, hash, key, 0) { acc }
+    else { map_insert_hashed(acc, hash, key, ()) },
+    SetErase => map_remove_hashed(acc, hash, key),
 }
 
 // A terminal node stores the complete hash for every key it holds.
@@ -2177,23 +2184,23 @@ let set_collect[T: Eq]
     (node: MapNode[T, Unit])
     (acc: Map[T, Unit])
     (other: MapNode[T, Unit])
-    (selection: SetSelection): Map[T, Unit]
+    (operation: SetOperation): Map[T, Unit]
 = match node {
     MapEmpty => acc,
-    MapLeaf(hash, key, _) => set_insert_selected(acc, other, selection, hash, key),
+    MapLeaf(hash, key, _) => set_apply_key(acc, other, operation, hash, key),
     MapCollision(hash, entries) => plum__array_fold_context_raw(
         entries,
         acc,
         other,
-        selection,
+        operation,
         hash,
-        |out, entry, rhs, policy, h| set_insert_selected(out, rhs, policy, h, entry.key)
+        |out, entry, rhs, policy, h| set_apply_key(out, rhs, policy, h, entry.key)
     ),
     MapBranch(_, children) => plum__array_fold_context_raw(
         children,
         acc,
         other,
-        selection,
+        operation,
         (),
         |out, child, rhs, policy, unused| set_collect(child, out, rhs, policy)
     ),
@@ -2220,8 +2227,18 @@ pub let Set.intersection[T: Eq + Hash] (a: Set[T]) (b: Set[T]): Set[T] =
     Set { inner: set_collect(set_root(a), Map.new(()), b.inner.root, SetPresent) }
 
 /// What is in `a` and not in `b`.
-pub let Set.difference[T: Eq + Hash] (a: Set[T]) (b: Set[T]): Set[T] =
-    Set { inner: set_collect(set_root(a), Map.new(()), b.inner.root, SetAbsent) }
+pub let Set.difference[T: Eq + Hash] (a: Set[T]) (b: Set[T]): Set[T] = {
+    let right_size = Set.len(b);
+    if right_size == 0 { a }
+    else if right_size <= Set.len(a) / 2 {
+        // Visit at most as many keys as a rebuild would need to insert.
+        match a {
+            Set { inner } => Set { inner: set_collect(set_root(b), inner, MapEmpty, SetErase) },
+        }
+    } else {
+        Set { inner: set_collect(set_root(a), Map.new(()), b.inner.root, SetAbsent) }
+    }
+}
 
 /// A set of the array's elements, discarding duplicates.
 pub let Set.from_array[T: Eq + Hash] (arr: Array[T]): Set[T] =
