@@ -116,6 +116,23 @@ let check_projected_owners (): Unit = {
     };
 }
 
+let build_scoped_map (): Map[Int, Owner] = {
+    let values = [make(71), make(72), make(73), make(74)];
+    let map = Map.from_arrays([1, 1, 2], values);
+    assert_eq(closed(), 71);
+    map
+}
+
+let check_bulk_owners (): Unit = {
+    let map = build_scoped_map();
+    // The overwritten value and the unpaired tail closed at scope exit.
+    // Both returned owners remain live.
+    assert_eq(closed(), 73);
+    assert_eq(Map.len(map), 2);
+    assert_eq(raw(Map.get(map, 1)), 72);
+    assert_eq(raw(Map.get(map, 2)), 73);
+}
+
 let main (): Unit = {
     exercise();
     assert_eq(closed(), 49);
@@ -124,5 +141,7 @@ let main (): Unit = {
     compact_owned_children();
     check_projected_owners();
     assert_eq(closed(), 71);
+    check_bulk_owners();
+    assert_eq(closed(), 75);
     println("Map updates preserve shared resource owners and release each exactly once")
 }

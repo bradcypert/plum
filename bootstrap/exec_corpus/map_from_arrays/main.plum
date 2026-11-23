@@ -1,3 +1,40 @@
+use Memory;
+
+let peak_bytes (): Int = match Memory.snapshot() {
+    None => -1,
+    Some(s) => s.peak_bytes,
+}
+
+let check_consuming_build (): Unit = {
+    let mut keys: Array[String] = [];
+    let mut values: Array[String] = [];
+    for i in 0..4096 {
+        keys = keys.push((i / 2).to_string().repeat(24));
+        values = values.push(i.to_string().repeat(48));
+    };
+    let before = peak_bytes();
+    let map = Map.from_arrays(keys, values);
+    let after = peak_bytes();
+    assert_eq(Map.len(map), 2048);
+    if before >= 0 {
+        // Each replaced value can be freed while the next entry is built.
+        assert(after - before < 32768);
+    };
+    for i in 0..2048 {
+        let key = i.to_string().repeat(24);
+        assert_eq(Map.get(map, key), Some((i * 2 + 1).to_string().repeat(48)));
+    };
+}
+
+let check_same_array (): Unit = {
+    let shared = ["key".repeat(16), "value".repeat(16)];
+    let map = Map.from_arrays(shared, shared);
+    assert_eq(Map.len(map), 2);
+    for item in shared {
+        assert_eq(Map.get(map, item), Some(item));
+    };
+}
+
 // Shared-prefix construction must preserve duplicate handling and heap ownership.
 let main (): Unit = {
     let keys = ["a", "b", "a", "ignored"];
@@ -26,5 +63,7 @@ let main (): Unit = {
     assert_eq(Map.len(Map.from_arrays(no_keys, values)), 0);
     assert_eq(Map.len(Map.from_arrays(keys, no_values)), 0);
     assert_eq(Map.len(Map.from_arrays(no_keys, no_values)), 0);
+    check_same_array();
+    check_consuming_build();
     println("map_from_arrays: ok");
 }
