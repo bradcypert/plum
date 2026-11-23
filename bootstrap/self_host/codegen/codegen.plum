@@ -4469,6 +4469,8 @@ let cg_fn_call
 =
     if cg_is_array_zip_with(module_name, name) {
         cg_leaf_tail(p, tail, cg_array_zip_with(p, env, n, args[0], args[1], args[2]))
+    } else if cg_is_array_insert(module_name, name) {
+        cg_leaf_tail(p, tail, cg_array_insert(p, env, n, args[0], args[1], args[2]))
     } else {
         match cg_handle_conv(p, env, n, name, args, ret) {
             Some(e) => e,
@@ -5718,6 +5720,40 @@ let cg_array_push
         val: cell,
         ty: ty,
         n: v.n + 6
+    }
+}
+
+let cg_is_array_insert (module_name: String) (name: String): Bool =
+    module_name == "<prelude>" && name == "plum__array_insert_raw"
+
+let cg_array_insert
+    (p: CgProgram)
+    (env: Array[CgSlot])
+    (n: Int)
+    (base: typecheck.TExpr)
+    (idx: typecheck.TExpr)
+    (value: typecheck.TExpr): Emit
+= {
+    // Prepare every operand before the runtime considers reusing the array.
+    let b = cg_expr(p, env, n, base);
+    let i = cg_expr(p, env, b.n, idx);
+    let v = cg_expr(p, env, i.n, value);
+    let bty = cg_concrete(p, typecheck.texpr_ty(p.subst, base));
+    let cell = cg_reg(v.n);
+    let heap = if cg_is_heap(cg_elem_ty(b.ty)) { "1" } else { "0" };
+    Emit {
+        code: b.code.concat(i.code).concat(v.code)
+            .concat(
+                "  ${cell} = call ptr @plum_array_insert_gap(ptr ${b.val}, i64 ${i.val}, i1 ${heap}, ptr ${cg_rel_sym(bty)})\n"
+            )
+            .concat(cg_elem_ptr_lines(cell, i.val, v.n + 1))
+            .concat("  store ${cg_llvm_ty(v.ty)} ${v.val}, ptr ${cg_elem_ptr_reg(v.n + 1)}\n"),
+        allocas: b.allocas.concat(i.allocas).concat(v.allocas),
+        releases: b.releases.concat(i.releases).concat(v.releases),
+        globals: b.globals.concat(i.globals).concat(v.globals),
+        val: cell,
+        ty: b.ty,
+        n: v.n + 4
     }
 }
 

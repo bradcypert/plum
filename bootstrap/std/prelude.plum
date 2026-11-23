@@ -1860,20 +1860,18 @@ let map_join[K, V]
     else { MapBranch(abit | bbit, [b, a]) }
 }
 
-let map_child_insert[K, V]
-    (children: Array[MapNode[K, V]])
-    (at: Int)
-    (child: MapNode[K, V]): Array[MapNode[K, V]]
-= {
+// The compiler lowers this to the consuming array growth path plus a
+// suffix shift. The source body supports older bootstrap compilers.
+let plum__array_insert_raw[T] (xs: Array[T]) (at: Int) (value: T): Array[T] = {
     let mut out = [];
-    for i in 0..children.len() {
+    for i in 0..xs.len() {
         if i == at {
-            out = out.push(child);
+            out = out.push(value);
         };
-        out = out.push(children[i]);
+        out = out.push(xs[i]);
     };
-    if at == children.len() {
-        out = out.push(child);
+    if at == xs.len() {
+        out = out.push(value);
     };
     out
 }
@@ -1931,7 +1929,7 @@ let map_node_put[K: Eq, V]
         let bit = map_bit(hash, shift);
         let i = map_rank(bits, bit);
         if (bits & bit) == 0 {
-            MapBranch(bits | bit, map_child_insert(children, i, MapLeaf(hash, key, value)))
+            MapBranch(bits | bit, plum__array_insert_raw(children, i, MapLeaf(hash, key, value)))
         }
         else {
             MapBranch(bits, children.set(i, map_node_put(children[i], hash, key, value, shift + 5)))

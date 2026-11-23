@@ -1,14 +1,12 @@
 #include <stdint.h>
 #include <stdlib.h>
 
-static uint64_t closed;
+static unsigned char closed[67];
 static int64_t count;
 
 void map_scoped_close(int64_t id) {
-    if (id < 0 || id >= 49) abort();
-    uint64_t bit = UINT64_C(1) << id;
-    if (closed & bit) abort();
-    closed |= bit;
+    if (id < 0 || id >= 67 || closed[id]) abort();
+    closed[id] = 1;
     count++;
 }
 
