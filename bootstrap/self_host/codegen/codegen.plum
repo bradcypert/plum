@@ -6721,8 +6721,9 @@ let cg_invoke (clo_val: String) (ret: CgTy) (arg_ops: String) (n: Int): String =
 let cg_is_array_zip_with (module_name: String) (name: String): Bool =
     module_name == "<prelude>" && name == "plum__array_zip_with_raw"
 
-// Own both arrays through the fill. Each callback consumes two retained
-// elements, and its owned result goes straight into the output slot.
+// Own both inputs through the fill. A reused input transfers each old slot
+// into the callback before the result overwrites it. The other input retains
+// its own reference. Only the result type may release the reused array.
 let cg_array_zip_with
     (p: CgProgram)
     (env: Array[CgSlot])
@@ -6736,6 +6737,8 @@ let cg_array_zip_with
     let pair = cg_expr(p, env, right.n, pair_e);
     let left_ty = cg_elem_ty(left.ty);
     let right_ty = cg_elem_ty(right.ty);
+    let reuse_left = cg_zip_can_reuse(p, left_e);
+    let reuse_right = cg_zip_can_reuse(p, right_e);
     let elem = cg_closure_ret(pair.ty);
     let out = cg_reg(pair.n);
     let len = out.concat("_len");
@@ -6750,12 +6753,13 @@ let cg_array_zip_with
         .concat("  ${len}_b = call i64 @plum_array_len(ptr ${right.val})\n")
         .concat("  ${len}_left = icmp slt i64 ${len}_a, ${len}_b\n")
         .concat("  ${len} = select i1 ${len}_left, i64 ${len}_a, i64 ${len}_b\n");
-    let body = cg_elem_ptr_lines_at(left.val, index, l.concat("_slot"))
-        .concat("  ${l} = load ${cg_llvm_ty(left_ty)}, ptr ${l}_slot\n")
-        .concat(cg_inc(left_ty, l))
-        .concat(cg_elem_ptr_lines_at(right.val, index, r.concat("_slot")))
-        .concat("  ${r} = load ${cg_llvm_ty(right_ty)}, ptr ${r}_slot\n")
-        .concat(cg_inc(right_ty, r))
+    let storage = if reuse_left || reuse_right {
+        let a = if reuse_left { left.val } else { "null" };
+        let b = if reuse_right { right.val } else { "null" };
+        "  ${out} = call ptr @plum_array_zip_result(i64 ${len}, ptr ${a}, ptr ${b})\n"
+    } else { "  ${out} = call ptr @plum_array_new_result(i64 ${len})\n" };
+    let body = cg_zip_arg(left, left_ty, index, l, reuse_left)
+        .concat(cg_zip_arg(right, right_ty, index, r, reuse_right))
         .concat(
             cg_invoke(
                 pair.val,
@@ -6768,9 +6772,15 @@ let cg_array_zip_with
         .concat("  store ${cg_llvm_ty(elem)} ${cg_reg(i + 3)}, ptr ${slot}\n");
     Emit {
         code: left.code.concat(right.code).concat(pair.code).concat(bounds)
-            .concat("  ${out} = call ptr @plum_array_new_result(i64 ${len})\n")
+            .concat(storage)
+            .concat(if reuse_left { "  ${l}_move = icmp eq ptr ${left.val}, ${out}\n" } else { "" })
+            .concat(
+                if reuse_right { "  ${r}_move = icmp eq ptr ${right.val}, ${out}\n" } else { "" }
+            )
             .concat(loop.pre).concat(body).concat(loop.post)
-            .concat(cg_dec_cg(pair.ty, pair.val)).concat(right.drop).concat(left.drop),
+            .concat(cg_dec_cg(pair.ty, pair.val))
+            .concat(cg_zip_release(p, right_e, right, r, reuse_right))
+            .concat(cg_zip_release(p, left_e, left, l, reuse_left)),
         allocas: "  ${iv} = alloca i64\n${left.allocas}${right.allocas}${pair.allocas}",
         releases: left.releases.concat(right.releases).concat(pair.releases),
         globals: left.globals.concat(right.globals).concat(pair.globals),
@@ -6779,6 +6789,32 @@ let cg_array_zip_with
         n: i + 5
     }
 }
+
+let cg_zip_can_reuse (p: CgProgram) (src: typecheck.TExpr): Bool =
+    cg_rc_enabled(()) && cg_can_release_early(p, cg_concrete(p, typecheck.texpr_ty(p.subst, src)))
+
+let cg_zip_arg (src: BorrowEmit) (ty: CgTy) (idx: String) (reg: String) (reuse: Bool): String =
+    cg_elem_ptr_lines_at(src.val, idx, reg.concat("_slot"))
+        .concat(
+            if reuse && cg_is_heap(ty) {
+                "  ${reg} = call ptr @plum_array_owned_arg(ptr ${reg}_slot, i1 ${reg}_move)\n"
+            } else {
+                "  ${reg} = load ${cg_llvm_ty(ty)}, ptr ${reg}_slot\n".concat(cg_inc(ty, reg))
+            }
+        )
+
+let cg_zip_release
+    (p: CgProgram)
+    (src: typecheck.TExpr)
+    (owned: BorrowEmit)
+    (reg: String)
+    (reuse: Bool): String
+=
+    if reuse {
+        let ity = cg_concrete(p, typecheck.texpr_ty(p.subst, src));
+        "  ${reg}_release = select i1 ${reg}_move, ptr null, ptr ${owned.val}\n"
+            .concat(cg_dec(ity, reg.concat("_release")))
+    } else { owned.drop }
 
 let cg_array_ns_call
     (p: CgProgram)

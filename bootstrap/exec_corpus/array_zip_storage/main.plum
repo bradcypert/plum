@@ -1,3 +1,5 @@
+use Memory;
+
 extern "C" {
     fn zip_close(n: Int) -> Unit;
     fn zip_closed() -> Int;
@@ -21,6 +23,38 @@ let exercise_scoped (): Unit = {
     assert_eq(closed(), 2);
     assert_eq(unsafe { pairs[0].first.raw() }, 0);
     assert_eq(pairs[0].second(), 2);
+}
+
+let live_bytes (): Int = match Memory.snapshot() {
+    Some(s) => s.live_bytes,
+    None => -1,
+}
+
+let oversized_input (): Unit = {
+    let bytes = "a".repeat(4096).concat("b").as_bytes();
+    let mut values = bytes.to_array();
+    values = Array.filter(values, |x| x == 98);
+    let pairs = Array.zip(values, [7, 8]);
+    let live = live_bytes();
+    if live >= 0 {
+        assert(live < 8192);
+    };
+    assert_eq(pairs.len(), 1);
+    assert_eq(pairs[0].first, 98);
+    assert_eq(pairs[0].second, 7);
+}
+
+let owned_nested (right_shorter: Bool): Unit = {
+    let text = "ab".repeat(32);
+    if right_shorter {
+        let pairs = Array.zip([[text], ["tail"]], [["head".repeat(32)]]);
+        assert_eq(pairs[0].first[0], text);
+        assert_eq(pairs[0].second[0], "head".repeat(32));
+    } else {
+        let pairs = Array.zip([[text]], [["head".repeat(32)], [text]]);
+        assert_eq(pairs[0].first[0], text);
+        assert_eq(pairs[0].second[0], "head".repeat(32));
+    }
 }
 
 let main (): Unit = {
@@ -64,6 +98,9 @@ let main (): Unit = {
         assert_eq(pairs[i].second, alias[i]);
     };
 
+    oversized_input();
+    owned_nested(false);
+    owned_nested(true);
     exercise_scoped();
     assert_eq(closed(), 7);
     println("Array.zip pairs typed values and preserves shared and scoped owners")
