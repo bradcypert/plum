@@ -97,11 +97,32 @@ let compact_owned_children (): Unit = {
     };
 }
 
+let project_owners (m: Map[Int, Owner]): (Array[Int], Array[Owner]) =
+    (Map.keys(m), Map.values(m))
+
+let check_projected_owners (): Unit = {
+    let keys = [0, -3592346752865808038, 7849046083877192578, 17];
+    let mut m: Map[Int, Owner] = Map.new(());
+    for i in 0..keys.len() {
+        m = Map.insert(m, keys[i], make(67 + i));
+    };
+    let (actual, owners) = project_owners(m);
+    assert_eq(closed(), 67);
+    assert_eq(actual.len(), keys.len());
+    assert_eq(owners.len(), keys.len());
+    for i in 0..owners.len() {
+        let id = unsafe { owners[i].resource.raw() };
+        assert_eq(actual[i], keys[id - 67]);
+    };
+}
+
 let main (): Unit = {
     exercise();
     assert_eq(closed(), 49);
     insert_shared_children();
     assert_eq(closed(), 67);
     compact_owned_children();
+    check_projected_owners();
+    assert_eq(closed(), 71);
     println("Map updates preserve shared resource owners and release each exactly once")
 }

@@ -4473,6 +4473,8 @@ let cg_fn_call
         cg_leaf_tail(p, tail, cg_array_insert(p, env, n, args[0], args[1], args[2]))
     } else if cg_is_array_remove_compact(module_name, name) {
         cg_leaf_tail(p, tail, cg_array_remove(p, env, n, args[0], args[1], ret, true))
+    } else if cg_is_array_reserve_empty(module_name, name) {
+        cg_leaf_tail(p, tail, cg_array_reserve_empty(p, env, n, args[0], targs[0], ret))
     } else if cg_is_array_fold_context(module_name, name) {
         cg_leaf_tail(p, tail, cg_array_fold(
             p,
@@ -5742,6 +5744,33 @@ let cg_array_push
         val: cell,
         ty: ty,
         n: v.n + 6
+    }
+}
+
+let cg_is_array_reserve_empty (module_name: String) (name: String): Bool =
+    module_name == "<prelude>" && name == "plum__array_reserve_empty_raw"
+
+let cg_array_reserve_empty
+    (p: CgProgram)
+    (env: Array[CgSlot])
+    (n: Int)
+    (capacity: typecheck.TExpr)
+    (elem: typecheck.ITy)
+    (ty: CgTy): Emit
+= {
+    let cap = cg_expr(p, env, n, capacity);
+    // Scoped array accumulators can retain an owner across recursive calls.
+    // Their first push would copy the reserved buffer and lose its capacity.
+    let requested = if cg_can_release_early(p, cg_concrete(p, elem)) { cap.val } else { "0" };
+    let out = cg_reg(cap.n);
+    Emit {
+        code: cap.code.concat("  ${out} = call ptr @plum_array_reserve_empty(i64 ${requested})\n"),
+        allocas: cap.allocas,
+        releases: cap.releases,
+        globals: cap.globals,
+        val: out,
+        ty: ty,
+        n: cap.n + 1,
     }
 }
 

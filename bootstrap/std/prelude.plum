@@ -2063,49 +2063,44 @@ pub let Map.remove[K: Eq + Hash, V] (m: Map[K, V]) (k: K): Map[K, V] = {
 /// How many entries.
 pub let Map.len[K, V] (m: Map[K, V]): Int = m.size
 
-let map_node_keys[K, V] (node: MapNode[K, V]) (acc: Array[K]): Array[K] = match node {
-    MapEmpty => acc,
-    MapLeaf(_, k, _) => acc.push(k),
-    MapCollision(_, entries) => {
-        let mut out = acc;
-        for entry in entries {
-            out = out.push(entry.key);
-        };
-        out
-    },
-    MapBranch(_, children) => {
-        let mut out = acc;
-        for child in children {
-            out = map_node_keys(child, out);
-        };
-        out
-    },
-}
+// Reserve the known size of the result while keeping its initialized
+// length at zero. Older compilers use ordinary array growth.
+let plum__array_reserve_empty_raw[T] (capacity: Int): Array[T] = []
 
-let map_node_values[K, V] (node: MapNode[K, V]) (acc: Array[V]): Array[V] = match node {
+let map_node_collect[K, V, T]
+    (node: MapNode[K, V])
+    (acc: Array[T])
+    (project: (K, V) -> T): Array[T]
+= match node {
     MapEmpty => acc,
-    MapLeaf(_, _, v) => acc.push(v),
-    MapCollision(_, entries) => {
-        let mut out = acc;
-        for entry in entries {
-            out = out.push(entry.value);
-        };
-        out
-    },
-    MapBranch(_, children) => {
-        let mut out = acc;
-        for child in children {
-            out = map_node_values(child, out);
-        };
-        out
-    },
+    MapLeaf(_, k, v) => acc.push(project(k, v)),
+    MapCollision(_, entries) => plum__array_fold_context_raw(
+        entries,
+        acc,
+        project,
+        (),
+        (),
+        |out, entry, get, unused1, unused2| out.push(get(entry.key, entry.value))
+    ),
+    MapBranch(_, children) => plum__array_fold_context_raw(
+        children,
+        acc,
+        project,
+        (),
+        (),
+        |out, child, get, unused1, unused2| map_node_collect(child, out, get)
+    ),
 }
 
 /// Every key, in no particular order.
-pub let Map.keys[K, V] (m: Map[K, V]): Array[K] = map_node_keys(m.root, [])
+pub let Map.keys[K, V] (m: Map[K, V]): Array[K] = match m {
+    Map { root, size } => map_node_collect(root, plum__array_reserve_empty_raw(size), |k, v| k),
+}
 
 /// Every value, in the same order as `Map.keys`.
-pub let Map.values[K, V] (m: Map[K, V]): Array[V] = map_node_values(m.root, [])
+pub let Map.values[K, V] (m: Map[K, V]): Array[V] = match m {
+    Map { root, size } => map_node_collect(root, plum__array_reserve_empty_raw(size), |k, v| v),
+}
 
 let map_from_arrays_acc[K: Eq + Hash, V]
     (keys: Array[K])
