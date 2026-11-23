@@ -94,6 +94,7 @@ def main():
                                   ('array_concat_ownership', 'Array.concat: owned batch appends, immutable aliases, operand order and scoped owners'),
                                   ('array_slice_ownership', 'Array.slice: clamped ranges, compact copies, operand order and scoped owners'),
                                   ('array_reverse_ownership', 'Array.reverse: permutations, aliases, function values and scoped owners'),
+                                  ('array_zip_storage', 'Array.zip pairs typed values and preserves shared and scoped owners'),
                                   ('array_set_ownership', 'Array.set: consuming reuse, persistent snapshots, operand aliases and scalar/heap ownership'),
                                   ('array_callback_ownership', 'Array callbacks: receiver captures, operand order, immutable aliases and consuming reuse'),
                                   ('array_map_transfer', 'Array.map: moved child references, immutable aliases and scoped cleanup'),

@@ -1407,19 +1407,23 @@ pub let Array.sort_float (arr: Array[Float]): Array[Float] =
 /// A named struct, not a tuple, exactly as the real prelude has it.
 pub struct Zipped[A, B] { pub first: A, pub second: B }
 
-let plum__array_zip_acc[T, U]
+// The current compiler lowers this private traversal to an exact-sized
+// array and a paired fill. The source body supports older bootstrap compilers.
+let plum__array_zip_with_raw[T, U, V]
     (a: Array[T])
     (b: Array[U])
-    (i: Int)
-    (acc: Array[Zipped[T, U]]): Array[Zipped[T, U]]
-=
-    if i >= a.len() || i >= b.len() { acc } else {
-        plum__array_zip_acc(a, b, i + 1, acc.push(Zipped { first: a[i], second: b[i] }))
-    }
+    (pair: (T, U) -> V): Array[V]
+= {
+    let mut out = [];
+    for i in 0..Int.min(a.len(), b.len()) {
+        out = out.push(pair(a[i], b[i]));
+    };
+    out
+}
 
 /// Pairs elements positionally, stopping at the shorter array.
 pub let Array.zip[T, U] (a: Array[T]) (b: Array[U]): Array[Zipped[T, U]] =
-    plum__array_zip_acc(a, b, 0, [])
+    plum__array_zip_with_raw(a, b, |first, second| Zipped { first: first, second: second })
 
 // --- String trimming ---
 

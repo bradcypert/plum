@@ -1,0 +1,1 @@
+Array.zip pairs typed values and preserves shared and scoped owners

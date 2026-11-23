@@ -4467,9 +4467,13 @@ let cg_fn_call
     (tail: Bool)
     (pending: String): Emit
 =
-    match cg_handle_conv(p, env, n, name, args, ret) {
-        Some(e) => e,
-        None => cg_fn_call_real(p, env, n, module_name, name, args, targs, ret, tail, pending),
+    if cg_is_array_zip_with(module_name, name) {
+        cg_leaf_tail(p, tail, cg_array_zip_with(p, env, n, args[0], args[1], args[2]))
+    } else {
+        match cg_handle_conv(p, env, n, name, args, ret) {
+            Some(e) => e,
+            None => cg_fn_call_real(p, env, n, module_name, name, args, targs, ret, tail, pending),
+        }
     }
 
 let cg_fn_call_real
@@ -6713,6 +6717,68 @@ let cg_invoke (clo_val: String) (ret: CgTy) (arg_ops: String) (n: Int): String =
         .concat("  ").concat(cg_reg(n)).concat(" = load ptr, ptr ").concat(cg_reg(n)).concat("p\n")
         .concat("  ").concat(cg_reg(n + 1)).concat(" = call ").concat(cg_llvm_ty(ret)).concat(" ")
         .concat(cg_reg(n)).concat("(ptr ").concat(clo_val).concat(arg_ops).concat(")\n")
+
+let cg_is_array_zip_with (module_name: String) (name: String): Bool =
+    module_name == "<prelude>" && name == "plum__array_zip_with_raw"
+
+// Own both arrays through the fill. Each callback consumes two retained
+// elements, and its owned result goes straight into the output slot.
+let cg_array_zip_with
+    (p: CgProgram)
+    (env: Array[CgSlot])
+    (n: Int)
+    (left_e: typecheck.TExpr)
+    (right_e: typecheck.TExpr)
+    (pair_e: typecheck.TExpr): Emit
+= {
+    let left = cg_borrow_owned(p, env, n, left_e);
+    let right = cg_borrow_owned(p, env, left.n, right_e);
+    let pair = cg_expr(p, env, right.n, pair_e);
+    let left_ty = cg_elem_ty(left.ty);
+    let right_ty = cg_elem_ty(right.ty);
+    let elem = cg_closure_ret(pair.ty);
+    let out = cg_reg(pair.n);
+    let len = out.concat("_len");
+    let iv = cg_reg(pair.n + 1);
+    let loop = cg_array_loop(iv, len, pair.n + 2);
+    let index = loop.idx_reg;
+    let i = loop.body_n;
+    let l = cg_reg(i);
+    let r = cg_reg(i + 1);
+    let slot = cg_reg(i + 4);
+    let bounds = "  ${len}_a = call i64 @plum_array_len(ptr ${left.val})\n"
+        .concat("  ${len}_b = call i64 @plum_array_len(ptr ${right.val})\n")
+        .concat("  ${len}_left = icmp slt i64 ${len}_a, ${len}_b\n")
+        .concat("  ${len} = select i1 ${len}_left, i64 ${len}_a, i64 ${len}_b\n");
+    let body = cg_elem_ptr_lines_at(left.val, index, l.concat("_slot"))
+        .concat("  ${l} = load ${cg_llvm_ty(left_ty)}, ptr ${l}_slot\n")
+        .concat(cg_inc(left_ty, l))
+        .concat(cg_elem_ptr_lines_at(right.val, index, r.concat("_slot")))
+        .concat("  ${r} = load ${cg_llvm_ty(right_ty)}, ptr ${r}_slot\n")
+        .concat(cg_inc(right_ty, r))
+        .concat(
+            cg_invoke(
+                pair.val,
+                elem,
+                ", ${cg_llvm_ty(left_ty)} ${l}, ${cg_llvm_ty(right_ty)} ${r}",
+                i + 2
+            )
+        )
+        .concat(cg_elem_ptr_lines_at(out, index, slot))
+        .concat("  store ${cg_llvm_ty(elem)} ${cg_reg(i + 3)}, ptr ${slot}\n");
+    Emit {
+        code: left.code.concat(right.code).concat(pair.code).concat(bounds)
+            .concat("  ${out} = call ptr @plum_array_new_result(i64 ${len})\n")
+            .concat(loop.pre).concat(body).concat(loop.post)
+            .concat(cg_dec_cg(pair.ty, pair.val)).concat(right.drop).concat(left.drop),
+        allocas: "  ${iv} = alloca i64\n${left.allocas}${right.allocas}${pair.allocas}",
+        releases: left.releases.concat(right.releases).concat(pair.releases),
+        globals: left.globals.concat(right.globals).concat(pair.globals),
+        val: out,
+        ty: CgArray(elem),
+        n: i + 5
+    }
+}
 
 let cg_array_ns_call
     (p: CgProgram)

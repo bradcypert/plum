@@ -1,0 +1,11 @@
+// A non-power-of-two result catches geometric growth as well as extra copies.
+let main (): Unit = {
+    let left = "a".repeat(4097).as_bytes().to_array();
+    let right = "b".repeat(5000).as_bytes().to_array();
+    let pairs = Array.zip(left, right);
+    assert_eq(pairs.len(), 4097);
+    for pair in pairs {
+        assert_eq(pair.first, 97);
+        assert_eq(pair.second, 98);
+    };
+}
