@@ -1,0 +1,43 @@
+extern "C" {
+    fn map_scoped_close(id: Int) -> Unit;
+    fn map_scoped_closed() -> Int;
+}
+
+handle Resource { on_drop: map_scoped_close }
+
+struct Owner { resource: Resource }
+
+let make (id: Int): Owner = Owner { resource: unsafe { Resource.from_raw(id) } }
+
+let raw (owner: Option[Owner]): Int = match owner {
+    Some(o) => unsafe { o.resource.raw() },
+    None => -1,
+}
+
+let closed (): Int = unsafe { map_scoped_closed() }
+
+let exercise (): Unit = {
+    let mut m: Map[Int, Owner] = Map.new(());
+    for i in 0..48 {
+        m = Map.insert(m, i, make(i));
+    };
+    let snapshot = m;
+    m = Map.insert(m, 15, make(48));
+    m = Map.remove(m, 16);
+    m = Map.remove(m, 99);
+
+    assert_eq(Map.len(m), 47);
+    assert_eq(Map.len(snapshot), 48);
+    for i in 0..48 {
+        assert_eq(raw(Map.get(snapshot, i)), i);
+        let expected = if i == 15 { 48 } else if i == 16 { -1 } else { i };
+        assert_eq(raw(Map.get(m, i)), expected);
+    };
+    assert_eq(closed(), 0);
+}
+
+let main (): Unit = {
+    exercise();
+    assert_eq(closed(), 49);
+    println("Map updates preserve shared resource owners and release each exactly once")
+}

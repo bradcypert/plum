@@ -1985,12 +1985,18 @@ let map_node_remove[K: Eq, V]
 /// An empty map.
 pub let Map.new[K, V] (): Map[K, V] = Map { root: MapEmpty, size: 0 }
 
+// Matching the wrapper lets Perceus reset it and pass the root to the
+// trie update before rebuilding the wrapper. A shared map keeps its root.
 /// A NEW map with `k` set to `v`, replacing any previous value. The
 /// original is unchanged. Only the affected trie path is rebuilt.
 pub let Map.insert[K: Eq + Hash, V] (m: Map[K, V]) (k: K) (v: V): Map[K, V] = {
     let hash = value_hash(k);
-    let added = if map_node_contains(m.root, hash, k, 0) { 0 } else { 1 };
-    Map { root: map_node_put(m.root, hash, k, v, 0), size: m.size + added }
+    match m {
+        Map { root, size } => {
+            let added = if map_node_contains(root, hash, k, 0) { 0 } else { 1 };
+            Map { root: map_node_put(root, hash, k, v, 0), size: size + added }
+        },
+    }
 }
 
 /// The value for `k`, or `None`.
@@ -2005,7 +2011,9 @@ pub let Map.contains[K: Eq + Hash, V] (m: Map[K, V]) (k: K): Bool =
 pub let Map.remove[K: Eq + Hash, V] (m: Map[K, V]) (k: K): Map[K, V] = {
     let hash = value_hash(k);
     if map_node_contains(m.root, hash, k, 0) {
-        Map { root: map_node_remove(m.root, hash, k, 0), size: m.size - 1 }
+        match m {
+            Map { root, size } => Map { root: map_node_remove(root, hash, k, 0), size: size - 1 },
+        }
     } else { m }
 }
 
@@ -2081,14 +2089,17 @@ pub struct Set[T] { inner: Map[T, Unit] }
 pub let Set.new[T] (): Set[T] = Set { inner: Map.new(()) }
 
 /// A new set with `x` added. Adding a member twice changes nothing.
-pub let Set.insert[T: Eq + Hash] (s: Set[T]) (x: T): Set[T] =
-    Set { inner: Map.insert(s.inner, x, ()) }
+pub let Set.insert[T: Eq + Hash] (s: Set[T]) (x: T): Set[T] = match s {
+    Set { inner } => Set { inner: Map.insert(inner, x, ()) },
+}
 
 /// Whether `x` is a member.
 pub let Set.contains[T: Eq + Hash] (s: Set[T]) (x: T): Bool = Map.contains(s.inner, x)
 
 /// A new set without `x`.
-pub let Set.remove[T: Eq + Hash] (s: Set[T]) (x: T): Set[T] = Set { inner: Map.remove(s.inner, x) }
+pub let Set.remove[T: Eq + Hash] (s: Set[T]) (x: T): Set[T] = match s {
+    Set { inner } => Set { inner: Map.remove(inner, x) },
+}
 
 /// How many members.
 pub let Set.len[T] (s: Set[T]): Int = Map.len(s.inner)
