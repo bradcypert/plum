@@ -5,11 +5,24 @@ let allocation_bytes (): Int = match Memory.snapshot() {
     Some(s) => s.allocated_bytes,
 }
 
+let assert_projection_bytes (before: Int) (len: Int): Unit = {
+    let after = allocation_bytes();
+    if before >= 0 {
+        // One header and eight bytes per slot, with room for the observer.
+        assert(after - before <= 8 * len + 256);
+    };
+}
+
 let check_set_traversal (): Unit = {
     let mut source: Set[Int] = Set.new(());
     for i in 0..4096 {
         source = Set.insert(source, i);
     };
+    let before_members = allocation_bytes();
+    let members = Set.to_array(source);
+    assert_projection_bytes(before_members, 4096);
+    assert_eq(members.len(), 4096);
+    assert(members.contains(0) && members.contains(4095));
     let disjoint = Set.from_array([5000, 7000]);
     let before = allocation_bytes();
     let result = Set.intersection(source, disjoint);
@@ -68,6 +81,13 @@ let main (): Unit = {
     // These hashes share the first twelve trie levels. Test each kind
     // of collapse in isolation, including removal from a shared root.
     let path = Map.insert(Map.insert(Map.insert(Map.new(()), a, "a"), b, "b"), deep, "deep");
+    let path_keys = Map.keys(path);
+    let path_values = Map.values(path);
+    assert_eq(path_keys.len(), 3);
+    assert_eq(path_values.len(), path_keys.len());
+    for i in 0..path_keys.len() {
+        assert_eq(Map.get(path, path_keys[i]), Some(path_values[i]));
+    };
     let no_deep = Map.remove(path, deep);
     assert_eq(Map.len(no_deep), 2);
     assert_eq(Map.get(no_deep, a), Some("a"));
@@ -129,8 +149,12 @@ let main (): Unit = {
     for i in 0..1024 {
         dense = Map.insert(dense, i, i.to_string());
     };
+    let before_keys = allocation_bytes();
     let ks = Map.keys(dense);
+    assert_projection_bytes(before_keys, 1024);
+    let before_values = allocation_bytes();
     let vs = Map.values(dense);
+    assert_projection_bytes(before_values, 1024);
     assert_eq(ks.len(), 1024);
     assert_eq(vs.len(), ks.len());
     for i in 0..ks.len() {
