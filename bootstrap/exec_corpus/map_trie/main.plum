@@ -1,3 +1,58 @@
+use Memory;
+
+let allocation_bytes (): Int = match Memory.snapshot() {
+    None => -1,
+    Some(s) => s.allocated_bytes,
+}
+
+let check_set_traversal (): Unit = {
+    let mut source: Set[Int] = Set.new(());
+    for i in 0..4096 {
+        source = Set.insert(source, i);
+    };
+    let disjoint = Set.from_array([5000, 7000]);
+    let before = allocation_bytes();
+    let result = Set.intersection(source, disjoint);
+    let after = allocation_bytes();
+    assert_eq(Set.len(result), 0);
+    if before >= 0 {
+        // The disjoint traversal only needs an empty result and the
+        // observer record. A rebuilt key array or per-branch closures
+        // would allocate thousands of bytes.
+        assert(after - before < 1024);
+    };
+}
+
+let check_set_snapshots (a: Int) (b: Int) (deep: Int): Unit = {
+    let left = Set.from_array([a, b, deep]);
+    let right = Set.from_array([b, deep, 17]);
+    let either = Set.union(left, right);
+    let both = Set.intersection(left, right);
+    let only_left = Set.difference(left, right);
+    assert_eq(Set.len(either), 4);
+    for key in [a, b, deep, 17] {
+        assert(Set.contains(either, key));
+    };
+    assert_eq(Set.len(both), 2);
+    assert(Set.contains(both, b));
+    assert(Set.contains(both, deep));
+    assert_eq(Set.to_array(only_left), [a]);
+    assert_eq(Set.len(Set.intersection(left, left)), 3);
+    assert_eq(Set.len(Set.difference(right, right)), 0);
+    assert_eq(Set.len(left), 3);
+    assert(Set.contains(left, a));
+    assert(!Set.contains(left, 17));
+    assert_eq(Set.len(right), 3);
+    assert(Set.contains(right, 17));
+    assert(!Set.contains(right, a));
+
+    // Equal keys can still have distinguishable representations.
+    let neg = Set.from_array([-0.0]);
+    let pos = Set.from_array([0.0]);
+    assert_eq(Set.to_array(Set.union(neg, pos))[0].to_string(), "-0");
+    assert_eq(Set.to_array(Set.intersection(neg, pos))[0].to_string(), "-0");
+}
+
 // Inverting the two reversible word-mixer rounds supplies real complete-hash
 // collisions (the final sign-bit mask identifies these pairs). Verify the
 // hashes here so a future hashing change cannot silently weaken this test.
@@ -8,6 +63,8 @@ let main (): Unit = {
     assert_eq(a.hash(), b.hash());
     assert_eq(a.hash(), 0);
     assert_eq(deep.hash(), 1152921504606846976);
+    check_set_snapshots(a, b, deep);
+    check_set_traversal();
     // These hashes share the first twelve trie levels. Test each kind
     // of collapse in isolation, including removal from a shared root.
     let path = Map.insert(Map.insert(Map.insert(Map.new(()), a, "a"), b, "b"), deep, "deep");

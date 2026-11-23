@@ -1892,6 +1892,17 @@ let plum__array_update_raw[T, A, B, C, D]
     (update: (T, A, B, C, D) -> T): Array[T]
 = xs.set(at, update(xs[at], a, b, c, d))
 
+// Pass context without a closure per child array. The source body
+// supports older bootstrap compilers.
+let plum__array_fold_context_raw[T, A, B, C, D]
+    (xs: Array[T])
+    (init: A)
+    (b: B)
+    (c: C)
+    (d: D)
+    (step: (A, T, B, C, D) -> A): A
+= Array.fold(xs, init, |acc, item| step(acc, item, b, c, d))
+
 let map_node_get[K: Eq, V] (node: MapNode[K, V]) (hash: Int) (key: K) (shift: Int): Option[V] =
     match node {
         MapEmpty => None,
@@ -2015,17 +2026,18 @@ pub let Map.new[K, V] (): Map[K, V] = Map { root: MapEmpty, size: 0 }
 
 // Matching the wrapper lets Perceus reset it and pass the root to the
 // trie update before rebuilding the wrapper. A shared map keeps its root.
-/// A NEW map with `k` set to `v`, replacing any previous value. The
-/// original is unchanged. Only the affected trie path is rebuilt.
-pub let Map.insert[K: Eq + Hash, V] (m: Map[K, V]) (k: K) (v: V): Map[K, V] = {
-    let hash = value_hash(k);
+let map_insert_hashed[K: Eq, V] (m: Map[K, V]) (hash: Int) (k: K) (v: V): Map[K, V] =
     match m {
         Map { root, size } => {
             let added = if map_node_contains(root, hash, k, 0) { 0 } else { 1 };
             Map { root: map_node_put(root, hash, k, v, 0), size: size + added }
         },
     }
-}
+
+/// A NEW map with `k` set to `v`, replacing any previous value. The
+/// original is unchanged. Only the affected trie path is rebuilt.
+pub let Map.insert[K: Eq + Hash, V] (m: Map[K, V]) (k: K) (v: V): Map[K, V] =
+    map_insert_hashed(m, value_hash(k), k, v)
 
 /// The value for `k`, or `None`.
 pub let Map.get[K: Eq + Hash, V] (m: Map[K, V]) (k: K): Option[V] =
@@ -2138,36 +2150,73 @@ pub let Set.len[T] (s: Set[T]): Int = Map.len(s.inner)
 /// Every member, in no particular order.
 pub let Set.to_array[T] (s: Set[T]): Array[T] = Map.keys(s.inner)
 
-/// Everything in either set.
-pub let Set.union[T: Eq + Hash] (a: Set[T]) (b: Set[T]): Set[T] = {
-    let mut result = b;
-    for x in Set.to_array(a) {
-        result = Set.insert(result, x);
+enum SetSelection { SetAll, SetPresent, SetAbsent }
+
+let set_insert_selected[T: Eq]
+    (acc: Map[T, Unit])
+    (other: MapNode[T, Unit])
+    (selection: SetSelection)
+    (hash: Int)
+    (key: T): Map[T, Unit]
+= {
+    let keep = match selection {
+        SetAll => true,
+        SetPresent => map_node_contains(other, hash, key, 0),
+        SetAbsent => !map_node_contains(other, hash, key, 0),
     };
-    result
+    if keep { map_insert_hashed(acc, hash, key, ()) } else { acc }
 }
+
+// A terminal node stores the complete hash for every key it holds.
+let set_collect[T: Eq]
+    (node: MapNode[T, Unit])
+    (acc: Map[T, Unit])
+    (other: MapNode[T, Unit])
+    (selection: SetSelection): Map[T, Unit]
+= match node {
+    MapEmpty => acc,
+    MapLeaf(hash, key, _) => set_insert_selected(acc, other, selection, hash, key),
+    MapCollision(hash, entries) => plum__array_fold_context_raw(
+        entries,
+        acc,
+        other,
+        selection,
+        hash,
+        |out, entry, rhs, policy, h| set_insert_selected(out, rhs, policy, h, entry.key)
+    ),
+    MapBranch(_, children) => plum__array_fold_context_raw(
+        children,
+        acc,
+        other,
+        selection,
+        (),
+        |out, child, rhs, policy, unused| set_collect(child, out, rhs, policy)
+    ),
+}
+
+let set_root[T] (s: Set[T]): MapNode[T, Unit] =
+    match s {
+        Set { inner } => match inner {
+            Map { root, size: _ } => root,
+        },
+    }
+
+/// Everything in either set.
+pub let Set.union[T: Eq + Hash] (a: Set[T]) (b: Set[T]): Set[T] =
+    if Set.len(a) == 0 { b }
+    else {
+        match b {
+            Set { inner } => Set { inner: set_collect(set_root(a), inner, MapEmpty, SetAll) },
+        }
+    }
 
 /// Only what is in both.
-pub let Set.intersection[T: Eq + Hash] (a: Set[T]) (b: Set[T]): Set[T] = {
-    let mut result = Set.new(());
-    for x in Set.to_array(a) {
-        if Set.contains(b, x) {
-            result = Set.insert(result, x);
-        }
-    };
-    result
-}
+pub let Set.intersection[T: Eq + Hash] (a: Set[T]) (b: Set[T]): Set[T] =
+    Set { inner: set_collect(set_root(a), Map.new(()), b.inner.root, SetPresent) }
 
 /// What is in `a` and not in `b`.
-pub let Set.difference[T: Eq + Hash] (a: Set[T]) (b: Set[T]): Set[T] = {
-    let mut result = Set.new(());
-    for x in Set.to_array(a) {
-        if !Set.contains(b, x) {
-            result = Set.insert(result, x);
-        }
-    };
-    result
-}
+pub let Set.difference[T: Eq + Hash] (a: Set[T]) (b: Set[T]): Set[T] =
+    Set { inner: set_collect(set_root(a), Map.new(()), b.inner.root, SetAbsent) }
 
 let set_from_array_acc[T: Eq + Hash] (arr: Array[T]) (i: Int) (acc: Set[T]): Set[T] =
     if i >= arr.len() { acc } else { set_from_array_acc(arr, i + 1, Set.insert(acc, arr[i])) }

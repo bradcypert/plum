@@ -4473,6 +4473,16 @@ let cg_fn_call
         cg_leaf_tail(p, tail, cg_array_insert(p, env, n, args[0], args[1], args[2]))
     } else if cg_is_array_remove_compact(module_name, name) {
         cg_leaf_tail(p, tail, cg_array_remove(p, env, n, args[0], args[1], ret, true))
+    } else if cg_is_array_fold_context(module_name, name) {
+        cg_leaf_tail(p, tail, cg_array_fold(
+            p,
+            env,
+            n,
+            args[0],
+            args[1],
+            Array.slice(args, 2, args.len() - 1),
+            args[args.len() - 1]
+        ))
     } else if cg_is_array_update(module_name, name) {
         cg_leaf_tail(p, tail, cg_array_update(
             p,
@@ -6944,7 +6954,7 @@ let cg_array_ns_call
 =
     if fn_name == "map" { cg_array_map(p, env, n, args[0], args[1]) }
     else if fn_name == "filter" { cg_array_filter(p, env, n, args[0], args[1]) }
-    else if fn_name == "fold" { cg_array_fold(p, env, n, args[0], args[1], args[2]) }
+    else if fn_name == "fold" { cg_array_fold(p, env, n, args[0], args[1], [], args[2]) }
     else {
         {
             cg_fail("Array.${fn_name}(..) isn't supported yet");
@@ -7307,12 +7317,16 @@ let cg_array_filter
         f_e
     )
 
+let cg_is_array_fold_context (module_name: String) (name: String): Bool =
+    module_name == "<prelude>" && name == "plum__array_fold_context_raw"
+
 let cg_array_fold
     (p: CgProgram)
     (env: Array[CgSlot])
     (n: Int)
     (arr_e: typecheck.TExpr)
     (init_e: typecheck.TExpr)
+    (context: Array[typecheck.TExpr])
     (f_e: typecheck.TExpr): Emit
 = {
     let a = cg_expr(p, env, n, arr_e);
@@ -7320,7 +7334,15 @@ let cg_array_fold
     let arr_ity = cg_concrete(p, typecheck.texpr_ty(p.subst, arr_e));
     let move_elem = cg_is_heap(elem) && cg_can_release_early(p, cg_array_elem_ity(p, arr_ity));
     let init = cg_expr(p, env, a.n, init_e);
-    let f = cg_expr(p, env, init.n, f_e);
+    let ctx = cg_args(p, env, init.n, context);
+    let f = cg_expr(p, env, ctx.n, f_e);
+    let mut retain_context = "";
+    for i in 0..context.len() {
+        let ity = cg_concrete(p, typecheck.texpr_ty(p.subst, context[i]));
+        retain_context = retain_context.concat(cg_inc(cg_of_ity(ity), cg_arg_val(ctx.vals[i])));
+    };
+    let context_ops = if Array.is_empty(context) { "" }
+    else { ", ".concat(cg_join_commas(ctx.vals)) };
     let acc_ty = cg_llvm_ty(init.ty);
     let len = cg_reg(f.n);
     let move = len.concat("_move");
@@ -7345,13 +7367,18 @@ let cg_array_fold
         // Both operands are consumed by the closure. The accumulator
         // slot's own reference is replaced by the result immediately
         // below, so it is released rather than incremented.
-        .concat(
-            cg_invoke(f.val, init.ty, ", ${acc_ty} ${cur_acc}, ${cg_llvm_ty(elem)} ${ev}", b + 5)
-        )
+        // The context stays owned by the loop and each call gets a copy.
+        .concat(retain_context)
+        .concat(cg_invoke(
+            f.val,
+            init.ty,
+            ", ${acc_ty} ${cur_acc}, ${cg_llvm_ty(elem)} ${ev}".concat(context_ops),
+            b + 5
+        ))
         .concat("  store ").concat(acc_ty).concat(" ").concat(cg_reg(b + 6)).concat(", ptr ")
         .concat(acc).concat("\n");
     let out = cg_reg(b + 7);
-    let code = a.code.concat(init.code).concat(f.code)
+    let code = a.code.concat(init.code).concat(ctx.code).concat(f.code)
         .concat("  ").concat(len).concat(" = call i64 @plum_array_len(ptr ").concat(a.val)
         .concat(")\n")
         // Later operands may publish or capture the source. Observe their
@@ -7367,18 +7394,16 @@ let cg_array_fold
         .concat(lp.pre).concat(body).concat(lp.post)
         .concat("  ").concat(out).concat(" = load ").concat(acc_ty).concat(", ptr ").concat(acc)
         .concat("\n")
-        // Both operands arrived OWNED (`cg_expr`, not `cg_borrow`), so
-        // both are this call's to release. Neither was, which leaked
-        // the source array and the closure cell on every
-        // `Array.map`/`filter`/`fold` -- invisible when an array is
-        // used once, real the moment one is folded over twice.
+        // The result owns the final accumulator. The loop releases the
+        // source array, its own context references, and the closure.
         .concat(cg_dec(arr_ity, a.val))
+        .concat(cg_dec_args(p, context, ctx.vals, 0, ""))
         .concat(cg_dec_cg(f.ty, f.val));
     Emit {
         code: code,
-        allocas: "  ${iv} = alloca i64\n  ${acc} = alloca ${acc_ty}\n${a.allocas}${init.allocas}${f.allocas}",
-        releases: a.releases.concat(init.releases).concat(f.releases),
-        globals: a.globals.concat(init.globals).concat(f.globals),
+        allocas: "  ${iv} = alloca i64\n  ${acc} = alloca ${acc_ty}\n${a.allocas}${init.allocas}${ctx.allocas}${f.allocas}",
+        releases: a.releases.concat(init.releases).concat(ctx.releases).concat(f.releases),
+        globals: a.globals.concat(init.globals).concat(ctx.globals).concat(f.globals),
         val: out,
         ty: init.ty,
         n: b + 8,
