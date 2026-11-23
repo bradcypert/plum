@@ -1,5 +1,5 @@
 // A flat bucket table requests about 1.85 GB building this map. A bounded
-// trie path stays below 5.9 MB, including replacement/removal snapshots.
+// trie path stays below 1.75 MB, including replacement/removal snapshots.
 let main (): Unit = {
     let mut m: Map[Int, Int] = Map.new(());
     for i in 0..10000 {

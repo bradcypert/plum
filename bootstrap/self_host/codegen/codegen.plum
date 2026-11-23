@@ -4471,6 +4471,16 @@ let cg_fn_call
         cg_leaf_tail(p, tail, cg_array_zip_with(p, env, n, args[0], args[1], args[2]))
     } else if cg_is_array_insert(module_name, name) {
         cg_leaf_tail(p, tail, cg_array_insert(p, env, n, args[0], args[1], args[2]))
+    } else if cg_is_array_update(module_name, name) {
+        cg_leaf_tail(p, tail, cg_array_update(
+            p,
+            env,
+            n,
+            args[0],
+            args[1],
+            Array.slice(args, 2, args.len() - 1),
+            args[args.len() - 1]
+        ))
     } else {
         match cg_handle_conv(p, env, n, name, args, ret) {
             Some(e) => e,
@@ -5754,6 +5764,72 @@ let cg_array_insert
         val: cell,
         ty: b.ty,
         n: v.n + 4
+    }
+}
+
+let cg_is_array_update (module_name: String) (name: String): Bool =
+    module_name == "<prelude>" && name == "plum__array_update_raw"
+
+let cg_array_update
+    (p: CgProgram)
+    (env: Array[CgSlot])
+    (n: Int)
+    (base: typecheck.TExpr)
+    (idx: typecheck.TExpr)
+    (context: Array[typecheck.TExpr])
+    (update: typecheck.TExpr): Emit
+= {
+    let b = cg_expr(p, env, n, base);
+    let i = cg_expr(p, env, b.n, idx);
+    let a = cg_args(p, env, i.n, context);
+    let f = cg_expr(p, env, a.n, update);
+    let ity = cg_concrete(p, typecheck.texpr_ty(p.subst, base));
+    let elem_ity = cg_array_elem_ity(p, ity);
+    let elem = cg_elem_ty(b.ty);
+    let heap = cg_is_heap(elem);
+    let heap_flag = if heap { "1" } else { "0" };
+    let may_move = heap && cg_can_release_early(p, elem_ity);
+    let length = cg_reg(f.n);
+    let slot = cg_reg(f.n + 1);
+    let value = cg_reg(f.n + 2);
+    let output = cg_reg(f.n + 4);
+    let cell = cg_reg(f.n + 5);
+    let dest = cg_reg(f.n + 6);
+    // Observe aliases after preparing the callback. When it can see the
+    // source through another owner, keep the source's slot attached.
+    let owned = if may_move {
+        "  ${value}_move = call i1 @plum_rc_unique(ptr ${b.val})\n"
+            .concat("  ${value} = call ptr @plum_array_owned_arg(ptr ${slot}, i1 ${value}_move)\n")
+    } else {
+        "  ${value} = load ${cg_llvm_ty(elem)}, ptr ${slot}\n".concat(cg_inc(elem, value))
+    };
+    let drop_old = if heap {
+        "  ${dest}_old = load ptr, ptr ${dest}\n".concat(cg_dec(elem_ity, dest.concat("_old")))
+    } else { "" };
+    Emit {
+        code: b.code.concat(i.code).concat(a.code).concat(f.code)
+            .concat("  ${length} = call i64 @plum_array_check_index(ptr ${b.val}, i64 ${i.val})\n")
+            .concat(cg_elem_ptr_lines_at(b.val, i.val, slot)).concat(owned)
+            .concat(
+                cg_invoke(
+                    f.val,
+                    elem,
+                    ", ${cg_llvm_ty(elem)} ${value}, ${cg_join_commas(a.vals)}",
+                    f.n + 3
+                )
+            )
+            .concat(
+                "  ${cell} = call ptr @plum_array_ensure_unique(ptr ${b.val}, i1 ${heap_flag}, ptr ${cg_rel_sym(ity)})\n"
+            )
+            .concat(cg_elem_ptr_lines_at(cell, i.val, dest)).concat(drop_old)
+            .concat("  store ${cg_llvm_ty(elem)} ${output}, ptr ${dest}\n")
+            .concat(cg_dec_cg(f.ty, f.val)),
+        allocas: b.allocas.concat(i.allocas).concat(a.allocas).concat(f.allocas),
+        releases: b.releases.concat(i.releases).concat(a.releases).concat(f.releases),
+        globals: b.globals.concat(i.globals).concat(a.globals).concat(f.globals),
+        val: cell,
+        ty: b.ty,
+        n: f.n + 7
     }
 }
 

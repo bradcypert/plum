@@ -1876,6 +1876,18 @@ let plum__array_insert_raw[T] (xs: Array[T]) (at: Int) (value: T): Array[T] = {
     out
 }
 
+// Pass callback arguments directly so the recursive update needs neither
+// a captured closure nor a boxed context at each level of the trie.
+let plum__array_update_raw[T, A, B, C, D]
+    (xs: Array[T])
+    (at: Int)
+    (a: A)
+    (b: B)
+    (c: C)
+    (d: D)
+    (update: (T, A, B, C, D) -> T): Array[T]
+= xs.set(at, update(xs[at], a, b, c, d))
+
 let map_node_get[K: Eq, V] (node: MapNode[K, V]) (hash: Int) (key: K) (shift: Int): Option[V] =
     match node {
         MapEmpty => None,
@@ -1932,7 +1944,15 @@ let map_node_put[K: Eq, V]
             MapBranch(bits | bit, plum__array_insert_raw(children, i, MapLeaf(hash, key, value)))
         }
         else {
-            MapBranch(bits, children.set(i, map_node_put(children[i], hash, key, value, shift + 5)))
+            MapBranch(bits, plum__array_update_raw(
+                children,
+                i,
+                hash,
+                key,
+                value,
+                shift + 5,
+                |child, h, k, v, next| map_node_put(child, h, k, v, next)
+            ))
         }
     },
 }
