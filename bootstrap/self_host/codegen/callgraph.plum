@@ -50,6 +50,7 @@ let cg_reaches_batch
             || cg_is_array_concat(head.module, head.name, head.targs)
             || cg_is_array_zip_with(head.module, head.name)
             || cg_is_array_insert(head.module, head.name)
+            || cg_is_array_remove_compact(head.module, head.name)
             || cg_is_array_update(head.module, head.name) {
                 cg_reaches_batch(p, batch, read + 1, queued, target, seen.push(s), fuel + 1)
             }
@@ -125,6 +126,7 @@ let cg_reachable_batch
             || cg_is_array_concat(head.module, head.name, head.targs)
             || cg_is_array_zip_with(head.module, head.name)
             || cg_is_array_insert(head.module, head.name)
+            || cg_is_array_remove_compact(head.module, head.name)
             || cg_is_array_update(head.module, head.name) {
                 cg_reachable_batch(p, batch, read + 1, queued, done, fuel)
             }

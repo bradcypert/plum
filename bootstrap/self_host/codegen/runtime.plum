@@ -50,6 +50,16 @@ let cg_ascii_cells (): String = {
     ).concat("], align 8")
 }
 
+// Complete a successful raw malloc for paths that handle allocation failure.
+let cg_finish_alloc (cell: String) (size: String) (origin: String) (heap: Bool): String =
+    (
+        if heap {
+            "  call void @plum_heap_adopt_origin(ptr ${cell}, i64 ${size}, i64 ${origin})\n"
+        } else { "" }
+    ).concat("  %pn = atomicrmw add ptr @plum_n_alloc, i64 1 monotonic\n")
+        .concat("  %pb = atomicrmw add ptr @plum_b_alloc, i64 ${size} monotonic\n")
+        .concat("  store i64 1, ptr ${cell}")
+
 pub let cg_runtime (heap: Bool): String = cg_lines([
     "; --- Stage 5 runtime (self-hosted backend) ---",
     cg_fixed_bits_runtime(()),
@@ -356,12 +366,7 @@ pub let cg_runtime (heap: Bool): String = cg_lines([
     "ready:",
     "  %cell = phi ptr [ %first, %first_ok ], [ %minimum, %minimum_ready ]",
     "  %size = phi i64 [ %preferred, %first_ok ], [ %required, %minimum_ready ]",
-    if heap { "  call void @plum_heap_adopt_origin(ptr %cell, i64 %size, i64 %origin)" } else {
-        ""
-    },
-    "  %pn = atomicrmw add ptr @plum_n_alloc, i64 1 monotonic",
-    "  %pb = atomicrmw add ptr @plum_b_alloc, i64 %size monotonic",
-    "  store i64 1, ptr %cell",
+    cg_finish_alloc("%cell", "%size", "%origin", heap),
     "  ret ptr %cell",
     "fail:",
     "  call void @plum_memory_fatal(ptr %error, i64 %error_length)",
@@ -2998,10 +3003,43 @@ pub let cg_runtime (heap: Bool): String = cg_lines([
     "  ret i64 %word",
     "}",
     "",
+    "; Takes a unique nonempty cell after deletion. If compaction succeeds,",
+    "; the new cell owns every surviving slot and the old buffer is freed raw.",
+    "define internal ptr @plum_array_compact_after_remove(ptr %a, i64 %len) {",
+    "entry:",
+    "  %bytes = mul i64 %len, 8",
+    "  %size = add i64 %bytes, 16",
+    "  %usable = call i64 @malloc_usable_size(ptr %a)",
+    "; Require at least four unused slots and at most a quarter occupancy.",
+    "; The gap from doubling on growth prevents one-step grow/shrink cycles.",
+    "  %min_usable = add i64 %size, 32",
+    "  %has_slack = icmp uge i64 %usable, %min_usable",
+    "  %payload = sub i64 %usable, 16",
+    "  %capacity = lshr i64 %payload, 3",
+    "  %threshold = lshr i64 %capacity, 2",
+    "  %underfilled = icmp ule i64 %len, %threshold",
+    "  %shrink = and i1 %has_slack, %underfilled",
+    "  br i1 %shrink, label %allocate, label %keep",
+    "allocate:",
+    "  %out = call ptr @malloc(i64 %size)",
+    "  %ok = icmp ne ptr %out, null",
+    "  br i1 %ok, label %transfer, label %keep",
+    "transfer:",
+    cg_finish_alloc("%out", "%size", cg_origin_array(()).to_string(), heap),
+    "  %an = atomicrmw add ptr @plum_n_array, i64 1 monotonic",
+    "  %lp = getelementptr i8, ptr %out, i64 8",
+    "  store i64 %len, ptr %lp",
+    "  %copied = call i1 @plum_array_copy(ptr %out, ptr %a, i64 %len)",
+    "  call void @plum_free(ptr %a)",
+    "  ret ptr %out",
+    "keep:",
+    "  ret ptr %a",
+    "}",
+    "",
     "; Consume one array owner. A unique cell transfers its surviving slots;",
     "; a shared/static cell copies only survivors and retains their children.",
     "; Check the index before touching payload. Empty output releases the owner.",
-    "define ptr @plum_array_remove(ptr %a, i64 %idx, i1 %heap, ptr %rel, ptr %elem_rel) {",
+    "define ptr @plum_array_remove(ptr %a, i64 %idx, i1 %heap, ptr %rel, ptr %elem_rel, i1 %compact) {",
     "entry:",
     "  %len = call i64 @plum_array_check_index(ptr %a, i64 %idx)",
     "  %nlen = sub i64 %len, 1",
@@ -3034,6 +3072,11 @@ pub let cg_runtime (heap: Bool): String = cg_lines([
     "  call void %elem_rel(ptr %removed)",
     "  br label %done",
     "done:",
+    "  br i1 %compact, label %compact_owned, label %keep",
+    "compact_owned:",
+    "  %compacted = call ptr @plum_array_compact_after_remove(ptr %a, i64 %nlen)",
+    "  ret ptr %compacted",
+    "keep:",
     "  ret ptr %a",
     "copy:",
     "  %out = call ptr @plum_array_new(i64 %nlen)",

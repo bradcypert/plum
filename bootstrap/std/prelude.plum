@@ -1876,6 +1876,10 @@ let plum__array_insert_raw[T] (xs: Array[T]) (at: Int) (value: T): Array[T] = {
     out
 }
 
+// Trie buffers can release excess capacity after deletion. The source body
+// supports older bootstrap compilers.
+let plum__array_remove_compact_raw[T] (xs: Array[T]) (at: Int): Array[T] = xs.remove(at)
+
 // Pass callback arguments directly so the recursive update needs neither
 // a captured closure nor a boxed context at each level of the trie.
 let plum__array_update_raw[T, A, B, C, D]
@@ -1969,7 +1973,7 @@ let map_node_remove_present[K: Eq, V]
     MapLeaf(_, _, _) => MapEmpty,
     MapCollision(h, entries) => {
         let i = map_bucket_find_index(entries, key, 0);
-        let rest = entries.remove(i);
+        let rest = plum__array_remove_compact_raw(entries, i);
         if rest.len() == 1 { MapLeaf(h, rest[0].key, rest[0].value) }
         else { MapCollision(h, rest) }
     },
@@ -1982,7 +1986,7 @@ let map_node_remove_present[K: Eq, V]
         };
         // A branch or collision represents at least two entries. Only a
         // leaf child disappears when we remove a single key.
-        let rest = if leaf { children.remove(i) } else {
+        let rest = if leaf { plum__array_remove_compact_raw(children, i) } else {
             plum__array_update_raw(
                 children,
                 i,
