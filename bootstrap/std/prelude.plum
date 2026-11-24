@@ -1882,15 +1882,16 @@ let plum__array_remove_compact_raw[T] (xs: Array[T]) (at: Int): Array[T] = xs.re
 
 // Pass callback arguments directly so the recursive update needs neither
 // a captured closure nor a boxed context at each level of the trie.
-let plum__array_update_raw[T, A, B, C, D]
+let plum__array_update_raw[T, A, B, C, D, E]
     (xs: Array[T])
     (at: Int)
     (a: A)
     (b: B)
     (c: C)
     (d: D)
-    (update: (T, A, B, C, D) -> T): Array[T]
-= xs.set(at, update(xs[at], a, b, c, d))
+    (e: E)
+    (update: (T, A, B, C, D, E) -> T): Array[T]
+= xs.set(at, update(xs[at], a, b, c, d, e))
 
 // Pass context without a closure per child array. The source body
 // supports older bootstrap compilers.
@@ -1939,16 +1940,17 @@ let map_bucket_append[K, V]
     (value: V): Array[MapEntry[K, V]]
 = entries.push(MapEntry { key: key, value: value })
 
-let map_node_put[K: Eq, V]
+let map_node_put[K, V]
     (node: MapNode[K, V])
     (hash: Int)
     (key: K)
     (value: V)
+    (position: Int)
     (shift: Int): MapNode[K, V]
 = match node {
     MapEmpty => MapLeaf(hash, key, value),
     MapLeaf(h, k, v) => if h != hash { map_join(node, h, MapLeaf(hash, key, value), hash, shift) }
-    else if k == key { MapLeaf(hash, key, value) }
+    else if position < 0 { MapLeaf(hash, key, value) }
     else {
         MapCollision(hash, [MapEntry { key: k, value: v }, MapEntry { key: key, value: value }])
     },
@@ -1956,19 +1958,19 @@ let map_node_put[K: Eq, V]
         map_join(node, h, MapLeaf(hash, key, value), hash, shift)
     }
     else {
-        let i = map_bucket_find_index(entries, key, 0);
         MapCollision(
             hash,
-            if i < 0 { map_bucket_append(entries, key, value) }
+            if position == 0 { map_bucket_append(entries, key, value) }
             else {
                 plum__array_update_raw(
                     entries,
-                    i,
+                    position - 1,
                     key,
                     value,
                     (),
                     (),
-                    |previous, k, v, unused1, unused2| MapEntry {
+                    (),
+                    |previous, k, v, unused1, unused2, unused3| MapEntry {
                         key: k,
                         value: v,
                         ..previous
@@ -1990,8 +1992,9 @@ let map_node_put[K: Eq, V]
                 hash,
                 key,
                 value,
+                position,
                 shift + 5,
-                |child, h, k, v, next| map_node_put(child, h, k, v, next)
+                |child, h, k, v, at, next| map_node_put(child, h, k, v, at, next)
             ))
         }
     },
@@ -1999,7 +2002,7 @@ let map_node_put[K: Eq, V]
 
 // Return -1 for a matching leaf, 0 on a miss, or a one-based collision
 // position. The update can use this result without comparing the key again.
-let map_node_removal_index[K: Eq, V]
+let map_node_key_position[K: Eq, V]
     (node: MapNode[K, V])
     (hash: Int)
     (key: K)
@@ -2013,7 +2016,7 @@ let map_node_removal_index[K: Eq, V]
     MapBranch(bits, children) => {
         let bit = map_bit(hash, shift);
         if (bits & bit) == 0 { 0 }
-        else { map_node_removal_index(children[map_rank(bits, bit)], hash, key, shift + 5) }
+        else { map_node_key_position(children[map_rank(bits, bit)], hash, key, shift + 5) }
     },
 }
 
@@ -2099,7 +2102,14 @@ let map_node_remove_present[K, V]
                     shift + 5,
                     // A failed probe already covered the unary prefix.
                     !unary,
-                    |child, h, at, next, probe| map_node_remove_present(child, h, at, next, probe)
+                    (),
+                    |child, h, at, next, probe, unused| map_node_remove_present(
+                        child,
+                        h,
+                        at,
+                        next,
+                        probe
+                    )
                 );
                 // A recursive removal can turn the only child into a terminal.
                 if unary {
@@ -2122,8 +2132,9 @@ pub let Map.new[K, V] (): Map[K, V] = Map { root: MapEmpty, size: 0 }
 let map_insert_hashed[K: Eq, V] (m: Map[K, V]) (hash: Int) (k: K) (v: V): Map[K, V] =
     match m {
         Map { root, size } => {
-            let added = if map_node_contains(root, hash, k, 0) { 0 } else { 1 };
-            Map { root: map_node_put(root, hash, k, v, 0), size: size + added }
+            let position = map_node_key_position(root, hash, k, 0);
+            let added = if position == 0 { 1 } else { 0 };
+            Map { root: map_node_put(root, hash, k, v, position, 0), size: size + added }
         },
     }
 
@@ -2141,7 +2152,7 @@ pub let Map.contains[K: Eq + Hash, V] (m: Map[K, V]) (k: K): Bool =
     map_node_contains(m.root, value_hash(k), k, 0)
 
 let map_remove_hashed[K: Eq, V] (m: Map[K, V]) (hash: Int) (k: K): Map[K, V] = {
-    let position = map_node_removal_index(m.root, hash, k, 0);
+    let position = map_node_key_position(m.root, hash, k, 0);
     if position != 0 {
         match m {
             Map { root, size } => Map {
@@ -2271,7 +2282,7 @@ let set_apply_key[T: Eq]
     else {
         match acc {
             Map { root, size } => Map {
-                root: map_node_put(root, hash, key, (), 0),
+                root: map_node_put(root, hash, key, (), 0, 0),
                 size: size + 1
             },
         }
