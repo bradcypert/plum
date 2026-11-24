@@ -2270,6 +2270,13 @@ enum SetOperation {
     SetErase
 }
 
+let set_insert_missing[T] (acc: Map[T, Unit]) (hash: Int) (key: T): Map[T, Unit] =
+    match acc {
+        Map { root, size } => Map { root: map_node_put(root, hash, key, (), 0, 0), size: size + 1 },
+    }
+
+// The filters start with an empty accumulator and receive each source
+// member once, even when the source has full-hash collisions.
 let set_apply_key[T: Eq]
     (acc: Map[T, Unit])
     (other: MapNode[T, Unit])
@@ -2279,19 +2286,12 @@ let set_apply_key[T: Eq]
 = match operation {
     SetAll => map_insert_hashed(acc, hash, key, ()),
     SetAddMissing => if map_node_contains(acc.root, hash, key, 0) { acc }
-    else {
-        match acc {
-            Map { root, size } => Map {
-                root: map_node_put(root, hash, key, (), 0, 0),
-                size: size + 1
-            },
-        }
-    },
+    else { set_insert_missing(acc, hash, key) },
     SetPresent => if map_node_contains(other, hash, key, 0) {
-        map_insert_hashed(acc, hash, key, ())
+        set_insert_missing(acc, hash, key)
     } else { acc },
     SetAbsent => if map_node_contains(other, hash, key, 0) { acc }
-    else { map_insert_hashed(acc, hash, key, ()) },
+    else { set_insert_missing(acc, hash, key) },
     SetErase => map_remove_hashed(acc, hash, key),
 }
 
