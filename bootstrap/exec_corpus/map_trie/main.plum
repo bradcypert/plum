@@ -189,6 +189,8 @@ let check_set_snapshots (a: Int) (b: Int) (deep: Int): Unit = {
     let single_a = Set.from_array([a]);
     let single_b = Set.from_array([b]);
     assert_eq(Set.difference(single_a, single_b), single_a);
+    assert_eq(Set.difference(single_a, Set.from_array([b, deep])), single_a);
+    assert_eq(Set.len(Set.difference(single_b, left)), 0);
     assert_eq(Set.difference(collision_only, Set.from_array([b, deep])), single_a);
     assert_eq(Set.len(Set.difference(right, right)), 0);
     assert_eq(Set.len(left), 3);

@@ -2436,9 +2436,16 @@ pub let Set.difference[T: Eq + Hash] (a: Set[T]) (b: Set[T]): Set[T] = {
         match a {
             Set { inner } => Set { inner: set_collect(set_root(b), inner, MapEmpty, SetErase) },
         }
-    } else if !set_nodes_overlap(a.inner.root, b.inner.root, 0, SharedMember) { a }
+    }
     else {
-        Set { inner: set_collect(set_root(a), Map.new(()), b.inner.root, SetAbsent) }
+        match a.inner.root {
+            MapLeaf(hash, key, _) => if map_node_contains(b.inner.root, hash, key, 0) {
+                Set.new(())
+            } else { a },
+            _ => if !set_nodes_overlap(a.inner.root, b.inner.root, 0, SharedMember) { a } else {
+                Set { inner: set_collect(set_root(a), Map.new(()), b.inner.root, SetAbsent) }
+            },
+        }
     }
 }
 
