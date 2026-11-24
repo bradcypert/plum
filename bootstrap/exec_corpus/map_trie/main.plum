@@ -13,6 +13,23 @@ let assert_projection_bytes (before: Int) (len: Int): Unit = {
     };
 }
 
+let check_collision_replacements (a: Int) (b: Int): Unit = {
+    let mut map = Map.from_arrays([a, b], [0, 1]);
+    let before = allocation_bytes();
+    for i in 0..1024 {
+        let key = if i % 2 == 0 { a } else { b };
+        map = Map.insert(map, key, i);
+    };
+    let after = allocation_bytes();
+    if before >= 0 {
+        // Replacing an owned entry can recycle its record on every iteration.
+        assert(after - before < 1024);
+    };
+    assert_eq(Map.len(map), 2);
+    assert_eq(Map.get(map, a), Some(1022));
+    assert_eq(Map.get(map, b), Some(1023));
+}
+
 let check_set_traversal (): Unit = {
     let mut source: Set[Int] = Set.new(());
     for i in 0..4096 {
@@ -119,6 +136,7 @@ let main (): Unit = {
     assert_eq(a.hash(), b.hash());
     assert_eq(a.hash(), 0);
     assert_eq(deep.hash(), 1152921504606846976);
+    check_collision_replacements(a, b);
     check_set_snapshots(a, b, deep);
     check_set_traversal();
     // These hashes share the first twelve trie levels. Test each kind

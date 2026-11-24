@@ -133,6 +133,22 @@ let check_bulk_owners (): Unit = {
     assert_eq(raw(Map.get(map, 2)), 73);
 }
 
+let check_collision_owners (): Unit = {
+    let a = 0;
+    let b = -3592346752865808038;
+    assert_eq(a.hash(), b.hash());
+    let mut map = Map.insert(Map.insert(Map.new(()), a, make(75)), b, make(76));
+    map = Map.insert(map, a, make(77));
+    assert_eq(closed(), 76);
+    let snapshot = map;
+    map = Map.insert(map, a, make(78));
+    assert_eq(closed(), 76);
+    assert_eq(raw(Map.get(snapshot, a)), 77);
+    assert_eq(raw(Map.get(map, a)), 78);
+    assert_eq(raw(Map.get(snapshot, b)), 76);
+    assert_eq(raw(Map.get(map, b)), 76);
+}
+
 let main (): Unit = {
     exercise();
     assert_eq(closed(), 49);
@@ -143,5 +159,7 @@ let main (): Unit = {
     assert_eq(closed(), 71);
     check_bulk_owners();
     assert_eq(closed(), 75);
+    check_collision_owners();
+    assert_eq(closed(), 79);
     println("Map updates preserve shared resource owners and release each exactly once")
 }

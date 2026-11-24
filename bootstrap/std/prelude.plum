@@ -1931,6 +1931,14 @@ let map_node_contains[K: Eq, V] (node: MapNode[K, V]) (hash: Int) (key: K) (shif
         },
     }
 
+// The new entry needs its own cell. Keep the collision node's reset token
+// in the caller so it can rebuild the node at its original size.
+let map_bucket_append[K, V]
+    (entries: Array[MapEntry[K, V]])
+    (key: K)
+    (value: V): Array[MapEntry[K, V]]
+= entries.push(MapEntry { key: key, value: value })
+
 let map_node_put[K: Eq, V]
     (node: MapNode[K, V])
     (hash: Int)
@@ -1949,8 +1957,25 @@ let map_node_put[K: Eq, V]
     }
     else {
         let i = map_bucket_find_index(entries, key, 0);
-        let entry = MapEntry { key: key, value: value };
-        MapCollision(hash, if i < 0 { entries.push(entry) } else { entries.set(i, entry) })
+        MapCollision(
+            hash,
+            if i < 0 { map_bucket_append(entries, key, value) }
+            else {
+                plum__array_update_raw(
+                    entries,
+                    i,
+                    key,
+                    value,
+                    (),
+                    (),
+                    |previous, k, v, unused1, unused2| MapEntry {
+                        key: k,
+                        value: v,
+                        ..previous
+                    }
+                )
+            }
+        )
     },
     MapBranch(bits, children) => {
         let bit = map_bit(hash, shift);
