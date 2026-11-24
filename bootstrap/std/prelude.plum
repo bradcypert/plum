@@ -2193,6 +2193,7 @@ pub let Set.to_array[T] (s: Set[T]): Array[T] = Map.keys(s.inner)
 
 enum SetOperation {
     SetAll,
+    SetAddMissing,
     SetPresent,
     SetAbsent,
     SetErase
@@ -2206,6 +2207,15 @@ let set_apply_key[T: Eq]
     (key: T): Map[T, Unit]
 = match operation {
     SetAll => map_insert_hashed(acc, hash, key, ()),
+    SetAddMissing => if map_node_contains(acc.root, hash, key, 0) { acc }
+    else {
+        match acc {
+            Map { root, size } => Map {
+                root: map_node_put(root, hash, key, (), 0),
+                size: size + 1
+            },
+        }
+    },
     SetPresent => if map_node_contains(other, hash, key, 0) {
         map_insert_hashed(acc, hash, key, ())
     } else { acc },
@@ -2309,6 +2319,15 @@ let set_node_is_subset[T: Eq]
 pub let Set.union[T: Eq + Hash] (a: Set[T]) (b: Set[T]): Set[T] =
     if Set.len(a) == 0 { b }
     else if Set.len(b) == 0 { a }
+    else if Set.len(b) <= Set.len(a) {
+        // Keep the left representative of an equal key, whichever
+        // set supplies the accumulator.
+        match a {
+            Set { inner } => Set {
+                inner: set_collect(set_root(b), inner, MapEmpty, SetAddMissing)
+            },
+        }
+    }
     else {
         match b {
             Set { inner } => Set { inner: set_collect(set_root(a), inner, MapEmpty, SetAll) },
