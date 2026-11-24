@@ -40,12 +40,14 @@ let check_promotion
     assert(Map.contains(source, removed));
 }
 
-let check_terminal_promotion (a: Int) (b: Int): Unit = {
+let check_terminal_promotion (a: Int) (b: Int) (deep: Int): Unit = {
     let other = key_in_slot(1, 1);
     let nested = key_in_slot(1, other + 1);
     check_promotion(Map.from_arrays([a, b], [10, 20]), b, [a], 64);
     check_promotion(Map.from_arrays([a, other], [10, 20]), a, [other], 24);
     check_promotion(Map.from_arrays([a, b, other], [10, 20, 30]), other, [a, b], 24);
+    check_promotion(Map.from_arrays([a, deep], [10, 20]), deep, [a], 24);
+    check_promotion(Map.from_arrays([a, b, deep], [10, 20, 30]), deep, [a, b], 24);
 
     let source = Map.from_arrays([a, other, nested], [10, 20, 30]);
     let result = Map.remove(source, a);
@@ -265,7 +267,7 @@ let main (): Unit = {
     assert_eq(a.hash(), b.hash());
     assert_eq(a.hash(), 0);
     assert_eq(deep.hash(), 1152921504606846976);
-    check_terminal_promotion(a, b);
+    check_terminal_promotion(a, b, deep);
     check_collision_replacements(a, b);
     check_set_snapshots(a, b, deep);
     check_set_union_collision_order(a, b, deep);

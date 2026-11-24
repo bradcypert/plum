@@ -1997,61 +1997,119 @@ let map_node_put[K: Eq, V]
     },
 }
 
-// The caller has proved the key exists. This lets the match release or
-// reset the old node before handing its children into the update.
-let map_node_remove_present[K: Eq, V]
+// Return -1 for a matching leaf, 0 on a miss, or a one-based collision
+// position. The update can use this result without comparing the key again.
+let map_node_removal_index[K: Eq, V]
     (node: MapNode[K, V])
     (hash: Int)
     (key: K)
+    (shift: Int): Int
+= match node {
+    MapEmpty => 0,
+    MapLeaf(h, k, _) => if h == hash && k == key { -1 } else { 0 },
+    MapCollision(h, entries) => if h == hash { map_bucket_find_index(entries, key, 0) + 1 } else {
+        0
+    },
+    MapBranch(bits, children) => {
+        let bit = map_bit(hash, shift);
+        if (bits & bit) == 0 { 0 }
+        else { map_node_removal_index(children[map_rank(bits, bit)], hash, key, shift + 5) }
+    },
+}
+
+// A unary branch can be dropped when removing a key leaves just one
+// full hash. Follow the unary prefix to the first split.
+let map_unary_survivor[K, V]
+    (node: MapNode[K, V])
+    (hash: Int)
     (shift: Int): MapNode[K, V]
+= match node {
+    MapBranch(bits, children) => if children.len() == 1 {
+        map_unary_survivor(children[0], hash, shift + 5)
+    } else if children.len() == 2 {
+        let i = map_rank(bits, map_bit(hash, shift));
+        match children[i] {
+            MapLeaf(_, _, _) => {
+                let sibling = children[1 - i];
+                match sibling {
+                    MapLeaf(_, _, _) | MapCollision(_, _) => sibling,
+                    _ => MapEmpty,
+                }
+            },
+            _ => MapEmpty,
+        }
+    } else { MapEmpty },
+    _ => MapEmpty,
+}
+
+// The caller has proved the key exists. This lets the match release or
+// reset the old node before handing its children into the update.
+let map_node_remove_present[K, V]
+    (node: MapNode[K, V])
+    (hash: Int)
+    (position: Int)
+    (shift: Int)
+    (probe_unary: Bool): MapNode[K, V]
 = match node {
     MapEmpty => MapEmpty,
     MapLeaf(_, _, _) => MapEmpty,
     MapCollision(h, entries) => {
-        let i = map_bucket_find_index(entries, key, 0);
+        let i = position - 1;
         if entries.len() == 2 {
             let survivor = entries[1 - i];
             MapLeaf(h, survivor.key, survivor.value)
         } else { MapCollision(h, plum__array_remove_compact_raw(entries, i)) }
     },
     MapBranch(bits, children) => {
-        let bit = map_bit(hash, shift);
-        let i = map_rank(bits, bit);
-        let leaf = match children[i] {
-            MapLeaf(_, _, _) => true,
-            _ => false,
+        let unary = children.len() == 1;
+        let survivor = if unary && probe_unary && position < 0 {
+            map_unary_survivor(children[0], hash, shift + 5)
+        }
+        else { MapEmpty };
+        let promote_unary = match survivor {
+            MapEmpty => false,
+            _ => true,
         };
-        // A branch or collision represents at least two entries. Only a
-        // leaf child disappears when we remove a single key.
-        if leaf {
-            // Read a terminal survivor from the original array. A branch
-            // survivor still needs the current level's shift.
-            let promote = children.len() == 2 && match children[1 - i] {
+        if promote_unary { survivor } else {
+            let bit = map_bit(hash, shift);
+            let i = map_rank(bits, bit);
+            let leaf = match children[i] {
                 MapLeaf(_, _, _) => true,
-                MapCollision(_, _) => true,
                 _ => false,
             };
-            if promote { children[1 - i] }
-            else { MapBranch(bits & ~bit, plum__array_remove_compact_raw(children, i)) }
-        }
-        else {
-            let rest = plum__array_update_raw(
-                children,
-                i,
-                hash,
-                key,
-                shift + 5,
-                (),
-                |child, h, k, next, ignored| map_node_remove_present(child, h, k, next)
-            );
-            // A recursive removal can turn the only child into a terminal.
-            if rest.len() == 1 {
-                match rest[0] {
-                    MapLeaf(_, _, _) => rest[0],
-                    MapCollision(_, _) => rest[0],
-                    _ => MapBranch(bits, rest),
-                }
-            } else { MapBranch(bits, rest) }
+            // A branch or collision represents at least two entries. Only a
+            // leaf child disappears when we remove a single key.
+            if leaf {
+                // Read a terminal survivor from the original array. A branch
+                // survivor still needs the current level's shift.
+                let promote = children.len() == 2 && match children[1 - i] {
+                    MapLeaf(_, _, _) => true,
+                    MapCollision(_, _) => true,
+                    _ => false,
+                };
+                if promote { children[1 - i] }
+                else { MapBranch(bits & ~bit, plum__array_remove_compact_raw(children, i)) }
+            }
+            else {
+                let rest = plum__array_update_raw(
+                    children,
+                    i,
+                    hash,
+                    position,
+                    shift + 5,
+                    // A failed probe already covered the unary prefix.
+                    !unary,
+                    |child, h, at, next, probe| map_node_remove_present(child, h, at, next, probe)
+                );
+                // A recursive removal can turn the only child into a terminal.
+                if unary {
+                    match rest[0] {
+                        MapLeaf(_, _, _) => rest[0],
+                        MapCollision(_, _) => rest[0],
+                        _ => MapBranch(bits, rest),
+                    }
+                } else { MapBranch(bits, rest) }
+            }
         }
     },
 }
@@ -2082,15 +2140,17 @@ pub let Map.get[K: Eq + Hash, V] (m: Map[K, V]) (k: K): Option[V] =
 pub let Map.contains[K: Eq + Hash, V] (m: Map[K, V]) (k: K): Bool =
     map_node_contains(m.root, value_hash(k), k, 0)
 
-let map_remove_hashed[K: Eq, V] (m: Map[K, V]) (hash: Int) (k: K): Map[K, V] =
-    if map_node_contains(m.root, hash, k, 0) {
+let map_remove_hashed[K: Eq, V] (m: Map[K, V]) (hash: Int) (k: K): Map[K, V] = {
+    let position = map_node_removal_index(m.root, hash, k, 0);
+    if position != 0 {
         match m {
             Map { root, size } => Map {
-                root: map_node_remove_present(root, hash, k, 0),
+                root: map_node_remove_present(root, hash, position, 0, true),
                 size: size - 1
             },
         }
     } else { m }
+}
 
 /// A new map without `k`. Removing an absent key is not an error.
 pub let Map.remove[K: Eq + Hash, V] (m: Map[K, V]) (k: K): Map[K, V] =
