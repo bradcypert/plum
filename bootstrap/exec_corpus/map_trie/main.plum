@@ -57,8 +57,8 @@ let check_terminal_promotion (a: Int) (b: Int) (deep: Int): Unit = {
     assert_eq(Map.get(source, a), Some(10));
 }
 
-let check_collision_replacements (a: Int) (b: Int): Unit = {
-    let mut map = Map.from_arrays([a, b], [0, 1]);
+let check_collision_replacements (a: Int) (b: Int) (deep: Int): Unit = {
+    let mut map = Map.from_arrays([a, b, deep], [0, 1, 2]);
     let before = allocation_bytes();
     for i in 0..1024 {
         let key = if i % 2 == 0 { a } else { b };
@@ -69,9 +69,10 @@ let check_collision_replacements (a: Int) (b: Int): Unit = {
         // Replacing an owned entry can recycle its record on every iteration.
         assert(after - before < 1024);
     };
-    assert_eq(Map.len(map), 2);
+    assert_eq(Map.len(map), 3);
     assert_eq(Map.get(map, a), Some(1022));
     assert_eq(Map.get(map, b), Some(1023));
+    assert_eq(Map.get(map, deep), Some(2));
 }
 
 let check_set_traversal (): Unit = {
@@ -268,7 +269,7 @@ let main (): Unit = {
     assert_eq(a.hash(), 0);
     assert_eq(deep.hash(), 1152921504606846976);
     check_terminal_promotion(a, b, deep);
-    check_collision_replacements(a, b);
+    check_collision_replacements(a, b, deep);
     check_set_snapshots(a, b, deep);
     check_set_union_collision_order(a, b, deep);
     check_set_traversal();
