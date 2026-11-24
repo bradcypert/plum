@@ -2325,11 +2325,10 @@ let set_bucket_has_member_in[T: Eq]
     (right: MapNode[T, Unit])
     (hash: Int)
     (i: Int): Bool
-= i < entries.len()
-    && (
-        map_node_contains(right, hash, entries[i].key, 0)
-            || set_bucket_has_member_in(entries, right, hash, i + 1)
-    )
+=
+    if i >= entries.len() { false }
+    else if map_node_contains(right, hash, entries[i].key, 0) { true }
+    else { set_bucket_has_member_in(entries, right, hash, i + 1) }
 
 let set_children_overlap[T: Eq]
     (left: Array[MapNode[T, Unit]])
