@@ -183,5 +183,15 @@ let main (): Unit = {
     assert_eq(closed(), 79);
     check_promoted_owners();
     assert_eq(closed(), 83);
+    {
+        let deep = 7849046083877192578;
+        let collision = -3592346752865808038;
+        let mut map = Map.from_arrays([0, collision, deep], [make(83), make(84), make(85)]);
+        map = Map.remove(map, deep);
+        assert_eq(closed(), 84);
+        assert_eq(raw(Map.get(map, 0)), 83);
+        assert_eq(raw(Map.get(map, collision)), 84);
+    };
+    assert_eq(closed(), 86);
     println("Map updates preserve shared resource owners and release each exactly once")
 }
