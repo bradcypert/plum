@@ -2213,9 +2213,67 @@ let set_root[T] (s: Set[T]): MapNode[T, Unit] =
         },
     }
 
+let set_bucket_is_subset[T: Eq]
+    (entries: Array[MapEntry[T, Unit]])
+    (right: MapNode[T, Unit])
+    (hash: Int)
+    (shift: Int)
+    (i: Int): Bool
+=
+    if i >= entries.len() { true }
+    else if map_node_contains(right, hash, entries[i].key, shift) {
+        set_bucket_is_subset(entries, right, hash, shift, i + 1)
+    }
+    else { false }
+
+let set_children_are_subset[T: Eq]
+    (left: Array[MapNode[T, Unit]])
+    (right: Array[MapNode[T, Unit]])
+    (bits: Int)
+    (right_bits: Int)
+    (shift: Int)
+    (i: Int): Bool
+=
+    if bits == 0 { true }
+    else {
+        let bit = bits & - bits;
+        if set_node_is_subset(left[i], right[map_rank(right_bits, bit)], shift) {
+            set_children_are_subset(left, right, bits & ~bit, right_bits, shift, i + 1)
+        }
+        else { false }
+    }
+
+// Branches at the same shift use compatible bitmaps. Reject a missing
+// branch bit before testing keys, then follow only the left-hand paths.
+let set_node_is_subset[T: Eq]
+    (left: MapNode[T, Unit])
+    (right: MapNode[T, Unit])
+    (shift: Int): Bool
+= match left {
+    MapEmpty => true,
+    MapLeaf(hash, key, _) => map_node_contains(right, hash, key, shift),
+    MapCollision(hash, entries) => set_bucket_is_subset(entries, right, hash, shift, 0),
+    MapBranch(left_bits, left_children) => match right {
+        MapBranch(right_bits, right_children) =>
+            (left_bits & right_bits) == left_bits
+                && set_children_are_subset(
+                    left_children,
+                    right_children,
+                    left_bits,
+                    right_bits,
+                    shift + 5,
+                    0
+                ),
+        // A leaf or collision has only one complete hash. A branch
+        // represents at least two distinct hashes, even along a unary path.
+        _ => false,
+    },
+}
+
 /// Everything in either set.
 pub let Set.union[T: Eq + Hash] (a: Set[T]) (b: Set[T]): Set[T] =
     if Set.len(a) == 0 { b }
+    else if Set.len(b) == 0 { a }
     else {
         match b {
             Set { inner } => Set { inner: set_collect(set_root(a), inner, MapEmpty, SetAll) },
@@ -2223,8 +2281,12 @@ pub let Set.union[T: Eq + Hash] (a: Set[T]) (b: Set[T]): Set[T] =
     }
 
 /// Only what is in both.
-pub let Set.intersection[T: Eq + Hash] (a: Set[T]) (b: Set[T]): Set[T] =
-    Set { inner: set_collect(set_root(a), Map.new(()), b.inner.root, SetPresent) }
+pub let Set.intersection[T: Eq + Hash] (a: Set[T]) (b: Set[T]): Set[T] = {
+    let right_size = Set.len(b);
+    if right_size == 0 { b }
+    else if Set.len(a) <= right_size && set_node_is_subset(a.inner.root, b.inner.root, 0) { a }
+    else { Set { inner: set_collect(set_root(a), Map.new(()), b.inner.root, SetPresent) } }
+}
 
 /// What is in `a` and not in `b`.
 pub let Set.difference[T: Eq + Hash] (a: Set[T]) (b: Set[T]): Set[T] = {

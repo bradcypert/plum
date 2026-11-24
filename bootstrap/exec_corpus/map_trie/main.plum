@@ -35,6 +35,19 @@ let check_set_traversal (): Unit = {
         assert(after - before < 1024);
     };
     let empty: Set[Int] = Set.new(());
+    let superset = Set.insert(source, 8192);
+    let before_reuse = allocation_bytes();
+    let union = Set.union(source, empty);
+    let before_intersection = allocation_bytes();
+    let intersection = Set.intersection(source, superset);
+    let after_intersection = allocation_bytes();
+    if before_reuse >= 0 {
+        assert(before_intersection - before_reuse < 1024);
+        assert(after_intersection - before_intersection < 1024);
+    };
+    assert_eq(union, source);
+    assert_eq(intersection, source);
+    assert_eq(Set.len(superset), 4097);
     let before_empty = allocation_bytes();
     let same = Set.difference(source, empty);
     let after_empty = allocation_bytes();
@@ -74,6 +87,10 @@ let check_set_snapshots (a: Int) (b: Int) (deep: Int): Unit = {
     assert(Set.contains(both, deep));
     assert_eq(Set.to_array(only_left), [a]);
     assert_eq(Set.len(Set.intersection(left, left)), 3);
+    let collision_only = Set.from_array([a, b]);
+    assert_eq(Set.intersection(collision_only, left), collision_only);
+    let reversed_collision = Set.from_array([b, a]);
+    assert_eq(Set.intersection(collision_only, reversed_collision), collision_only);
     assert_eq(Set.len(Set.difference(right, right)), 0);
     assert_eq(Set.len(left), 3);
     assert(Set.contains(left, a));
