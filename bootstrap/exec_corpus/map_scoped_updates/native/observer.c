@@ -1,7 +1,7 @@
 #include <stdint.h>
 #include <stdlib.h>
 
-static unsigned char closed[79];
+static unsigned char closed[83];
 static int64_t count;
 
 void map_scoped_close(int64_t id) {

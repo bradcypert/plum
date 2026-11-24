@@ -2009,9 +2009,10 @@ let map_node_remove_present[K: Eq, V]
     MapLeaf(_, _, _) => MapEmpty,
     MapCollision(h, entries) => {
         let i = map_bucket_find_index(entries, key, 0);
-        let rest = plum__array_remove_compact_raw(entries, i);
-        if rest.len() == 1 { MapLeaf(h, rest[0].key, rest[0].value) }
-        else { MapCollision(h, rest) }
+        if entries.len() == 2 {
+            let survivor = entries[1 - i];
+            MapLeaf(h, survivor.key, survivor.value)
+        } else { MapCollision(h, plum__array_remove_compact_raw(entries, i)) }
     },
     MapBranch(bits, children) => {
         let bit = map_bit(hash, shift);
@@ -2022,8 +2023,19 @@ let map_node_remove_present[K: Eq, V]
         };
         // A branch or collision represents at least two entries. Only a
         // leaf child disappears when we remove a single key.
-        let rest = if leaf { plum__array_remove_compact_raw(children, i) } else {
-            plum__array_update_raw(
+        if leaf {
+            // Read a terminal survivor from the original array. A branch
+            // survivor still needs the current level's shift.
+            let promote = children.len() == 2 && match children[1 - i] {
+                MapLeaf(_, _, _) => true,
+                MapCollision(_, _) => true,
+                _ => false,
+            };
+            if promote { children[1 - i] }
+            else { MapBranch(bits & ~bit, plum__array_remove_compact_raw(children, i)) }
+        }
+        else {
+            let rest = plum__array_update_raw(
                 children,
                 i,
                 hash,
@@ -2031,18 +2043,16 @@ let map_node_remove_present[K: Eq, V]
                 shift + 5,
                 (),
                 |child, h, k, next, ignored| map_node_remove_present(child, h, k, next)
-            )
-        };
-        let new_bits = if leaf { bits & ~bit } else { bits };
-        // This branch had at least two entries, so at least one survives.
-        // Only a terminal node can cross a level without losing its shift.
-        if rest.len() == 1 {
-            match rest[0] {
-                MapLeaf(_, _, _) => rest[0],
-                MapCollision(_, _) => rest[0],
-                _ => MapBranch(new_bits, rest),
-            }
-        } else { MapBranch(new_bits, rest) }
+            );
+            // A recursive removal can turn the only child into a terminal.
+            if rest.len() == 1 {
+                match rest[0] {
+                    MapLeaf(_, _, _) => rest[0],
+                    MapCollision(_, _) => rest[0],
+                    _ => MapBranch(bits, rest),
+                }
+            } else { MapBranch(bits, rest) }
+        }
     },
 }
 

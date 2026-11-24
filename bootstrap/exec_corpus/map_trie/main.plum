@@ -13,6 +13,48 @@ let assert_projection_bytes (before: Int) (len: Int): Unit = {
     };
 }
 
+let key_in_slot (slot: Int) (start: Int): Int =
+    if (start.hash() & 31) == slot { start } else { key_in_slot(slot, start + 1) }
+
+let check_promotion
+    (source: Map[Int, Int])
+    (removed: Int)
+    (survivors: Array[Int])
+    (bytes_per_removal: Int): Unit
+= {
+    let before = allocation_bytes();
+    for i in 0..64 {
+        let result = Map.remove(source, removed);
+        assert_eq(Map.len(result), survivors.len());
+        assert(!Map.contains(result, removed));
+        for key in survivors {
+            assert(Map.contains(result, key));
+        };
+    };
+    let after = allocation_bytes();
+    if before >= 0 {
+        // Allow the result wrapper and, for a collision collapse, a new
+        // leaf. The source snapshot needs no singleton array copy.
+        assert(after - before <= 64 * bytes_per_removal + 256);
+    };
+    assert(Map.contains(source, removed));
+}
+
+let check_terminal_promotion (a: Int) (b: Int): Unit = {
+    let other = key_in_slot(1, 1);
+    let nested = key_in_slot(1, other + 1);
+    check_promotion(Map.from_arrays([a, b], [10, 20]), b, [a], 64);
+    check_promotion(Map.from_arrays([a, other], [10, 20]), a, [other], 24);
+    check_promotion(Map.from_arrays([a, b, other], [10, 20, 30]), other, [a, b], 24);
+
+    let source = Map.from_arrays([a, other, nested], [10, 20, 30]);
+    let result = Map.remove(source, a);
+    assert_eq(Map.len(result), 2);
+    assert_eq(Map.get(result, other), Some(20));
+    assert_eq(Map.get(result, nested), Some(30));
+    assert_eq(Map.get(source, a), Some(10));
+}
+
 let check_collision_replacements (a: Int) (b: Int): Unit = {
     let mut map = Map.from_arrays([a, b], [0, 1]);
     let before = allocation_bytes();
@@ -136,6 +178,7 @@ let main (): Unit = {
     assert_eq(a.hash(), b.hash());
     assert_eq(a.hash(), 0);
     assert_eq(deep.hash(), 1152921504606846976);
+    check_terminal_promotion(a, b);
     check_collision_replacements(a, b);
     check_set_snapshots(a, b, deep);
     check_set_traversal();
