@@ -107,6 +107,28 @@ let check_set_traversal (): Unit = {
     assert_eq(union, source);
     assert_eq(intersection, source);
     assert_eq(Set.len(superset), 4097);
+
+    let covered = Set.from_array([0, 2048, 4095]);
+    let before_covered = allocation_bytes();
+    let covered_union = Set.union(source, covered);
+    let after_covered = allocation_bytes();
+    assert_eq(covered_union, source);
+    if before_covered >= 0 {
+        assert(after_covered - before_covered < 256);
+    };
+
+    let extra = Set.insert(covered, 8192);
+    let before_extra = allocation_bytes();
+    let extended = Set.union(source, extra);
+    let after_extra = allocation_bytes();
+    assert_eq(extended, superset);
+    assert(Set.contains(extra, 8192));
+    assert(!Set.contains(source, 8192));
+    if before_extra >= 0 {
+        // Only the novel member needs a copy of a path into the shared trie.
+        assert(after_extra - before_extra < 4096);
+    };
+
     let before_empty = allocation_bytes();
     let same = Set.difference(source, empty);
     let after_empty = allocation_bytes();
@@ -164,8 +186,35 @@ let check_set_snapshots (a: Int) (b: Int) (deep: Int): Unit = {
     assert_eq(Set.to_array(Set.union(neg, pos))[0].to_string(), "-0");
     assert_eq(Set.to_array(Set.intersection(neg, pos))[0].to_string(), "-0");
     let signed = Set.from_array([-0.0, 1.0, 2.0]);
+    let added = Set.union(signed, Set.from_array([0.0, 3.0]));
+    assert_eq(Set.len(added), 4);
+    assert(Set.contains(added, 3.0));
+    assert(Array.any(Set.to_array(added), |x| x.to_string() == "-0"));
     let remainder = Set.difference(signed, Set.from_array([1.0]));
     assert(Array.any(Set.to_array(remainder), |x| x.to_string() == "-0"));
+}
+
+let check_union_key (left: Set[Int]) (right: Set[Int]) (expected: Set[Int]): Unit = {
+    let result = Set.union(left, right);
+    assert_eq(result, expected);
+    let table = Map.insert(Map.new(()), result, 42);
+    assert_eq(Map.get(table, expected), Some(42));
+}
+
+let check_set_union_collision_order (a: Int) (b: Int) (deep: Int): Unit = {
+    let single_a = Set.from_array([a]);
+    let single_b = Set.from_array([b]);
+    let ab = Set.from_array([a, b]);
+    let ba = Set.from_array([b, a]);
+    // Union historically keeps right bucket positions, even with different
+    // operand sizes. Those positions determine structural key equality.
+    check_union_key(single_a, single_b, ba);
+    check_union_key(ab, single_b, ba);
+    check_union_key(ab, ba, ba);
+    let left_branch = Set.from_array([a, deep]);
+    let expected = Set.from_array([b, a, deep]);
+    check_union_key(left_branch, single_b, expected);
+    check_union_key(left_branch, Set.from_array([b, deep]), expected);
 }
 
 // Inverting the two reversible word-mixer rounds supplies real complete-hash
@@ -181,6 +230,7 @@ let main (): Unit = {
     check_terminal_promotion(a, b);
     check_collision_replacements(a, b);
     check_set_snapshots(a, b, deep);
+    check_set_union_collision_order(a, b, deep);
     check_set_traversal();
     // These hashes share the first twelve trie levels. Test each kind
     // of collapse in isolation, including removal from a shared root.
