@@ -149,6 +149,26 @@ let check_collision_owners (): Unit = {
     assert_eq(raw(Map.get(map, b)), 76);
 }
 
+let check_promoted_owners (): Unit = {
+    let a = 0;
+    let b = -3592346752865808038;
+    {
+        let mut map = Map.from_arrays([a, b], [make(79), make(80)]);
+        map = Map.remove(map, b);
+        assert_eq(closed(), 80);
+        assert_eq(raw(Map.get(map, a)), 79);
+    };
+    assert_eq(closed(), 81);
+    {
+        let other = key_at(1, 1);
+        let snapshot = Map.from_arrays([a, other], [make(81), make(82)]);
+        let result = Map.remove(snapshot, a);
+        assert_eq(closed(), 81);
+        assert_eq(raw(Map.get(result, other)), 82);
+        assert_eq(raw(Map.get(snapshot, a)), 81);
+    };
+}
+
 let main (): Unit = {
     exercise();
     assert_eq(closed(), 49);
@@ -161,5 +181,7 @@ let main (): Unit = {
     assert_eq(closed(), 75);
     check_collision_owners();
     assert_eq(closed(), 79);
+    check_promoted_owners();
+    assert_eq(closed(), 83);
     println("Map updates preserve shared resource owners and release each exactly once")
 }
