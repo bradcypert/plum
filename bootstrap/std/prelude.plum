@@ -2419,12 +2419,52 @@ pub let Set.union[T: Eq + Hash] (a: Set[T]) (b: Set[T]): Set[T] =
         }
     }
 
+// Find the left representative of a singleton intersection. A matching
+// leaf already has the shape needed by the result.
+let set_find_leaf[T: Eq]
+    (node: MapNode[T, Unit])
+    (hash: Int)
+    (key: T)
+    (shift: Int): MapNode[T, Unit]
+= match node {
+    MapEmpty => MapEmpty,
+    MapLeaf(h, k, _) => if h == hash && k == key { node } else { MapEmpty },
+    MapCollision(h, entries) => if h != hash { MapEmpty } else {
+        let i = map_bucket_find_index(entries, key, 0);
+        if i < 0 { MapEmpty } else { MapLeaf(h, entries[i].key, ()) }
+    },
+    MapBranch(bits, children) => {
+        let bit = map_bit(hash, shift);
+        if (bits & bit) == 0 { MapEmpty }
+        else { set_find_leaf(children[map_rank(bits, bit)], hash, key, shift + 5) }
+    },
+}
+
 /// Only what is in both.
 pub let Set.intersection[T: Eq + Hash] (a: Set[T]) (b: Set[T]): Set[T] = {
     let right_size = Set.len(b);
     if right_size == 0 { b }
-    else if Set.len(a) <= right_size && set_node_is_subset(a.inner.root, b.inner.root, 0) { a }
-    else { Set { inner: set_collect(set_root(a), Map.new(()), b.inner.root, SetPresent) } }
+    else {
+        match a.inner.root {
+            MapEmpty => a,
+            MapLeaf(hash, key, _) => if map_node_contains(b.inner.root, hash, key, 0) { a }
+            else { Set.new(()) },
+            _ => match b.inner.root {
+                MapLeaf(hash, key, _) => match set_find_leaf(set_root(a), hash, key, 0) {
+                    MapEmpty => Set.new(()),
+                    root => Set { inner: Map { root: root, size: 1 } },
+                },
+                _ => if Set.len(a) <= right_size
+                    && set_node_is_subset(a.inner.root, b.inner.root, 0) {
+                        a
+                    } else {
+                        Set {
+                            inner: set_collect(set_root(a), Map.new(()), b.inner.root, SetPresent)
+                        }
+                    },
+            },
+        }
+    }
 }
 
 /// What is in `a` and not in `b`.
