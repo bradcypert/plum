@@ -576,7 +576,7 @@ jobs:
           retention-days: 7
 
   linux-arm64-checks:
-    name: Linux arm64 compiler, corpus and platform checks
+    name: Linux arm64 compiler and corpus checks
     needs: linux-arm64-build
     runs-on: ubuntu-24.04-arm
     timeout-minutes: 30
@@ -609,8 +609,6 @@ jobs:
       - name: corpus
         run: ./bootstrap/corpus-check
 
-      - name: the compiler it built works
-        run: ./bootstrap/platform-smoke ./sh.real
       - name: scalar integer C ABI round trips in debug and release
         run: python3 ./bootstrap/integer-ffi-check.py ./sh.real --native-only
 
@@ -619,6 +617,34 @@ jobs:
 
       - name: properties hold
         run: ./bootstrap/property-check ./sh.real
+
+  # Native builds in platform-smoke can consume most of the serial job's
+  # budget. Give each shard the compiler artifact and its own time limit.
+  linux-arm64-smoke:
+    name: Linux arm64 platform smoke (${{ matrix.shard }}/2)
+    needs: linux-arm64-build
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2]
+    steps:
+      - uses: actions/checkout@v5
+      - name: clang toolchain
+        run: |
+          if ! command -v clang > /dev/null 2>&1; then
+            sudo apt-get update
+            sudo apt-get install -y clang
+          fi
+          clang --version
+      - uses: actions/download-artifact@v4
+        with:
+          name: plum-linux-arm64-compiler
+      - name: restore freshly built compiler
+        run: tar -xzf plum-linux-arm64-compiler.tar.gz
+      - name: real programs work on Linux arm64
+        run: ./bootstrap/platform-smoke ./sh.real --shard ${{ matrix.shard }}/2
 
   linux-arm64-cache:
     name: Linux arm64 build cache behavior
@@ -646,7 +672,7 @@ jobs:
   linux-arm64:
     name: linux arm64 builds and runs real programs
     if: ${{ always() }}
-    needs: [linux-arm64-build, linux-arm64-checks, linux-arm64-cache]
+    needs: [linux-arm64-build, linux-arm64-checks, linux-arm64-smoke, linux-arm64-cache]
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
@@ -654,6 +680,7 @@ jobs:
         run: |
           test "${{ needs.linux-arm64-build.result }}" = success
           test "${{ needs.linux-arm64-checks.result }}" = success
+          test "${{ needs.linux-arm64-smoke.result }}" = success
           test "${{ needs.linux-arm64-cache.result }}" = success
 
   # Windows, under MSYS2/MinGW. This was `continue-on-error` while the
