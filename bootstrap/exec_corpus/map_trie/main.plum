@@ -194,6 +194,29 @@ let check_set_snapshots (a: Int) (b: Int) (deep: Int): Unit = {
     assert(Array.any(Set.to_array(remainder), |x| x.to_string() == "-0"));
 }
 
+let check_union_key (left: Set[Int]) (right: Set[Int]) (expected: Set[Int]): Unit = {
+    let result = Set.union(left, right);
+    assert_eq(result, expected);
+    let table = Map.insert(Map.new(()), result, 42);
+    assert_eq(Map.get(table, expected), Some(42));
+}
+
+let check_set_union_collision_order (a: Int) (b: Int) (deep: Int): Unit = {
+    let single_a = Set.from_array([a]);
+    let single_b = Set.from_array([b]);
+    let ab = Set.from_array([a, b]);
+    let ba = Set.from_array([b, a]);
+    // Union historically keeps right bucket positions, even with different
+    // operand sizes. Those positions determine structural key equality.
+    check_union_key(single_a, single_b, ba);
+    check_union_key(ab, single_b, ba);
+    check_union_key(ab, ba, ba);
+    let left_branch = Set.from_array([a, deep]);
+    let expected = Set.from_array([b, a, deep]);
+    check_union_key(left_branch, single_b, expected);
+    check_union_key(left_branch, Set.from_array([b, deep]), expected);
+}
+
 // Inverting the two reversible word-mixer rounds supplies real complete-hash
 // collisions (the final sign-bit mask identifies these pairs). Verify the
 // hashes here so a future hashing change cannot silently weaken this test.
@@ -207,6 +230,7 @@ let main (): Unit = {
     check_terminal_promotion(a, b);
     check_collision_replacements(a, b);
     check_set_snapshots(a, b, deep);
+    check_set_union_collision_order(a, b, deep);
     check_set_traversal();
     // These hashes share the first twelve trie levels. Test each kind
     // of collapse in isolation, including removal from a shared root.

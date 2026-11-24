@@ -2315,11 +2315,63 @@ let set_node_is_subset[T: Eq]
     },
 }
 
+let set_union_reorders_children[T: Eq]
+    (left: Array[MapNode[T, Unit]])
+    (right: Array[MapNode[T, Unit]])
+    (left_bits: Int)
+    (right_bits: Int)
+    (common: Int)
+    (shift: Int): Bool
+= if common == 0 { false } else {
+    let bit = common & - common;
+    set_union_reorders_bucket(
+        left[map_rank(left_bits, bit)],
+        right[map_rank(right_bits, bit)],
+        shift
+    )
+        || set_union_reorders_children(left, right, left_bits, right_bits, common & ~bit, shift)
+}
+
+// A collision bucket's order is observable through structural equality.
+// Changing the base trie can reorder a bucket if both inputs contribute
+// to the same full hash and the combined bucket has multiple keys.
+let set_union_reorders_bucket[T: Eq]
+    (left: MapNode[T, Unit])
+    (right: MapNode[T, Unit])
+    (shift: Int): Bool
+= match left {
+    MapEmpty => false,
+    MapBranch(left_bits, left_children) => match right {
+        MapBranch(right_bits, right_children) => set_union_reorders_children(
+            left_children,
+            right_children,
+            left_bits,
+            right_bits,
+            left_bits & right_bits,
+            shift + 5
+        ),
+        _ => set_union_reorders_bucket(right, left, shift),
+    },
+    MapLeaf(hash, _, _) | MapCollision(hash, _) => match right {
+        MapEmpty => false,
+        MapLeaf(h, key, _) => hash == h && match left {
+            MapLeaf(_, k, _) => k != key,
+            _ => true,
+        },
+        MapCollision(h, _) => hash == h,
+        MapBranch(bits, children) => {
+            let bit = map_bit(hash, shift);
+            (bits & bit) != 0
+                && set_union_reorders_bucket(left, children[map_rank(bits, bit)], shift + 5)
+        },
+    },
+}
+
 /// Everything in either set.
 pub let Set.union[T: Eq + Hash] (a: Set[T]) (b: Set[T]): Set[T] =
     if Set.len(a) == 0 { b }
     else if Set.len(b) == 0 { a }
-    else if Set.len(b) <= Set.len(a) {
+    else if Set.len(b) <= Set.len(a) && !set_union_reorders_bucket(b.inner.root, a.inner.root, 0) {
         // Keep the left representative of an equal key, whichever
         // set supplies the accumulator.
         match a {
