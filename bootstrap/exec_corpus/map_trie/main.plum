@@ -202,6 +202,8 @@ let check_set_snapshots (a: Int) (b: Int) (deep: Int): Unit = {
     assert_eq(Set.intersection(collision_only, left), collision_only);
     let reversed_collision = Set.from_array([b, a]);
     assert_eq(Set.intersection(collision_only, reversed_collision), collision_only);
+    assert_eq(Set.intersection(left, reversed_collision), collision_only);
+    assert_eq(Set.difference(left, Set.from_array([deep, 17])), collision_only);
     let single_a = Set.from_array([a]);
     let single_b = Set.from_array([b]);
     assert_eq(Set.intersection(collision_only, single_b), single_b);
