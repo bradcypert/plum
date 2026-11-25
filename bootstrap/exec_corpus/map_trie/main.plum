@@ -170,6 +170,34 @@ let check_set_traversal (): Unit = {
     for i in 4096..8192 {
         large_disjoint = Set.insert(large_disjoint, i);
     };
+    let before_union = allocation_bytes();
+    let joined = Set.union(source, large_disjoint);
+    let after_union = allocation_bytes();
+    assert_eq(Set.len(joined), 8192);
+    assert_eq(Set.len(source), 4096);
+    assert_eq(Set.len(large_disjoint), 4096);
+    for key in 0..8192 {
+        assert(Set.contains(joined, key));
+    };
+    if before_union >= 0 {
+        // The union shares leaf cells even when most root slots overlap.
+        assert(after_union - before_union < 280000);
+    };
+
+    let mut mostly_covered: Set[Int] = Set.new(());
+    for key in 0..3072 {
+        mostly_covered = Set.insert(mostly_covered, key);
+    };
+    mostly_covered = Set.insert(mostly_covered, 8192);
+    let before_covered_union = allocation_bytes();
+    let mostly_covered_union = Set.union(source, mostly_covered);
+    let after_covered_union = allocation_bytes();
+    assert_eq(mostly_covered_union, superset);
+    assert_eq(Set.len(mostly_covered), 3073);
+    if before_covered_union >= 0 {
+        assert(after_covered_union - before_covered_union < 4096);
+    };
+
     let before_disjoint = allocation_bytes();
     let retained = Set.difference(source, large_disjoint);
     let after_disjoint = allocation_bytes();

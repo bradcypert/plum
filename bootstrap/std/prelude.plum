@@ -2628,13 +2628,185 @@ let set_union_by_insertion[T: Eq] (a: Set[T]) (b: Set[T]): Set[T] =
         }
     }
 
+// An edit carries the number of new keys contributed by the right input.
+enum SetMergeEdit[T] {
+    SetMergeKeep,
+    SetMergeUpdated(MapNode[T, Unit], Int)
+}
+
+let set_merge_children[T: Eq]
+    (left_bits: Int)
+    (left: Array[MapNode[T, Unit]])
+    (right_bits: Int)
+    (right: Array[MapNode[T, Unit]])
+    (shift: Int): SetMergeEdit[T]
+= {
+    let bits = left_bits | right_bits;
+    let size = Int.count_ones(bits);
+    let mut slots = bits;
+    let mut left_index = 0;
+    let mut right_index = 0;
+    let mut changed = false;
+    let mut added = 0;
+    let mut children: Array[MapNode[T, Unit]] = [];
+    for i in 0..size {
+        let bit = slots & - slots;
+        slots = slots & ~bit;
+        let on_left = (left_bits & bit) != 0;
+        let on_right = (right_bits & bit) != 0;
+        let other = if !on_right { MapEmpty }
+        else if !on_left {
+            let child = right[right_index];
+            added = added + set_count_node(child);
+            child
+        } else {
+            match set_merge_union_node(left[left_index], right[right_index], shift) {
+                SetMergeKeep => MapEmpty,
+                SetMergeUpdated(child, count) => {
+                    added = added + count;
+                    child
+                },
+            }
+        };
+        match other {
+            MapEmpty => if changed {
+                children = children.push(left[left_index]);
+            },
+            child => {
+                if !changed {
+                    children = plum__array_reserve_empty_raw(size);
+                    for at in 0..left_index {
+                        children = children.push(left[at]);
+                    };
+                    changed = true;
+                };
+                children = children.push(child);
+            },
+        };
+        if on_left {
+            left_index = left_index + 1;
+        };
+        if on_right {
+            right_index = right_index + 1;
+        };
+    };
+    if changed { SetMergeUpdated(MapBranch(bits, children), added) } else { SetMergeKeep }
+}
+
+let set_merge_branch_terminal[T: Eq]
+    (bits: Int)
+    (children: Array[MapNode[T, Unit]])
+    (terminal: MapNode[T, Unit])
+    (hash: Int)
+    (shift: Int)
+    (terminal_first: Bool): SetMergeEdit[T]
+= {
+    let bit = map_bit(hash, shift);
+    let index = map_rank(bits, bit);
+    if (bits & bit) == 0 {
+        let added = if terminal_first { set_count_children(children) }
+        else { set_count_node(terminal) };
+        SetMergeUpdated(
+            MapBranch(bits | bit, plum__array_insert_raw(children, index, terminal)),
+            added
+        )
+    } else if terminal_first {
+        let original = children[index];
+        let mut siblings = 0;
+        for i in 0..children.len() {
+            if i != index {
+                siblings = siblings + set_count_node(children[i]);
+            };
+        };
+        match set_merge_union_node(terminal, original, shift + 5) {
+            SetMergeKeep => SetMergeUpdated(
+                MapBranch(bits, children.set(index, terminal)),
+                siblings
+            ),
+            SetMergeUpdated(child, added) =>
+                SetMergeUpdated(MapBranch(bits, children.set(index, child)), siblings + added),
+        }
+    } else {
+        match set_merge_union_node(children[index], terminal, shift + 5) {
+            SetMergeKeep => SetMergeKeep,
+            SetMergeUpdated(child, added) =>
+                SetMergeUpdated(MapBranch(bits, children.set(index, child)), added),
+        }
+    }
+}
+
+let set_merge_bucket_union[T: Eq]
+    (left: MapNode[T, Unit])
+    (right: MapNode[T, Unit]): SetMergeEdit[T]
+= {
+    // The right bucket supplies positions and left keys supply representatives.
+    let base = Map { root: right, size: set_count_node(right) };
+    match set_collect(left, base, SetAll) {
+        Map { root, size } => SetMergeUpdated(root, size - set_count_node(left)),
+    }
+}
+
+let set_merge_union_node[T: Eq]
+    (left: MapNode[T, Unit])
+    (right: MapNode[T, Unit])
+    (shift: Int): SetMergeEdit[T]
+= match left {
+    MapEmpty => SetMergeUpdated(right, set_count_node(right)),
+    MapBranch(left_bits, left_children) => match right {
+        MapEmpty => SetMergeKeep,
+        MapBranch(right_bits, right_children) => if (left_bits & right_bits) == 0 {
+            SetMergeUpdated(
+                MapBranch(
+                    left_bits | right_bits,
+                    set_graft_children(left_bits, left_children, right_bits, right_children)
+                ),
+                set_count_children(right_children)
+            )
+        } else {
+            set_merge_children(left_bits, left_children, right_bits, right_children, shift + 5)
+        },
+        MapLeaf(hash, _, _) | MapCollision(hash, _) =>
+            set_merge_branch_terminal(left_bits, left_children, right, hash, shift, false),
+    },
+    MapLeaf(hash, _, _) | MapCollision(hash, _) => match right {
+        MapEmpty => SetMergeKeep,
+        MapBranch(bits, children) =>
+            set_merge_branch_terminal(bits, children, left, hash, shift, true),
+        MapLeaf(h, _, _) | MapCollision(h, _) => if hash != h {
+            SetMergeUpdated(map_join(left, hash, right, h, shift), set_count_node(right))
+        } else {
+            match left {
+                MapLeaf(_, key, _) => match right {
+                    MapLeaf(_, k, _) if key == k => SetMergeKeep,
+                    _ => set_merge_bucket_union(left, right),
+                },
+                _ => set_merge_bucket_union(left, right),
+            }
+        },
+    },
+}
+
+let set_union_merge_routes[T: Eq] (a: Set[T]) (b: Set[T]): Set[T] =
+    match a.inner.root {
+        MapBranch(_, _) => match b.inner.root {
+            MapBranch(_, _) => match set_merge_union_node(a.inner.root, b.inner.root, 0) {
+                SetMergeKeep => a,
+                SetMergeUpdated(root, added) => Set {
+                    inner: Map { root: root, size: Set.len(a) + added }
+                },
+            },
+            _ => set_union_by_insertion(a, b),
+        },
+        _ => set_union_by_insertion(a, b),
+    }
+
 /// Everything in either set.
 pub let Set.union[T: Eq + Hash] (a: Set[T]) (b: Set[T]): Set[T] =
     if Set.len(a) == 0 { b }
     else if Set.len(b) == 0 { a }
     else {
         match set_graft_union(a.inner.root, b.inner.root, 0) {
-            MapEmpty => set_union_by_insertion(a, b),
+            MapEmpty => set_union_merge_routes(a, b),
             root => Set { inner: Map { root: root, size: Set.len(a) + Set.len(b) } },
         }
     }
@@ -2871,17 +3043,19 @@ let set_prune_nodes[T: Eq]
 
 // Count the result once so unchanged and fully removed subtries need no
 // allocated records for their sizes during the edit.
+let set_count_children[T] (children: Array[MapNode[T, Unit]]): Int = {
+    let mut size = 0;
+    for child in children {
+        size = size + set_count_node(child);
+    };
+    size
+}
+
 let set_count_node[T] (node: MapNode[T, Unit]): Int = match node {
     MapEmpty => 0,
     MapLeaf(_, _, _) => 1,
     MapCollision(_, entries) => entries.len(),
-    MapBranch(_, children) => {
-        let mut size = 0;
-        for child in children {
-            size = size + set_count_node(child);
-        };
-        size
-    },
+    MapBranch(_, children) => set_count_children(children),
 }
 
 let set_prune[T: Eq] (left: Set[T]) (right: Set[T]) (retain_matches: Bool): Set[T] =
