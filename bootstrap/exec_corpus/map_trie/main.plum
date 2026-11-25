@@ -242,6 +242,38 @@ let check_set_traversal (): Unit = {
     };
 }
 
+let check_grafted_union (shift: Int): Unit = {
+    let mut left: Set[Int] = Set.new(());
+    let mut right: Set[Int] = Set.new(());
+    for key in 0..4096 {
+        let hash = key.hash();
+        if shift == 0 || (hash & 31) == 7 {
+            if (Int.shr_logical(hash, shift) & 1) == 0 {
+                left = Set.insert(left, key);
+            }
+            else {
+                right = Set.insert(right, key);
+            };
+        };
+    };
+    let left_size = Set.len(left);
+    let right_size = Set.len(right);
+    let before = allocation_bytes();
+    let result = Set.union(left, right);
+    let after = allocation_bytes();
+    assert_eq(Set.len(result), left_size + right_size);
+    assert(left_size >= 2 && right_size >= 2);
+    assert_eq(Set.len(left), left_size);
+    assert_eq(Set.len(right), right_size);
+    for key in 0..4096 {
+        assert_eq(Set.contains(result, key), shift == 0 || (key.hash() & 31) == 7);
+    };
+    if before >= 0 {
+        // The union only needs packed branch slots and the result wrapper.
+        assert(after - before < 2048);
+    };
+}
+
 let check_single_candidate_intersection (a: Int) (b: Int) (deep: Int): Unit = {
     // Only slot zero is shared. Each right set is too small for the coverage scan.
     let outside = key_in_slot(4, 1);
@@ -346,6 +378,13 @@ let check_set_union_collision_order (a: Int) (b: Int) (deep: Int): Unit = {
     let expected = Set.from_array([b, a, deep]);
     check_union_key(left_branch, single_b, expected);
     check_union_key(left_branch, Set.from_array([b, deep]), expected);
+    let x = key_in_slot(1, 1);
+    let y = key_in_slot(2, 1);
+    let separate_slots = Set.from_array([x, y]);
+    let separate_union = Set.from_array([b, a, x, y]);
+    check_union_key(separate_slots, ba, separate_union);
+    check_union_key(ba, separate_slots, separate_union);
+    check_union_key(ba, Set.from_array([deep]), Set.from_array([b, a, deep]));
 }
 
 // Inverting the two reversible word-mixer rounds supplies real complete-hash
@@ -363,6 +402,8 @@ let main (): Unit = {
     check_set_snapshots(a, b, deep);
     check_single_candidate_intersection(a, b, deep);
     check_set_union_collision_order(a, b, deep);
+    check_grafted_union(0);
+    check_grafted_union(5);
     check_set_traversal();
     // These hashes share the first twelve trie levels. Test each kind
     // of collapse in isolation, including removal from a shared root.
