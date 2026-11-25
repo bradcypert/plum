@@ -158,6 +158,16 @@ let check_set_traversal (): Unit = {
         assert(after_extra - before_extra < 4096);
     };
 
+    let only_two = Set.from_array([key_in_slot(1, 8192), key_in_slot(2, 8192)]);
+    let skewed = Set.union(only_two, source);
+    assert_eq(Set.len(skewed), 4098);
+    for key in Set.to_array(only_two) {
+        assert(Set.contains(skewed, key));
+    };
+    for key in 0..4096 {
+        assert(Set.contains(skewed, key));
+    };
+
     let before_empty = allocation_bytes();
     let same = Set.difference(source, empty);
     let after_empty = allocation_bytes();
@@ -170,6 +180,34 @@ let check_set_traversal (): Unit = {
     for i in 4096..8192 {
         large_disjoint = Set.insert(large_disjoint, i);
     };
+    let before_union = allocation_bytes();
+    let joined = Set.union(source, large_disjoint);
+    let after_union = allocation_bytes();
+    assert_eq(Set.len(joined), 8192);
+    assert_eq(Set.len(source), 4096);
+    assert_eq(Set.len(large_disjoint), 4096);
+    for key in 0..8192 {
+        assert(Set.contains(joined, key));
+    };
+    if before_union >= 0 {
+        // The union shares leaf cells even when most root slots overlap.
+        assert(after_union - before_union < 280000);
+    };
+
+    let mut mostly_covered: Set[Int] = Set.new(());
+    for key in 0..3072 {
+        mostly_covered = Set.insert(mostly_covered, key);
+    };
+    mostly_covered = Set.insert(mostly_covered, 8192);
+    let before_covered_union = allocation_bytes();
+    let mostly_covered_union = Set.union(source, mostly_covered);
+    let after_covered_union = allocation_bytes();
+    assert_eq(mostly_covered_union, superset);
+    assert_eq(Set.len(mostly_covered), 3073);
+    if before_covered_union >= 0 {
+        assert(after_covered_union - before_covered_union < 4096);
+    };
+
     let before_disjoint = allocation_bytes();
     let retained = Set.difference(source, large_disjoint);
     let after_disjoint = allocation_bytes();
@@ -364,6 +402,22 @@ let check_union_key (left: Set[Int]) (right: Set[Int]) (expected: Set[Int]): Uni
     assert_eq(Map.get(table, expected), Some(42));
 }
 
+let check_union_identical_buckets (a: Int) (b: Int) (deep: Int): Unit = {
+    let left = Set.from_array([a, b, deep]);
+    let right = Set.from_array([a, b, deep]);
+    let before = allocation_bytes();
+    for i in 0..64 {
+        assert_eq(Set.union(left, right), left);
+    };
+    let after = allocation_bytes();
+    if before >= 0 {
+        assert(after - before < 256);
+    };
+    let reversed = Set.from_array([b, a, deep]);
+    check_union_key(left, reversed, reversed);
+    assert_eq(Set.to_array(left), [a, b, deep]);
+}
+
 let check_set_union_collision_order (a: Int) (b: Int) (deep: Int): Unit = {
     let single_a = Set.from_array([a]);
     let single_b = Set.from_array([b]);
@@ -402,6 +456,7 @@ let main (): Unit = {
     check_set_snapshots(a, b, deep);
     check_single_candidate_intersection(a, b, deep);
     check_set_union_collision_order(a, b, deep);
+    check_union_identical_buckets(a, b, deep);
     check_grafted_union(0);
     check_grafted_union(5);
     check_set_traversal();
