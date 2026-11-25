@@ -242,6 +242,33 @@ let check_set_traversal (): Unit = {
     };
 }
 
+let check_single_candidate_intersection (a: Int) (b: Int) (deep: Int): Unit = {
+    // Only slot zero is shared. Each right set is too small for the coverage scan.
+    let outside = key_in_slot(4, 1);
+    let left = Set.from_array([a, b, deep, key_in_slot(1, 1), key_in_slot(2, 1)]);
+    let leaf_right = Set.from_array([deep, outside]);
+    let before = allocation_bytes();
+    for i in 0..64 {
+        let leaf = Set.intersection(left, leaf_right);
+        assert_eq(Set.len(leaf), 1);
+        assert(Set.contains(leaf, deep));
+    };
+    let after = allocation_bytes();
+    if before >= 0 {
+        // The surviving terminal needs no temporary child buffer.
+        assert(after - before <= 64 * 80 + 256);
+    };
+    let collision = Set.intersection(left, Set.from_array([b, a, outside]));
+    assert_eq(Set.to_array(collision), [a, b]);
+    let branch = Set.intersection(left, Set.from_array([a, deep, outside]));
+    assert_eq(Set.len(branch), 2);
+    assert(Set.contains(branch, a));
+    assert(Set.contains(branch, deep));
+    assert_eq(branch, Set.from_array([a, deep]));
+    assert_eq(Set.len(left), 5);
+    assert_eq(Set.len(leaf_right), 2);
+}
+
 let check_set_snapshots (a: Int) (b: Int) (deep: Int): Unit = {
     let left = Set.from_array([a, b, deep]);
     let right = Set.from_array([b, deep, 17]);
@@ -334,6 +361,7 @@ let main (): Unit = {
     check_terminal_promotion(a, b, deep);
     check_collision_replacements(a, b, deep);
     check_set_snapshots(a, b, deep);
+    check_single_candidate_intersection(a, b, deep);
     check_set_union_collision_order(a, b, deep);
     check_set_traversal();
     // These hashes share the first twelve trie levels. Test each kind

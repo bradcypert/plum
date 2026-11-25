@@ -2653,6 +2653,28 @@ let set_prune_branch[T: Eq]
     (retain_matches: Bool): SetPrune[T]
 = if common == 0 {
     if retain_matches { SetDropNode } else { SetKeepNode }
+} else if retain_matches && (common & (common - 1)) == 0 {
+    let child = children[map_rank(bits, common)];
+    let other = match right {
+        MapBranch(right_bits, right_children) => right_children[map_rank(right_bits, common)],
+        _ => right,
+    };
+    let edit = set_prune_nodes(child, other, shift + 5, true);
+    match edit {
+        SetKeepNode if common == bits => SetKeepNode,
+        SetDropNode => SetDropNode,
+        _ => {
+            let survivor = match edit {
+                SetUpdateNode(next) => next,
+                _ => child,
+            };
+            match survivor {
+                // A branch still routes using the next hash chunk.
+                MapBranch(_, _) => SetUpdateNode(MapBranch(common, [survivor])),
+                _ => SetUpdateNode(survivor),
+            }
+        },
+    }
 } else {
     let candidates = if retain_matches { common } else { bits };
     let mut todo = candidates;
