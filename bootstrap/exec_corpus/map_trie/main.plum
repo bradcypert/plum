@@ -339,6 +339,32 @@ let check_single_candidate_intersection (a: Int) (b: Int) (deep: Int): Unit = {
     assert_eq(Set.len(leaf_right), 2);
 }
 
+let check_pruned_terminals (a: Int) (b: Int) (deep: Int): Unit = {
+    let other = key_in_slot(1, 1);
+    let outside = key_in_slot(2, 1);
+    let left = Set.from_array([a, b, deep, other]);
+    let removals = Set.from_array([a, b, other]);
+    let before = allocation_bytes();
+    for i in 0..64 {
+        let leaf = Set.difference(left, removals);
+        assert_eq(Set.len(leaf), 1);
+        assert(Set.contains(leaf, deep));
+    };
+    let after = allocation_bytes();
+    if before >= 0 {
+        // Promoting the leaf through every shared hash level should not
+        // build a temporary array at each level.
+        assert(after - before <= 64 * 448 + 256);
+    };
+
+    let collision = Set.difference(left, Set.from_array([deep, other, outside]));
+    assert_eq(Set.to_array(collision), [a, b]);
+    let branch = Set.difference(left, Set.from_array([b, other, outside]));
+    assert_eq(branch, Set.from_array([a, deep]));
+    assert(Set.contains(branch, a) && Set.contains(branch, deep));
+    assert_eq(Set.len(left), 4);
+}
+
 let check_set_snapshots (a: Int) (b: Int) (deep: Int): Unit = {
     let left = Set.from_array([a, b, deep]);
     let right = Set.from_array([b, deep, 17]);
@@ -455,6 +481,7 @@ let main (): Unit = {
     check_collision_replacements(a, b, deep);
     check_set_snapshots(a, b, deep);
     check_single_candidate_intersection(a, b, deep);
+    check_pruned_terminals(a, b, deep);
     check_set_union_collision_order(a, b, deep);
     check_union_identical_buckets(a, b, deep);
     check_grafted_union(0);
