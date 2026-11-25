@@ -215,6 +215,17 @@ let check_set_traversal (): Unit = {
         assert(after_clustered - before_clustered < 16384);
     };
 
+    let before_clustered_intersection = allocation_bytes();
+    let common = Set.intersection(source, clustered);
+    let after_clustered_intersection = allocation_bytes();
+    assert_eq(Set.len(common), 4096 - survivors);
+    for i in 0..4096 {
+        assert_eq(Set.contains(common, i), (i.hash() & 31) < 16);
+    };
+    if before_clustered_intersection >= 0 {
+        assert(after_clustered_intersection - before_clustered_intersection < 16384);
+    };
+
     let exclusions = Set.from_array([0, 1024, 4095, 8192]);
     let before_cut = allocation_bytes();
     let cut = Set.difference(source, exclusions);
