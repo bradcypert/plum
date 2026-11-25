@@ -2267,7 +2267,6 @@ pub let Set.to_array[T] (s: Set[T]): Array[T] = Map.keys(s.inner)
 enum SetOperation {
     SetAll,
     SetAddMissing,
-    SetPresent,
     SetAbsent,
     SetErase
 }
@@ -2289,9 +2288,6 @@ let set_apply_key[T: Eq]
     SetAll => map_insert_hashed(acc, hash, key, ()),
     SetAddMissing => if map_node_contains(acc.root, hash, key, 0) { acc }
     else { set_insert_missing(acc, hash, key) },
-    SetPresent => if map_node_contains(other, hash, key, 0) {
-        set_insert_missing(acc, hash, key)
-    } else { acc },
     SetAbsent => if map_node_contains(other, hash, key, 0) { acc }
     else { set_insert_missing(acc, hash, key) },
     SetErase => map_remove_hashed(acc, hash, key),
@@ -2322,6 +2318,71 @@ let set_collect[T: Eq]
         (),
         |out, child, rhs, policy, unused| set_collect(child, out, rhs, policy)
     ),
+}
+
+let set_collect_common_children[T: Eq]
+    (left: Array[MapNode[T, Unit]])
+    (right: Array[MapNode[T, Unit]])
+    (left_bits: Int)
+    (right_bits: Int)
+    (common: Int)
+    (shift: Int)
+    (acc: Map[T, Unit]): Map[T, Unit]
+= if common == 0 { acc } else {
+    let bit = common & - common;
+    let next = set_collect_common(
+        left[map_rank(left_bits, bit)],
+        right[map_rank(right_bits, bit)],
+        shift,
+        acc
+    );
+    set_collect_common_children(left, right, left_bits, right_bits, common & ~bit, shift, next)
+}
+
+// Only the shared routing slots can contribute to the intersection.
+// Walk the left bucket in order so retained keys keep their representatives.
+let set_collect_common[T: Eq]
+    (left: MapNode[T, Unit])
+    (right: MapNode[T, Unit])
+    (shift: Int)
+    (acc: Map[T, Unit]): Map[T, Unit]
+= match left {
+    MapEmpty => acc,
+    MapLeaf(hash, key, _) => if map_node_contains(right, hash, key, shift) {
+        set_insert_missing(acc, hash, key)
+    } else { acc },
+    MapCollision(hash, entries) => match right {
+        MapEmpty => acc,
+        _ => plum__array_fold_context_raw(
+            entries,
+            acc,
+            right,
+            hash,
+            shift,
+            |out, entry, rhs, h, depth| if map_node_contains(rhs, h, entry.key, depth) {
+                set_insert_missing(out, h, entry.key)
+            } else { out }
+        ),
+    },
+    MapBranch(left_bits, left_children) => match right {
+        MapEmpty => acc,
+        MapBranch(right_bits, right_children) => set_collect_common_children(
+            left_children,
+            right_children,
+            left_bits,
+            right_bits,
+            left_bits & right_bits,
+            shift + 5,
+            acc
+        ),
+        MapLeaf(hash, _, _) | MapCollision(hash, _) => {
+            let bit = map_bit(hash, shift);
+            if (left_bits & bit) == 0 { acc }
+            else {
+                set_collect_common(left_children[map_rank(left_bits, bit)], right, shift + 5, acc)
+            }
+        },
+    },
 }
 
 let set_root[T] (s: Set[T]): MapNode[T, Unit] =
@@ -2625,7 +2686,7 @@ pub let Set.intersection[T: Eq + Hash] (a: Set[T]) (b: Set[T]): Set[T] = {
                             Set { inner } => Set { inner: map_remove_at(inner, hash, position) },
                         },
                         SetMissingMany => Set {
-                            inner: set_collect(set_root(a), Map.new(()), b.inner.root, SetPresent)
+                            inner: set_collect_common(set_root(a), b.inner.root, 0, Map.new(()))
                         },
                     }
                 },
