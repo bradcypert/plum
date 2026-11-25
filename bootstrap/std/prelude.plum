@@ -2735,6 +2735,14 @@ let set_merge_branch_terminal[T: Eq]
     }
 }
 
+let set_bucket_keys_match[T: Eq]
+    (left: Array[MapEntry[T, Unit]])
+    (right: Array[MapEntry[T, Unit]])
+    (i: Int): Bool
+= if i == left.len() { true }
+else if left[i].key == right[i].key { set_bucket_keys_match(left, right, i + 1) }
+else { false }
+
 let set_merge_bucket_union[T: Eq]
     (left: MapNode[T, Unit])
     (right: MapNode[T, Unit]): SetMergeEdit[T]
@@ -2780,6 +2788,11 @@ let set_merge_union_node[T: Eq]
                     MapLeaf(_, k, _) if key == k => SetMergeKeep,
                     _ => set_merge_bucket_union(left, right),
                 },
+                MapCollision(_, left_entries) => match right {
+                    MapCollision(_, right_entries) if left_entries.len() == right_entries.len()
+                        && set_bucket_keys_match(left_entries, right_entries, 0) => SetMergeKeep,
+                    _ => set_merge_bucket_union(left, right),
+                },
                 _ => set_merge_bucket_union(left, right),
             }
         },
@@ -2806,6 +2819,8 @@ pub let Set.union[T: Eq + Hash] (a: Set[T]) (b: Set[T]): Set[T] =
     else if Set.len(b) == 0 { a }
     else {
         match set_graft_union(a.inner.root, b.inner.root, 0) {
+            // Inserting a small left input avoids counting large right-only subtries.
+            MapEmpty if Set.len(a) <= Set.len(b) / 8 => set_union_by_insertion(a, b),
             MapEmpty => set_union_merge_routes(a, b),
             root => Set { inner: Map { root: root, size: Set.len(a) + Set.len(b) } },
         }
