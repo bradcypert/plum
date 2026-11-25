@@ -2910,8 +2910,8 @@ let set_prune_bucket[T: Eq]
     else { SetUpdateNode(MapCollision(hash, kept)) }
 }
 
-// Start collecting children at the first edit. The untouched prefix and
-// other surviving slots keep their original child nodes.
+// Keep the original children until the first edit. Hold a lone survivor
+// directly so promoting a terminal does not require a temporary array.
 let set_prune_branch[T: Eq]
     (children: Array[MapNode[T, Unit]])
     (right: MapNode[T, Unit])
@@ -2948,6 +2948,7 @@ let set_prune_branch[T: Eq]
     let mut todo = candidates;
     let mut surviving = candidates;
     let mut changed = candidates != bits;
+    let mut first = MapEmpty;
     let mut kept: Array[MapNode[T, Unit]] = [];
     for i in 0..Int.count_ones(candidates) {
         let bit = todo & - todo;
@@ -2960,32 +2961,48 @@ let set_prune_branch[T: Eq]
             };
             set_prune_nodes(child, other, shift + 5, retain_matches)
         };
-        match edit {
-            SetKeepNode => if changed {
-                kept = kept.push(child);
-            },
+        let prefix = if changed { 0 } else { i };
+        let next = match edit {
+            SetKeepNode => if changed { child } else { MapEmpty },
             SetDropNode => {
-                if !changed {
-                    kept = Array.take(children, i);
-                    changed = true;
-                };
+                changed = true;
                 surviving = surviving & ~bit;
+                MapEmpty
             },
             SetUpdateNode(next) => {
-                if !changed {
-                    kept = Array.take(children, i);
-                    changed = true;
-                };
-                kept = kept.push(next);
+                changed = true;
+                next
             },
+        };
+        if changed {
+            if prefix == 1 {
+                first = children[0];
+            }
+            else if prefix > 1 {
+                kept = Array.take(children, prefix);
+            };
+            match next {
+                MapEmpty => (),
+                _ if kept.len() != 0 => {
+                    kept = kept.push(next);
+                },
+                _ => match first {
+                    MapEmpty => {
+                        first = next;
+                    },
+                    _ => {
+                        kept = [first, next];
+                    },
+                },
+            };
         };
     };
     if !changed { SetKeepNode }
     else if surviving == 0 { SetDropNode }
-    else if kept.len() == 1 {
-        match kept[0] {
-            MapLeaf(_, _, _) | MapCollision(_, _) => SetUpdateNode(kept[0]),
-            _ => SetUpdateNode(MapBranch(surviving, kept)),
+    else if kept.len() == 0 {
+        match first {
+            MapBranch(_, _) => SetUpdateNode(MapBranch(surviving, [first])),
+            _ => SetUpdateNode(first),
         }
     } else { SetUpdateNode(MapBranch(surviving, kept)) }
 }
