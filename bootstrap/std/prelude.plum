@@ -2151,16 +2151,18 @@ pub let Map.get[K: Eq + Hash, V] (m: Map[K, V]) (k: K): Option[V] =
 pub let Map.contains[K: Eq + Hash, V] (m: Map[K, V]) (k: K): Bool =
     map_node_contains(m.root, value_hash(k), k, 0)
 
+// The caller supplies a leaf (-1) or a one-based collision position.
+let map_remove_at[K, V] (m: Map[K, V]) (hash: Int) (position: Int): Map[K, V] =
+    match m {
+        Map { root, size } => Map {
+            root: map_node_remove_present(root, hash, position, 0, true),
+            size: size - 1
+        },
+    }
+
 let map_remove_hashed[K: Eq, V] (m: Map[K, V]) (hash: Int) (k: K): Map[K, V] = {
     let position = map_node_key_position(m.root, hash, k, 0);
-    if position != 0 {
-        match m {
-            Map { root, size } => Map {
-                root: map_node_remove_present(root, hash, position, 0, true),
-                size: size - 1
-            },
-        }
-    } else { m }
+    if position == 0 { m } else { map_remove_at(m, hash, position) }
 }
 
 /// A new map without `k`. Removing an absent key is not an error.
@@ -2329,60 +2331,99 @@ let set_root[T] (s: Set[T]): MapNode[T, Unit] =
         },
     }
 
-let set_bucket_is_subset[T: Eq]
+enum SetCoverage {
+    SetCovered,
+    SetMissingOne(Int, Int),
+    SetMissingMany
+}
+
+let set_note_missing (found: SetCoverage) (hash: Int) (position: Int): SetCoverage =
+    match found {
+        SetCovered => SetMissingOne(hash, position),
+        _ => SetMissingMany,
+    }
+
+let set_bucket_coverage[T: Eq]
     (entries: Array[MapEntry[T, Unit]])
     (right: MapNode[T, Unit])
     (hash: Int)
     (shift: Int)
-    (i: Int): Bool
+    (i: Int)
+    (found: SetCoverage): SetCoverage
 =
-    if i >= entries.len() { true }
+    if i >= entries.len() { found }
     else if map_node_contains(right, hash, entries[i].key, shift) {
-        set_bucket_is_subset(entries, right, hash, shift, i + 1)
+        set_bucket_coverage(entries, right, hash, shift, i + 1, found)
+    } else {
+        match set_note_missing(found, hash, i + 1) {
+            SetMissingMany => SetMissingMany,
+            next => set_bucket_coverage(entries, right, hash, shift, i + 1, next),
+        }
     }
-    else { false }
 
-let set_children_are_subset[T: Eq]
+let set_children_coverage[T: Eq]
     (left: Array[MapNode[T, Unit]])
     (right: Array[MapNode[T, Unit]])
     (bits: Int)
     (right_bits: Int)
     (shift: Int)
-    (i: Int): Bool
+    (i: Int)
+    (found: SetCoverage): SetCoverage
 =
-    if bits == 0 { true }
+    if bits == 0 { found }
     else {
         let bit = bits & - bits;
-        if set_node_is_subset(left[i], right[map_rank(right_bits, bit)], shift) {
-            set_children_are_subset(left, right, bits & ~bit, right_bits, shift, i + 1)
+        let other = if (right_bits & bit) == 0 { MapEmpty }
+        else { right[map_rank(right_bits, bit)] };
+        match set_node_coverage(left[i], other, shift, found) {
+            SetMissingMany => SetMissingMany,
+            next => set_children_coverage(left, right, bits & ~bit, right_bits, shift, i + 1, next),
         }
-        else { false }
     }
 
-// Branches at the same shift use compatible bitmaps. Reject a missing
-// branch bit before testing keys, then follow only the left-hand paths.
-let set_node_is_subset[T: Eq]
+// A right terminal checks the complete hash, independent of branch shift.
+let set_terminal_coverage[T: Eq]
+    (left: Array[MapNode[T, Unit]])
+    (right: MapNode[T, Unit])
+    (i: Int)
+    (found: SetCoverage): SetCoverage
+=
+    if i >= left.len() { found }
+    else {
+        match set_node_coverage(left[i], right, 0, found) {
+            SetMissingMany => SetMissingMany,
+            next => set_terminal_coverage(left, right, i + 1, next),
+        }
+    }
+
+// Follow the left paths while aligning right branch slots at each shift.
+// A right terminal can be checked at any shift using its complete hash.
+// Record the left position so removal needs no second equality lookup.
+let set_node_coverage[T: Eq]
     (left: MapNode[T, Unit])
     (right: MapNode[T, Unit])
-    (shift: Int): Bool
+    (shift: Int)
+    (found: SetCoverage): SetCoverage
 = match left {
-    MapEmpty => true,
-    MapLeaf(hash, key, _) => map_node_contains(right, hash, key, shift),
-    MapCollision(hash, entries) => set_bucket_is_subset(entries, right, hash, shift, 0),
-    MapBranch(left_bits, left_children) => match right {
-        MapBranch(right_bits, right_children) =>
-            (left_bits & right_bits) == left_bits
-                && set_children_are_subset(
-                    left_children,
-                    right_children,
-                    left_bits,
-                    right_bits,
-                    shift + 5,
-                    0
-                ),
-        // A leaf or collision has only one complete hash. A branch
-        // represents at least two distinct hashes, even along a unary path.
-        _ => false,
+    MapEmpty => found,
+    MapLeaf(hash, key, _) => if map_node_contains(right, hash, key, shift) { found }
+    else { set_note_missing(found, hash, -1) },
+    MapCollision(hash, entries) => match right {
+        MapEmpty => SetMissingMany,
+        _ => set_bucket_coverage(entries, right, hash, shift, 0, found),
+    },
+    MapBranch(bits, children) => match right {
+        MapEmpty => SetMissingMany,
+        MapBranch(right_bits, right_children) => set_children_coverage(
+            children,
+            right_children,
+            bits,
+            right_bits,
+            shift + 5,
+            0,
+            found
+        ),
+        _ => set_terminal_coverage(children, right, 0, found),
     },
 }
 
@@ -2574,14 +2615,20 @@ pub let Set.intersection[T: Eq + Hash] (a: Set[T]) (b: Set[T]): Set[T] = {
                     MapEmpty => Set.new(()),
                     root => Set { inner: Map { root: root, size: 1 } },
                 },
-                _ => if Set.len(a) <= right_size
-                    && set_node_is_subset(a.inner.root, b.inner.root, 0) {
-                        a
-                    } else {
-                        Set {
+                _ => {
+                    let coverage = if Set.len(a) - 1 <= right_size {
+                        set_node_coverage(a.inner.root, b.inner.root, 0, SetCovered)
+                    } else { SetMissingMany };
+                    match coverage {
+                        SetCovered => a,
+                        SetMissingOne(hash, position) => match a {
+                            Set { inner } => Set { inner: map_remove_at(inner, hash, position) },
+                        },
+                        SetMissingMany => Set {
                             inner: set_collect(set_root(a), Map.new(()), b.inner.root, SetPresent)
-                        }
-                    },
+                        },
+                    }
+                },
             },
         }
     }

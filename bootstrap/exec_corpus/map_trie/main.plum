@@ -111,6 +111,19 @@ let check_set_traversal (): Unit = {
     assert_eq(intersection, source);
     assert_eq(Set.len(superset), 4097);
 
+    let almost_superset = Set.remove(superset, 4095);
+    let before_single_miss = allocation_bytes();
+    let almost_all = Set.intersection(source, almost_superset);
+    let after_single_miss = allocation_bytes();
+    assert_eq(Set.len(almost_all), 4095);
+    assert(!Set.contains(almost_all, 4095));
+    assert(Set.contains(source, 4095));
+    assert(Set.contains(almost_superset, 8192));
+    if before_single_miss >= 0 {
+        // Removing the missing key copies only its path from the shared input.
+        assert(after_single_miss - before_single_miss < 16384);
+    };
+
     let member = Set.from_array([2048]);
     let before_singleton = allocation_bytes();
     for i in 0..64 {
@@ -214,6 +227,8 @@ let check_set_snapshots (a: Int) (b: Int) (deep: Int): Unit = {
     let reversed_collision = Set.from_array([b, a]);
     assert_eq(Set.intersection(collision_only, reversed_collision), collision_only);
     assert_eq(Set.intersection(left, reversed_collision), collision_only);
+    let right_with_one_miss = Set.from_array([a, deep]);
+    assert_eq(Set.intersection(left, right_with_one_miss), right_with_one_miss);
     assert_eq(Set.difference(left, Set.from_array([deep, 17])), collision_only);
     let single_a = Set.from_array([a]);
     let single_b = Set.from_array([b]);
