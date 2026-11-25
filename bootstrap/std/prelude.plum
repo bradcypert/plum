@@ -2391,15 +2391,35 @@ enum SetOverlapCheck {
     CollisionOrder
 }
 
-let set_bucket_has_member_in[T: Eq]
+enum SetOverlap[T] {
+    NoSetOverlap,
+    OneSetOverlap(Int, T),
+    StopSetOverlap
+}
+
+let set_note_overlap[T] (found: SetOverlap[T]) (hash: Int) (key: T): SetOverlap[T] =
+    match found {
+        NoSetOverlap => OneSetOverlap(hash, key),
+        _ => StopSetOverlap,
+    }
+
+let set_bucket_overlap[T: Eq]
     (entries: Array[MapEntry[T, Unit]])
     (right: MapNode[T, Unit])
     (hash: Int)
-    (i: Int): Bool
+    (i: Int)
+    (found: SetOverlap[T]): SetOverlap[T]
 =
-    if i >= entries.len() { false }
-    else if map_node_contains(right, hash, entries[i].key, 0) { true }
-    else { set_bucket_has_member_in(entries, right, hash, i + 1) }
+    if i >= entries.len() { found }
+    else {
+        let key = entries[i].key;
+        if map_node_contains(right, hash, key, 0) {
+            match set_note_overlap(found, hash, key) {
+                StopSetOverlap => StopSetOverlap,
+                next => set_bucket_overlap(entries, right, hash, i + 1, next),
+            }
+        } else { set_bucket_overlap(entries, right, hash, i + 1, found) }
+    }
 
 let set_children_overlap[T: Eq]
     (left: Array[MapNode[T, Unit]])
@@ -2408,28 +2428,42 @@ let set_children_overlap[T: Eq]
     (right_bits: Int)
     (common: Int)
     (shift: Int)
-    (check: SetOverlapCheck): Bool
-= if common == 0 { false } else {
+    (check: SetOverlapCheck)
+    (found: SetOverlap[T]): SetOverlap[T]
+= if common == 0 { found } else {
     let bit = common & - common;
-    set_nodes_overlap(
+    match set_nodes_overlap(
         left[map_rank(left_bits, bit)],
         right[map_rank(right_bits, bit)],
         shift,
-        check
-    )
-        || set_children_overlap(left, right, left_bits, right_bits, common & ~bit, shift, check)
+        check,
+        found
+    ) {
+        StopSetOverlap => StopSetOverlap,
+        next => set_children_overlap(
+            left,
+            right,
+            left_bits,
+            right_bits,
+            common & ~bit,
+            shift,
+            check,
+            next
+        ),
+    }
 }
 
 // Only matching bitmap slots can lead to terminals with the same hash.
 // Union checks whether changing the base can reorder colliding keys.
-// Difference needs an equal key before removal can affect the result.
+// Difference keeps one equal key and stops when it finds a second.
 let set_nodes_overlap[T: Eq]
     (left: MapNode[T, Unit])
     (right: MapNode[T, Unit])
     (shift: Int)
-    (check: SetOverlapCheck): Bool
+    (check: SetOverlapCheck)
+    (found: SetOverlap[T]): SetOverlap[T]
 = match left {
-    MapEmpty => false,
+    MapEmpty => found,
     MapBranch(left_bits, left_children) => match right {
         MapBranch(right_bits, right_children) => set_children_overlap(
             left_children,
@@ -2438,44 +2472,59 @@ let set_nodes_overlap[T: Eq]
             right_bits,
             left_bits & right_bits,
             shift + 5,
-            check
+            check,
+            found
         ),
-        _ => set_nodes_overlap(right, left, shift, check),
+        _ => set_nodes_overlap(right, left, shift, check, found),
     },
     MapLeaf(hash, _, _) | MapCollision(hash, _) => match right {
-        MapEmpty => false,
-        MapLeaf(h, key, _) => hash == h && match left {
-            MapLeaf(_, k, _) => {
-                let equal = k == key;
-                match check {
-                    SharedMember => equal,
-                    CollisionOrder => !equal,
-                }
-            },
-            MapCollision(_, entries) => match check {
-                SharedMember => map_bucket_find_index(entries, key, 0) >= 0,
-                CollisionOrder => true,
-            },
-            _ => false,
+        MapEmpty => found,
+        MapLeaf(h, key, _) => if hash != h { found } else {
+            match left {
+                MapLeaf(_, k, _) => {
+                    let equal = k == key;
+                    match check {
+                        SharedMember => if equal { set_note_overlap(found, hash, key) } else {
+                            found
+                        },
+                        CollisionOrder => if equal { found } else { StopSetOverlap },
+                    }
+                },
+                MapCollision(_, entries) => match check {
+                    SharedMember => if map_bucket_find_index(entries, key, 0) >= 0 {
+                        set_note_overlap(found, hash, key)
+                    } else { found },
+                    CollisionOrder => StopSetOverlap,
+                },
+                _ => found,
+            }
         },
-        MapCollision(h, entries) => hash == h && match check {
-            SharedMember => set_bucket_has_member_in(entries, left, h, 0),
-            CollisionOrder => true,
+        MapCollision(h, entries) => if hash != h { found } else {
+            match check {
+                SharedMember => set_bucket_overlap(entries, left, h, 0, found),
+                CollisionOrder => StopSetOverlap,
+            }
         },
         MapBranch(bits, children) => {
             let bit = map_bit(hash, shift);
-            (bits & bit) != 0
-                && set_nodes_overlap(left, children[map_rank(bits, bit)], shift + 5, check)
+            if (bits & bit) == 0 { found }
+            else { set_nodes_overlap(left, children[map_rank(bits, bit)], shift + 5, check, found) }
         },
     },
 }
+
+let set_preserves_union_order[T: Eq] (left: MapNode[T, Unit]) (right: MapNode[T, Unit]): Bool =
+    match set_nodes_overlap(left, right, 0, CollisionOrder, NoSetOverlap) {
+        NoSetOverlap => true,
+        _ => false,
+    }
 
 /// Everything in either set.
 pub let Set.union[T: Eq + Hash] (a: Set[T]) (b: Set[T]): Set[T] =
     if Set.len(a) == 0 { b }
     else if Set.len(b) == 0 { a }
     else if Set.len(b) <= Set.len(a)
-        && !set_nodes_overlap(b.inner.root, a.inner.root, 0, CollisionOrder) {
+        && set_preserves_union_order(b.inner.root, a.inner.root) {
             // Keep the left representative of an equal key, whichever
             // set supplies the accumulator.
             match a {
@@ -2553,8 +2602,14 @@ pub let Set.difference[T: Eq + Hash] (a: Set[T]) (b: Set[T]): Set[T] = {
             MapLeaf(hash, key, _) => if map_node_contains(b.inner.root, hash, key, 0) {
                 Set.new(())
             } else { a },
-            _ => if !set_nodes_overlap(a.inner.root, b.inner.root, 0, SharedMember) { a } else {
-                Set { inner: set_collect(set_root(a), Map.new(()), b.inner.root, SetAbsent) }
+            _ => match set_nodes_overlap(a.inner.root, b.inner.root, 0, SharedMember, NoSetOverlap) {
+                NoSetOverlap => a,
+                OneSetOverlap(hash, key) => match a {
+                    Set { inner } => Set { inner: map_remove_hashed(inner, hash, key) },
+                },
+                StopSetOverlap => Set {
+                    inner: set_collect(set_root(a), Map.new(()), b.inner.root, SetAbsent)
+                },
             },
         }
     }

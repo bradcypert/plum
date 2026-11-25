@@ -167,6 +167,17 @@ let check_set_traversal (): Unit = {
         assert(after_disjoint - before_disjoint < 256);
     };
 
+    let mostly_disjoint = Set.insert(large_disjoint, 4095);
+    let before_single_cut = allocation_bytes();
+    let single_cut = Set.difference(source, mostly_disjoint);
+    let after_single_cut = allocation_bytes();
+    assert_eq(Set.len(single_cut), 4095);
+    assert(!Set.contains(single_cut, 4095));
+    assert(Set.contains(source, 4095));
+    if before_single_cut >= 0 {
+        assert(after_single_cut - before_single_cut < 16384);
+    };
+
     let exclusions = Set.from_array([0, 1024, 4095, 8192]);
     let before_cut = allocation_bytes();
     let cut = Set.difference(source, exclusions);
