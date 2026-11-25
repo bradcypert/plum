@@ -2267,7 +2267,6 @@ pub let Set.to_array[T] (s: Set[T]): Array[T] = Map.keys(s.inner)
 enum SetOperation {
     SetAll,
     SetAddMissing,
-    SetPresent,
     SetErase
 }
 
@@ -2276,11 +2275,8 @@ let set_insert_missing[T] (acc: Map[T, Unit]) (hash: Int) (key: T): Map[T, Unit]
         Map { root, size } => Map { root: map_node_put(root, hash, key, (), 0, 0), size: size + 1 },
     }
 
-// The filters start with an empty accumulator and receive each source
-// member once, even when the source has full-hash collisions.
 let set_apply_key[T: Eq]
     (acc: Map[T, Unit])
-    (other: MapNode[T, Unit])
     (operation: SetOperation)
     (hash: Int)
     (key: T): Map[T, Unit]
@@ -2288,9 +2284,6 @@ let set_apply_key[T: Eq]
     SetAll => map_insert_hashed(acc, hash, key, ()),
     SetAddMissing => if map_node_contains(acc.root, hash, key, 0) { acc }
     else { set_insert_missing(acc, hash, key) },
-    SetPresent => if map_node_contains(other, hash, key, 0) {
-        set_insert_missing(acc, hash, key)
-    } else { acc },
     SetErase => map_remove_hashed(acc, hash, key),
 }
 
@@ -2298,89 +2291,26 @@ let set_apply_key[T: Eq]
 let set_collect[T: Eq]
     (node: MapNode[T, Unit])
     (acc: Map[T, Unit])
-    (other: MapNode[T, Unit])
     (operation: SetOperation): Map[T, Unit]
 = match node {
     MapEmpty => acc,
-    MapLeaf(hash, key, _) => set_apply_key(acc, other, operation, hash, key),
+    MapLeaf(hash, key, _) => set_apply_key(acc, operation, hash, key),
     MapCollision(hash, entries) => plum__array_fold_context_raw(
         entries,
         acc,
-        other,
         operation,
         hash,
-        |out, entry, rhs, policy, h| set_apply_key(out, rhs, policy, h, entry.key)
+        (),
+        |out, entry, policy, h, unused| set_apply_key(out, policy, h, entry.key)
     ),
     MapBranch(_, children) => plum__array_fold_context_raw(
         children,
         acc,
-        other,
         operation,
         (),
-        |out, child, rhs, policy, unused| set_collect(child, out, rhs, policy)
+        (),
+        |out, child, policy, unused1, unused2| set_collect(child, out, policy)
     ),
-}
-
-let set_collect_common_children[T: Eq]
-    (left: Array[MapNode[T, Unit]])
-    (right: Array[MapNode[T, Unit]])
-    (left_bits: Int)
-    (right_bits: Int)
-    (common: Int)
-    (shift: Int)
-    (acc: Map[T, Unit]): Map[T, Unit]
-= if common == 0 { acc } else {
-    let bit = common & - common;
-    let next = set_collect_common(
-        left[map_rank(left_bits, bit)],
-        right[map_rank(right_bits, bit)],
-        shift,
-        acc
-    );
-    set_collect_common_children(left, right, left_bits, right_bits, common & ~bit, shift, next)
-}
-
-// Only the shared routing slots can contribute to the intersection.
-// Walk the left bucket in order so retained keys keep their representatives.
-let set_collect_common[T: Eq]
-    (left: MapNode[T, Unit])
-    (right: MapNode[T, Unit])
-    (shift: Int)
-    (acc: Map[T, Unit]): Map[T, Unit]
-= match left {
-    MapEmpty => acc,
-    MapLeaf(hash, key, _) => if map_node_contains(right, hash, key, shift) {
-        set_insert_missing(acc, hash, key)
-    } else { acc },
-    MapCollision(hash, _) => match right {
-        MapEmpty => acc,
-        MapBranch(bits, children) => {
-            let bit = map_bit(hash, shift);
-            if (bits & bit) == 0 { acc }
-            else { set_collect_common(left, children[map_rank(bits, bit)], shift + 5, acc) }
-        },
-        // Once the right side is a terminal, membership uses the full hash.
-        _ => set_collect(left, acc, right, SetPresent),
-    },
-    MapBranch(left_bits, left_children) => match right {
-        MapEmpty => acc,
-        MapBranch(right_bits, right_children) => set_collect_common_children(
-            left_children,
-            right_children,
-            left_bits,
-            right_bits,
-            left_bits & right_bits,
-            shift + 5,
-            acc
-        ),
-        MapLeaf(hash, _, _) | MapCollision(hash, _) => {
-            let bit = map_bit(hash, shift);
-            if (left_bits & bit) == 0 { acc }
-            else {
-                set_collect_common(left_children[map_rank(left_bits, bit)], right, shift + 5, acc)
-            }
-        },
-    },
 }
 
 let set_root[T] (s: Set[T]): MapNode[T, Unit] =
@@ -2618,13 +2548,13 @@ pub let Set.union[T: Eq + Hash] (a: Set[T]) (b: Set[T]): Set[T] =
             // set supplies the accumulator.
             match a {
                 Set { inner } => Set {
-                    inner: set_collect(set_root(b), inner, MapEmpty, SetAddMissing)
+                    inner: set_collect(set_root(b), inner, SetAddMissing)
                 },
             }
         }
     else {
         match b {
-            Set { inner } => Set { inner: set_collect(set_root(a), inner, MapEmpty, SetAll) },
+            Set { inner } => Set { inner: set_collect(set_root(a), inner, SetAll) },
         }
     }
 
@@ -2672,9 +2602,7 @@ pub let Set.intersection[T: Eq + Hash] (a: Set[T]) (b: Set[T]): Set[T] = {
                         OneSetMatch(hash, position) => match a {
                             Set { inner } => Set { inner: map_remove_at(inner, hash, position) },
                         },
-                        StopSetScan => Set {
-                            inner: set_collect_common(set_root(a), b.inner.root, 0, Map.new(()))
-                        },
+                        StopSetScan => set_prune(a, b, true),
                     }
                 },
             },
@@ -2692,13 +2620,14 @@ enum SetPrune[T] {
 let set_prune_bucket[T: Eq]
     (entries: Array[MapEntry[T, Unit]])
     (right: MapNode[T, Unit])
-    (hash: Int): SetPrune[T]
+    (hash: Int)
+    (retain_matches: Bool): SetPrune[T]
 = {
     let mut changed = false;
     let mut kept: Array[MapEntry[T, Unit]] = [];
     for i in 0..entries.len() {
         let entry = entries[i];
-        if map_node_contains(right, hash, entry.key, 0) {
+        if map_node_contains(right, hash, entry.key, 0) != retain_matches {
             if !changed {
                 kept = Array.take(entries, i);
                 changed = true;
@@ -2720,22 +2649,48 @@ let set_prune_branch[T: Eq]
     (right: MapNode[T, Unit])
     (bits: Int)
     (common: Int)
-    (shift: Int): SetPrune[T]
-= if common == 0 { SetKeepNode } else {
-    let mut todo = bits;
-    let mut surviving = bits;
-    let mut changed = false;
+    (shift: Int)
+    (retain_matches: Bool): SetPrune[T]
+= if common == 0 {
+    if retain_matches { SetDropNode } else { SetKeepNode }
+} else if retain_matches && (common & (common - 1)) == 0 {
+    let child = children[map_rank(bits, common)];
+    let other = match right {
+        MapBranch(right_bits, right_children) => right_children[map_rank(right_bits, common)],
+        _ => right,
+    };
+    let edit = set_prune_nodes(child, other, shift + 5, true);
+    match edit {
+        SetKeepNode if common == bits => SetKeepNode,
+        SetDropNode => SetDropNode,
+        _ => {
+            let survivor = match edit {
+                SetUpdateNode(next) => next,
+                _ => child,
+            };
+            match survivor {
+                // A branch still routes using the next hash chunk.
+                MapBranch(_, _) => SetUpdateNode(MapBranch(common, [survivor])),
+                _ => SetUpdateNode(survivor),
+            }
+        },
+    }
+} else {
+    let candidates = if retain_matches { common } else { bits };
+    let mut todo = candidates;
+    let mut surviving = candidates;
+    let mut changed = candidates != bits;
     let mut kept: Array[MapNode[T, Unit]] = [];
-    for i in 0..children.len() {
+    for i in 0..Int.count_ones(candidates) {
         let bit = todo & - todo;
         todo = todo & ~bit;
-        let child = children[i];
+        let child = children[if candidates == bits { i } else { map_rank(bits, bit) }];
         let edit = if (common & bit) == 0 { SetKeepNode } else {
             let other = match right {
                 MapBranch(right_bits, right_children) => right_children[map_rank(right_bits, bit)],
                 _ => right,
             };
-            set_prune_difference(child, other, shift + 5)
+            set_prune_nodes(child, other, shift + 5, retain_matches)
         };
         match edit {
             SetKeepNode => if changed {
@@ -2767,43 +2722,70 @@ let set_prune_branch[T: Eq]
     } else { SetUpdateNode(MapBranch(surviving, kept)) }
 }
 
-let set_prune_difference[T: Eq]
+// A right-hand leaf bounds the intersection to one left representative.
+let set_prune_singleton[T: Eq]
+    (left: MapNode[T, Unit])
+    (hash: Int)
+    (key: T)
+    (shift: Int): SetPrune[T]
+= match set_find_leaf(left, hash, key, shift) {
+    MapEmpty => SetDropNode,
+    leaf => SetUpdateNode(leaf),
+}
+
+let set_prune_nodes[T: Eq]
     (left: MapNode[T, Unit])
     (right: MapNode[T, Unit])
-    (shift: Int): SetPrune[T]
-= match left {
-    MapEmpty => SetKeepNode,
-    MapLeaf(hash, key, _) => if map_node_contains(right, hash, key, shift) {
-        SetDropNode
-    } else { SetKeepNode },
-    MapCollision(hash, entries) => match right {
+    (shift: Int)
+    (retain_matches: Bool): SetPrune[T]
+= {
+    let nonmember = if retain_matches { SetDropNode } else { SetKeepNode };
+    match left {
         MapEmpty => SetKeepNode,
-        MapBranch(bits, children) => {
-            let bit = map_bit(hash, shift);
-            if (bits & bit) == 0 { SetKeepNode }
-            else { set_prune_difference(left, children[map_rank(bits, bit)], shift + 5) }
-        },
-        MapLeaf(h, _, _) | MapCollision(h, _) => if h == hash {
-            set_prune_bucket(entries, right, hash)
+        MapLeaf(hash, key, _) => if map_node_contains(right, hash, key, shift) != retain_matches {
+            SetDropNode
         } else { SetKeepNode },
-    },
-    MapBranch(bits, children) => match right {
-        MapEmpty => SetKeepNode,
-        MapBranch(other_bits, _) => set_prune_branch(
-            children,
-            right,
-            bits,
-            bits & other_bits,
-            shift
-        ),
-        MapLeaf(hash, _, _) | MapCollision(hash, _) => set_prune_branch(
-            children,
-            right,
-            bits,
-            bits & map_bit(hash, shift),
-            shift
-        ),
-    },
+        MapCollision(hash, entries) => match right {
+            MapEmpty => nonmember,
+            MapBranch(bits, children) => {
+                let bit = map_bit(hash, shift);
+                if (bits & bit) == 0 { nonmember }
+                else {
+                    set_prune_nodes(left, children[map_rank(bits, bit)], shift + 5, retain_matches)
+                }
+            },
+            MapLeaf(h, key, _) => if h != hash { nonmember }
+            else if retain_matches { set_prune_singleton(left, h, key, shift) }
+            else { set_prune_bucket(entries, right, hash, false) },
+            MapCollision(h, _) => if h == hash {
+                set_prune_bucket(entries, right, hash, retain_matches)
+            } else { nonmember },
+        },
+        MapBranch(bits, children) => match right {
+            MapEmpty => nonmember,
+            MapBranch(other_bits, _) => set_prune_branch(
+                children,
+                right,
+                bits,
+                bits & other_bits,
+                shift,
+                retain_matches
+            ),
+            MapLeaf(hash, key, _) => if retain_matches {
+                set_prune_singleton(left, hash, key, shift)
+            } else {
+                set_prune_branch(children, right, bits, bits & map_bit(hash, shift), shift, false)
+            },
+            MapCollision(hash, _) => set_prune_branch(
+                children,
+                right,
+                bits,
+                bits & map_bit(hash, shift),
+                shift,
+                retain_matches
+            ),
+        },
+    }
 }
 
 // Count the result once so unchanged and fully removed subtries need no
@@ -2821,6 +2803,13 @@ let set_count_node[T] (node: MapNode[T, Unit]): Int = match node {
     },
 }
 
+let set_prune[T: Eq] (left: Set[T]) (right: Set[T]) (retain_matches: Bool): Set[T] =
+    match set_prune_nodes(left.inner.root, right.inner.root, 0, retain_matches) {
+        SetKeepNode => left,
+        SetDropNode => Set.new(()),
+        SetUpdateNode(root) => Set { inner: Map { root: root, size: set_count_node(root) } },
+    }
+
 /// What is in `a` and not in `b`.
 pub let Set.difference[T: Eq + Hash] (a: Set[T]) (b: Set[T]): Set[T] = {
     let right_size = Set.len(b);
@@ -2828,7 +2817,7 @@ pub let Set.difference[T: Eq + Hash] (a: Set[T]) (b: Set[T]): Set[T] = {
     else if right_size <= Set.len(a) / 2 {
         // Visit at most as many keys as a rebuild would need to insert.
         match a {
-            Set { inner } => Set { inner: set_collect(set_root(b), inner, MapEmpty, SetErase) },
+            Set { inner } => Set { inner: set_collect(set_root(b), inner, SetErase) },
         }
     }
     else {
@@ -2841,13 +2830,7 @@ pub let Set.difference[T: Eq + Hash] (a: Set[T]) (b: Set[T]): Set[T] = {
                 OneSetMatch(hash, key) => match a {
                     Set { inner } => Set { inner: map_remove_hashed(inner, hash, key) },
                 },
-                StopSetScan => match set_prune_difference(a.inner.root, b.inner.root, 0) {
-                    SetKeepNode => a,
-                    SetDropNode => Set.new(()),
-                    SetUpdateNode(root) => Set {
-                        inner: Map { root: root, size: set_count_node(root) }
-                    },
-                },
+                StopSetScan => set_prune(a, b, false),
             },
         }
     }
