@@ -2538,11 +2538,81 @@ let set_preserves_union_order[T: Eq] (left: MapNode[T, Unit]) (right: MapNode[T,
         _ => false,
     }
 
-/// Everything in either set.
-pub let Set.union[T: Eq + Hash] (a: Set[T]) (b: Set[T]): Set[T] =
-    if Set.len(a) == 0 { b }
-    else if Set.len(b) == 0 { a }
-    else if Set.len(b) <= Set.len(a)
+// Separate bitmap slots contain different full hashes. Combine their
+// packed child arrays without rebuilding either side's descendants.
+let set_graft_children[T]
+    (left_bits: Int)
+    (left: Array[MapNode[T, Unit]])
+    (right_bits: Int)
+    (right: Array[MapNode[T, Unit]]): Array[MapNode[T, Unit]]
+= {
+    let mut slots = left_bits | right_bits;
+    let mut left_index = 0;
+    let mut right_index = 0;
+    let size = left.len() + right.len();
+    let mut children = plum__array_reserve_empty_raw(size);
+    for i in 0..size {
+        let bit = slots & - slots;
+        slots = slots & ~bit;
+        if (left_bits & bit) != 0 {
+            children = children.push(left[left_index]);
+            left_index = left_index + 1;
+        } else {
+            children = children.push(right[right_index]);
+            right_index = right_index + 1;
+        };
+    };
+    children
+}
+
+// A successful graft keeps every key from both inputs. A shared full
+// hash delegates to the normal union so collision order and equal-key
+// representatives follow the existing policy.
+let set_graft_union[T]
+    (left: MapNode[T, Unit])
+    (right: MapNode[T, Unit])
+    (shift: Int): MapNode[T, Unit]
+= match left {
+    MapEmpty => MapEmpty,
+    MapBranch(left_bits, left_children) => match right {
+        MapBranch(right_bits, right_children) => if (left_bits & right_bits) == 0 {
+            MapBranch(
+                left_bits | right_bits,
+                set_graft_children(left_bits, left_children, right_bits, right_children)
+            )
+        } else if left_bits == right_bits && left_children.len() == 1 {
+            // The merged branch still needs this level's hash chunk.
+            match set_graft_union(left_children[0], right_children[0], shift + 5) {
+                MapEmpty => MapEmpty,
+                child => MapBranch(left_bits, [child]),
+            }
+        } else { MapEmpty },
+        MapLeaf(hash, _, _) | MapCollision(hash, _) => {
+            let bit = map_bit(hash, shift);
+            if (left_bits & bit) == 0 {
+                let i = map_rank(left_bits, bit);
+                MapBranch(left_bits | bit, plum__array_insert_raw(left_children, i, right))
+            } else if left_bits == bit {
+                match set_graft_union(left_children[0], right, shift + 5) {
+                    MapEmpty => MapEmpty,
+                    child => MapBranch(left_bits, [child]),
+                }
+            } else { MapEmpty }
+        },
+        MapEmpty => MapEmpty,
+    },
+    MapLeaf(hash, _, _) | MapCollision(hash, _) => match right {
+        MapEmpty => MapEmpty,
+        MapBranch(_, _) => set_graft_union(right, left, shift),
+        MapLeaf(h, _, _) | MapCollision(h, _) => if hash != h {
+            map_join(left, hash, right, h, shift)
+        }
+        else { MapEmpty },
+    },
+}
+
+let set_union_by_insertion[T: Eq] (a: Set[T]) (b: Set[T]): Set[T] =
+    if Set.len(b) <= Set.len(a)
         && set_preserves_union_order(b.inner.root, a.inner.root) {
             // Keep the left representative of an equal key, whichever
             // set supplies the accumulator.
@@ -2555,6 +2625,17 @@ pub let Set.union[T: Eq + Hash] (a: Set[T]) (b: Set[T]): Set[T] =
     else {
         match b {
             Set { inner } => Set { inner: set_collect(set_root(a), inner, SetAll) },
+        }
+    }
+
+/// Everything in either set.
+pub let Set.union[T: Eq + Hash] (a: Set[T]) (b: Set[T]): Set[T] =
+    if Set.len(a) == 0 { b }
+    else if Set.len(b) == 0 { a }
+    else {
+        match set_graft_union(a.inner.root, b.inner.root, 0) {
+            MapEmpty => set_union_by_insertion(a, b),
+            root => Set { inner: Map { root: root, size: Set.len(a) + Set.len(b) } },
         }
     }
 
