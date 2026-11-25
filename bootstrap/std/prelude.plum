@@ -2268,7 +2268,6 @@ enum SetOperation {
     SetAll,
     SetAddMissing,
     SetPresent,
-    SetAbsent,
     SetErase
 }
 
@@ -2292,8 +2291,6 @@ let set_apply_key[T: Eq]
     SetPresent => if map_node_contains(other, hash, key, 0) {
         set_insert_missing(acc, hash, key)
     } else { acc },
-    SetAbsent => if map_node_contains(other, hash, key, 0) { acc }
-    else { set_insert_missing(acc, hash, key) },
     SetErase => map_remove_hashed(acc, hash, key),
 }
 
@@ -2685,6 +2682,145 @@ pub let Set.intersection[T: Eq + Hash] (a: Set[T]) (b: Set[T]): Set[T] = {
     }
 }
 
+// The caller still has the left node for the unchanged case.
+enum SetPrune[T] {
+    SetKeepNode,
+    SetDropNode,
+    SetUpdateNode(MapNode[T, Unit])
+}
+
+let set_prune_bucket[T: Eq]
+    (entries: Array[MapEntry[T, Unit]])
+    (right: MapNode[T, Unit])
+    (hash: Int): SetPrune[T]
+= {
+    let mut changed = false;
+    let mut kept: Array[MapEntry[T, Unit]] = [];
+    for i in 0..entries.len() {
+        let entry = entries[i];
+        if map_node_contains(right, hash, entry.key, 0) {
+            if !changed {
+                kept = Array.take(entries, i);
+                changed = true;
+            };
+        } else if changed {
+            kept = kept.push(entry);
+        };
+    };
+    if !changed { SetKeepNode }
+    else if kept.len() == 0 { SetDropNode }
+    else if kept.len() == 1 { SetUpdateNode(MapLeaf(hash, kept[0].key, ())) }
+    else { SetUpdateNode(MapCollision(hash, kept)) }
+}
+
+// Start collecting children at the first edit. The untouched prefix and
+// other surviving slots keep their original child nodes.
+let set_prune_branch[T: Eq]
+    (children: Array[MapNode[T, Unit]])
+    (right: MapNode[T, Unit])
+    (bits: Int)
+    (common: Int)
+    (shift: Int): SetPrune[T]
+= if common == 0 { SetKeepNode } else {
+    let mut todo = bits;
+    let mut surviving = bits;
+    let mut changed = false;
+    let mut kept: Array[MapNode[T, Unit]] = [];
+    for i in 0..children.len() {
+        let bit = todo & - todo;
+        todo = todo & ~bit;
+        let child = children[i];
+        let edit = if (common & bit) == 0 { SetKeepNode } else {
+            let other = match right {
+                MapBranch(right_bits, right_children) => right_children[map_rank(right_bits, bit)],
+                _ => right,
+            };
+            set_prune_difference(child, other, shift + 5)
+        };
+        match edit {
+            SetKeepNode => if changed {
+                kept = kept.push(child);
+            },
+            SetDropNode => {
+                if !changed {
+                    kept = Array.take(children, i);
+                    changed = true;
+                };
+                surviving = surviving & ~bit;
+            },
+            SetUpdateNode(next) => {
+                if !changed {
+                    kept = Array.take(children, i);
+                    changed = true;
+                };
+                kept = kept.push(next);
+            },
+        };
+    };
+    if !changed { SetKeepNode }
+    else if surviving == 0 { SetDropNode }
+    else if kept.len() == 1 {
+        match kept[0] {
+            MapLeaf(_, _, _) | MapCollision(_, _) => SetUpdateNode(kept[0]),
+            _ => SetUpdateNode(MapBranch(surviving, kept)),
+        }
+    } else { SetUpdateNode(MapBranch(surviving, kept)) }
+}
+
+let set_prune_difference[T: Eq]
+    (left: MapNode[T, Unit])
+    (right: MapNode[T, Unit])
+    (shift: Int): SetPrune[T]
+= match left {
+    MapEmpty => SetKeepNode,
+    MapLeaf(hash, key, _) => if map_node_contains(right, hash, key, shift) {
+        SetDropNode
+    } else { SetKeepNode },
+    MapCollision(hash, entries) => match right {
+        MapEmpty => SetKeepNode,
+        MapBranch(bits, children) => {
+            let bit = map_bit(hash, shift);
+            if (bits & bit) == 0 { SetKeepNode }
+            else { set_prune_difference(left, children[map_rank(bits, bit)], shift + 5) }
+        },
+        MapLeaf(h, _, _) | MapCollision(h, _) => if h == hash {
+            set_prune_bucket(entries, right, hash)
+        } else { SetKeepNode },
+    },
+    MapBranch(bits, children) => match right {
+        MapEmpty => SetKeepNode,
+        MapBranch(other_bits, _) => set_prune_branch(
+            children,
+            right,
+            bits,
+            bits & other_bits,
+            shift
+        ),
+        MapLeaf(hash, _, _) | MapCollision(hash, _) => set_prune_branch(
+            children,
+            right,
+            bits,
+            bits & map_bit(hash, shift),
+            shift
+        ),
+    },
+}
+
+// Count the result once so unchanged and fully removed subtries need no
+// allocated records for their sizes during the edit.
+let set_count_node[T] (node: MapNode[T, Unit]): Int = match node {
+    MapEmpty => 0,
+    MapLeaf(_, _, _) => 1,
+    MapCollision(_, entries) => entries.len(),
+    MapBranch(_, children) => {
+        let mut size = 0;
+        for child in children {
+            size = size + set_count_node(child);
+        };
+        size
+    },
+}
+
 /// What is in `a` and not in `b`.
 pub let Set.difference[T: Eq + Hash] (a: Set[T]) (b: Set[T]): Set[T] = {
     let right_size = Set.len(b);
@@ -2705,8 +2841,12 @@ pub let Set.difference[T: Eq + Hash] (a: Set[T]) (b: Set[T]): Set[T] = {
                 OneSetMatch(hash, key) => match a {
                     Set { inner } => Set { inner: map_remove_hashed(inner, hash, key) },
                 },
-                StopSetScan => Set {
-                    inner: set_collect(set_root(a), Map.new(()), b.inner.root, SetAbsent)
+                StopSetScan => match set_prune_difference(a.inner.root, b.inner.root, 0) {
+                    SetKeepNode => a,
+                    SetDropNode => Set.new(()),
+                    SetUpdateNode(root) => Set {
+                        inner: Map { root: root, size: set_count_node(root) }
+                    },
                 },
             },
         }

@@ -191,6 +191,30 @@ let check_set_traversal (): Unit = {
         assert(after_single_cut - before_single_cut < 16384);
     };
 
+    let mut clustered = large_disjoint;
+    let mut survivors = 0;
+    for i in 0..4096 {
+        if (i.hash() & 31) < 16 {
+            clustered = Set.insert(clustered, i);
+        }
+        else {
+            survivors = survivors + 1;
+        };
+    };
+    let before_clustered = allocation_bytes();
+    let remainder = Set.difference(source, clustered);
+    let after_clustered = allocation_bytes();
+    assert_eq(Set.len(remainder), survivors);
+    assert_eq(Set.len(source), 4096);
+    assert_eq(Set.len(clustered), 8192 - survivors);
+    for i in 0..4096 {
+        assert_eq(Set.contains(remainder, i), (i.hash() & 31) >= 16);
+    };
+    if before_clustered >= 0 {
+        // A changed bitmap can keep all the surviving child tries.
+        assert(after_clustered - before_clustered < 16384);
+    };
+
     let exclusions = Set.from_array([0, 1024, 4095, 8192]);
     let before_cut = allocation_bytes();
     let cut = Set.difference(source, exclusions);
