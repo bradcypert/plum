@@ -373,6 +373,42 @@ let bucket_key (a: Int) (b: Int) (mask: Int): Array[Int] = {
     key
 }
 
+let check_single_bucket_leaf
+    (keys: Array[Array[Int]])
+    (bucket: Set[Array[Int]])
+    (miss: Array[Int]): Unit
+= {
+    let first = keys[0];
+    let last = keys[keys.len() - 1];
+    let left = Set.insert(Set.insert(bucket, [-1]), [-2]);
+    let mut right = Set.from_array([[-1], [-2]]);
+    // The two shared leaves reach bulk pruning. The padding keeps this
+    // path even though at most one key from the collision bucket can match.
+    for index in 0..keys.len() {
+        right = Set.insert(right, [index]);
+    };
+    let exclusions = Set.insert(right, first);
+    let before = allocation_bytes();
+    let without_first = Set.difference(left, exclusions);
+    let after = allocation_bytes();
+    if before >= 0 {
+        // Copy the surviving entries without building a selection mask.
+        assert(after - before <= 1264);
+    };
+    assert_eq(Set.to_array(without_first), Array.drop(keys, 1));
+    let without_last = Set.difference(left, Set.insert(right, last));
+    assert_eq(Set.to_array(without_last), Array.take(keys, keys.len() - 1));
+    let no_collision_match = Set.difference(left, Set.insert(right, miss));
+    assert_eq(Set.to_array(no_collision_match), keys);
+
+    let pair = Set.from_array([first, last, [-1], [-2]]);
+    let survivor = Set.difference(pair, Set.from_array([first, [-1], [-2]]));
+    assert_eq(survivor, Set.from_array([last]));
+    assert(Set.contains(survivor, last));
+    assert_eq(Set.len(left), keys.len() + 2);
+    assert_eq(Set.to_array(bucket), keys);
+}
+
 let check_pruned_bucket (a: Int) (b: Int): Unit = {
     let mut keys: Array[Array[Int]] = [];
     let mut survivors: Array[Array[Int]] = [];
@@ -413,6 +449,7 @@ let check_pruned_bucket (a: Int) (b: Int): Unit = {
     let only_last = Set.difference(left, Set.from_array(Array.take(keys, 127)));
     assert_eq(Set.to_array(only_last), [keys[127]]);
     assert_eq(Set.to_array(left), keys);
+    check_single_bucket_leaf(keys, left, bucket_key(a, b, 128));
 }
 
 let check_set_snapshots (a: Int) (b: Int) (deep: Int): Unit = {

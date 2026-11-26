@@ -3092,7 +3092,11 @@ let set_prune_nodes[T: Eq]
             },
             MapLeaf(h, key, _) => if h != hash { nonmember }
             else if retain_matches { set_prune_singleton(left, h, key, shift) }
-            else { set_prune_bucket(entries, right, hash, false) },
+            else {
+                let i = map_bucket_find_index(entries, key, 0);
+                if i < 0 { SetKeepNode }
+                else { SetUpdateNode(map_node_remove_present(left, hash, i + 1, shift, false)) }
+            },
             MapCollision(h, _) => if h == hash {
                 set_prune_bucket(entries, right, hash, retain_matches)
             } else { nonmember },
