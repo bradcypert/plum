@@ -707,6 +707,24 @@ let check_grafted_singleton_leaf (a: Int) (b: Int) (deep: Int): Unit = {
     check_union_key(split, Set.from_array([key]), Set.insert(expected, key));
 }
 
+let check_owned_singleton_graft (): Unit = {
+    let x = key_in_slot(1, 1);
+    let y = key_in_slot(2, 1);
+    let z = key_in_slot(3, 1);
+    let right = Set.from_array([y]);
+    let expected = Set.from_array([0, x, y, z]);
+    let owned = Set.remove(Set.from_array([0, x, y, z]), y);
+    let before = allocation_bytes();
+    let combined = Set.union(owned, right);
+    let after = allocation_bytes();
+    if before >= 0 {
+        // The vacant slot fits in the existing child array. Allow the observer.
+        assert(after - before <= 96);
+    };
+    assert_eq(Set.to_array(combined), Set.to_array(expected));
+    assert_eq(Set.to_array(right), [y]);
+}
+
 let check_singleton_trie_union (a: Int) (b: Int) (deep: Int): Unit = {
     let left = Set.from_array([a, b, deep]);
     let first = Set.from_array([a]);
@@ -780,6 +798,7 @@ let main (): Unit = {
     check_set_union_collision_order(a, b, deep);
     check_singleton_trie_union(a, b, deep);
     check_grafted_singleton_leaf(a, b, deep);
+    check_owned_singleton_graft();
     check_union_identical_buckets(a, b, deep);
     check_grafted_union(0);
     check_grafted_union(5);
