@@ -680,6 +680,37 @@ let check_union_identical_buckets (a: Int) (b: Int) (deep: Int): Unit = {
     assert_eq(Set.to_array(left), [a, b, deep]);
 }
 
+let check_singleton_trie_union (a: Int) (b: Int) (deep: Int): Unit = {
+    let left = Set.from_array([a, b, deep]);
+    let first = Set.from_array([a]);
+    let last = Set.from_array([b]);
+    let existing = Set.from_array([deep]);
+    let before = allocation_bytes();
+    for i in 0..64 {
+        assert_eq(Set.union(left, first), left);
+        assert_eq(Set.union(left, existing), left);
+    };
+    let after = allocation_bytes();
+    if before >= 0 {
+        assert(after - before <= 256);
+    };
+
+    let reordered = Set.from_array([b, a, deep]);
+    check_union_key(left, last, reordered);
+    check_union_key(Set.from_array([a, deep]), last, reordered);
+    assert_eq(Set.to_array(left), [a, b, deep]);
+
+    let owned = Set.from_array([a, b, deep]);
+    let before_owned = allocation_bytes();
+    let moved = Set.union(owned, last);
+    let after_owned = allocation_bytes();
+    if before_owned >= 0 {
+        // Moving the key can reuse the collision bucket and the entire path.
+        assert(after_owned - before_owned <= 128);
+    };
+    assert_eq(moved, reordered);
+}
+
 let check_set_union_collision_order (a: Int) (b: Int) (deep: Int): Unit = {
     let single_a = Set.from_array([a]);
     let single_b = Set.from_array([b]);
@@ -720,6 +751,7 @@ let main (): Unit = {
     check_pruned_terminals(a, b, deep);
     check_pruned_bucket(a, b);
     check_set_union_collision_order(a, b, deep);
+    check_singleton_trie_union(a, b, deep);
     check_union_identical_buckets(a, b, deep);
     check_grafted_union(0);
     check_grafted_union(5);
