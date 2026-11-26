@@ -436,6 +436,45 @@ let check_sparse_bucket_intersection
     assert_eq(Set.to_array(left), keys);
 }
 
+let check_bulk_collision_union (keys: Array[Array[Int]]): Unit = {
+    let left_keys = Array.take(keys, 96);
+    let right_keys = Array.reverse(Array.drop(keys, 64));
+    let left = Set.from_array(left_keys);
+    let right = Set.from_array(right_keys);
+    let before = allocation_bytes();
+    let joined = Set.union(left, right);
+    let after = allocation_bytes();
+    if before >= 0 {
+        // The union shares the original key entries and only grows the bucket.
+        assert(after - before <= 2048);
+    };
+    let ordered = Array.concat(right_keys, Array.take(keys, 64));
+    let expected = Set.from_array(ordered);
+    assert_eq(Set.to_array(joined), ordered);
+    assert_eq(Map.get(Map.insert(Map.new(()), joined, 42), expected), Some(42));
+    assert_eq(Set.to_array(left), left_keys);
+    assert_eq(Set.to_array(right), right_keys);
+
+    let reversed = Array.reverse(keys);
+    let owned_left = Set.from_array(keys);
+    let owned_right = Set.from_array(reversed);
+    let before_owned = allocation_bytes();
+    let reordered = Set.union(owned_left, owned_right);
+    let after_owned = allocation_bytes();
+    if before_owned >= 0 {
+        // Reuse the unique right bucket, with room for observer records.
+        assert(after_owned - before_owned <= 128);
+    };
+    assert_eq(Set.to_array(reordered), reversed);
+
+    let negative = Set.from_array([(keys[0], -0.0), (keys[1], -0.0)]);
+    let positive = Set.from_array([(keys[2], 0.0), (keys[1], 0.0)]);
+    let representatives = Set.to_array(Set.union(negative, positive));
+    assert_eq(representatives, [(keys[2], 0.0), (keys[1], -0.0), (keys[0], -0.0)]);
+    let (_, retained) = representatives[1];
+    assert_eq(retained.to_string(), "-0");
+}
+
 let check_pruned_bucket (a: Int) (b: Int): Unit = {
     let mut keys: Array[Array[Int]] = [];
     let mut survivors: Array[Array[Int]] = [];
@@ -478,6 +517,7 @@ let check_pruned_bucket (a: Int) (b: Int): Unit = {
     assert_eq(Set.to_array(left), keys);
     check_single_bucket_leaf(keys, left, bucket_key(a, b, 128));
     check_sparse_bucket_intersection(a, b, keys, left);
+    check_bulk_collision_union(keys);
 }
 
 let check_set_snapshots (a: Int) (b: Int) (deep: Int): Unit = {
