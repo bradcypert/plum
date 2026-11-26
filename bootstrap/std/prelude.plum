@@ -2735,13 +2735,18 @@ let set_merge_branch_terminal[T: Eq]
     }
 }
 
-let set_bucket_keys_match[T: Eq]
+let set_bucket_prefix_length[T: Eq]
     (left: Array[MapEntry[T, Unit]])
     (right: Array[MapEntry[T, Unit]])
-    (i: Int): Bool
-= if i == left.len() { true }
-else if left[i].key == right[i].key { set_bucket_keys_match(left, right, i + 1) }
-else { false }
+    (i: Int)
+    (end: Int): Int
+= if i == end || left[i].key != right[i].key { i }
+else { set_bucket_prefix_length(left, right, i + 1, end) }
+
+let set_bucket_common_prefix[T: Eq]
+    (left: Array[MapEntry[T, Unit]])
+    (right: Array[MapEntry[T, Unit]]): Int
+= set_bucket_prefix_length(left, right, 0, Int.min(left.len(), right.len()))
 
 let set_merge_bucket_union[T: Eq]
     (left: MapNode[T, Unit])
@@ -2754,30 +2759,37 @@ let set_merge_bucket_union[T: Eq]
     }
 }
 
-let set_find_bucket_prefix[T: Eq]
+let set_find_bucket_index[T: Eq]
     (entries: Array[MapEntry[T, Unit]])
     (key: T)
     (index: Int)
     (end: Int): Int
 = if index == end { -1 }
 else if entries[index].key == key { index }
-else { set_find_bucket_prefix(entries, key, index + 1, end) }
+else { set_find_bucket_index(entries, key, index + 1, end) }
 
 // Equal replacements keep the original right positions searchable.
 // Search only that prefix so a unique right buffer can be reused.
 let set_merge_collision_entries[T: Eq]
     (left: Array[MapEntry[T, Unit]])
-    (right: Array[MapEntry[T, Unit]]): Array[MapEntry[T, Unit]]
+    (right: Array[MapEntry[T, Unit]])
+    (prefix: Int): Array[MapEntry[T, Unit]]
 = {
     let end = right.len();
     let mut merged = right;
-    for entry in left {
-        let i = set_find_bucket_prefix(merged, entry.key, 0, end);
-        if i < 0 {
+    // The common prefix already supplies the positions for these entries.
+    for i in 0..prefix {
+        merged = merged.set(i, left[i]);
+    };
+    // Keys in the remaining left suffix cannot match an earlier left key.
+    for i in prefix..left.len() {
+        let entry = left[i];
+        let at = set_find_bucket_index(merged, entry.key, prefix, end);
+        if at < 0 {
             merged = merged.push(entry);
         }
         else {
-            merged = merged.set(i, entry);
+            merged = merged.set(at, entry);
         };
     };
     merged
@@ -2818,16 +2830,19 @@ let set_merge_union_node[T: Eq]
                     _ => set_merge_bucket_union(left, right),
                 },
                 MapCollision(_, left_entries) => match right {
-                    MapCollision(_, right_entries) =>
-                        if left_entries.len() == right_entries.len()
-                            && set_bucket_keys_match(left_entries, right_entries, 0) {
-                                SetMergeKeep
-                            }
+                    MapCollision(_, right_entries) => {
+                        let prefix = set_bucket_common_prefix(left_entries, right_entries);
+                        if prefix == right_entries.len() { SetMergeKeep }
                         else {
-                            let merged = set_merge_collision_entries(left_entries, right_entries);
+                            let merged = set_merge_collision_entries(
+                                left_entries,
+                                right_entries,
+                                prefix
+                            );
                             let added = merged.len() - left_entries.len();
                             SetMergeUpdated(MapCollision(hash, merged), added)
-                        },
+                        }
+                    },
                     _ => set_merge_bucket_union(left, right),
                 },
                 _ => set_merge_bucket_union(left, right),
@@ -2846,13 +2861,14 @@ let set_union_branch_roots[T: Eq] (a: Set[T]) (b: Set[T]): Set[T] =
 
 let set_union_collision_map[T: Eq]
     (left: Array[MapEntry[T, Unit]])
-    (right: Map[T, Unit]): Map[T, Unit]
+    (right: Map[T, Unit])
+    (prefix: Int): Map[T, Unit]
 = match right {
     Map { root, size } => {
         // Finish the Map outside the node match so both cells can be reused.
         let merged = match root {
             MapCollision(hash, entries) =>
-                MapCollision(hash, set_merge_collision_entries(left, entries)),
+                MapCollision(hash, set_merge_collision_entries(left, entries, prefix)),
             node => node,
         };
         let size = set_count_node(merged);
@@ -2860,24 +2876,15 @@ let set_union_collision_map[T: Eq]
     },
 }
 
-enum SetBucketUnion {
-    SetOtherBucket,
-    SetKeepLeftBucket,
-    SetMergeBuckets
-}
-
-// Inspect the bucket before consuming the right Set so the scan's
-// references are gone when the merge tries to reuse its storage.
-let set_bucket_union_kind[T: Eq]
+// Inspect the prefix before consuming the right Set. A negative result
+// indicates that the right root is outside this same-hash bucket path.
+let set_bucket_union_prefix[T: Eq]
     (left: Array[MapEntry[T, Unit]])
     (hash: Int)
-    (right: MapNode[T, Unit]): SetBucketUnion
+    (right: MapNode[T, Unit]): Int
 = match right {
-    MapCollision(h, entries) if h == hash =>
-        if left.len() == entries.len() && set_bucket_keys_match(left, entries, 0) {
-            SetKeepLeftBucket
-        } else { SetMergeBuckets },
-    _ => SetOtherBucket,
+    MapCollision(h, entries) if h == hash => set_bucket_common_prefix(left, entries),
+    _ => -1,
 }
 
 let set_union_merge_routes[T: Eq] (a: Set[T]) (b: Set[T]): Set[T] =
@@ -2887,14 +2894,18 @@ let set_union_merge_routes[T: Eq] (a: Set[T]) (b: Set[T]): Set[T] =
             MapBranch(_, _) => set_union_branch_roots(a, b),
             _ => set_union_by_insertion(a, b),
         },
-        MapCollision(hash, left_entries) =>
-            match set_bucket_union_kind(left_entries, hash, b.inner.root) {
-                SetKeepLeftBucket => a,
-                SetMergeBuckets => match b {
-                    Set { inner } => Set { inner: set_union_collision_map(left_entries, inner) },
-                },
-                SetOtherBucket => set_union_by_insertion(a, b),
-            },
+        MapCollision(hash, left_entries) => {
+            let prefix = set_bucket_union_prefix(left_entries, hash, b.inner.root);
+            if prefix < 0 { set_union_by_insertion(a, b) }
+            else if prefix == Set.len(b) { a }
+            else {
+                match b {
+                    Set { inner } => Set {
+                        inner: set_union_collision_map(left_entries, inner, prefix)
+                    },
+                }
+            }
+        },
         _ => set_union_by_insertion(a, b),
     }
 
