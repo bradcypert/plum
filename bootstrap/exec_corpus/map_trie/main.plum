@@ -409,6 +409,33 @@ let check_single_bucket_leaf
     assert_eq(Set.to_array(bucket), keys);
 }
 
+let check_sparse_bucket_intersection
+    (a: Int)
+    (b: Int)
+    (keys: Array[Array[Int]])
+    (left: Set[Array[Int]]): Unit
+= {
+    let first = keys[1];
+    let last = keys[127];
+    let mut absent: Set[Array[Int]] = Set.new(());
+    for slot in 128..142 {
+        absent = Set.insert(absent, bucket_key(a, b, slot));
+    };
+    let one = Set.insert(absent, last);
+    let both = Set.insert(one, first);
+    let before = allocation_bytes();
+    let result = Set.intersection(left, both);
+    let after = allocation_bytes();
+    if before >= 0 {
+        // Only two entries survive, even though the right bucket has sixteen.
+        assert(after - before <= 208);
+    };
+    assert_eq(Set.to_array(result), [first, last]);
+    assert_eq(Set.to_array(Set.intersection(left, one)), [last]);
+    assert_eq(Set.len(Set.intersection(left, absent)), 0);
+    assert_eq(Set.to_array(left), keys);
+}
+
 let check_pruned_bucket (a: Int) (b: Int): Unit = {
     let mut keys: Array[Array[Int]] = [];
     let mut survivors: Array[Array[Int]] = [];
@@ -450,6 +477,7 @@ let check_pruned_bucket (a: Int) (b: Int): Unit = {
     assert_eq(Set.to_array(only_last), [keys[127]]);
     assert_eq(Set.to_array(left), keys);
     check_single_bucket_leaf(keys, left, bucket_key(a, b, 128));
+    check_sparse_bucket_intersection(a, b, keys, left);
 }
 
 let check_set_snapshots (a: Int) (b: Int) (deep: Int): Unit = {

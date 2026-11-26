@@ -2961,6 +2961,46 @@ let set_prune_bucket[T: Eq]
     }
 }
 
+let set_bucket_find_last_match[T: Eq]
+    (left: Array[MapEntry[T, Unit]])
+    (right: Array[MapEntry[T, Unit]])
+    (i: Int): Int
+= if i < 0 { -1 }
+else if map_bucket_find_index(right, left[i].key, 0) >= 0 { i }
+else { set_bucket_find_last_match(left, right, i - 1) }
+
+// Only matching entries add frames. The caller limits the right bucket to sixteen.
+// Walking backwards lets us fill the exact-size result in left order.
+let set_bucket_collect_matches[T: Eq]
+    (left: Array[MapEntry[T, Unit]])
+    (right: Array[MapEntry[T, Unit]])
+    (i: Int)
+    (count: Int): Array[MapEntry[T, Unit]]
+= {
+    let next = if count == right.len() { -1 } else { set_bucket_find_last_match(left, right, i) };
+    if next < 0 { plum__array_reserve_empty_raw(count) }
+    else {
+        set_bucket_collect_matches(left, right, next - 1, count + 1).push(left[next])
+    }
+}
+
+let set_prune_sparse_bucket[T: Eq]
+    (left: Array[MapEntry[T, Unit]])
+    (right: Array[MapEntry[T, Unit]])
+    (hash: Int): SetPrune[T]
+= {
+    let last = set_bucket_find_last_match(left, right, left.len() - 1);
+    if last < 0 { SetDropNode }
+    else {
+        let previous = set_bucket_find_last_match(left, right, last - 1);
+        if previous < 0 { SetUpdateNode(MapLeaf(hash, left[last].key, ())) }
+        else {
+            let kept = set_bucket_collect_matches(left, right, previous - 1, 2);
+            SetUpdateNode(MapCollision(hash, kept.push(left[previous]).push(left[last])))
+        }
+    }
+}
+
 // Keep the original children until the first edit. Hold a lone survivor
 // directly so promoting a terminal does not require a temporary array.
 let set_prune_branch[T: Eq]
@@ -3097,9 +3137,12 @@ let set_prune_nodes[T: Eq]
                 if i < 0 { SetKeepNode }
                 else { SetUpdateNode(map_node_remove_present(left, hash, i + 1, shift, false)) }
             },
-            MapCollision(h, _) => if h == hash {
-                set_prune_bucket(entries, right, hash, retain_matches)
-            } else { nonmember },
+            MapCollision(h, other_entries) => if h != hash { nonmember }
+            else if retain_matches && other_entries.len() <= 16
+                && other_entries.len() <= entries.len() / 2 {
+                    set_prune_sparse_bucket(entries, other_entries, hash)
+                }
+            else { set_prune_bucket(entries, right, hash, retain_matches) },
         },
         MapBranch(bits, children) => match right {
             MapEmpty => nonmember,
