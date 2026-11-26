@@ -365,6 +365,56 @@ let check_pruned_terminals (a: Int) (b: Int) (deep: Int): Unit = {
     assert_eq(Set.len(left), 4);
 }
 
+let bucket_key (a: Int) (b: Int) (mask: Int): Array[Int] = {
+    let mut key: Array[Int] = [];
+    for bit in 0..8 {
+        key = key.push(if (mask & (1 << bit)) == 0 { a } else { b });
+    };
+    key
+}
+
+let check_pruned_bucket (a: Int) (b: Int): Unit = {
+    let mut keys: Array[Array[Int]] = [];
+    let mut survivors: Array[Array[Int]] = [];
+    let mut removals: Array[Array[Int]] = [];
+    for slot in 0..128 {
+        let key = bucket_key(a, b, slot);
+        keys = keys.push(key);
+        if slot % 4 == 0 {
+            removals = removals.push(key);
+        }
+        else {
+            survivors = survivors.push(key);
+        };
+    };
+    for slot in 128..192 {
+        removals = removals.push(bucket_key(a, b, slot));
+    };
+    assert_eq(keys[0].hash(), keys[127].hash());
+    let left = Set.from_array(keys);
+    let excluded = Set.from_array(removals);
+    let included = Set.from_array(Array.reverse(survivors));
+
+    let before = allocation_bytes();
+    let difference = Set.difference(left, excluded);
+    let split = allocation_bytes();
+    let intersection = Set.intersection(left, included);
+    let after = allocation_bytes();
+    if before >= 0 {
+        // The shared bucket needs one exact 96-entry buffer and a small
+        // selection mask. Its capacity never grows while filling.
+        assert(split - before <= 1024);
+        assert(after - split <= 1024);
+    };
+    assert_eq(Set.to_array(difference), survivors);
+    assert_eq(Set.to_array(intersection), survivors);
+
+    // Promote the survivor at the highest bit of the last selection word.
+    let only_last = Set.difference(left, Set.from_array(Array.take(keys, 127)));
+    assert_eq(Set.to_array(only_last), [keys[127]]);
+    assert_eq(Set.to_array(left), keys);
+}
+
 let check_set_snapshots (a: Int) (b: Int) (deep: Int): Unit = {
     let left = Set.from_array([a, b, deep]);
     let right = Set.from_array([b, deep, 17]);
@@ -482,6 +532,7 @@ let main (): Unit = {
     check_set_snapshots(a, b, deep);
     check_single_candidate_intersection(a, b, deep);
     check_pruned_terminals(a, b, deep);
+    check_pruned_bucket(a, b);
     check_set_union_collision_order(a, b, deep);
     check_union_identical_buckets(a, b, deep);
     check_grafted_union(0);
