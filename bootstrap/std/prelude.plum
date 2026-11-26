@@ -2795,6 +2795,23 @@ let set_merge_collision_entries[T: Eq]
     merged
 }
 
+// The right leaf takes the first position. An equal left entry supplies
+// its representative and the remaining left entries keep their order.
+let set_prepend_bucket_leaf[T]
+    (entries: Array[MapEntry[T, Unit]])
+    (key: T)
+    (position: Int): Array[MapEntry[T, Unit]]
+= if position < 0 { plum__array_insert_raw(entries, 0, MapEntry { key: key, value: () }) }
+else {
+    let entry = entries[position];
+    let mut moved = entries;
+    for i in 0..position {
+        let at = position - i;
+        moved = moved.set(at, moved[at - 1]);
+    };
+    moved.set(0, entry)
+}
+
 let set_merge_union_node[T: Eq]
     (left: MapNode[T, Unit])
     (right: MapNode[T, Unit])
@@ -2840,6 +2857,15 @@ let set_merge_union_node[T: Eq]
                                 prefix
                             );
                             let added = merged.len() - left_entries.len();
+                            SetMergeUpdated(MapCollision(hash, merged), added)
+                        }
+                    },
+                    MapLeaf(_, key, _) => {
+                        let position = map_bucket_find_index(left_entries, key, 0);
+                        if position == 0 { SetMergeKeep }
+                        else {
+                            let merged = set_prepend_bucket_leaf(left_entries, key, position);
+                            let added = if position < 0 { 1 } else { 0 };
                             SetMergeUpdated(MapCollision(hash, merged), added)
                         }
                     },
@@ -2909,16 +2935,61 @@ let set_union_merge_routes[T: Eq] (a: Set[T]) (b: Set[T]): Set[T] =
         _ => set_union_by_insertion(a, b),
     }
 
+// Inspect the old node before consuming its container. A mismatch
+// returns -2; -1 means a same-hash bucket without this key.
+let set_bucket_leaf_position[T: Eq]
+    (left: MapNode[T, Unit])
+    (hash: Int)
+    (key: T): Int
+= match left {
+    MapCollision(h, entries) if h == hash => map_bucket_find_index(entries, key, 0),
+    _ => -2,
+}
+
+let set_union_prepend_to_map[T]
+    (left: Map[T, Unit])
+    (key: T)
+    (position: Int): Map[T, Unit]
+= match left {
+    Map { root, size } => {
+        let merged = match root {
+            MapCollision(hash, entries) =>
+                MapCollision(hash, set_prepend_bucket_leaf(entries, key, position)),
+            node => node,
+        };
+        let size = set_count_node(merged);
+        Map { root: merged, size }
+    },
+}
+
+let set_union_single_leaf[T: Eq] (a: Set[T]) (b: Set[T]): Set[T] =
+    match b.inner.root {
+        MapLeaf(hash, key, _) => {
+            let position = set_bucket_leaf_position(a.inner.root, hash, key);
+            if position == 0 { a }
+            else if position < -1 { set_union_by_insertion(a, b) }
+            else {
+                match a {
+                    Set { inner } => Set { inner: set_union_prepend_to_map(inner, key, position) },
+                }
+            }
+        },
+        _ => set_union_by_insertion(a, b),
+    }
+
 /// Everything in either set.
-pub let Set.union[T: Eq + Hash] (a: Set[T]) (b: Set[T]): Set[T] =
+pub let Set.union[T: Eq + Hash] (a: Set[T]) (b: Set[T]): Set[T] = {
+    let right_size = Set.len(b);
     if Set.len(a) == 0 { b }
-    else if Set.len(b) == 0 { a }
+    else if right_size == 0 { a }
     else {
         match set_graft_union(a.inner.root, b.inner.root, 0) {
+            MapEmpty if right_size == 1 => set_union_single_leaf(a, b),
             MapEmpty => set_union_merge_routes(a, b),
-            root => Set { inner: Map { root: root, size: Set.len(a) + Set.len(b) } },
+            root => Set { inner: Map { root: root, size: Set.len(a) + right_size } },
         }
     }
+}
 
 // Find the left representative of a singleton intersection. A matching
 // leaf already has the shape needed by the result.

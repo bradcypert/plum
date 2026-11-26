@@ -507,6 +507,53 @@ let check_collision_union_prefix (keys: Array[Array[Int]]) (left: Set[Array[Int]
     assert_eq(second.to_string(), "-0");
 }
 
+let check_union_colliding_singleton
+    (keys: Array[Array[Int]])
+    (left: Set[Array[Int]])
+    (novel: Array[Int]): Unit
+= {
+    let first = keys[0];
+    let last = keys[keys.len() - 1];
+    let first_set = Set.from_array([first]);
+    let last_set = Set.from_array([last]);
+    let novel_set = Set.from_array([novel]);
+    let before = allocation_bytes();
+    let unchanged = Set.union(left, first_set);
+    let moved = Set.union(left, last_set);
+    let added = Set.union(left, novel_set);
+    let after = allocation_bytes();
+    if before >= 0 {
+        // A shared bucket copies its entries once to move or prepend a key.
+        assert(after - before <= 2560);
+    };
+
+    let reordered = Array.concat([last], Array.take(keys, keys.len() - 1));
+    assert_eq(unchanged, left);
+    assert_eq(Set.to_array(moved), reordered);
+    assert_eq(Set.to_array(added), Array.concat([novel], keys));
+    assert_eq(Set.to_array(left), keys);
+
+    let branch = Set.insert(left, [-1]);
+    let other = Set.from_array([last, [-1]]);
+    let merged = Set.union(branch, other);
+    assert_eq(merged, Set.insert(Set.from_array(reordered), [-1]));
+
+    let owned = Set.from_array(keys);
+    let before_owned = allocation_bytes();
+    let reused = Set.union(owned, last_set);
+    let after_owned = allocation_bytes();
+    if before_owned >= 0 {
+        assert(after_owned - before_owned <= 128);
+    };
+    assert_eq(Set.to_array(reused), reordered);
+
+    let signed = Set.from_array([(first, 0.0), (last, -0.0)]);
+    let selected = Set.union(signed, Set.from_array([(last, 0.0)]));
+    let (key, zero) = Set.to_array(selected)[0];
+    assert_eq(key, last);
+    assert_eq(zero.to_string(), "-0");
+}
+
 let check_pruned_bucket (a: Int) (b: Int): Unit = {
     let mut keys: Array[Array[Int]] = [];
     let mut survivors: Array[Array[Int]] = [];
@@ -551,6 +598,7 @@ let check_pruned_bucket (a: Int) (b: Int): Unit = {
     check_sparse_bucket_intersection(a, b, keys, left);
     check_bulk_collision_union(keys);
     check_collision_union_prefix(keys, left);
+    check_union_colliding_singleton(keys, left, bucket_key(a, b, 128));
 }
 
 let check_set_snapshots (a: Int) (b: Int) (deep: Int): Unit = {
