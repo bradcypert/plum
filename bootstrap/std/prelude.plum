@@ -2935,42 +2935,75 @@ let set_union_merge_routes[T: Eq] (a: Set[T]) (b: Set[T]): Set[T] =
         _ => set_union_by_insertion(a, b),
     }
 
-// Inspect the old node before consuming its container. A mismatch
-// returns -2; -1 means a same-hash bucket without this key.
-let set_bucket_leaf_position[T: Eq]
-    (left: MapNode[T, Unit])
+// A miss on a different hash is -2. A new key with the same hash is
+// -1. An existing key uses its zero-based position, including a leaf at 0.
+let set_union_leaf_position[T: Eq]
+    (node: MapNode[T, Unit])
     (hash: Int)
-    (key: T): Int
-= match left {
-    MapCollision(h, entries) if h == hash => map_bucket_find_index(entries, key, 0),
-    _ => -2,
+    (key: T)
+    (shift: Int): Int
+= match node {
+    MapEmpty => -2,
+    MapLeaf(h, k, _) => if h != hash { -2 } else if k == key { 0 } else { -1 },
+    MapCollision(h, entries) => if h != hash { -2 }
+    else { map_bucket_find_index(entries, key, 0) },
+    MapBranch(bits, children) => {
+        let bit = map_bit(hash, shift);
+        if (bits & bit) == 0 { -2 }
+        else { set_union_leaf_position(children[map_rank(bits, bit)], hash, key, shift + 5) }
+    },
+}
+
+// The lookup proved this route ends at a terminal with the same hash.
+let set_union_prepend_at[T]
+    (node: MapNode[T, Unit])
+    (hash: Int)
+    (key: T)
+    (position: Int)
+    (shift: Int): MapNode[T, Unit]
+= match node {
+    MapEmpty => MapEmpty,
+    MapLeaf(h, old_key, _) =>
+        MapCollision(h, [MapEntry { key: key, value: () }, MapEntry { key: old_key, value: () }]),
+    MapCollision(h, entries) => MapCollision(h, set_prepend_bucket_leaf(entries, key, position)),
+    MapBranch(bits, children) => {
+        let i = map_rank(bits, map_bit(hash, shift));
+        MapBranch(bits, plum__array_update_raw(
+            children,
+            i,
+            hash,
+            key,
+            position,
+            shift + 5,
+            (),
+            |child, h, k, at, next, unused| set_union_prepend_at(child, h, k, at, next)
+        ))
+    },
 }
 
 let set_union_prepend_to_map[T]
     (left: Map[T, Unit])
+    (hash: Int)
     (key: T)
     (position: Int): Map[T, Unit]
 = match left {
     Map { root, size } => {
-        let merged = match root {
-            MapCollision(hash, entries) =>
-                MapCollision(hash, set_prepend_bucket_leaf(entries, key, position)),
-            node => node,
-        };
-        let size = set_count_node(merged);
-        Map { root: merged, size }
+        let added = if position < 0 { 1 } else { 0 };
+        Map { root: set_union_prepend_at(root, hash, key, position, 0), size: size + added }
     },
 }
 
 let set_union_single_leaf[T: Eq] (a: Set[T]) (b: Set[T]): Set[T] =
     match b.inner.root {
         MapLeaf(hash, key, _) => {
-            let position = set_bucket_leaf_position(a.inner.root, hash, key);
+            let position = set_union_leaf_position(a.inner.root, hash, key, 0);
             if position == 0 { a }
-            else if position < -1 { set_union_by_insertion(a, b) }
             else {
                 match a {
-                    Set { inner } => Set { inner: set_union_prepend_to_map(inner, key, position) },
+                    Set { inner } => Set {
+                        inner: if position == -2 { set_insert_missing(inner, hash, key) }
+                        else { set_union_prepend_to_map(inner, hash, key, position) }
+                    },
                 }
             }
         },
