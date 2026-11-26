@@ -475,6 +475,38 @@ let check_bulk_collision_union (keys: Array[Array[Int]]): Unit = {
     assert_eq(retained.to_string(), "-0");
 }
 
+let check_collision_union_prefix (keys: Array[Array[Int]]) (left: Set[Array[Int]]): Unit = {
+    let ordered = Array.take(keys, 96);
+    let right = Set.from_array(ordered);
+    let branch = Set.insert(left, [-1]);
+    let right_branch = Set.insert(right, [-1]);
+    let before = allocation_bytes();
+    let covered = Set.union(left, right);
+    let covered_branch = Set.union(branch, right_branch);
+    let after = allocation_bytes();
+    if before >= 0 {
+        // An ordered prefix can keep the original root and its branches.
+        assert(after - before <= 256);
+    };
+    assert_eq(covered, left);
+    assert_eq(covered_branch, branch);
+    assert_eq(Set.to_array(right), ordered);
+    assert(Set.contains(right_branch, [-1]));
+
+    let reordered = Array.concat(Array.take(keys, 126), [keys[127], keys[126]]);
+    let right_reordered = Set.from_array(reordered);
+    assert_eq(Set.to_array(Set.union(left, right_reordered)), reordered);
+
+    let negative = Set.from_array([(keys[0], -0.0), (keys[1], -0.0)]);
+    let extended = Set.from_array([(keys[0], 0.0), (keys[1], 0.0), (keys[2], 0.0)]);
+    let reps = Set.to_array(Set.union(negative, extended));
+    assert_eq(reps, [(keys[0], -0.0), (keys[1], -0.0), (keys[2], 0.0)]);
+    let (_, first) = reps[0];
+    let (_, second) = reps[1];
+    assert_eq(first.to_string(), "-0");
+    assert_eq(second.to_string(), "-0");
+}
+
 let check_pruned_bucket (a: Int) (b: Int): Unit = {
     let mut keys: Array[Array[Int]] = [];
     let mut survivors: Array[Array[Int]] = [];
@@ -518,6 +550,7 @@ let check_pruned_bucket (a: Int) (b: Int): Unit = {
     check_single_bucket_leaf(keys, left, bucket_key(a, b, 128));
     check_sparse_bucket_intersection(a, b, keys, left);
     check_bulk_collision_union(keys);
+    check_collision_union_prefix(keys, left);
 }
 
 let check_set_snapshots (a: Int) (b: Int) (deep: Int): Unit = {
