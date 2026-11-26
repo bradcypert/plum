@@ -2954,61 +2954,74 @@ let set_union_leaf_position[T: Eq]
     },
 }
 
-// The lookup proved this route ends at a terminal with the same hash.
-let set_union_prepend_at[T]
+// Keep the existing right leaf when the route ends at a missing slot
+// or at a terminal with a different hash.
+let set_union_update_leaf[T]
     (node: MapNode[T, Unit])
     (hash: Int)
     (key: T)
+    (leaf: MapNode[T, Unit])
     (position: Int)
     (shift: Int): MapNode[T, Unit]
 = match node {
-    MapEmpty => MapEmpty,
-    MapLeaf(h, old_key, _) =>
-        MapCollision(h, [MapEntry { key: key, value: () }, MapEntry { key: old_key, value: () }]),
-    MapCollision(h, entries) => MapCollision(h, set_prepend_bucket_leaf(entries, key, position)),
+    MapEmpty => leaf,
+    MapLeaf(h, old_key, _) => if h != hash { map_join(node, h, leaf, hash, shift) }
+    else {
+        MapCollision(h, [MapEntry { key: key, value: () }, MapEntry { key: old_key, value: () }])
+    },
+    MapCollision(h, entries) => if h != hash { map_join(node, h, leaf, hash, shift) }
+    else { MapCollision(h, set_prepend_bucket_leaf(entries, key, position)) },
     MapBranch(bits, children) => {
-        let i = map_rank(bits, map_bit(hash, shift));
-        MapBranch(bits, plum__array_update_raw(
-            children,
-            i,
-            hash,
-            key,
-            position,
-            shift + 5,
-            (),
-            |child, h, k, at, next, unused| set_union_prepend_at(child, h, k, at, next)
-        ))
+        let bit = map_bit(hash, shift);
+        let i = map_rank(bits, bit);
+        if (bits & bit) == 0 {
+            MapBranch(bits | bit, plum__array_insert_raw(children, i, leaf))
+        }
+        else {
+            MapBranch(bits, plum__array_update_raw(
+                children,
+                i,
+                hash,
+                key,
+                leaf,
+                position,
+                shift + 5,
+                |child, h, k, right, at, next| set_union_update_leaf(child, h, k, right, at, next)
+            ))
+        }
     },
 }
 
-let set_union_prepend_to_map[T]
+let set_union_update_map[T]
     (left: Map[T, Unit])
     (hash: Int)
     (key: T)
+    (leaf: MapNode[T, Unit])
     (position: Int): Map[T, Unit]
 = match left {
     Map { root, size } => {
         let added = if position < 0 { 1 } else { 0 };
-        Map { root: set_union_prepend_at(root, hash, key, position, 0), size: size + added }
+        Map { root: set_union_update_leaf(root, hash, key, leaf, position, 0), size: size + added }
     },
 }
 
-let set_union_single_leaf[T: Eq] (a: Set[T]) (b: Set[T]): Set[T] =
-    match b.inner.root {
+let set_union_single_leaf[T: Eq] (a: Set[T]) (b: Set[T]): Set[T] = {
+    let leaf = b.inner.root;
+    match leaf {
         MapLeaf(hash, key, _) => {
             let position = set_union_leaf_position(a.inner.root, hash, key, 0);
             if position == 0 { a }
             else {
                 match a {
                     Set { inner } => Set {
-                        inner: if position == -2 { set_insert_missing(inner, hash, key) }
-                        else { set_union_prepend_to_map(inner, hash, key, position) }
+                        inner: set_union_update_map(inner, hash, key, leaf, position)
                     },
                 }
             }
         },
         _ => set_union_by_insertion(a, b),
     }
+}
 
 /// Everything in either set.
 pub let Set.union[T: Eq + Hash] (a: Set[T]) (b: Set[T]): Set[T] = {

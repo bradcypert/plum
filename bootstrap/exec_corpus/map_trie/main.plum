@@ -680,6 +680,33 @@ let check_union_identical_buckets (a: Int) (b: Int) (deep: Int): Unit = {
     assert_eq(Set.to_array(left), [a, b, deep]);
 }
 
+let key_in_open_child (start: Int): Int = {
+    let key = key_in_slot(0, start);
+    if (key.hash() & 1023) != 0 { key } else { key_in_open_child(key + 1) }
+}
+
+let check_grafted_singleton_leaf (a: Int) (b: Int) (deep: Int): Unit = {
+    let other = key_in_slot(1, 1);
+    let left = Set.from_array([a, other]);
+    let right = Set.from_array([deep]);
+    let before = allocation_bytes();
+    let split = Set.union(left, right);
+    let after = allocation_bytes();
+    if before >= 0 {
+        // The deep split needs its branch path and shares both leaf cells.
+        assert(after - before <= 992);
+    };
+    let expected = Set.from_array([a, deep, other]);
+    assert_eq(split, expected);
+    assert_eq(Set.to_array(left), Set.to_array(Set.from_array([a, other])));
+    assert_eq(Set.to_array(right), [deep]);
+
+    let with_collision = Set.from_array([a, b, other]);
+    check_union_key(with_collision, right, Set.from_array([a, b, deep, other]));
+    let key = key_in_open_child(1);
+    check_union_key(split, Set.from_array([key]), Set.insert(expected, key));
+}
+
 let check_singleton_trie_union (a: Int) (b: Int) (deep: Int): Unit = {
     let left = Set.from_array([a, b, deep]);
     let first = Set.from_array([a]);
@@ -752,6 +779,7 @@ let main (): Unit = {
     check_pruned_bucket(a, b);
     check_set_union_collision_order(a, b, deep);
     check_singleton_trie_union(a, b, deep);
+    check_grafted_singleton_leaf(a, b, deep);
     check_union_identical_buckets(a, b, deep);
     check_grafted_union(0);
     check_grafted_union(5);
