@@ -16,6 +16,26 @@ let assert_projection_bytes (before: Int) (len: Int): Unit = {
 let key_in_slot (slot: Int) (start: Int): Int =
     if (start.hash() & 31) == slot { start } else { key_in_slot(slot, start + 1) }
 
+let check_static_empty_set (): Unit = {
+    let left = Set.from_array([0, 1, 2]);
+    let absent = Set.from_array([3]);
+    let before = allocation_bytes();
+    for i in 0..64 {
+        let empty: Set[Int] = Set.new(());
+        assert_eq(Set.len(empty), 0);
+        assert_eq(Set.len(Set.intersection(left, absent)), 0);
+    };
+    let after = allocation_bytes();
+    if before >= 0 {
+        // Both empty results reuse a static value. Allow the observer.
+        assert(after - before <= 128);
+    };
+    let empty: Set[Int] = Set.new(());
+    let inserted = Set.insert(empty, 4);
+    assert_eq(Set.len(empty), 0);
+    assert_eq(Set.to_array(inserted), [4]);
+}
+
 let check_promotion
     (source: Map[Int, Int])
     (removed: Int)
@@ -783,6 +803,7 @@ let check_set_union_collision_order (a: Int) (b: Int) (deep: Int): Unit = {
 // collisions (the final sign-bit mask identifies these pairs). Verify the
 // hashes here so a future hashing change cannot silently weaken this test.
 let main (): Unit = {
+    check_static_empty_set();
     let a = 0;
     let b = -3592346752865808038;
     let deep = 7849046083877192578;
