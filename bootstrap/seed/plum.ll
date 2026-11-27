@@ -20006,42 +20006,42 @@ free:
   %tp = getelementptr i8, ptr %p, i64 8
   %tag = load i64, ptr %tp
   switch i64 %tag, label %done [
-    i64 61, label %R61
+    i64 56, label %R56
+    i64 63, label %R63
+    i64 65, label %R65
+    i64 66, label %R66
+    i64 67, label %R67
     i64 68, label %R68
+    i64 69, label %R69
     i64 70, label %R70
     i64 71, label %R71
-    i64 72, label %R72
-    i64 73, label %R73
-    i64 74, label %R74
-    i64 75, label %R75
-    i64 76, label %R76
   ]
-R61:
+R56:
   %rp0 = getelementptr i8, ptr %p, i64 16
   %rv0 = load ptr, ptr %rp0
   call void @plum.h.rel.Etypecheck$2eIntegerKind.0.(ptr %rv0)
   br label %done
-R68:
+R63:
   %rp100 = getelementptr i8, ptr %p, i64 16
   %rv100 = load ptr, ptr %rp100
   call void @plum.h.rel.Etypecheck$2eRawPointee.0.(ptr %rv100)
   br label %done
-R70:
+R65:
   %rp200 = getelementptr i8, ptr %p, i64 16
   %rv200 = load ptr, ptr %rp200
   call void @plum_rel_str(ptr %rv200)
   br label %done
-R71:
+R66:
   %rp300 = getelementptr i8, ptr %p, i64 16
   %rv300 = load ptr, ptr %rp300
   call void @plum_rel_str(ptr %rv300)
   br label %done
-R72:
+R67:
   %rp400 = getelementptr i8, ptr %p, i64 16
   %rv400 = load ptr, ptr %rp400
   call void @plum.h.rel.Ecodegen$2eCgTy.0.(ptr %rv400)
   br label %done
-R73:
+R68:
   %rp500 = getelementptr i8, ptr %p, i64 16
   %rv500 = load ptr, ptr %rp500
   call void @plum.h.rel.SArray.1.Ecodegen$2eCgTy.0.(ptr %rv500)
@@ -20049,17 +20049,17 @@ R73:
   %rv501 = load ptr, ptr %rp501
   call void @plum.h.rel.Ecodegen$2eCgTy.0.(ptr %rv501)
   br label %done
-R74:
+R69:
   %rp600 = getelementptr i8, ptr %p, i64 16
   %rv600 = load ptr, ptr %rp600
   call void @plum.h.rel.SArray.1.Ecodegen$2eCgTy.0.(ptr %rv600)
   br label %done
-R75:
+R70:
   %rp700 = getelementptr i8, ptr %p, i64 16
   %rv700 = load ptr, ptr %rp700
   call void @plum_rel_str(ptr %rv700)
   br label %done
-R76:
+R71:
   %rp800 = getelementptr i8, ptr %p, i64 16
   %rv800 = load ptr, ptr %rp800
   call void @plum.h.rel.Ecodegen$2eCgTy.0.(ptr %rv800)
@@ -20077,42 +20077,42 @@ live:
   %tp = getelementptr i8, ptr %p, i64 8
   %tag = load i64, ptr %tp
   switch i64 %tag, label %done [
-    i64 61, label %R61
+    i64 56, label %R56
+    i64 63, label %R63
+    i64 65, label %R65
+    i64 66, label %R66
+    i64 67, label %R67
     i64 68, label %R68
+    i64 69, label %R69
     i64 70, label %R70
     i64 71, label %R71
-    i64 72, label %R72
-    i64 73, label %R73
-    i64 74, label %R74
-    i64 75, label %R75
-    i64 76, label %R76
   ]
-R61:
+R56:
   %rp0 = getelementptr i8, ptr %p, i64 16
   %rv0 = load ptr, ptr %rp0
   call void @plum.h.rel.Etypecheck$2eIntegerKind.0.(ptr %rv0)
   br label %done
-R68:
+R63:
   %rp100 = getelementptr i8, ptr %p, i64 16
   %rv100 = load ptr, ptr %rp100
   call void @plum.h.rel.Etypecheck$2eRawPointee.0.(ptr %rv100)
   br label %done
-R70:
+R65:
   %rp200 = getelementptr i8, ptr %p, i64 16
   %rv200 = load ptr, ptr %rp200
   call void @plum_rel_str(ptr %rv200)
   br label %done
-R71:
+R66:
   %rp300 = getelementptr i8, ptr %p, i64 16
   %rv300 = load ptr, ptr %rp300
   call void @plum_rel_str(ptr %rv300)
   br label %done
-R72:
+R67:
   %rp400 = getelementptr i8, ptr %p, i64 16
   %rv400 = load ptr, ptr %rp400
   call void @plum.h.rel.Ecodegen$2eCgTy.0.(ptr %rv400)
   br label %done
-R73:
+R68:
   %rp500 = getelementptr i8, ptr %p, i64 16
   %rv500 = load ptr, ptr %rp500
   call void @plum.h.rel.SArray.1.Ecodegen$2eCgTy.0.(ptr %rv500)
@@ -20120,17 +20120,17 @@ R73:
   %rv501 = load ptr, ptr %rp501
   call void @plum.h.rel.Ecodegen$2eCgTy.0.(ptr %rv501)
   br label %done
-R74:
+R69:
   %rp600 = getelementptr i8, ptr %p, i64 16
   %rv600 = load ptr, ptr %rp600
   call void @plum.h.rel.SArray.1.Ecodegen$2eCgTy.0.(ptr %rv600)
   br label %done
-R75:
+R70:
   %rp700 = getelementptr i8, ptr %p, i64 16
   %rv700 = load ptr, ptr %rp700
   call void @plum_rel_str(ptr %rv700)
   br label %done
-R76:
+R71:
   %rp800 = getelementptr i8, ptr %p, i64 16
   %rv800 = load ptr, ptr %rp800
   call void @plum.h.rel.Ecodegen$2eCgTy.0.(ptr %rv800)
@@ -24092,27 +24092,27 @@ free:
   %tp = getelementptr i8, ptr %p, i64 8
   %tag = load i64, ptr %tp
   switch i64 %tag, label %done [
-    i64 56, label %R56
-    i64 57, label %R57
-    i64 58, label %R58
-    i64 59, label %R59
+    i64 73, label %R73
+    i64 74, label %R74
+    i64 75, label %R75
+    i64 76, label %R76
   ]
-R56:
+R73:
   %rp0 = getelementptr i8, ptr %p, i64 16
   %rv0 = load ptr, ptr %rp0
   call void @plum.h.rel.SArray.1.Stypecheck$2eTExpr.0.(ptr %rv0)
   br label %done
-R57:
+R74:
   %rp100 = getelementptr i8, ptr %p, i64 16
   %rv100 = load ptr, ptr %rp100
   call void @plum.h.rel.SArray.1.Etypecheck$2eTStmt.0.(ptr %rv100)
   br label %done
-R58:
+R75:
   %rp200 = getelementptr i8, ptr %p, i64 16
   %rv200 = load ptr, ptr %rp200
   call void @plum.h.rel.SArray.1.Stypecheck$2eTFieldInit.0.(ptr %rv200)
   br label %done
-R59:
+R76:
   %rp300 = getelementptr i8, ptr %p, i64 16
   %rv300 = load ptr, ptr %rp300
   call void @plum.h.rel.Ecodegen$2eLvFuture.0.(ptr %rv300)
@@ -24133,27 +24133,27 @@ live:
   %tp = getelementptr i8, ptr %p, i64 8
   %tag = load i64, ptr %tp
   switch i64 %tag, label %done [
-    i64 56, label %R56
-    i64 57, label %R57
-    i64 58, label %R58
-    i64 59, label %R59
+    i64 73, label %R73
+    i64 74, label %R74
+    i64 75, label %R75
+    i64 76, label %R76
   ]
-R56:
+R73:
   %rp0 = getelementptr i8, ptr %p, i64 16
   %rv0 = load ptr, ptr %rp0
   call void @plum.h.rel.SArray.1.Stypecheck$2eTExpr.0.(ptr %rv0)
   br label %done
-R57:
+R74:
   %rp100 = getelementptr i8, ptr %p, i64 16
   %rv100 = load ptr, ptr %rp100
   call void @plum.h.rel.SArray.1.Etypecheck$2eTStmt.0.(ptr %rv100)
   br label %done
-R58:
+R75:
   %rp200 = getelementptr i8, ptr %p, i64 16
   %rv200 = load ptr, ptr %rp200
   call void @plum.h.rel.SArray.1.Stypecheck$2eTFieldInit.0.(ptr %rv200)
   br label %done
-R59:
+R76:
   %rp300 = getelementptr i8, ptr %p, i64 16
   %rv300 = load ptr, ptr %rp300
   call void @plum.h.rel.Ecodegen$2eLvFuture.0.(ptr %rv300)
@@ -42270,6 +42270,11 @@ entry:
   %tp = getelementptr i8, ptr %p, i64 8
   %tag = load i64, ptr %tp
   switch i64 %tag, label %unknown [
+    i64 55, label %S55
+    i64 56, label %S56
+    i64 57, label %S57
+    i64 58, label %S58
+    i64 59, label %S59
     i64 60, label %S60
     i64 61, label %S61
     i64 62, label %S62
@@ -42282,15 +42287,10 @@ entry:
     i64 69, label %S69
     i64 70, label %S70
     i64 71, label %S71
-    i64 72, label %S72
-    i64 73, label %S73
-    i64 74, label %S74
-    i64 75, label %S75
-    i64 76, label %S76
   ]
-S60:
+S55:
   ret ptr @.sfmt_Ecodegen$2eCgTy.0._100
-S61:
+S56:
   %t102 = getelementptr i8, ptr %p, i64 16
   %t103 = load ptr, ptr %t102
   %t104 = call ptr @plum.h.str.Etypecheck$2eIntegerKind.0.(ptr %t103)
@@ -42300,19 +42300,19 @@ S61:
   %t107 = call ptr @plum_str_concat(ptr %t105, ptr @.sfmt_Ecodegen$2eCgTy.0._106)
   call void @plum_rel_str(ptr %t105)
   ret ptr %t107
-S62:
+S57:
   ret ptr @.sfmt_Ecodegen$2eCgTy.0._108
-S63:
+S58:
   ret ptr @.sfmt_Ecodegen$2eCgTy.0._109
-S64:
+S59:
   ret ptr @.sfmt_Ecodegen$2eCgTy.0._110
-S65:
+S60:
   ret ptr @.sfmt_Ecodegen$2eCgTy.0._111
-S66:
+S61:
   ret ptr @.sfmt_Ecodegen$2eCgTy.0._112
-S67:
+S62:
   ret ptr @.sfmt_Ecodegen$2eCgTy.0._113
-S68:
+S63:
   %t115 = getelementptr i8, ptr %p, i64 16
   %t116 = load ptr, ptr %t115
   %t117 = call ptr @plum.h.str.Etypecheck$2eRawPointee.0.(ptr %t116)
@@ -42322,9 +42322,9 @@ S68:
   %t120 = call ptr @plum_str_concat(ptr %t118, ptr @.sfmt_Ecodegen$2eCgTy.0._119)
   call void @plum_rel_str(ptr %t118)
   ret ptr %t120
-S69:
+S64:
   ret ptr @.sfmt_Ecodegen$2eCgTy.0._121
-S70:
+S65:
   %t123 = getelementptr i8, ptr %p, i64 16
   %t124 = load ptr, ptr %t123
   %t126 = call ptr @plum_str_concat(ptr @.sfmt_Ecodegen$2eCgTy.0._125, ptr %t124)
@@ -42336,7 +42336,7 @@ S70:
   %t130 = call ptr @plum_str_concat(ptr %t128, ptr @.sfmt_Ecodegen$2eCgTy.0._129)
   call void @plum_rel_str(ptr %t128)
   ret ptr %t130
-S71:
+S66:
   %t132 = getelementptr i8, ptr %p, i64 16
   %t133 = load ptr, ptr %t132
   %t135 = call ptr @plum_str_concat(ptr @.sfmt_Ecodegen$2eCgTy.0._134, ptr %t133)
@@ -42348,7 +42348,7 @@ S71:
   %t139 = call ptr @plum_str_concat(ptr %t137, ptr @.sfmt_Ecodegen$2eCgTy.0._138)
   call void @plum_rel_str(ptr %t137)
   ret ptr %t139
-S72:
+S67:
   %t141 = getelementptr i8, ptr %p, i64 16
   %t142 = load ptr, ptr %t141
   %t143 = call ptr @plum.h.str.Ecodegen$2eCgTy.0.(ptr %t142)
@@ -42358,7 +42358,7 @@ S72:
   %t146 = call ptr @plum_str_concat(ptr %t144, ptr @.sfmt_Ecodegen$2eCgTy.0._145)
   call void @plum_rel_str(ptr %t144)
   ret ptr %t146
-S73:
+S68:
   %t148 = getelementptr i8, ptr %p, i64 16
   %t149 = load ptr, ptr %t148
   %t150 = call ptr @plum.h.str.SArray.1.Ecodegen$2eCgTy.0.(ptr %t149)
@@ -42376,7 +42376,7 @@ S73:
   %t159 = call ptr @plum_str_concat(ptr %t157, ptr @.sfmt_Ecodegen$2eCgTy.0._158)
   call void @plum_rel_str(ptr %t157)
   ret ptr %t159
-S74:
+S69:
   %t161 = getelementptr i8, ptr %p, i64 16
   %t162 = load ptr, ptr %t161
   %t163 = call ptr @plum.h.str.SArray.1.Ecodegen$2eCgTy.0.(ptr %t162)
@@ -42386,7 +42386,7 @@ S74:
   %t166 = call ptr @plum_str_concat(ptr %t164, ptr @.sfmt_Ecodegen$2eCgTy.0._165)
   call void @plum_rel_str(ptr %t164)
   ret ptr %t166
-S75:
+S70:
   %t168 = getelementptr i8, ptr %p, i64 16
   %t169 = load ptr, ptr %t168
   %t171 = call ptr @plum_str_concat(ptr @.sfmt_Ecodegen$2eCgTy.0._170, ptr %t169)
@@ -42398,7 +42398,7 @@ S75:
   %t175 = call ptr @plum_str_concat(ptr %t173, ptr @.sfmt_Ecodegen$2eCgTy.0._174)
   call void @plum_rel_str(ptr %t173)
   ret ptr %t175
-S76:
+S71:
   %t177 = getelementptr i8, ptr %p, i64 16
   %t178 = load ptr, ptr %t177
   %t179 = call ptr @plum.h.str.Ecodegen$2eCgTy.0.(ptr %t178)
@@ -46706,15 +46706,15 @@ entry:
   %tp = getelementptr i8, ptr %p, i64 8
   %tag = load i64, ptr %tp
   switch i64 %tag, label %unknown [
-    i64 55, label %S55
-    i64 56, label %S56
-    i64 57, label %S57
-    i64 58, label %S58
-    i64 59, label %S59
+    i64 72, label %S72
+    i64 73, label %S73
+    i64 74, label %S74
+    i64 75, label %S75
+    i64 76, label %S76
   ]
-S55:
+S72:
   ret ptr @.sfmt_Ecodegen$2eLvFuture.0._100
-S56:
+S73:
   %t102 = getelementptr i8, ptr %p, i64 16
   %t103 = load ptr, ptr %t102
   %t104 = call ptr @plum.h.str.SArray.1.Stypecheck$2eTExpr.0.(ptr %t103)
@@ -46732,7 +46732,7 @@ S56:
   %t113 = call ptr @plum_str_concat(ptr %t111, ptr @.sfmt_Ecodegen$2eLvFuture.0._112)
   call void @plum_rel_str(ptr %t111)
   ret ptr %t113
-S57:
+S74:
   %t115 = getelementptr i8, ptr %p, i64 16
   %t116 = load ptr, ptr %t115
   %t117 = call ptr @plum.h.str.SArray.1.Etypecheck$2eTStmt.0.(ptr %t116)
@@ -46750,7 +46750,7 @@ S57:
   %t126 = call ptr @plum_str_concat(ptr %t124, ptr @.sfmt_Ecodegen$2eLvFuture.0._125)
   call void @plum_rel_str(ptr %t124)
   ret ptr %t126
-S58:
+S75:
   %t128 = getelementptr i8, ptr %p, i64 16
   %t129 = load ptr, ptr %t128
   %t130 = call ptr @plum.h.str.SArray.1.Stypecheck$2eTFieldInit.0.(ptr %t129)
@@ -46768,7 +46768,7 @@ S58:
   %t139 = call ptr @plum_str_concat(ptr %t137, ptr @.sfmt_Ecodegen$2eLvFuture.0._138)
   call void @plum_rel_str(ptr %t137)
   ret ptr %t139
-S59:
+S76:
   %t141 = getelementptr i8, ptr %p, i64 16
   %t142 = load ptr, ptr %t141
   %t143 = call ptr @plum.h.str.Ecodegen$2eLvFuture.0.(ptr %t142)
@@ -49997,24 +49997,6 @@ unknown:
 @.str1000028 = private global { i64, i64, [1 x i8] } { i64 -1, i64 0, [1 x i8] c"\00" }
 @g.plum.f.codegen.C_ABI_TARGET.0. = global ptr null
 @g.plum.f.codegen.CYCLE_FUEL.0. = global i64 0
-@.str1000032 = private global { i64, i64, [2 x i8] } { i64 -1, i64 1, [2 x i8] c"0\00" }
-@.str1000034 = private global { i64, i64, [2 x i8] } { i64 -1, i64 1, [2 x i8] c"1\00" }
-@.str1000036 = private global { i64, i64, [2 x i8] } { i64 -1, i64 1, [2 x i8] c"2\00" }
-@.str1000038 = private global { i64, i64, [2 x i8] } { i64 -1, i64 1, [2 x i8] c"3\00" }
-@.str1000040 = private global { i64, i64, [2 x i8] } { i64 -1, i64 1, [2 x i8] c"4\00" }
-@.str1000042 = private global { i64, i64, [2 x i8] } { i64 -1, i64 1, [2 x i8] c"5\00" }
-@.str1000044 = private global { i64, i64, [2 x i8] } { i64 -1, i64 1, [2 x i8] c"6\00" }
-@.str1000046 = private global { i64, i64, [2 x i8] } { i64 -1, i64 1, [2 x i8] c"7\00" }
-@.str1000048 = private global { i64, i64, [2 x i8] } { i64 -1, i64 1, [2 x i8] c"8\00" }
-@.str1000050 = private global { i64, i64, [2 x i8] } { i64 -1, i64 1, [2 x i8] c"9\00" }
-@.str1000052 = private global { i64, i64, [2 x i8] } { i64 -1, i64 1, [2 x i8] c"a\00" }
-@.str1000054 = private global { i64, i64, [2 x i8] } { i64 -1, i64 1, [2 x i8] c"b\00" }
-@.str1000056 = private global { i64, i64, [2 x i8] } { i64 -1, i64 1, [2 x i8] c"c\00" }
-@.str1000058 = private global { i64, i64, [2 x i8] } { i64 -1, i64 1, [2 x i8] c"d\00" }
-@.str1000060 = private global { i64, i64, [2 x i8] } { i64 -1, i64 1, [2 x i8] c"e\00" }
-@.str1000062 = private global { i64, i64, [2 x i8] } { i64 -1, i64 1, [2 x i8] c"f\00" }
-@.const1000064 = private global <{ i64, i64, ptr, ptr, ptr, ptr, ptr, ptr, ptr, ptr, ptr, ptr, ptr, ptr, ptr, ptr, ptr, ptr }> <{ i64 -1, i64 16, ptr @.str1000032, ptr @.str1000034, ptr @.str1000036, ptr @.str1000038, ptr @.str1000040, ptr @.str1000042, ptr @.str1000044, ptr @.str1000046, ptr @.str1000048, ptr @.str1000050, ptr @.str1000052, ptr @.str1000054, ptr @.str1000056, ptr @.str1000058, ptr @.str1000060, ptr @.str1000062 }>
-@g.plum.f.codegen.CG_SYMBOL_HEX.0. = global ptr null
 @g.plum.f.codegen.DEBUG_FRAMES.0. = global ptr null
 @g.plum.f.codegen.CORE_RUNTIME.0. = global ptr null
 @g.plum.f.codegen.HEAP_STATS.0. = global ptr null
@@ -50024,11 +50006,29 @@ unknown:
 @g.plum.f.codegen.DBG_ID.0. = global ptr null
 @g.plum.f.codegen.DBG_LOCS.0. = global ptr null
 @g.plum.f.codegen.TAIL_SITE.0. = global ptr null
-@.const1000086 = private global <{ i64, i64 }> <{ i64 -1, i64 0 }>
+@.const1000053 = private global <{ i64, i64 }> <{ i64 -1, i64 0 }>
 @g.plum.f.codegen.HASH_TYPES.0. = global ptr null
 @g.plum.f.codegen.HASH_SEEN.0. = global ptr null
 @g.plum.f.codegen.EQ_TYPES.0. = global ptr null
 @g.plum.f.codegen.REL_TYPES.0. = global ptr null
+@.str1000065 = private global { i64, i64, [2 x i8] } { i64 -1, i64 1, [2 x i8] c"0\00" }
+@.str1000067 = private global { i64, i64, [2 x i8] } { i64 -1, i64 1, [2 x i8] c"1\00" }
+@.str1000069 = private global { i64, i64, [2 x i8] } { i64 -1, i64 1, [2 x i8] c"2\00" }
+@.str1000071 = private global { i64, i64, [2 x i8] } { i64 -1, i64 1, [2 x i8] c"3\00" }
+@.str1000073 = private global { i64, i64, [2 x i8] } { i64 -1, i64 1, [2 x i8] c"4\00" }
+@.str1000075 = private global { i64, i64, [2 x i8] } { i64 -1, i64 1, [2 x i8] c"5\00" }
+@.str1000077 = private global { i64, i64, [2 x i8] } { i64 -1, i64 1, [2 x i8] c"6\00" }
+@.str1000079 = private global { i64, i64, [2 x i8] } { i64 -1, i64 1, [2 x i8] c"7\00" }
+@.str1000081 = private global { i64, i64, [2 x i8] } { i64 -1, i64 1, [2 x i8] c"8\00" }
+@.str1000083 = private global { i64, i64, [2 x i8] } { i64 -1, i64 1, [2 x i8] c"9\00" }
+@.str1000085 = private global { i64, i64, [2 x i8] } { i64 -1, i64 1, [2 x i8] c"a\00" }
+@.str1000087 = private global { i64, i64, [2 x i8] } { i64 -1, i64 1, [2 x i8] c"b\00" }
+@.str1000089 = private global { i64, i64, [2 x i8] } { i64 -1, i64 1, [2 x i8] c"c\00" }
+@.str1000091 = private global { i64, i64, [2 x i8] } { i64 -1, i64 1, [2 x i8] c"d\00" }
+@.str1000093 = private global { i64, i64, [2 x i8] } { i64 -1, i64 1, [2 x i8] c"e\00" }
+@.str1000095 = private global { i64, i64, [2 x i8] } { i64 -1, i64 1, [2 x i8] c"f\00" }
+@.const1000097 = private global <{ i64, i64, ptr, ptr, ptr, ptr, ptr, ptr, ptr, ptr, ptr, ptr, ptr, ptr, ptr, ptr, ptr, ptr }> <{ i64 -1, i64 16, ptr @.str1000065, ptr @.str1000067, ptr @.str1000069, ptr @.str1000071, ptr @.str1000073, ptr @.str1000075, ptr @.str1000077, ptr @.str1000079, ptr @.str1000081, ptr @.str1000083, ptr @.str1000085, ptr @.str1000087, ptr @.str1000089, ptr @.str1000091, ptr @.str1000093, ptr @.str1000095 }>
+@g.plum.f.codegen.CG_SYMBOL_HEX.0. = global ptr null
 @.str1000098 = private global { i64, i64, [27 x i8] } { i64 -1, i64 26, [27 x i8] c"ABCDEFGHIJKLMNOPQRSTUVWXYZ\00" }
 @.str1000100 = private global { i64, i64, [1 x i8] } { i64 -1, i64 0, [1 x i8] c"\00" }
 @g.plum.f.highlight.HL_UPPER.0. = global ptr null
@@ -60306,7 +60306,7 @@ entry:
   store ptr null, ptr %match_owner4905, !dbg !446
   %match_token4905 = alloca ptr, !dbg !446
   store ptr null, ptr %match_token4905, !dbg !446
-  ; plum.off 150259
+  ; plum.off 150575
   %t4897 = load ptr, ptr %s0, !dbg !447
   store ptr null, ptr %s0, !dbg !447
   %t4898 = call ptr @plum_bytes_retag(ptr %t4897), !dbg !447
@@ -60315,7 +60315,7 @@ entry:
   call void @plum_rel_str(ptr %t4896_pre), !dbg !447
   store ptr null, ptr %t4896, !dbg !447
   store ptr %t4898, ptr %t4896, !dbg !447
-  ; plum.off 150296
+  ; plum.off 150612
   %t4900 = load ptr, ptr %t4896, !dbg !447
   call void @plum_rc_inc(ptr %t4900), !dbg !447
   %t4901 = call i64 @plum.f.$3cprelude$3e.skip_ws.0.(ptr %t4900, i64 0), !dbg !447
@@ -60403,7 +60403,7 @@ reset_no4933:
   call void @plum.h.rel.E$3cprelude$3e$2eResult.2.S$3cprelude$3e$2eParseResult.1.E$3cprelude$3e$2eJsonValue.0.s(ptr %reset_old4933), !dbg !447
   br label %reset_done4933, !dbg !447
 reset_done4933:
-  ; plum.off 150425
+  ; plum.off 150741
   %t4935 = load ptr, ptr %t4896, !dbg !447
   call void @plum_rc_inc(ptr %t4935), !dbg !447
   %t4936 = load ptr, ptr %t4931, !dbg !447
@@ -73373,7 +73373,7 @@ entry:
   ret ptr %t11176, !dbg !898
 }
 
-@.str11177 = private global { i64, i64, [155884 x i8] } { i64 -1, i64 155883, [155884 x i8] c"/// A value that may not be there.\0A///\0A/// Plum has no null, so absence is spelled here and the checker makes\0A/// you handle it.\0Apub enum Option[T] { Some(T), None }\0A\0A/// A value, or an explanation of why there isn't one.\0A///\0A/// Failure is an ordinary value: no exceptions, so a function that can\0A/// fail says so in its type.\0Apub enum Result[T, E] { Ok(T), Err(E) }\0A\0A/// The mathematical integer kinds used by checked integer conversions.\0A/// `Signed64` represents both `Int` and its `I64` alias.\0Apub enum IntegerKind {\0A    Signed8,\0A    Signed16,\0A    Signed32,\0A    Signed64,\0A    Unsigned8,\0A    Unsigned16,\0A    Unsigned32,\0A    Unsigned64\0A}\0A\0A/// A checked integer conversion whose value is outside the destination range.\0A/// Contains only source and destination kind tags, not the rejected value or\0A/// an allocated error message. Ordinary Result and error values may allocate.\0Apub struct IntegerConversionError { pub source: IntegerKind, pub destination: IntegerKind }\0A\0A/// Whether there is a value.\0Apub let Option.is_some[T] (o: Option[T]): Bool = match o {\0A    Some(_) => true,\0A    None => false\0A}\0A\0A/// Whether there is no value.\0Apub let Option.is_none[T] (o: Option[T]): Bool = match o {\0A    Some(_) => false,\0A    None => true\0A}\0A\0A/// The first option when it contains a value, or `fallback` otherwise.\0A///\0A/// `fallback` is evaluated whether or not it is needed. Use `or_else`\0A/// when finding the fallback costs something.\0Apub let Option.or[T] (o: Option[T]) (fallback: Option[T]): Option[T] = match o {\0A    Some(_) => o,\0A    None => fallback\0A}\0A\0A/// The first option when it contains a value, or the result of calling\0A/// `f` otherwise. The lazy `or`: `f` runs only when it has to.\0Apub let Option.or_else[T] (o: Option[T]) (f: () -> Option[T]): Option[T] = match o {\0A    Some(_) => o,\0A    None => f()\0A}\0A\0A/// The value, or `fallback` when there is none.\0A///\0A/// `fallback` is evaluated whether or not it is needed. Use\0A/// `unwrap_or_else` when computing it costs something.\0Apub let Option.unwrap_or[T] (o: Option[T]) (fallback: T): T = match o {\0A    Some(v) => v,\0A    None => fallback\0A}\0A\0A/// The value, or the result of calling `f` when there is none. The\0A/// lazy `unwrap_or`: `f` runs only when it has to.\0Apub let Option.unwrap_or_else[T] (o: Option[T]) (f: () -> T): T = match o {\0A    Some(v) => v,\0A    None => f()\0A}\0A\0A/// Transforms the value if there is one, leaving `None` alone.\0Apub let Option.map[T, U] (o: Option[T]) (f: (T) -> U): Option[U] = match o {\0A    Some(v) => Some(f(v)),\0A    None => None\0A}\0A\0A/// Chains an operation that may itself find nothing.\0A///\0A/// `map` with a function returning `Option` would give\0A/// `Option[Option[U]]`; this is the one that keeps it flat.\0Apub let Option.and_then[T, U] (o: Option[T]) (f: (T) -> Option[U]): Option[U] = match o {\0A    Some(v) => f(v),\0A    None => None\0A}\0A\0A/// Turns nothing into an error, so an `Option` can join a chain of\0A/// `Result`s.\0Apub let Option.ok_or[T, E] (o: Option[T]) (err: E): Result[T, E] = match o {\0A    Some(v) => Ok(v),\0A    None => Err(err)\0A}\0A\0A/// Whether this succeeded.\0Apub let Result.is_ok[T, E] (r: Result[T, E]): Bool = match r {\0A    Ok(_) => true,\0A    Err(_) => false\0A}\0A\0A/// Whether this failed.\0Apub let Result.is_err[T, E] (r: Result[T, E]): Bool = match r {\0A    Ok(_) => false,\0A    Err(_) => true\0A}\0A\0A/// The value, or `fallback` on failure — DISCARDING the error. Reach\0A/// for `unwrap_or_else` when the error should shape the answer.\0Apub let Result.unwrap_or[T, E] (r: Result[T, E]) (fallback: T): T = match r {\0A    Ok(v) => v,\0A    Err(_) => fallback\0A}\0A\0A/// The value, or the result of calling `f` with the error. The\0A/// recovery that gets to see what went wrong.\0Apub let Result.unwrap_or_else[T, E] (r: Result[T, E]) (f: (E) -> T): T = match r {\0A    Ok(v) => v,\0A    Err(e) => f(e)\0A}\0A\0A/// Transforms the value on success, leaving an error untouched.\0Apub let Result.map[T, E, U] (r: Result[T, E]) (f: (T) -> U): Result[U, E] = match r {\0A    Ok(v) => Ok(f(v)),\0A    Err(e) => Err(e)\0A}\0A\0A/// Transforms the ERROR, leaving a success untouched. For adding\0A/// context to a failure on its way up.\0Apub let Result.map_err[T, E, F] (r: Result[T, E]) (f: (E) -> F): Result[T, F] = match r {\0A    Ok(v) => Ok(v),\0A    Err(e) => Err(f(e))\0A}\0A\0A/// Chains an operation that may itself fail, stopping at the first\0A/// error. The flat version of `map` over a fallible step.\0Apub let Result.and_then[T, E, U] (r: Result[T, E]) (f: (T) -> Result[U, E]): Result[U, E] =\0A    match r {\0A        Ok(v) => f(v),\0A        Err(e) => Err(e)\0A    }\0A\0A/// Whether the array has no elements.\0Apub let Array.is_empty[T] (xs: Array[T]): Bool = xs.len() == 0\0A\0Alet plum__array_concat_acc[T] (a: Array[T]) (b: Array[T]) (i: Int): Array[T] =\0A    if i >= b.len() { a } else { plum__array_concat_acc(a.push(b[i]), b, i + 1) }\0A\0A/// A new array with `b`'s elements after `a`'s. Neither input is\0A/// changed.\0Apub let Array.concat[T] (a: Array[T]) (b: Array[T]): Array[T] = plum__array_concat_acc(a, b, 0)\0A\0A// Fixed-size merges reuse fitting buffers with up to four spare slots.\0Alet plum__array_concat_exact_raw[T] (a: Array[T]) (b: Array[T]): Array[T] = Array.concat(a, b)\0A\0A// Interleave up to 32 packed elements. A mask bit selects the right array.\0Alet plum__array_interleave_exact_raw[T] (a: Array[T]) (b: Array[T]) (right_slots: Int): Array[T] = {\0A    let total = a.len() + b.len();\0A    let mut merged = plum__array_reserve_empty_raw(total);\0A    let mut left_index = 0;\0A    let mut right_index = 0;\0A    for i in 0..total {\0A        if (right_slots & (1 << i)) != 0 {\0A            merged = merged.push(b[right_index]);\0A            right_index = right_index + 1;\0A        } else {\0A            merged = merged.push(a[left_index]);\0A            left_index = left_index + 1;\0A        };\0A    };\0A    merged\0A}\0A\0Alet plum__array_contains_acc[T] (xs: Array[T]) (needle: T) (i: Int): Bool =\0A    if i >= xs.len() { false } else if xs[i] == needle { true } else {\0A        plum__array_contains_acc(xs, needle, i + 1)\0A    }\0A\0A/// Whether any element equals `needle`, compared structurally.\0Apub let Array.contains[T] (xs: Array[T]) (needle: T): Bool = plum__array_contains_acc(xs, needle, 0)\0A\0Alet plum__array_any_acc[T] (xs: Array[T]) (f: (T) -> Bool) (i: Int): Bool =\0A    if i >= xs.len() { false } else if f(xs[i]) { true } else { plum__array_any_acc(xs, f, i + 1) }\0A\0A/// Whether `f` holds for at least one element. Stops at the first\0A/// that passes; false for an empty array.\0Apub let Array.any[T] (xs: Array[T]) (f: (T) -> Bool): Bool = plum__array_any_acc(xs, f, 0)\0A\0A/// Clamped at both ends, like the real prelude's own: a slice past\0A/// the end is the tail, not a crash, which matters because this\0A/// backend emits no bounds check of its own.\0Alet plum__array_slice_acc[T] (xs: Array[T]) (i: Int) (end: Int) (acc: Array[T]): Array[T] =\0A    if i >= end { acc } else if i >= xs.len() { acc } else {\0A        plum__array_slice_acc(xs, i + 1, end, acc.push(xs[i]))\0A    }\0A\0A/// The elements from `start` up to but NOT including `end`.\0A///\0A/// Out-of-range bounds are clamped rather than an error, and a `start`\0A/// past `end` gives an empty array — so slicing near the end of an\0A/// array needs no arithmetic to stay safe.\0Apub let Array.slice[T] (xs: Array[T]) (start: Int) (end: Int): Array[T] =\0A    plum__array_slice_acc(xs, if start < 0 { 0 } else { start }, end, [])\0A\0A// The native backend uses an owned permutation. Keep the source definition\0A// as a semantic fallback for evaluators without that lowering.\0Alet plum__array_reverse_acc[T] (xs: Array[T]) (i: Int) (acc: Array[T]): Array[T] =\0A    if i < 0 { acc } else { plum__array_reverse_acc(xs, i - 1, acc.push(xs[i])) }\0A\0A/// A new array in the opposite order.\0Apub let Array.reverse[T] (xs: Array[T]): Array[T] = plum__array_reverse_acc(xs, xs.len() - 1, [])\0A\0Alet plum__array_all_acc[T] (xs: Array[T]) (f: (T) -> Bool) (i: Int): Bool =\0A    if i >= xs.len() { true } else if f(xs[i]) { plum__array_all_acc(xs, f, i + 1) } else { false }\0A\0A/// Whether `f` holds for every element. Stops at the first that\0A/// fails; TRUE for an empty array, which is the convention everywhere\0A/// and still surprises people.\0Apub let Array.all[T] (xs: Array[T]) (f: (T) -> Bool): Bool = plum__array_all_acc(xs, f, 0)\0A\0Alet plum__array_find_acc[T] (xs: Array[T]) (f: (T) -> Bool) (i: Int): Option[T] =\0A    if i >= xs.len() { None } else if f(xs[i]) { Some(xs[i]) } else {\0A        plum__array_find_acc(xs, f, i + 1)\0A    }\0A\0A/// The first element `f` accepts, or `None`.\0Apub let Array.find[T] (xs: Array[T]) (f: (T) -> Bool): Option[T] = plum__array_find_acc(xs, f, 0)\0A\0Alet plum__array_find_index_acc[T] (xs: Array[T]) (f: (T) -> Bool) (i: Int): Option[Int] =\0A    if i >= xs.len() { None } else if f(xs[i]) { Some(i) } else {\0A        plum__array_find_index_acc(xs, f, i + 1)\0A    }\0A\0A/// The index of the first element `f` accepts, or `None`.\0Apub let Array.find_index[T] (xs: Array[T]) (f: (T) -> Bool): Option[Int] =\0A    plum__array_find_index_acc(xs, f, 0)\0A\0A/// The index of the first element equal to `needle`, or `None`.\0Apub let Array.index_of[T] (xs: Array[T]) (needle: T): Option[Int] =\0A    Array.find_index(xs, |x| x == needle)\0A\0A/// The first element, or `None` when the array is empty.\0Apub let Array.first[T] (xs: Array[T]): Option[T] =\0A    if Array.is_empty(xs) { None } else { Some(xs[0]) }\0A\0A/// The last element, or `None` when the array is empty.\0Apub let Array.last[T] (xs: Array[T]): Option[T] =\0A    if Array.is_empty(xs) { None } else { Some(xs[xs.len() - 1]) }\0A\0A/// The first `n` elements, or all of them if there are fewer. Never\0A/// an error.\0Apub let Array.take[T] (xs: Array[T]) (n: Int): Array[T] = Array.slice(xs, 0, n)\0A\0A/// Everything after the first `n` elements, or nothing if there are\0A/// fewer.\0Apub let Array.drop[T] (xs: Array[T]) (n: Int): Array[T] = Array.slice(xs, n, xs.len())\0A\0A/// The sum, which OVERFLOWS like any other addition and stops the\0A/// program rather than wrapping.\0Apub let Array.sum_int (xs: Array[Int]): Int = Array.fold(xs, 0, |acc, x| acc + x)\0A\0A/// The sum, left to right. Floating-point addition is not\0A/// associative, so a different order can give a different last digit.\0Apub let Array.sum_float (xs: Array[Float]): Float = Array.fold(xs, 0.0, |acc, x| acc + x)\0A\0A// --- Numbers ---\0A\0A/// The absolute value.\0A///\0A/// `Int.abs` of the most negative `Int` cannot be represented and\0A/// overflows, which stops the program rather than returning a negative\0A/// \22absolute\22 value.\0Apub let Int.abs (a: Int): Int = if a < 0 { 0 - a } else { a }\0A\0A/// The smaller of two.\0Apub let Int.min (a: Int) (b: Int): Int = if a < b { a } else { b }\0A\0A/// The larger of two.\0Apub let Int.max (a: Int) (b: Int): Int = if a > b { a } else { b }\0A\0A/// `x` held between `lo` and `hi` inclusive. A `lo` above `hi` gives\0A/// `hi`, since the upper bound is applied last.\0Apub let Int.clamp (x: Int) (lo: Int) (hi: Int): Int = Int.min(Int.max(x, lo), hi)\0A\0A/// An UNSIGNED right shift: zeros are shifted in, never the sign\0A/// bit. `>>` is arithmetic, because `Int` is signed and `-8 >> 1`\0A/// should be -4; hashing wants the other one, and writing it by\0A/// hand is exactly the sort of thing that is wrong at n = 0 and\0A/// n = 64 in every codebase that tries.\0A///\0A/// The mask is `~(-1 << (64 - n))` and NOT `(1 << (64 - n)) - 1`,\0A/// which is the spelling everyone reaches for first and which traps\0A/// here: at n = 1 that is `(1 << 63) - 1`, and `1 << 63` is\0A/// `Int`'s most negative value, so subtracting one from it is an\0A/// integer overflow. The complement builds the same mask out of a\0A/// shift and a NOT, neither of which can overflow.\0A///\0A/// The two ends are handled before the mask because the mask cannot\0A/// express them: at n = 0 it would need all 64 bits, and `64 - 0`\0A/// is a shift of 64, which this language defines as zero.\0Apub let Int.shr_logical (x: Int) (n: Int): Int =\0A    if n <= 0 { x }\0A    else if n >= 64 { 0 }\0A    else { (x >> n) & ~((0 - 1) << (64 - n)) }\0A\0A/// The number of one bits. Counted a nibble at a time through a\0A/// lookup rather than bit by bit, so it is 16 steps and not 64.\0Apub let Int.count_ones (x: Int): Int = plum__popcount(x, 0, 0)\0A\0Alet plum__popcount (x: Int) (i: Int) (acc: Int): Int =\0A    if i >= 16 { acc }\0A    else { plum__popcount(x, i + 1, acc + PLUM_NIBBLE_ONES[Int.shr_logical(x, i * 4) & 15]) }\0A\0Alet PLUM_NIBBLE_ONES: Array[Int] = [0, 1, 1, 2, 1, 2, 2, 3, 1, 2, 2, 3, 2, 3, 3, 4]\0A\0A/// The absolute value, clearing the sign bit (including on negative zero).\0A/// NaN remains NaN.\0Apub let Float.abs (a: Float): Float = abs_raw(a)\0A\0A/// Whether `x` is neither infinity nor NaN. Includes both signed zeros\0A/// and subnormal values.\0Apub let Float.is_finite (x: Float): Bool = x - x == 0.0\0A\0A/// The smaller of two. NaN does not compare, so a NaN argument gives\0A/// an answer that is not meaningful.\0Apub let Float.min (a: Float) (b: Float): Float = if a < b { a } else { b }\0A\0A/// The larger of two. See `Float.min` on NaN.\0Apub let Float.max (a: Float) (b: Float): Float = if a > b { a } else { b }\0A\0A/// `x` held between `lo` and `hi` inclusive.\0Apub let Float.clamp (x: Float) (lo: Float) (hi: Float): Float = Float.min(Float.max(x, lo), hi)\0A\0A/// --- Strings ---\0A///\0A/// String operations use codepoint boundaries rather than byte\0A/// indices. `String.slice` scans those boundaries directly; operations\0A/// that need individual characters can materialize them with `chars_of`.\0A// Borrow input and return an owned result through the runtime constructor.\0Alet plum__string_reverse_raw (s: String): String = \22\22\0A\0A/// The string with its CHARACTERS (codepoints) reversed, not its bytes.\0A/// Combining marks reverse independently; this does not reverse graphemes.\0A/// Reuses uniquely owned input storage; shared input copies into one exact-sized\0A/// allocation. Uses constant scratch without character arrays or strings.\0A/// Empty output uses static storage; a single character shares input storage.\0Apub let String.reverse (s: String): String = plum__string_reverse_raw(s)\0A\0A/// Whether the string has no bytes.\0Apub let String.is_empty (s: String): Bool = s.len() == 0\0A\0A/// Characters from `start` up to but not including `end`, counted in\0A/// CODEPOINTS rather than bytes. Out-of-range bounds are clamped.\0A/// Scans only as far as the requested boundaries, without allocating an\0A/// array or individual characters. Whole ranges share their owned storage;\0A/// empty ranges use shared static storage. Other ranges copy only the\0A/// selected bytes into compact storage.\0Apub let String.slice (s: String) (start: Int) (end: Int): String = {\0A    let lo = if start < 0 { 0 } else { start };\0A    if end <= lo { \22\22 } else {\0A        let bytes = bytes_of_str_raw(s);\0A        let n = bytes_len_raw(bytes);\0A        let first = if lo == 0 { 0 } else { plum__string_slice_boundary(bytes, n, 1, lo - 1) };\0A        if first >= n { \22\22 } else {\0A            let last = plum__string_slice_boundary(bytes, n, first + 1, end - lo - 1);\0A            str_of_bytes_raw(bytes_slice_raw(bytes, first, last))\0A        }\0A    }\0A}\0A\0A// The first byte of a character was already consumed. Skip its\0A// continuation bytes, then count further character starts until the\0A// requested boundary. This also preserves chars_of's grouping for\0A// malformed raw byte sequences, including a leading continuation run.\0Alet plum__string_slice_boundary (bytes: Bytes) (n: Int) (i: Int) (left: Int): Int =\0A    if i >= n { n } else {\0A        let byte = bytes_at_raw(bytes, i);\0A        if byte >= 128 && byte < 192 { plum__string_slice_boundary(bytes, n, i + 1, left) }\0A        else if left <= 0 { i }\0A        else { plum__string_slice_boundary(bytes, n, i + 1, left - 1) }\0A    }\0A\0A// Borrows the input and returns an owned result; lowered to the runtime.\0Alet plum__string_repeat_raw (s: String) (n: Int): String = \22\22\0A\0A/// The string joined to itself `n` times. Zero or negative counts and\0A/// empty input give an empty string. Repeating nonempty input once shares\0A/// its storage; larger results allocate one buffer without spare capacity.\0Apub let String.repeat (s: String) (n: Int): String = plum__string_repeat_raw(s, n)\0A\0A/// The number of CHARACTERS in `s`, which is not `s.len()`.\0A///\0A/// `.len()` is bytes; everything else in this section is codepoints.\0A/// The two agree on ASCII and part company on anything else, so a\0A/// program that lines text up in columns wants this one; padding\0A/// computed from a byte count puts an accented name in the wrong place.\0A/// The number of CHARACTERS (codepoints). `String.len` is the number\0A/// of BYTES, and the two differ for anything outside ASCII.\0A/// Scans the UTF-8 bytes in linear time and constant space, without\0A/// allocating an array or a string for each character.\0Apub let String.char_len (s: String): Int = {\0A    let bytes = bytes_of_str_raw(s);\0A    let n = bytes_len_raw(bytes);\0A    // chars_of groups the first byte with any following continuation\0A    // bytes, even for malformed text supplied through unsafe code.\0A    if n == 0 { 0 } else { plum__string_count_starts(bytes, n, 1, 1) }\0A}\0A\0A/// Pad `s` to `width` CHARACTERS with `fill`, on the left or the right.\0A///\0A/// A `fill` that is not exactly one character returns `s` untouched, as\0A/// does a string already at least `width` wide. Both are deliberate: a\0A/// formatting helper that returns a `Result` is a formatting helper\0A/// nobody uses, and truncating to fit loses data that padding was never\0A/// asked to remove.\0A/// Padded on the LEFT to `width` characters — right-aligned text.\0A///\0A/// `fill` must be a single character. A string already at or past the\0A/// width is returned unchanged: this pads, it never truncates.\0A/// Unique storage is reused when it already fits; other padded results\0A/// use one compact buffer without intermediate repeated-fill strings.\0Apub let String.pad_left (s: String) (width: Int) (fill: String): String =\0A    plum__pad(s, width, fill, 0)\0A\0A/// Padded on the RIGHT to `width` characters — left-aligned text.\0A/// Never truncates; see `String.pad_left`.\0Apub let String.pad_right (s: String) (width: Int) (fill: String): String =\0A    plum__pad(s, width, fill, 1)\0A\0A// --- Formatting numbers (issue #23) ---\0A//\0A// String interpolation already exists -- `\22${a} + ${b} = ${a + b}\22` --\0A// so building output is not the gap. What was missing is CONTROL over\0A// how a number renders inside one: `${1.0 / 3.0}` gives\0A// 0.3333333333333333 and there was no way to ask for two places, and\0A// `${flags}` printing 20 is the wrong view of a bit field.\0A//\0A// These are the functions a `${x:.2}` syntax would lower to. Shipping\0A// them first means that syntax, if it ever arrives, can be designed\0A// against real usage rather than guessed -- and it stays purely\0A// additive, since it would be sugar over exactly these.\0A\0A/// Centred padding, completing the set beside `pad_left`/`pad_right`.\0A/// An odd remainder goes on the RIGHT, so a column of centred headings\0A/// lines up on its left edge rather than drifting.\0Apub let String.pad_center (s: String) (width: Int) (fill: String): String =\0A    plum__pad(s, width, fill, 2)\0A\0A/// `decimals` places after the point, rounded HALF TO EVEN. Precision is\0A/// clamped to 0..17: negative values act as 0, and values above 17 act as 17.\0A/// The limit leaves one guard digit for deterministic tie handling while\0A/// staying within the precision of a `Float`.\0A///\0A/// --- Why the rounding is done here and not by the C library ---\0A///\0A/// `snprintf(\22%.*f\22)` is correctly rounded on every platform and does\0A/// not give the same answer on all of them. glibc and Microsoft's CRT\0A/// agree on every value whose expansion is not an exact tie (2.675 is\0A/// really 2.674999..., and both render it 2.67) and disagree on ties:\0A/// glibc rounds 0.5, 1.5, 2.5, 3.5 to 0, 2, 2, 4 and the Microsoft CRT\0A/// to 1, 2, 3, 4.\0A///\0A/// A language whose programs print different\0A/// numbers depending on the machine has a worse problem than one whose\0A/// rounding is a line longer, so the decision is made here: the library\0A/// is asked for a high-precision expansion, and the rounding is applied\0A/// to the digits.\0A///\0A/// --- Why half to EVEN ---\0A///\0A/// It is IEEE 754's default (`roundTiesToEven`), which is what glibc\0A/// inherits from the ambient rounding mode rather than choosing, and it\0A/// is unbiased: rounding every tie away from zero accumulates. Summing\0A/// the thousand ties 0.5 .. 999.5 gives 500,500 rounded away and\0A/// 500,000 rounded to even, against an exact 500,000.\0A///\0A/// **`Float.round` rounds half AWAY from zero and that is not an\0A/// inconsistency.** C specifies `round()` that way regardless of the FP\0A/// mode, because it is arithmetic: \22the nearest integer, ties away\22,\0A/// while this is rendering. Every language with both has this pair.\0A///\0A/// --- Why 18 digits is enough to tell a tie from a near-miss ---\0A///\0A/// A tie has to be exact. The gap between neighbouring doubles near any\0A/// value whose fractional digits matter is enormously larger than\0A/// 1e-18: next to 2.5 it is about 4.4e-16, so the value after 2.5\0A/// renders as 2.500000000000000444 and is visibly not a tie. Above\0A/// about 1e3 the fraction is all zeros anyway.\0Apub let Float.to_fixed (x: Float) (decimals: Int): String = {\0A    let d = Int.clamp(decimals, 0, 17);\0A    let raw = float_fixed_raw(x, 18);\0A    // `inf` and `nan` have no digits to round.\0A    let dot = plum__decimal_dot(bytes_of_str_raw(raw), 0, raw.len());\0A    if dot < 0 { raw } else { plum__round_decimals(raw, d, dot) }\0A}\0A\0A// The fixed decimal expansion is ASCII. Search once without a general\0A// substring search's Option result or a second contains/index_of traversal.\0Alet plum__decimal_dot (s: Bytes) (i: Int) (end: Int): Int =\0A    if i >= end { 0 - 1 }\0A    else if bytes_at_raw(s, i) == 46 { i }\0A    else { plum__decimal_dot(s, i + 1, end) }\0A\0Alet plum__round_decimals (s: String) (d: Int) (raw_dot: Int): String = {\0A    let neg = String.starts_with(s, \22-\22);\0A    let body = if neg { String.slice(s, 1, s.len()) } else { s };\0A    let dot = raw_dot - if neg { 1 } else { 0 };\0A    let ip = String.slice(body, 0, dot);\0A    let fp = String.slice(body, dot + 1, body.len());\0A    let keep = String.slice(fp, 0, d);\0A    let rest = String.slice(fp, d, fp.len());\0A    let digits = ip.concat(keep);\0A    let bumped = if plum__rounds_up(digits, rest) { plum__inc_decimal(digits) } else { digits };\0A    let n = bumped.len();\0A    let out_ip = String.slice(bumped, 0, n - d);\0A    let out_fp = String.slice(bumped, n - d, n);\0A    let text = if d == 0 { out_ip } else { out_ip.concat(\22.\22).concat(out_fp) };\0A    // The sign survives a value that rounds to zero: `-0.00` says the\0A    // value was below zero, which is information. C does this too.\0A    if neg { \22-\22.concat(text) } else { text }\0A}\0A\0A/// `rest` is everything being discarded. Above half rounds up, below\0A/// half rounds down, and an EXACT half goes to whichever direction\0A/// leaves the last kept digit even.\0Alet plum__rounds_up (kept: String) (rest: String): Bool =\0A    if String.is_empty(rest) { false }\0A    else {\0A        let first = plum__digit_at(rest, 0);\0A        if first > 5 { true }\0A        else if first < 5 { false }\0A        else if plum__any_nonzero(rest, 1) { true }\0A        else {\0A            // An exact tie. Round to even.\0A            let last = if String.is_empty(kept) { 0 } else { plum__digit_at(kept, kept.len() - 1) };\0A            last - (last / 2) * 2 == 1\0A        }\0A    }\0A\0Alet plum__digit_at (s: String) (i: Int): Int =\0A    // Decimal expansion and assembled digits are ASCII. Preserve the zero\0A    // fallback without allocating a one-character String or an Option cell.\0A    // bytes_at_raw is unchecked: validate the index before reading storage.\0A    if i < 0 || i >= s.len() { 0 }\0A    else {\0A        let v = bytes_at_raw(bytes_of_str_raw(s), i);\0A        if v >= 48 && v <= 57 { v - 48 } else { 0 }\0A    }\0A\0Alet plum__any_nonzero (s: String) (i: Int): Bool =\0A    if i >= s.len() { false }\0A    else if plum__digit_at(s, i) != 0 { true }\0A    else { plum__any_nonzero(s, i + 1) }\0A\0A/// Adds one to a decimal digit string, growing it when every digit\0A/// carries: \22999\22 becomes \221000\22, which is what makes 9.99 round to\0A/// 10.0 without a special case.\0Alet plum__inc_decimal (s: String): String = plum__inc_acc(s, s.len() - 1, \22\22)\0A\0Alet plum__inc_acc (s: String) (i: Int) (acc: String): String =\0A    if i < 0 { \221\22.concat(acc) }\0A    else {\0A        let v = plum__digit_at(s, i) + 1;\0A        if v < 10 { String.slice(s, 0, i).concat(plum__radix_digit(v)).concat(acc) }\0A        else { plum__inc_acc(s, i - 1, \220\22.concat(acc)) }\0A    }\0A\0A/// --- Radix ---\0A///\0A/// SIGNED, and reversible: `Int.to_radix(-255, 16)` is \22-ff\22, which\0A/// `String.parse_int` would read back. That is the opposite of what C\0A/// and Rust print for `%x` on a negative, and it is the choice that\0A/// keeps `to_radix` a number conversion rather than a bit dump. For the\0A/// bit pattern, `Int.to_bits` says so in its name.\0A///\0A/// Radix is clamped to 2..36: one digit per character, `0-9a-z`.\0A/// Digit values select static strings. Multi-digit conversion grows a unique\0A/// accumulator through Perceus reuse, then reverses it into an exact-sized result.\0Apub let Int.to_radix (n: Int) (radix: Int): String = {\0A    let r = Int.clamp(radix, 2, 36);\0A    if n == 0 { \220\22 } else {\0A        // Peel the last digit before negating: Int::MIN has no positive\0A        // counterpart, but its quotient and remainder both do (r >= 2).\0A        let q = n / r;\0A        let tail = n - q * r;\0A        let digit = plum__radix_digit(if n < 0 { 0 - tail } else { tail });\0A        if q == 0 { if n < 0 { \22-\22.concat(digit) } else { digit } }\0A        else {\0A            let backwards = plum__radix_acc(if n < 0 { 0 - q } else { q }, r, digit);\0A            String.reverse(if n < 0 { backwards.concat(\22-\22) } else { backwards })\0A        }\0A    }\0A}\0A\0A// Remaining magnitude is nonnegative. Append least-significant digits into\0A// one owned accumulator; prepending would copy the growing suffix each time.\0Alet plum__radix_acc (n: Int) (r: Int) (acc: String): String =\0A    if n == 0 { acc } else {\0A        plum__radix_acc(n / r, r, acc.concat(plum__radix_digit(n - (n / r) * r)))\0A    }\0A\0A// A finite formatting alphabet needs no per-call arrays, byte buffers or\0A// Result cells. Each arm returns an immutable String literal. A global\0A// chars_of table would eagerly allocate all 36 digit cells and its array.\0A// Callers prove 0 <= v < 36; the fallback remains defensive.\0Alet plum__radix_digit (v: Int): String = match v {\0A    0 => \220\22,\0A    1 => \221\22,\0A    2 => \222\22,\0A    3 => \223\22,\0A    4 => \224\22,\0A    5 => \225\22,\0A    6 => \226\22,\0A    7 => \227\22,\0A    8 => \228\22,\0A    9 => \229\22,\0A    10 => \22a\22,\0A    11 => \22b\22,\0A    12 => \22c\22,\0A    13 => \22d\22,\0A    14 => \22e\22,\0A    15 => \22f\22,\0A    16 => \22g\22,\0A    17 => \22h\22,\0A    18 => \22i\22,\0A    19 => \22j\22,\0A    20 => \22k\22,\0A    21 => \22l\22,\0A    22 => \22m\22,\0A    23 => \22n\22,\0A    24 => \22o\22,\0A    25 => \22p\22,\0A    26 => \22q\22,\0A    27 => \22r\22,\0A    28 => \22s\22,\0A    29 => \22t\22,\0A    30 => \22u\22,\0A    31 => \22v\22,\0A    32 => \22w\22,\0A    33 => \22x\22,\0A    34 => \22y\22,\0A    35 => \22z\22,\0A    _ => \22?\22,\0A}\0A\0A/// Lowercase hex, SIGNED: `-255` is `-ff`, not a two's-complement bit\0A/// pattern. `Int.to_hex_bits` is the one that shows the bits.\0Apub let Int.to_hex (n: Int): String = Int.to_radix(n, 16)\0A\0A/// Binary, SIGNED: `-1` is `-1`. `Int.to_bits` shows all 64 bits.\0Apub let Int.to_binary (n: Int): String = Int.to_radix(n, 2)\0A\0A/// Octal, signed. See `Int.to_radix` for other bases.\0Apub let Int.to_octal (n: Int): String = Int.to_radix(n, 8)\0A\0A/// The BIT PATTERN: all 64 bits, two's complement, most significant\0A/// first. This is the one to reach for with a bit field, where a signed\0A/// reading is not what is wanted. `Int.to_bits(-1)` is sixty-four\0A/// ones, while `Int.to_binary(-1)` is \22-1\22. Both are right about\0A/// different questions.\0Apub let Int.to_bits (n: Int): String = plum__int_bits_raw(n, false)\0A\0A/// The same, in hex: sixteen digits, two's complement, zero padded.\0Apub let Int.to_hex_bits (n: Int): String = plum__int_bits_raw(n, true)\0A\0A// Fixed-width bit patterns need one owned result, with no growth buffers.\0Alet plum__int_bits_raw (n: Int) (hex: Bool): String = \22\22\0A\0A// The kernel consumes s and borrows fill, following Perceus argument ownership.\0Alet plum__string_pad_raw (s: String) (fill: String) (left: Int) (right: Int): String = \22\22\0A\0Alet plum__pad (s: String) (width: Int) (fill: String) (mode: Int): String = {\0A    let n = String.char_len(s);\0A    if String.char_len(fill) != 1 || n >= width { s }\0A    else {\0A        let total = width - n;\0A        let left = if mode == 0 { total } else if mode == 1 { 0 } else { total / 2 };\0A        plum__string_pad_raw(s, fill, left, total - left)\0A    }\0A}\0A\0A/// `print` is `println` without the newline. Its `env_var` and\0A/// file/process neighbours moved to the `Os` module in 0.0.9;\0A/// output stayed here, because a program that prints is not\0A/// thereby doing operating-system work.\0Alet print_raw (s: String): Bool = false\0A\0A/// Writes to standard output with NO trailing newline. `println` is\0A/// the one that adds one.\0Apub let print (s: String): Unit = {\0A    print_raw(s);\0A    ()\0A}\0A\0Alet wrapping_add_raw (a: Int) (b: Int): Int = 0\0A\0Alet wrapping_sub_raw (a: Int) (b: Int): Int = 0\0A\0Alet wrapping_mul_raw (a: Int) (b: Int): Int = 0\0A\0A/// Addition that WRAPS on overflow, two's complement, instead of\0A/// stopping the program.\0A///\0A/// `+` is the one to reach for. It aborts on overflow, deliberately,\0A/// because an integer that silently became negative is a wrong\0A/// answer that keeps running. This is for the cases where wrapping is\0A/// the SPECIFICATION rather than an accident: hashes, checksums,\0A/// fixed-width binary protocols, and generators like PCG or\0A/// splitmix64 that are defined mod 2^64.\0A///\0A/// It is a named function and not an operator so that it is visible\0A/// at the call site. Wrapping should be asked for, not defaulted to.\0Apub let Int.wrapping_add (a: Int) (b: Int): Int = wrapping_add_raw(a, b)\0A\0A/// Subtraction that WRAPS on overflow. See `Int.wrapping_add`.\0Apub let Int.wrapping_sub (a: Int) (b: Int): Int = wrapping_sub_raw(a, b)\0A\0A/// Multiplication that WRAPS on overflow. See `Int.wrapping_add`.\0A///\0A/// This is the one most algorithms actually need: FNV-1a, xxHash and\0A/// splitmix64 are all a wrapping multiply by a large constant\0A/// followed by a mix.\0Apub let Int.wrapping_mul (a: Int) (b: Int): Int = wrapping_mul_raw(a, b)\0A\0A// Fixed-width wrapping uses the same named primitive path as Int.\0Alet i8_wrapping_add_raw (a: I8) (b: I8): I8 = 0\0A\0A/// Adds modulo 2^8; interprets the result as signed two’s complement. Ordinary arithmetic remains checked.\0Apub let I8.wrapping_add (a: I8) (b: I8): I8 = i8_wrapping_add_raw(a, b)\0A\0Alet i8_wrapping_sub_raw (a: I8) (b: I8): I8 = 0\0A\0A/// Subtracts modulo 2^8; interprets the result as signed two’s complement. Ordinary arithmetic remains checked.\0Apub let I8.wrapping_sub (a: I8) (b: I8): I8 = i8_wrapping_sub_raw(a, b)\0A\0Alet i8_wrapping_mul_raw (a: I8) (b: I8): I8 = 0\0A\0A/// Multiplies modulo 2^8; interprets the result as signed two’s complement. Ordinary arithmetic remains checked.\0Apub let I8.wrapping_mul (a: I8) (b: I8): I8 = i8_wrapping_mul_raw(a, b)\0A\0Alet i16_wrapping_add_raw (a: I16) (b: I16): I16 = 0\0A\0A/// Adds modulo 2^16; interprets the result as signed two’s complement. Ordinary arithmetic remains checked.\0Apub let I16.wrapping_add (a: I16) (b: I16): I16 = i16_wrapping_add_raw(a, b)\0A\0Alet i16_wrapping_sub_raw (a: I16) (b: I16): I16 = 0\0A\0A/// Subtracts modulo 2^16; interprets the result as signed two’s complement. Ordinary arithmetic remains checked.\0Apub let I16.wrapping_sub (a: I16) (b: I16): I16 = i16_wrapping_sub_raw(a, b)\0A\0Alet i16_wrapping_mul_raw (a: I16) (b: I16): I16 = 0\0A\0A/// Multiplies modulo 2^16; interprets the result as signed two’s complement. Ordinary arithmetic remains checked.\0Apub let I16.wrapping_mul (a: I16) (b: I16): I16 = i16_wrapping_mul_raw(a, b)\0A\0Alet i32_wrapping_add_raw (a: I32) (b: I32): I32 = 0\0A\0A/// Adds modulo 2^32; interprets the result as signed two’s complement. Ordinary arithmetic remains checked.\0Apub let I32.wrapping_add (a: I32) (b: I32): I32 = i32_wrapping_add_raw(a, b)\0A\0Alet i32_wrapping_sub_raw (a: I32) (b: I32): I32 = 0\0A\0A/// Subtracts modulo 2^32; interprets the result as signed two’s complement. Ordinary arithmetic remains checked.\0Apub let I32.wrapping_sub (a: I32) (b: I32): I32 = i32_wrapping_sub_raw(a, b)\0A\0Alet i32_wrapping_mul_raw (a: I32) (b: I32): I32 = 0\0A\0A/// Multiplies modulo 2^32; interprets the result as signed two’s complement. Ordinary arithmetic remains checked.\0Apub let I32.wrapping_mul (a: I32) (b: I32): I32 = i32_wrapping_mul_raw(a, b)\0A\0Alet u8_wrapping_add_raw (a: U8) (b: U8): U8 = 0\0A\0A/// Adds modulo 2^8; returns the unsigned low bits. Ordinary arithmetic remains checked.\0Apub let U8.wrapping_add (a: U8) (b: U8): U8 = u8_wrapping_add_raw(a, b)\0A\0Alet u8_wrapping_sub_raw (a: U8) (b: U8): U8 = 0\0A\0A/// Subtracts modulo 2^8; returns the unsigned low bits. Ordinary arithmetic remains checked.\0Apub let U8.wrapping_sub (a: U8) (b: U8): U8 = u8_wrapping_sub_raw(a, b)\0A\0Alet u8_wrapping_mul_raw (a: U8) (b: U8): U8 = 0\0A\0A/// Multiplies modulo 2^8; returns the unsigned low bits. Ordinary arithmetic remains checked.\0Apub let U8.wrapping_mul (a: U8) (b: U8): U8 = u8_wrapping_mul_raw(a, b)\0A\0Alet u16_wrapping_add_raw (a: U16) (b: U16): U16 = 0\0A\0A/// Adds modulo 2^16; returns the unsigned low bits. Ordinary arithmetic remains checked.\0Apub let U16.wrapping_add (a: U16) (b: U16): U16 = u16_wrapping_add_raw(a, b)\0A\0Alet u16_wrapping_sub_raw (a: U16) (b: U16): U16 = 0\0A\0A/// Subtracts modulo 2^16; returns the unsigned low bits. Ordinary arithmetic remains checked.\0Apub let U16.wrapping_sub (a: U16) (b: U16): U16 = u16_wrapping_sub_raw(a, b)\0A\0Alet u16_wrapping_mul_raw (a: U16) (b: U16): U16 = 0\0A\0A/// Multiplies modulo 2^16; returns the unsigned low bits. Ordinary arithmetic remains checked.\0Apub let U16.wrapping_mul (a: U16) (b: U16): U16 = u16_wrapping_mul_raw(a, b)\0A\0Alet u32_wrapping_add_raw (a: U32) (b: U32): U32 = 0\0A\0A/// Adds modulo 2^32; returns the unsigned low bits. Ordinary arithmetic remains checked.\0Apub let U32.wrapping_add (a: U32) (b: U32): U32 = u32_wrapping_add_raw(a, b)\0A\0Alet u32_wrapping_sub_raw (a: U32) (b: U32): U32 = 0\0A\0A/// Subtracts modulo 2^32; returns the unsigned low bits. Ordinary arithmetic remains checked.\0Apub let U32.wrapping_sub (a: U32) (b: U32): U32 = u32_wrapping_sub_raw(a, b)\0A\0Alet u32_wrapping_mul_raw (a: U32) (b: U32): U32 = 0\0A\0A/// Multiplies modulo 2^32; returns the unsigned low bits. Ordinary arithmetic remains checked.\0Apub let U32.wrapping_mul (a: U32) (b: U32): U32 = u32_wrapping_mul_raw(a, b)\0A\0Alet u64_wrapping_add_raw (a: U64) (b: U64): U64 = 0\0A\0A/// Adds modulo 2^64; returns the unsigned low bits. Ordinary arithmetic remains checked.\0Apub let U64.wrapping_add (a: U64) (b: U64): U64 = u64_wrapping_add_raw(a, b)\0A\0Alet u64_wrapping_sub_raw (a: U64) (b: U64): U64 = 0\0A\0A/// Subtracts modulo 2^64; returns the unsigned low bits. Ordinary arithmetic remains checked.\0Apub let U64.wrapping_sub (a: U64) (b: U64): U64 = u64_wrapping_sub_raw(a, b)\0A\0Alet u64_wrapping_mul_raw (a: U64) (b: U64): U64 = 0\0A\0A/// Multiplies modulo 2^64; returns the unsigned low bits. Ordinary arithmetic remains checked.\0Apub let U64.wrapping_mul (a: U64) (b: U64): U64 = u64_wrapping_mul_raw(a, b)\0A\0A// Fixed-width bit helpers retain the Int helper conventions.\0Alet i8_shr_logical_raw (x: I8) (n: Int): I8 = 0\0A\0A/// Shifts the low 8 bits right with zero fill. Nonpositive counts return x; counts at least 8 return zero. The result retains I8.\0Apub let I8.shr_logical (x: I8) (n: Int): I8 = i8_shr_logical_raw(x, n)\0A\0Alet i8_count_ones_raw (x: I8): Int = 0\0A\0A/// Counts one bits within the 8-bit representation, excluding any sign extension. Returns an Int in 0..8 inclusive.\0Apub let I8.count_ones (x: I8): Int = i8_count_ones_raw(x)\0A\0Alet i16_shr_logical_raw (x: I16) (n: Int): I16 = 0\0A\0A/// Shifts the low 16 bits right with zero fill. Nonpositive counts return x; counts at least 16 return zero. The result retains I16.\0Apub let I16.shr_logical (x: I16) (n: Int): I16 = i16_shr_logical_raw(x, n)\0A\0Alet i16_count_ones_raw (x: I16): Int = 0\0A\0A/// Counts one bits within the 16-bit representation, excluding any sign extension. Returns an Int in 0..16 inclusive.\0Apub let I16.count_ones (x: I16): Int = i16_count_ones_raw(x)\0A\0Alet i32_shr_logical_raw (x: I32) (n: Int): I32 = 0\0A\0A/// Shifts the low 32 bits right with zero fill. Nonpositive counts return x; counts at least 32 return zero. The result retains I32.\0Apub let I32.shr_logical (x: I32) (n: Int): I32 = i32_shr_logical_raw(x, n)\0A\0Alet i32_count_ones_raw (x: I32): Int = 0\0A\0A/// Counts one bits within the 32-bit representation, excluding any sign extension. Returns an Int in 0..32 inclusive.\0Apub let I32.count_ones (x: I32): Int = i32_count_ones_raw(x)\0A\0Alet u8_shr_logical_raw (x: U8) (n: Int): U8 = 0\0A\0A/// Shifts the low 8 bits right with zero fill. Nonpositive counts return x; counts at least 8 return zero. The result retains U8.\0Apub let U8.shr_logical (x: U8) (n: Int): U8 = u8_shr_logical_raw(x, n)\0A\0Alet u8_count_ones_raw (x: U8): Int = 0\0A\0A/// Counts one bits within the 8-bit representation, excluding any sign extension. Returns an Int in 0..8 inclusive.\0Apub let U8.count_ones (x: U8): Int = u8_count_ones_raw(x)\0A\0Alet u16_shr_logical_raw (x: U16) (n: Int): U16 = 0\0A\0A/// Shifts the low 16 bits right with zero fill. Nonpositive counts return x; counts at least 16 return zero. The result retains U16.\0Apub let U16.shr_logical (x: U16) (n: Int): U16 = u16_shr_logical_raw(x, n)\0A\0Alet u16_count_ones_raw (x: U16): Int = 0\0A\0A/// Counts one bits within the 16-bit representation, excluding any sign extension. Returns an Int in 0..16 inclusive.\0Apub let U16.count_ones (x: U16): Int = u16_count_ones_raw(x)\0A\0Alet u32_shr_logical_raw (x: U32) (n: Int): U32 = 0\0A\0A/// Shifts the low 32 bits right with zero fill. Nonpositive counts return x; counts at least 32 return zero. The result retains U32.\0Apub let U32.shr_logical (x: U32) (n: Int): U32 = u32_shr_logical_raw(x, n)\0A\0Alet u32_count_ones_raw (x: U32): Int = 0\0A\0A/// Counts one bits within the 32-bit representation, excluding any sign extension. Returns an Int in 0..32 inclusive.\0Apub let U32.count_ones (x: U32): Int = u32_count_ones_raw(x)\0A\0Alet u64_shr_logical_raw (x: U64) (n: Int): U64 = 0\0A\0A/// Shifts the low 64 bits right with zero fill. Nonpositive counts return x; counts at least 64 return zero. The result retains U64.\0Apub let U64.shr_logical (x: U64) (n: Int): U64 = u64_shr_logical_raw(x, n)\0A\0Alet u64_count_ones_raw (x: U64): Int = 0\0A\0A/// Counts one bits within the 64-bit representation, excluding any sign extension. Returns an Int in 0..64 inclusive.\0Apub let U64.count_ones (x: U64): Int = u64_count_ones_raw(x)\0A\0A// i traverses the borrowed prefix [0, n); no optional byte cell is needed.\0Alet plum__string_hash_acc (b: Bytes) (i: Int) (n: Int) (h: Int): Int =\0A    if i >= n { h & 9223372036854775807 }\0A    else {\0A        plum__string_hash_acc(b, i + 1, n, Int.wrapping_mul(h ^ bytes_at_raw(b, i), 1099511628211))\0A    }\0A\0A/// A hash of the string's bytes, for bucketing.\0A///\0A/// Not stable across releases and not cryptographic — do not persist\0A/// it, and do not use it for anything security-related.\0A///\0A/// Borrows input and allocates no temporary storage while hashing.\0A///\0A/// FNV-1a, kept in Plum now that `Int.wrapping_mul` can express its\0A/// modulo-2^64 multiply. The final sign-bit mask is required: `Map`\0A/// uses the result with `%`, which needs a non-negative index.\0Apub let String.hash (s: String): Int = {\0A    let b = s.as_bytes();\0A    plum__string_hash_acc(b, 0, b.len(), -3750763034362895579)\0A}\0A\0A/// Whether a one-character string is an ASCII space, tab, newline or\0A/// carriage return. Unicode spaces are not included.\0Apub let String.is_ascii_ws (c: String): Bool = c == \22 \22 || c == \22\5Ct\22 || c == \22\5Cn\22 || c == \22\5Cr\22\0A\0A// KMP failure links: the longest proper prefix that is also a suffix\0A// of the bytes matched so far. Following a link never advances the\0A// input, and never repeats comparisons for a discarded prefix.\0Alet plum__string_search_fallback\0A    (needle: Bytes)\0A    (links: Array[Int])\0A    (matched: Int)\0A    (byte: Int): Int\0A=\0A    if matched > 0 && bytes_at_raw(needle, matched) != byte {\0A        plum__string_search_fallback(needle, links, links[matched - 1], byte)\0A    } else { matched }\0A\0A// Self-rebinding keeps the table uniquely owned while it grows, so\0A// push reuses storage and total table construction remains linear.\0Alet plum__string_search_links (needle: Bytes): Array[Int] = {\0A    let mut links = [0];\0A    let mut matched = 0;\0A    for i in 1..bytes_len_raw(needle) {\0A        let byte = bytes_at_raw(needle, i);\0A        let prefix = plum__string_search_fallback(needle, links, matched, byte);\0A        matched = if bytes_at_raw(needle, prefix) == byte { prefix + 1 } else { 0 };\0A        links = links.push(matched);\0A    };\0A    links\0A}\0A\0Alet plum__string_search_bytes\0A    (s: Bytes)\0A    (needle: Bytes)\0A    (links: Array[Int])\0A    (i: Int)\0A    (matched: Int): Option[Int]\0A=\0A    if i >= bytes_len_raw(s) { None }\0A    else {\0A        let byte = bytes_at_raw(s, i);\0A        let prefix = plum__string_search_fallback(needle, links, matched, byte);\0A        let next = if bytes_at_raw(needle, prefix) == byte { prefix + 1 } else { 0 };\0A        if next == bytes_len_raw(needle) { Some(i + 1 - next) }\0A        else { plum__string_search_bytes(s, needle, links, i + 1, next) }\0A    }\0A\0A// Count non-continuation bytes in a borrowed UTF-8 prefix. Shared by\0A// character counts and the conversion of search offsets to codepoints.\0Alet plum__string_count_starts (s: Bytes) (end: Int) (i: Int) (count: Int): Int =\0A    if i >= end { count }\0A    else {\0A        let byte = bytes_at_raw(s, i);\0A        plum__string_count_starts(\0A            s,\0A            end,\0A            i + 1,\0A            count + if byte < 128 || byte >= 192 { 1 } else { 0 }\0A        )\0A    }\0A\0A/// The CHARACTER index where `needle` first appears, or `None`.\0A/// An empty needle matches at zero. Uses linear time in the UTF-8\0A/// byte lengths and auxiliary storage proportional to the needle's\0A/// byte length; the input text is borrowed without copying.\0Apub let String.index_of (s: String) (needle: String): Option[Int] =\0A    if needle.len() == 0 { Some(0) }\0A    else if needle.len() > s.len() { None }\0A    else {\0A        let text = bytes_of_str_raw(s);\0A        let pattern = bytes_of_str_raw(needle);\0A        let links = plum__string_search_links(pattern);\0A        match plum__string_search_bytes(text, pattern, links, 0, 0) {\0A            Some(offset) => Some(plum__string_count_starts(text, offset, 0, 0)),\0A            None => None,\0A        }\0A    }\0A\0A/// --- Namespaced forms of the string METHODS ---\0A///\0A/// `.len()`, `.split()`, `.replace()` and friends are compiler\0A/// PRIMITIVES lowered straight to IR, so they existed only as\0A/// methods, while `String.slice`/`index_of`/`lines`/`repeat`/\0A/// `trim_start`/`trim_end` are ordinary prelude functions and so\0A/// existed only namespaced. That split tracks how each one happens\0A/// to be implemented, which is invisible from outside and produced\0A/// a genuinely confusing surface: `\22x\22.trim()` worked and\0A/// `String.trim(\22x\22)` did not, while `String.trim_start(\22x\22)`\0A/// worked and `\22x\22.trim_start()` did not. Same family, opposite\0A/// rules, no way to tell which without trying.\0A///\0A/// The rule now: `String.f(s, ..)` always works. Some also have\0A/// method sugar. These wrappers cost nothing when unused --\0A/// dead-function elimination drops them.\0A/// The number of BYTES. `String.char_len` is the character count, and\0A/// the two differ for anything outside ASCII.\0Apub let String.len (s: String): Int = s.len()\0A\0A/// Splits on every occurrence of `sep`.\0A///\0A/// A separator at either end produces an empty piece, so splitting\0A/// `\5C\22,a,\5C\22` on `\5C\22,\5C\22` gives three pieces. Splitting on an empty\0A/// separator gives the characters.\0Apub let String.split (s: String) (sep: String): Array[String] = s.split(sep)\0A\0A/// Whether `needle` appears anywhere.\0Apub let String.contains (s: String) (needle: String): Bool = s.contains(needle)\0A\0A/// Whether the string begins with `prefix`.\0Apub let String.starts_with (s: String) (prefix: String): Bool = s.starts_with(prefix)\0A\0A/// Whether the string ends with `suffix`.\0Apub let String.ends_with (s: String) (suffix: String): Bool = s.ends_with(suffix)\0A\0A/// Every occurrence of `from` replaced with `to`. An empty `from`\0A/// leaves the string alone rather than looping.\0A/// Unchanged nonempty results share the input cell. Equal-byte-length changes\0A/// may reuse uniquely owned storage; other changed results allocate exactly.\0A/// Empty results use static storage.\0Apub let String.replace (s: String) (from: String) (to: String): String = s.replace(from, to)\0A\0A/// Uppercased using the platform's one-codepoint Unicode mapping. This\0A/// does not perform multi-codepoint expansions (for example, ß to SS).\0A/// POSIX uses the initialized UTF-8 locale; Windows maps the BMP only\0A/// and leaves supplementary codepoints unchanged. Mappings can vary by OS.\0A/// Unchanged nonempty results share input storage. Changed results may reuse\0A/// uniquely owned storage when every mapped codepoint keeps its byte width;\0A/// otherwise they allocate exactly. Empty results use static storage.\0Apub let String.to_upper (s: String): String = s.to_upper()\0A\0A/// Lowercased with the same platform mapping and storage rules as `String.to_upper`.\0Apub let String.to_lower (s: String): String = s.to_lower()\0A\0A/// Whitespace removed from both ends, including Unicode spaces.\0A/// Unchanged input shares its owned storage; changed input copies only\0A/// the retained UTF-8 bytes.\0Apub let String.trim (s: String): String = s.trim()\0A\0Alet bytes_of_str_raw (s: String): Bytes = bytes_of_str_raw(s)\0A\0Alet str_of_bytes_raw (b: Bytes): String = \22\22\0A\0Alet bytes_len_raw (b: Bytes): Int = 0\0A\0Alet bytes_at_raw (b: Bytes) (i: Int): Int = 0\0A\0Alet bytes_slice_raw (b: Bytes) (start: Int) (end: Int): Bytes = bytes_slice_raw(b, start, end)\0A\0Alet bytes_concat_raw (a: Bytes) (b: Bytes): Bytes = bytes_concat_raw(a, b)\0A\0Alet bytes_from_array_raw (xs: Array[Int]): Bytes = bytes_from_array_raw(xs)\0A\0A/// No bytes.\0Apub let Bytes.empty (): Bytes = bytes_of_str_raw(\22\22)\0A\0A/// How many bytes.\0Apub let Bytes.len (b: Bytes): Int = bytes_len_raw(b)\0A\0A/// Whether there are no bytes.\0Apub let Bytes.is_empty (b: Bytes): Bool = bytes_len_raw(b) == 0\0A\0A/// Free in both directions at runtime; the DIRECTION is what differs.\0A/// Every String is bytes, so this one is total.\0A/// The string's bytes, as UTF-8. No copy of the text is decoded, so\0A/// this is the cheap direction.\0Apub let String.as_bytes (s: String): Bytes = bytes_of_str_raw(s)\0A\0A/// The string's UTF-8 bytes. The same as `String.as_bytes`, named for\0A/// a caller thinking in bytes.\0Apub let Bytes.from_string (s: String): Bytes = bytes_of_str_raw(s)\0A\0A/// Not every Bytes is a String, so this one is not. This is the ONE\0A/// place the UTF-8 promise is established rather than assumed. The\0A/// reason the two types are distinct at all.\0A/// Written in Plum, not as a runtime primitive, because it needs\0A/// nothing the two byte primitives above do not already provide --\0A/// and this prelude's rule is that only what CANNOT be written here\0A/// goes into hand-written IR.\0A///\0A/// Full UTF-8, not just a lead-byte check: the ranges below reject\0A/// overlong encodings (C0/C1, and E0/F0 with a too-small second\0A/// byte), the UTF-16 surrogate block (ED A0..BF, which is why ED is\0A/// singled out), and anything past U+10FFFF (F5..FF, and F4 with a\0A/// second byte over 8F). A validator that only checked continuation\0A/// bytes would accept all four, and each one is a real way for a\0A/// decoder downstream to disagree about what this buffer says.\0Alet plum__is_cont (b: Bytes) (i: Int): Bool = {\0A    let v = bytes_at_raw(b, i);\0A    v >= 128 && v <= 191\0A}\0A\0Alet plum__utf8_ok (b: Bytes) (i: Int) (n: Int): Bool =\0A    if i >= n { true }\0A    else {\0A        let c = bytes_at_raw(b, i);\0A        // ASCII.\0A        if c < 128 { plum__utf8_ok(b, i + 1, n) }\0A        // A continuation byte with no lead (80..BF), or an overlong\0A        // two-byte form (C0/C1).\0A        else if c < 194 { false }\0A        // Two bytes: C2..DF.\0A        else if c < 224 {\0A            if i + 1 >= n { false }\0A            else if !plum__is_cont(b, i + 1) { false }\0A            else { plum__utf8_ok(b, i + 2, n) }\0A        }\0A        // Three bytes: E0..EF. E0 must not be overlong (second byte\0A        // A0..BF) and ED must not encode a surrogate (second byte\0A        // 80..9F).\0A        else if c < 240 {\0A            if i + 2 >= n { false }\0A            else {\0A                let c1 = bytes_at_raw(b, i + 1);\0A                let lo = if c == 224 { 160 } else { 128 };\0A                let hi = if c == 237 { 159 } else { 191 };\0A                if c1 < lo || c1 > hi { false }\0A                else if !plum__is_cont(b, i + 2) { false }\0A                else { plum__utf8_ok(b, i + 3, n) }\0A            }\0A        }\0A        // Four bytes: F0..F4. F0 must not be overlong (second byte\0A        // 90..BF) and F4 must not exceed U+10FFFF (second byte\0A        // 80..8F).\0A        else if c < 245 {\0A            if i + 3 >= n { false }\0A            else {\0A                let c1 = bytes_at_raw(b, i + 1);\0A                let lo = if c == 240 { 144 } else { 128 };\0A                let hi = if c == 244 { 143 } else { 191 };\0A                if c1 < lo || c1 > hi { false }\0A                else if !plum__is_cont(b, i + 2) { false }\0A                else if !plum__is_cont(b, i + 3) { false }\0A                else { plum__utf8_ok(b, i + 4, n) }\0A            }\0A        }\0A        // F5..FF: past the end of the encodable range.\0A        else { false }\0A    }\0A\0A/// Whether these bytes are valid UTF-8, without building a string.\0Apub let Bytes.is_utf8 (b: Bytes): Bool = plum__utf8_ok(b, 0, bytes_len_raw(b))\0A\0A/// Decodes UTF-8 into a string.\0A///\0A/// `Err` when the bytes are not valid UTF-8 — which is why this is a\0A/// `Result` and `String.as_bytes` is not. Bytes arrive from files and\0A/// sockets, and not all of them are text.\0Apub let Bytes.as_string (b: Bytes): Result[String, String] =\0A    if Bytes.is_utf8(b) { Ok(str_of_bytes_raw(b)) }\0A    else { Err(\22Bytes.as_string: not valid UTF-8\22) }\0A\0A/// BYTE indices, throughout. `Bytes.slice` can and will split a\0A/// multi-byte character in half, which is the operation `String`\0A/// deliberately does not offer, and the reason a program reaching for\0A/// bytes reached for them.\0A///\0A/// Clamped rather than aborting, matching `Array.slice`.\0A/// Bytes from `start` up to but not including `end`, with bounds\0A/// clamped. A slice can split a multi-byte character, so the result is\0A/// not guaranteed to be valid UTF-8.\0A/// Whole ranges share their owned storage; empty ranges use shared static\0A/// storage. Other ranges copy only the selected bytes into compact storage.\0Apub let Bytes.slice (b: Bytes) (start: Int) (end: Int): Bytes = {\0A    let n = bytes_len_raw(b);\0A    let lo = if start < 0 { 0 } else if start > n { n } else { start };\0A    let hi = if end < lo { lo } else if end > n { n } else { end };\0A    bytes_slice_raw(b, lo, hi)\0A}\0A\0A/// The two runs of bytes, joined.\0Apub let Bytes.concat (a: Bytes) (b: Bytes): Bytes = bytes_concat_raw(a, b)\0A\0A/// `None` rather than an abort for an out-of-range index: a byte\0A/// buffer is usually being walked by a parser that does not know how\0A/// long it is yet, and `Option` is how the rest of this prelude says\0A/// \22nothing there\22 (`Array.first`, `Map.get`).\0A/// The byte at `i` as a number 0-255, or `None` when out of range.\0Apub let Bytes.at (b: Bytes) (i: Int): Option[Int] =\0A    if i < 0 { None } else if i >= bytes_len_raw(b) { None } else { Some(bytes_at_raw(b, i)) }\0A\0A/// Each element is one byte, 0-255. Values outside that range are\0A/// masked to their low 8 bits rather than rejected. `from_array` is\0A/// a construction helper, and a `Result` here would put error handling\0A/// in front of every literal buffer.\0A/// Bytes from numbers. Values outside 0-255 are truncated to their\0A/// low eight bits.\0Apub let Bytes.from_array (xs: Array[Int]): Bytes = bytes_from_array_raw(xs)\0A\0A/// The way back in from C, and the counterpart to `.as_cstr()`.\0A///\0A/// Takes an explicit LENGTH, which is the whole difference from\0A/// `RawCStr.as_string()`: that one stops at the first NUL because a\0A/// `char*` alone cannot say how long it is, and any C API returning\0A/// bytes has to hand back a count separately. Given the count, this\0A/// is binary-safe. Given a wrong one, it reads whatever is\0A/// next in memory, exactly as the equivalent C would.\0A///\0A/// COPIES into a fresh cell. C buffers are routinely static, reused\0A/// on the next call, or freed by the callee; the copy is what makes\0A/// the result an ordinary owned Plum value.\0Alet bytes_from_cstr_raw (c: RawCStr) (len: Int): Bytes = unsafe { bytes_from_cstr_raw(c, len) }\0A\0A/// Copies `len` bytes from a C pointer.\0A///\0A/// Requires an `unsafe` block and all arguments at the call site;\0A/// it cannot be used as a function value or partially applied.\0A/// For positive `len`, the caller must ensure `c` points to at least\0A/// `len` readable bytes that remain valid throughout the copy.\0A/// No pointer, lifetime, or allocation-bound validation is performed.\0A/// Nonpositive lengths return empty bytes without reading `c`.\0A/// The result owns a fresh copy, including any embedded NUL bytes;\0A/// the source is neither retained nor freed.\0Apub let Bytes.from_cstr (c: RawCStr) (len: Int): Bytes = unsafe {\0A    if len <= 0 { Bytes.empty() } else { bytes_from_cstr_raw(c, len) }\0A}\0A\0A// Borrows b and returns independent owned Array[Int] storage.\0Alet plum__bytes_to_array_raw (b: Bytes): Array[Int] = []\0A\0A/// The bytes as numbers 0-255, using one exact-sized array allocation.\0A/// The result is independent of the input; empty results use static storage.\0Apub let Bytes.to_array (b: Bytes): Array[Int] = plum__bytes_to_array_raw(b)\0A\0A/// Lowercase hex, two characters per byte, no separator.\0A///\0A/// This is what `.to_string()` would have to be if `Bytes` had one,\0A/// and the reason it does not: hex is A rendering, not THE rendering,\0A/// and picking it silently would make `.to_string()` mean something\0A/// different on this type than on every other. Named explicitly, the\0A/// caller decides.\0Alet plum__hex_digit (v: Int): String =\0A    if v == 0 { \220\22 } else if v == 1 { \221\22 } else if v == 2 { \222\22 } else if v == 3 { \223\22 }\0A    else if v == 4 { \224\22 } else if v == 5 { \225\22 } else if v == 6 { \226\22 } else if v == 7 { \227\22 }\0A    else if v == 8 { \228\22 } else if v == 9 { \229\22 } else if v == 10 { \22a\22 } else if v == 11 { \22b\22 }\0A    else if v == 12 { \22c\22 } else if v == 13 { \22d\22 } else if v == 14 { \22e\22 } else { \22f\22 }\0A\0A// Implemented by the generated runtime; borrows b and returns owned storage.\0Alet plum__bytes_to_hex_raw (b: Bytes): String = \22\22\0A\0A/// Lowercase hex, two characters per byte. `Encoding.hex_decode`\0A/// reads it back. A nonempty result uses one exact-sized allocation;\0A/// an empty result uses shared static storage.\0Apub let Bytes.to_hex (b: Bytes): String = plum__bytes_to_hex_raw(b)\0A\0A// The runtime plans and fills a known-size result while borrowing all inputs.\0Alet plum__string_join_raw (parts: Array[String]) (sep: String): String = \22\22\0A\0A/// Joins parts in order with `sep` between adjacent entries. Empty parts\0A/// still contribute separator boundaries.\0A///\0A/// Copies parts and separators directly into one exact-sized allocation.\0A/// Empty output uses shared static storage.\0Apub let Array.join (parts: Array[String]) (sep: String): String = plum__string_join_raw(parts, sep)\0A\0A/// Int's minimum, which CANNOT be written as a literal: its\0A/// magnitude is out of range as a positive number, so the lexer\0A/// rejects `9223372036854775808` before any sign is applied.\0Alet plum__int_min (u: Unit): Int = 0 - 9223372036854775807 - 1\0A\0A// chars_of groups following continuation bytes with the preceding byte,\0A// even for unsafe raw Strings. Only accept a sign/digit as a one-byte unit.\0Alet plum__string_parse_int_acc\0A    (s: String)\0A    (bytes: Bytes)\0A    (n: Int)\0A    (i: Int)\0A    (acc: Int)\0A    (any: Bool)\0A    (negative: Bool): Result[Int, String]\0A=\0A    if i >= n { if any { Ok(acc) } else { Err(\22expected at least one digit\22) } }\0A    else {\0A        let byte = bytes_at_raw(bytes, i);\0A        if byte < 48 || byte > 57 || (i + 1 < n && plum__is_cont(bytes, i + 1)) {\0A            // Accepted prefix units are single ASCII bytes, so i is also\0A            // the character index here. Reuse String.slice's grouping for\0A            // the first rejected unit instead of adding another decoder.\0A            Err(\22expected a digit, found \22.concat(String.slice(s, i, i + 1)))\0A        } else {\0A            let digit = byte - 48;\0A            // Check range before checked multiplication/addition. Negative\0A            // accumulation represents Int::MIN without negating its magnitude.\0A            if negative {\0A                if acc < 0 - 922337203685477580 { Err(\22integer out of range\22) }\0A                else if acc * 10 < plum__int_min(()) + digit { Err(\22integer out of range\22) }\0A                else {\0A                    plum__string_parse_int_acc(s, bytes, n, i + 1, acc * 10 - digit, true, negative)\0A                }\0A            } else if acc > 922337203685477580 { Err(\22integer out of range\22) }\0A            else if acc * 10 > 9223372036854775807 - digit { Err(\22integer out of range\22) }\0A            else {\0A                plum__string_parse_int_acc(s, bytes, n, i + 1, acc * 10 + digit, true, negative)\0A            }\0A        }\0A    }\0A\0A/// Parses a decimal integer, with an optional leading `-`.\0A///\0A/// `Err` on anything else, including an empty string, surrounding\0A/// spaces, and a number too large for an `Int`. No `0x` or `0b`\0A/// prefixes — this is the inverse of `to_string`, not a literal\0A/// parser. Scans ASCII digits directly without a character array;\0A/// the first invalid character keeps the existing diagnostic.\0Apub let String.parse_int (s: String): Result[Int, String] = {\0A    let bytes = bytes_of_str_raw(s);\0A    let n = bytes_len_raw(bytes);\0A    if n == 0 { Err(\22empty string\22) } else {\0A        let negative = bytes_at_raw(bytes, 0) == 45 && (n == 1 || !plum__is_cont(bytes, 1));\0A        plum__string_parse_int_acc(s, bytes, n, if negative { 1 } else { 0 }, 0, false, negative)\0A    }\0A}\0A\0A/// `String.parse_float` DELEGATES to the JSON number parser below,\0A/// exactly as the real prelude does.\0A///\0A/// It used to have a hand-written parser here, on the reasoning that\0A/// dragging a JSON parser in to read a float would be absurd. That\0A/// reasoning cost twice. The hand-written version accumulated the\0A/// fraction digit by digit against a repeatedly-divided 0.1, so\0A/// `0.000001` parsed as 1.0000000000000002e-06, invisible until\0A/// floats started printing every digit that matters. And its own\0A/// comment admitted the second cost: \22no exponent, which is a real\0A/// narrowing, stated rather than discovered\22. Stated, but it made\0A/// the two compilers DISAGREE. `String.parse_float(\221e3\22)` gave\0A/// 1000 under the real compiler and an error here.\0A///\0A/// The JSON parser was already in this same prelude, already\0A/// handling exponents, already correct. Reusing it is not absurd;\0A/// writing a second one was.\0A/// Overflow returns `Err`; underflow follows binary64 rounding to a\0A/// subnormal value or signed zero.\0Apub let String.parse_float (s: String): Result[Float, String] = {\0A    let cs = bytes_of_str_raw(s);\0A    match parse_number(cs, 0) {\0A        Ok(r) => if r.next_pos == bytes_len_raw(cs) { Ok(r.value) } else {\0A            Err(\22trailing characters after number\22)\0A        },\0A        Err(e) => Err(e),\0A    }\0A}\0A\0A// --- Sorting ---\0A\0A// Merge into a fresh, uniquely owned accumulator. Tail calls move it\0A// into the next push, so growth is amortized O(1) per element. Taking\0A// the left element on equality preserves the original order of ties.\0Alet plum__array_sort_merge_acc[T]\0A    (left: Array[T])\0A    (right: Array[T])\0A    (le: (T, T) -> Bool)\0A    (i: Int)\0A    (j: Int)\0A    (acc: Array[T]): Array[T]\0A=\0A    if i >= left.len() {\0A        if j >= right.len() { acc }\0A        else { plum__array_sort_merge_acc(left, right, le, i, j + 1, acc.push(right[j])) }\0A    } else if j >= right.len() {\0A        plum__array_sort_merge_acc(left, right, le, i + 1, j, acc.push(left[i]))\0A    } else if le(left[i], right[j]) {\0A        plum__array_sort_merge_acc(left, right, le, i + 1, j, acc.push(left[i]))\0A    } else {\0A        plum__array_sort_merge_acc(left, right, le, i, j + 1, acc.push(right[j]))\0A    }\0A\0A// Split index ranges rather than copying slices of the input. Only\0A// the sorted runs and merge output allocate, with O(n) peak storage\0A// and O(log n) stack depth for the recursive splits.\0Alet plum__array_sort_range[T] (arr: Array[T]) (le: (T, T) -> Bool) (lo: Int) (hi: Int): Array[T] =\0A    if hi <= lo { [] }\0A    else if hi - lo == 1 { [arr[lo]] }\0A    else {\0A        let mid = lo + (hi - lo) / 2;\0A        let left = plum__array_sort_range(arr, le, lo, mid);\0A        let right = plum__array_sort_range(arr, le, mid, hi);\0A        plum__array_sort_merge_acc(left, right, le, 0, 0, [])\0A    }\0A\0A/// Sorted by a \5C\22less than or equal\5C\22 predicate.\0A///\0A/// STABLE: elements `le` considers equivalent keep their original\0A/// order, which is what makes sorting by one key and then another\0A/// produce the ordering people expect.\0A///\0A/// Merge sort with O(n log n) comparisons and O(n) auxiliary storage.\0Apub let Array.sort_by[T] (arr: Array[T]) (le: (T, T) -> Bool): Array[T] =\0A    plum__array_sort_range(arr, le, 0, arr.len())\0A\0A/// Sorted ascending.\0Apub let Array.sort_int (arr: Array[Int]): Array[Int] = Array.sort_by(arr, |a: Int, b: Int| a <= b)\0A\0A/// Sorted ascending. NaN does not compare, so an array containing one\0A/// has no meaningful order.\0Apub let Array.sort_float (arr: Array[Float]): Array[Float] =\0A    Array.sort_by(arr, |a: Float, b: Float| a <= b)\0A\0A// `Array.sort_string` is deliberately ABSENT: the real prelude compares\0A// via `a.runes()`, and this compiler has no `.runes()` primitive. It\0A// belongs with `Float.sqrt` and friends -- the group that needs a\0A// runtime primitive rather than prelude source -- not here.\0A\0A// --- Zip ---\0A\0A/// A named struct, not a tuple, exactly as the real prelude has it.\0Apub struct Zipped[A, B] { pub first: A, pub second: B }\0A\0A// The current compiler lowers this private traversal to an exact-sized\0A// array and a paired fill. The source body supports older bootstrap compilers.\0Alet plum__array_zip_with_raw[T, U, V]\0A    (a: Array[T])\0A    (b: Array[U])\0A    (pair: (T, U) -> V): Array[V]\0A= {\0A    let mut out = [];\0A    for i in 0..Int.min(a.len(), b.len()) {\0A        out = out.push(pair(a[i], b[i]));\0A    };\0A    out\0A}\0A\0A/// Pairs elements positionally, stopping at the shorter array.\0Apub let Array.zip[T, U] (a: Array[T]) (b: Array[U]): Array[Zipped[T, U]] =\0A    plum__array_zip_with_raw(a, b, |first, second| Zipped { first: first, second: second })\0A\0A// --- String trimming ---\0A\0Alet plum__string_trim_start_raw (s: String): String = \22\22\0A\0Alet plum__string_trim_end_raw (s: String): String = \22\22\0A\0A/// Whitespace removed from the start, using the same Unicode whitespace\0A/// predicate as String.trim. Unchanged input shares its owned storage;\0A/// changed nonempty input copies only the retained UTF-8 bytes. Empty\0A/// results use shared static storage.\0Apub let String.trim_start (s: String): String = plum__string_trim_start_raw(s)\0A\0A/// Whitespace removed from the end, using the same Unicode whitespace\0A/// predicate as String.trim. Unchanged input shares its owned storage;\0A/// changed nonempty input copies only the retained UTF-8 bytes. Empty\0A/// results use shared static storage.\0Apub let String.trim_end (s: String): String = plum__string_trim_end_raw(s)\0A\0A/// Split on newlines.\0A///\0A/// A trailing newline produces a final empty piece, since the text\0A/// after it is empty — which is what makes joining the result back\0A/// with newlines give the original.\0Apub let String.lines (s: String): Array[String] = s.split(\22\5Cn\22)\0A\0A// --- Numbers that need the runtime ---\0A\0A/// The real prelude writes these as `unsafe { fabs(x) }`,\0A/// `unsafe { sqrt(x) }` and friends.\0A/// This backend has no `extern \22C\22`/`unsafe` support, so they reach the\0A/// same libm functions as runtime primitives instead.\0Alet abs_raw (x: Float): Float = 0.0\0A\0Alet sqrt_raw (x: Float): Float = 0.0\0A\0Alet pow_raw (b: Float) (e: Float): Float = 0.0\0A\0Alet floor_raw (x: Float): Float = 0.0\0A\0Alet ceil_raw (x: Float): Float = 0.0\0A\0Alet round_raw (x: Float): Float = 0.0\0A\0Alet sin_raw (x: Float): Float = 0.0\0A\0Alet cos_raw (x: Float): Float = 0.0\0A\0Alet tan_raw (x: Float): Float = 0.0\0A\0Alet asin_raw (x: Float): Float = 0.0\0A\0Alet acos_raw (x: Float): Float = 0.0\0A\0Alet atan_raw (x: Float): Float = 0.0\0A\0Alet atan2_raw (y: Float) (x: Float): Float = 0.0\0A\0Alet log_raw (x: Float): Float = 0.0\0A\0Alet log2_raw (x: Float): Float = 0.0\0A\0Alet log10_raw (x: Float): Float = 0.0\0A\0Alet exp_raw (x: Float): Float = 0.0\0A\0Alet float_fixed_raw (x: Float) (decimals: Int): String = \22\22\0A\0Alet random_raw (ignored: Bool): Float = 0.0\0A\0A/// The square root. Negative input gives NaN rather than failing.\0Apub let Float.sqrt (x: Float): Float = sqrt_raw(x)\0A\0A/// `base` raised to `exp`. A fractional exponent of a negative base\0A/// gives NaN.\0Apub let Float.pow (base: Float) (exp: Float): Float = pow_raw(base, exp)\0A\0A/// The largest whole number no greater than `x` — toward negative\0A/// infinity, so `floor(-2.5)` is `-3.0`.\0Apub let Float.floor (x: Float): Float = floor_raw(x)\0A\0A/// The smallest whole number no less than `x`.\0Apub let Float.ceil (x: Float): Float = ceil_raw(x)\0A\0A/// The nearest whole number, halves AWAY FROM ZERO: `round(2.5)` is\0A/// `3.0` and `round(-2.5)` is `-3.0`.\0A///\0A/// `Float.to_fixed` rounds halves to EVEN, which is not an\0A/// inconsistency — it is what C, Python, Rust and Java all do, because\0A/// rounding is arithmetic and formatting is rendering.\0Apub let Float.round (x: Float): Float = round_raw(x)\0A\0A/// A float in `[0.0, 1.0)` from a process-wide generator seeded from\0A/// the clock.\0A///\0A/// Different every run, and NOT reproducible. `Rng.from_seed` is the\0A/// one for a test or a replay.\0Apub let Float.random (): Float = random_raw(true)\0A\0A/// A float in `[lo, hi)`, from the same unseeded generator as\0A/// `Float.random`.\0Apub let Float.random_range (lo: Float) (hi: Float): Float = lo + (hi - lo) * Float.random(())\0A\0A/// --- Trigonometry, logs and constants (issue #20) ---\0A///\0A/// Angles are RADIANS everywhere, which is what libm takes and what the\0A/// inverse functions return. `Float.radians` and `Float.degrees` convert\0A/// at the edges, so a program that thinks in degrees converts once\0A/// rather than scattering `* 3.14159 / 180.0`.\0A/// Sine of an angle in RADIANS.\0Apub let Float.sin (x: Float): Float = sin_raw(x)\0A\0A/// Cosine of an angle in radians.\0Apub let Float.cos (x: Float): Float = cos_raw(x)\0A\0A/// Tangent of an angle in radians. Grows without bound near odd\0A/// multiples of pi/2 rather than failing.\0Apub let Float.tan (x: Float): Float = tan_raw(x)\0A\0A/// The angle in radians whose sine is `x`, in `[-pi/2, pi/2]`. NaN\0A/// outside `[-1, 1]`.\0Apub let Float.asin (x: Float): Float = asin_raw(x)\0A\0A/// The angle in radians whose cosine is `x`, in `[0, pi]`. NaN\0A/// outside `[-1, 1]`.\0Apub let Float.acos (x: Float): Float = acos_raw(x)\0A\0A/// The angle in radians whose tangent is `x`. `Float.atan2` is the\0A/// one that knows which quadrant.\0Apub let Float.atan (x: Float): Float = atan_raw(x)\0A\0A/// `atan2(y, x)`, in that order, matching libm, Go, Python\0A/// and Java all use, and the reason it exists: it knows which QUADRANT\0A/// the point is in, which `atan(y / x)` cannot, and it does not divide\0A/// by zero when `x` is 0.\0Apub let Float.atan2 (y: Float) (x: Float): Float = atan2_raw(y, x)\0A\0A/// Natural log. `log2` and `log10` are separate rather than\0A/// `log(x) / log(2.0)`, because libm computes them directly and the\0A/// division loses accuracy at exactly the powers people check.\0A/// The natural logarithm. NaN for a negative argument, and negative\0A/// infinity at zero.\0Apub let Float.log (x: Float): Float = log_raw(x)\0A\0A/// Base-2 logarithm, computed directly rather than as a division —\0A/// which is what keeps `log2(8.0)` exactly `3.0`.\0Apub let Float.log2 (x: Float): Float = log2_raw(x)\0A\0A/// Base-10 logarithm, computed directly. See `Float.log2`.\0Apub let Float.log10 (x: Float): Float = log10_raw(x)\0A\0A/// `e` raised to `x`.\0Apub let Float.exp (x: Float): Float = exp_raw(x)\0A\0A/// Constants as FUNCTIONS, because `Float.` is a type namespace and\0A/// `T.f(x)` is how a name gets into it. Written out to the last digit a\0A/// double can hold rather than computed, so they are exact literals and\0A/// not a rounding of something else.\0A/// Pi, to the last digit a double holds.\0Apub let Float.pi (): Float = 3.141592653589793\0A\0A/// Two pi — a full turn, which is the more useful constant when\0A/// working with angles.\0Apub let Float.tau (): Float = 6.283185307179586\0A\0A/// Euler's number.\0Apub let Float.e (): Float = 2.718281828459045\0A\0A/// Degrees to radians. Every trigonometric function here takes\0A/// radians, so this is the conversion at the edge.\0Apub let Float.radians (degrees: Float): Float = degrees * 3.141592653589793 / 180.0\0A\0A/// Radians to degrees.\0Apub let Float.degrees (radians: Float): Float = radians * 180.0 / 3.141592653589793\0A\0A/// --- Seeded, reproducible random numbers (issue #20) ---\0A///\0A/// `Float.random` reads a process-global generator seeded from the\0A/// clock, which is right for \22give me something different each run\22 and\0A/// useless for a test or a replay. An `Rng` is a VALUE: same seed, same\0A/// sequence, on every platform and every run.\0A///\0A/// Every call returns the NEXT GENERATOR alongside the number, rather\0A/// than mutating in place, so a generator is as ordinary a value as an\0A/// `Int`. Threading it by hand is the cost; being able to replay a game\0A/// from a seed, or write a test that cannot flake, is what it buys. A\0A/// `Ref[Rng]` is the opt-in for in-place update.\0A///\0A/// --- Which generator, and why ---\0A///\0A/// SplitMix64: a small, modern 64-bit generator with a full 2^64\0A/// period. It is fast, has excellent bit diffusion, and is the right\0A/// generator when reproducibility and simple state matter more than\0A/// cryptographic secrecy. The wrapping multiply and logical shifts it\0A/// needs became expressible when `Int.wrapping_mul` and bitwise\0A/// operators landed.\0A///\0A/// **Not for cryptography, keys, tokens or passwords.** It is a\0A/// statistical generator and its entire state is recoverable from two\0A/// outputs.\0Apub struct Rng { state: Int }\0A\0Alet RNG_GAMMA: Int = -7046029254386353131\0A\0Alet RNG_MIX_1: Int = -4658895280553007687\0A\0Alet RNG_MIX_2: Int = -7723592293110705685\0A\0Alet RNG_RANGE: Int = 9223372036854775807\0A\0A/// Any `Int` is a legal seed, including zero and negatives. SplitMix64\0A/// has no forbidden state, unlike generators whose all-zero state gets\0A/// stuck, so the seed is kept exactly rather than folded into a range.\0Apub let Rng.from_seed (seed: Int): Rng = Rng { state: seed }\0A\0Alet plum__mod_floor (a: Int) (m: Int): Int = {\0A    let r = a - (a / m) * m;\0A    if r < 0 { r + m } else { r }\0A}\0A\0A/// The raw step: advance by SplitMix64's golden-ratio increment, then\0A/// mix all 64 bits. Keep the sign bit here: wide integer ranges need\0A/// the full signed domain. Each caller reduces the output as needed.\0Alet rng_step (r: Rng): (Rng, Int) = {\0A    let next = Rng { state: Int.wrapping_add(r.state, RNG_GAMMA) };\0A    let z1 = Int.wrapping_mul(next.state ^ Int.shr_logical(next.state, 30), RNG_MIX_1);\0A    let z2 = Int.wrapping_mul(z1 ^ Int.shr_logical(z1, 27), RNG_MIX_2);\0A    (next, z2 ^ Int.shr_logical(z2, 31))\0A}\0A\0A/// A `Float` in `[0.0, 1.0)`. Use 53 exactly representable bits so\0A/// converting to `Float` cannot round the largest sample up to `1.0`.\0A/// The generator advances exactly once, as for previous versions;\0A/// float samples may differ because the discarded low bits no longer round.\0Apub let Rng.float (r: Rng): (Rng, Float) = {\0A    let (next, z) = rng_step(r);\0A    (next, Int.shr_logical(z & RNG_RANGE, 10).to_float() / 9007199254740992.0)\0A}\0A\0A/// A float in `[lo, hi)`, and the next generator.\0Apub let Rng.float_range (r: Rng) (lo: Float) (hi: Float): (Rng, Float) = {\0A    let (next, f) = Rng.float(r);\0A    (next, lo + (hi - lo) * f)\0A}\0A\0A/// `[lo, hi)`, the upper bound EXCLUDED, so `int_range(r, 0, xs.len())`\0A/// is an index into `xs` and needs no `- 1` anywhere.\0A/// All ordered `Int` bounds are supported, even when `hi - lo` would\0A/// overflow. `hi` must itself be an `Int`, so the maximum `Int` cannot\0A/// be included as a result of this half-open API.\0A///\0A/// Rejection sampling, not `z % span`. The modulo is biased whenever the\0A/// span does not divide the generator's range evenly: the low values\0A/// come up more often, by about one part in `range / span`. That is\0A/// invisible in a game and fatal in a shuffle, and the loop costs an\0A/// extra step only on the fraction of draws that land in the leftover\0A/// tail. Widths through the maximum `Int` preserve their seeded sequences.\0A/// Wider ranges reject full signed samples outside `[lo, hi)` instead;\0A/// they accept at least half of the domain, averaging at most two draws.\0A///\0A/// An empty or backwards range returns `lo` and does not draw, because\0A/// there is no number to return and a panic here would make an ordinary\0A/// off-by-one crash a program at random.\0Apub let Rng.int_range (r: Rng) (lo: Int) (hi: Int): (Rng, Int) = {\0A    if hi <= lo { (r, lo) } else {\0A        let span = Int.wrapping_sub(hi, lo);\0A        if span < 0 { rng_wide(r, lo, hi) } else { rng_below(r, span, lo) }\0A    }\0A}\0A\0A// Tail recursion keeps retries in constant stack space. No span or\0A// offset arithmetic is needed for ranges at least 2^63 wide.\0Alet rng_wide (r: Rng) (lo: Int) (hi: Int): (Rng, Int) = {\0A    let (next, z) = rng_step(r);\0A    if z < lo || z >= hi { rng_wide(next, lo, hi) } else { (next, z) }\0A}\0A\0Alet rng_below (r: Rng) (span: Int) (lo: Int): (Rng, Int) = {\0A    let range = RNG_RANGE;\0A    let limit = range - plum__mod_floor(range, span);\0A    let (next, raw) = rng_step(r);\0A    let z = raw & RNG_RANGE;\0A    if z >= limit { rng_below(next, span, lo) } else { (next, lo + plum__mod_floor(z, span)) }\0A}\0A\0A/// A boolean, evenly, and the next generator.\0Apub let Rng.bool (r: Rng): (Rng, Bool) = {\0A    let (next, v) = Rng.int_range(r, 0, 2);\0A    (next, v == 1)\0A}\0A\0A/// Fisher-Yates, walking from the end so every permutation is equally\0A/// likely. The naive version, swapping each element with any other, is\0A/// not uniform, and looks fine until somebody counts.\0Apub let Rng.shuffle[T] (r: Rng) (xs: Array[T]): (Rng, Array[T]) =\0A    rng_shuffle_acc(r, xs, xs.len() - 1)\0A\0Alet rng_shuffle_acc[T] (r: Rng) (xs: Array[T]) (i: Int): (Rng, Array[T]) =\0A    if i <= 0 { (r, xs) } else {\0A        let (next, j) = Rng.int_range(r, 0, i + 1);\0A        rng_shuffle_acc(next, plum__swap(xs, i, j), i - 1)\0A    }\0A\0Alet plum__swap[T] (xs: Array[T]) (i: Int) (j: Int): Array[T] =\0A    if i == j { xs } else {\0A        let a = xs[i];\0A        let b = xs[j];\0A        xs.set(i, b).set(j, a)\0A    }\0A\0A/// One element, or `None` from an empty array.\0Apub let Rng.choice[T] (r: Rng) (xs: Array[T]): (Rng, Option[T]) =\0A    if Array.is_empty(xs) { (r, None) } else {\0A        let (next, i) = Rng.int_range(r, 0, xs.len());\0A        (next, Some(xs[i]))\0A    }\0A\0A// --- String ordering ---\0A\0A/// Byte-lexicographic, which for UTF-8 IS codepoint order, so this\0A/// agrees with the real prelude's rune-by-rune comparison without\0A/// needing a `.runes()` decoder.\0Alet string_concat_all_raw (parts: Array[String]): String = \22\22\0A\0A/// Concatenates parts in order, without a separator. The compiler's own\0A/// emitter uses this for collected output fragments.\0A///\0A/// Uses checked sizes and one exact-sized allocation for nonempty output;\0A/// empty output uses shared static storage.\0Apub let Array.concat_all (parts: Array[String]): String = string_concat_all_raw(parts)\0A\0A/// Decimal text to the NEAREST double, via libc `strtod`.\0A///\0A/// `parse_number` below validates the grammar and finds where the\0A/// number ends, and that part was always right. What it got wrong was\0A/// the VALUE: building it as `mantissa * 10^exp` in floating point\0A/// accumulates rounding error, so `9.21258e-07` parsed to a double\0A/// one ulp away and `parse_float(x.to_string()) != x`. `to_string`\0A/// goes to real lengths to guarantee that round trip, retrying\0A/// at 15, 16 and 17 digits until `strtod` agrees, so the inverse\0A/// has to be the same `strtod`, not an approximation of it.\0A///\0A/// Found by a property test on 2026-08-25. The Rust interpreter\0A/// computed the identical wrong double, so `interp-check` agreed\0A/// with it and saw nothing.\0Alet parse_float_raw (s: String): Float = 0.0\0A\0Alet string_cmp_raw (a: String) (b: String): Int = 0\0A\0A/// Sorted by BYTE order, not by any locale's alphabet — so uppercase\0A/// sorts before lowercase, and accented letters sort after `z`.\0Apub let Array.sort_string (arr: Array[String]): Array[String] =\0A    Array.sort_by(arr, |a: String, b: String| a <= b)\0A\0A// --- Assertions ---\0A//\0A// Mirrored from the real prelude, message for message: a test that\0A// fails should read the same whichever compiler ran it.\0A\0A/// Stops the program unless `cond` holds.\0A///\0A/// For a condition the code depends on, not for input validation:\0A/// there is no way to catch this.\0Apub let assert (cond: Bool): Unit =\0A    if cond { () } else { panic_raw(\22assertion failed\22) }\0A\0A/// Stops the program unless the two are equal, printing BOTH — which\0A/// is the difference from `assert(a == b)` and the reason to prefer\0A/// it in a test.\0Apub let assert_eq[T] (a: T) (b: T): Unit =\0A    if a == b { () } else {\0A        panic_raw(\0A            \22assertion failed: left != right\5Cn  left:  \22.concat(a.to_string()).concat(\22\5Cn  right: \22)\0A                .concat(b.to_string())\0A        )\0A    }\0A\0A/// Stops the program if the two are equal, printing them.\0Apub let assert_ne[T] (a: T) (b: T): Unit =\0A    if a != b { () } else {\0A        panic_raw(\0A            \22assertion failed: left == right\5Cn  left:  \22.concat(a.to_string()).concat(\22\5Cn  right: \22)\0A                .concat(b.to_string())\0A        )\0A    }\0A\0A// --- Collections: Map and Set ---\0A\0A/// One key and value stored in a map collision bucket.\0Apub struct MapEntry[K, V] { key: K, value: V }\0A\0A// Single entries live directly in leaves. Only equal complete hashes need\0A// a collision array. Branch arrays are bounded by the bitmap's 32 slots.\0Aenum MapNode[K, V] {\0A    MapEmpty,\0A    MapLeaf(Int, K, V),\0A    MapCollision(Int, Array[MapEntry[K, V]]),\0A    MapBranch(Int, Array[MapNode[K, V]]),\0A}\0A\0A/// A hash map from `K` to `V`.\0A///\0A/// PERSISTENT: `Map.insert` returns a new map and leaves the original\0A/// alone, so a map can be shared without copying defensively. Keys\0A/// need `Eq` and `Hash`. Equal keys hash identically.\0A/// NaN is not a supported key, including inside aggregates, because\0A/// IEEE equality makes it unequal to itself. References use identity.\0Apub struct Map[K, V] { root: MapNode[K, V], size: Int }\0A\0Alet value_hash[T: Hash] (x: T): Int = x.hash()\0A\0Alet map_bit (hash: Int) (shift: Int): Int = 1 << (Int.shr_logical(hash, shift) & 31)\0A\0Alet map_rank (bits: Int) (bit: Int): Int = Int.count_ones(bits & (bit - 1))\0A\0Alet map_bucket_find_index[K: Eq, V] (bucket: Array[MapEntry[K, V]]) (k: K) (i: Int): Int =\0A    if i >= bucket.len() { -1 }\0A    else if bucket[i].key == k { i }\0A    else { map_bucket_find_index(bucket, k, i + 1) }\0A\0A// Joining distinct complete hashes must diverge before all hash bits are\0A// consumed. Keeping this separate also handles a collision node as a child.\0Alet map_join[K, V]\0A    (a: MapNode[K, V])\0A    (ah: Int)\0A    (b: MapNode[K, V])\0A    (bh: Int)\0A    (shift: Int): MapNode[K, V]\0A= {\0A    let abit = map_bit(ah, shift);\0A    let bbit = map_bit(bh, shift);\0A    if abit == bbit { MapBranch(abit, [map_join(a, ah, b, bh, shift + 5)]) }\0A    else if abit < bbit { MapBranch(abit | bbit, [a, b]) }\0A    else { MapBranch(abit | bbit, [b, a]) }\0A}\0A\0A// The compiler lowers this to the consuming array growth path plus a\0A// suffix shift. The source body supports older bootstrap compilers.\0Alet plum__array_insert_raw[T] (xs: Array[T]) (at: Int) (value: T): Array[T] = {\0A    let mut out = [];\0A    for i in 0..xs.len() {\0A        if i == at {\0A            out = out.push(value);\0A        };\0A        out = out.push(xs[i]);\0A    };\0A    if at == xs.len() {\0A        out = out.push(value);\0A    };\0A    out\0A}\0A\0A// Trie buffers can release excess capacity after deletion. The source body\0A// supports older bootstrap compilers.\0Alet plum__array_remove_compact_raw[T] (xs: Array[T]) (at: Int): Array[T] = xs.remove(at)\0A\0A// Pass callback arguments directly so the recursive update needs neither\0A// a captured closure nor a boxed context at each level of the trie.\0Alet plum__array_update_raw[T, A, B, C, D, E]\0A    (xs: Array[T])\0A    (at: Int)\0A    (a: A)\0A    (b: B)\0A    (c: C)\0A    (d: D)\0A    (e: E)\0A    (update: (T, A, B, C, D, E) -> T): Array[T]\0A= xs.set(at, update(xs[at], a, b, c, d, e))\0A\0A// Pass context without a closure per child array. The source body\0A// supports older bootstrap compilers.\0Alet plum__array_fold_context_raw[T, A, B, C, D]\0A    (xs: Array[T])\0A    (init: A)\0A    (b: B)\0A    (c: C)\0A    (d: D)\0A    (step: (A, T, B, C, D) -> A): A\0A= Array.fold(xs, init, |acc, item| step(acc, item, b, c, d))\0A\0Alet map_node_get[K: Eq, V] (node: MapNode[K, V]) (hash: Int) (key: K) (shift: Int): Option[V] =\0A    match node {\0A        MapEmpty => None,\0A        MapLeaf(h, k, v) => if h == hash && k == key { Some(v) } else { None },\0A        MapCollision(h, entries) => if h != hash { None } else {\0A            let i = map_bucket_find_index(entries, key, 0);\0A            if i < 0 { None } else { Some(entries[i].value) }\0A        },\0A        MapBranch(bits, children) => {\0A            let bit = map_bit(hash, shift);\0A            if (bits & bit) == 0 { None }\0A            else { map_node_get(children[map_rank(bits, bit)], hash, key, shift + 5) }\0A        },\0A    }\0A\0A// Presence checks must not allocate an Option or retain a stored value.\0Alet map_node_contains[K: Eq, V] (node: MapNode[K, V]) (hash: Int) (key: K) (shift: Int): Bool =\0A    match node {\0A        MapEmpty => false,\0A        MapLeaf(h, k, _) => h == hash && k == key,\0A        MapCollision(h, entries) => h == hash && map_bucket_find_index(entries, key, 0) >= 0,\0A        MapBranch(bits, children) => {\0A            let bit = map_bit(hash, shift);\0A            (bits & bit) != 0\0A                && map_node_contains(children[map_rank(bits, bit)], hash, key, shift + 5)\0A        },\0A    }\0A\0A// The new entry needs its own cell. Keep the collision node's reset token\0A// in the caller so it can rebuild the node at its original size.\0Alet map_bucket_append[K, V]\0A    (entries: Array[MapEntry[K, V]])\0A    (key: K)\0A    (value: V): Array[MapEntry[K, V]]\0A= entries.push(MapEntry { key: key, value: value })\0A\0Alet map_node_put[K, V]\0A    (node: MapNode[K, V])\0A    (hash: Int)\0A    (key: K)\0A    (value: V)\0A    (position: Int)\0A    (shift: Int): MapNode[K, V]\0A= match node {\0A    MapEmpty => MapLeaf(hash, key, value),\0A    MapLeaf(h, k, v) => if h != hash { map_join(node, h, MapLeaf(hash, key, value), hash, shift) }\0A    else if position < 0 { MapLeaf(hash, key, value) }\0A    else {\0A        MapCollision(hash, [MapEntry { key: k, value: v }, MapEntry { key: key, value: value }])\0A    },\0A    MapCollision(h, entries) => if h != hash {\0A        map_join(node, h, MapLeaf(hash, key, value), hash, shift)\0A    }\0A    else {\0A        MapCollision(\0A            hash,\0A            if position == 0 { map_bucket_append(entries, key, value) }\0A            else {\0A                plum__array_update_raw(\0A                    entries,\0A                    position - 1,\0A                    key,\0A                    value,\0A                    (),\0A                    (),\0A                    (),\0A                    |previous, k, v, unused1, unused2, unused3| MapEntry {\0A                        key: k,\0A                        value: v,\0A                        ..previous\0A                    }\0A                )\0A            }\0A        )\0A    },\0A    MapBranch(bits, children) => {\0A        let bit = map_bit(hash, shift);\0A        let i = map_rank(bits, bit);\0A        if (bits & bit) == 0 {\0A            MapBranch(bits | bit, plum__array_insert_raw(children, i, MapLeaf(hash, key, value)))\0A        }\0A        else {\0A            MapBranch(bits, plum__array_update_raw(\0A                children,\0A                i,\0A                hash,\0A                key,\0A                value,\0A                position,\0A                shift + 5,\0A                |child, h, k, v, at, next| map_node_put(child, h, k, v, at, next)\0A            ))\0A        }\0A    },\0A}\0A\0A// Return -1 for a matching leaf, 0 on a miss, or a one-based collision\0A// position. The update can use this result without comparing the key again.\0Alet map_node_key_position[K: Eq, V]\0A    (node: MapNode[K, V])\0A    (hash: Int)\0A    (key: K)\0A    (shift: Int): Int\0A= match node {\0A    MapEmpty => 0,\0A    MapLeaf(h, k, _) => if h == hash && k == key { -1 } else { 0 },\0A    MapCollision(h, entries) => if h == hash { map_bucket_find_index(entries, key, 0) + 1 } else {\0A        0\0A    },\0A    MapBranch(bits, children) => {\0A        let bit = map_bit(hash, shift);\0A        if (bits & bit) == 0 { 0 }\0A        else { map_node_key_position(children[map_rank(bits, bit)], hash, key, shift + 5) }\0A    },\0A}\0A\0A// A unary branch can be dropped when removing a key leaves just one\0A// full hash. Follow the unary prefix to the first split.\0Alet map_unary_survivor[K, V]\0A    (node: MapNode[K, V])\0A    (hash: Int)\0A    (shift: Int): MapNode[K, V]\0A= match node {\0A    MapBranch(bits, children) => if children.len() == 1 {\0A        map_unary_survivor(children[0], hash, shift + 5)\0A    } else if children.len() == 2 {\0A        let i = map_rank(bits, map_bit(hash, shift));\0A        match children[i] {\0A            MapLeaf(_, _, _) => {\0A                let sibling = children[1 - i];\0A                match sibling {\0A                    MapLeaf(_, _, _) | MapCollision(_, _) => sibling,\0A                    _ => MapEmpty,\0A                }\0A            },\0A            _ => MapEmpty,\0A        }\0A    } else { MapEmpty },\0A    _ => MapEmpty,\0A}\0A\0A// The caller has proved the key exists. This lets the match release or\0A// reset the old node before handing its children into the update.\0Alet map_node_remove_present[K, V]\0A    (node: MapNode[K, V])\0A    (hash: Int)\0A    (position: Int)\0A    (shift: Int)\0A    (probe_unary: Bool): MapNode[K, V]\0A= match node {\0A    MapEmpty => MapEmpty,\0A    MapLeaf(_, _, _) => MapEmpty,\0A    MapCollision(h, entries) => {\0A        let i = position - 1;\0A        if entries.len() == 2 {\0A            let survivor = entries[1 - i];\0A            MapLeaf(h, survivor.key, survivor.value)\0A        } else { MapCollision(h, plum__array_remove_compact_raw(entries, i)) }\0A    },\0A    MapBranch(bits, children) => {\0A        let unary = children.len() == 1;\0A        let survivor = if unary && probe_unary && position < 0 {\0A            map_unary_survivor(children[0], hash, shift + 5)\0A        }\0A        else { MapEmpty };\0A        let promote_unary = match survivor {\0A            MapEmpty => false,\0A            _ => true,\0A        };\0A        if promote_unary { survivor } else {\0A            let bit = map_bit(hash, shift);\0A            let i = map_rank(bits, bit);\0A            let leaf = match children[i] {\0A                MapLeaf(_, _, _) => true,\0A                _ => false,\0A            };\0A            // A branch or collision represents at least two entries. Only a\0A            // leaf child disappears when we remove a single key.\0A            if leaf {\0A                // Read a terminal survivor from the original array. A branch\0A                // survivor still needs the current level's shift.\0A                let promote = children.len() == 2 && match children[1 - i] {\0A                    MapLeaf(_, _, _) => true,\0A                    MapCollision(_, _) => true,\0A                    _ => false,\0A                };\0A                if promote { children[1 - i] }\0A                else { MapBranch(bits & ~bit, plum__array_remove_compact_raw(children, i)) }\0A            }\0A            else {\0A                let rest = plum__array_update_raw(\0A                    children,\0A                    i,\0A                    hash,\0A                    position,\0A                    shift + 5,\0A                    // A failed probe already covered the unary prefix.\0A                    !unary,\0A                    (),\0A                    |child, h, at, next, probe, unused| map_node_remove_present(\0A                        child,\0A                        h,\0A                        at,\0A                        next,\0A                        probe\0A                    )\0A                );\0A                // A recursive removal can turn the only child into a terminal.\0A                if unary {\0A                    match rest[0] {\0A                        MapLeaf(_, _, _) => rest[0],\0A                        MapCollision(_, _) => rest[0],\0A                        _ => MapBranch(bits, rest),\0A                    }\0A                } else { MapBranch(bits, rest) }\0A            }\0A        }\0A    },\0A}\0A\0A/// An empty map.\0Apub let Map.new[K, V] (): Map[K, V] = Map { root: MapEmpty, size: 0 }\0A\0A// Matching the wrapper lets Perceus reset it and pass the root to the\0A// trie update before rebuilding the wrapper. A shared map keeps its root.\0Alet map_insert_hashed[K: Eq, V] (m: Map[K, V]) (hash: Int) (k: K) (v: V): Map[K, V] =\0A    match m {\0A        Map { root, size } => {\0A            let position = map_node_key_position(root, hash, k, 0);\0A            let added = if position == 0 { 1 } else { 0 };\0A            Map { root: map_node_put(root, hash, k, v, position, 0), size: size + added }\0A        },\0A    }\0A\0A/// A NEW map with `k` set to `v`, replacing any previous value. The\0A/// original is unchanged. Only the affected trie path is rebuilt.\0Apub let Map.insert[K: Eq + Hash, V] (m: Map[K, V]) (k: K) (v: V): Map[K, V] =\0A    map_insert_hashed(m, value_hash(k), k, v)\0A\0A/// The value for `k`, or `None`.\0Apub let Map.get[K: Eq + Hash, V] (m: Map[K, V]) (k: K): Option[V] =\0A    map_node_get(m.root, value_hash(k), k, 0)\0A\0A/// Whether `k` has a value.\0Apub let Map.contains[K: Eq + Hash, V] (m: Map[K, V]) (k: K): Bool =\0A    map_node_contains(m.root, value_hash(k), k, 0)\0A\0A// The caller supplies a leaf (-1) or a one-based collision position.\0Alet map_remove_at[K, V] (m: Map[K, V]) (hash: Int) (position: Int): Map[K, V] =\0A    match m {\0A        Map { root, size } => Map {\0A            root: map_node_remove_present(root, hash, position, 0, true),\0A            size: size - 1\0A        },\0A    }\0A\0Alet map_remove_hashed[K: Eq, V] (m: Map[K, V]) (hash: Int) (k: K): Map[K, V] = {\0A    let position = map_node_key_position(m.root, hash, k, 0);\0A    if position == 0 { m } else { map_remove_at(m, hash, position) }\0A}\0A\0A/// A new map without `k`. Removing an absent key is not an error.\0Apub let Map.remove[K: Eq + Hash, V] (m: Map[K, V]) (k: K): Map[K, V] =\0A    map_remove_hashed(m, value_hash(k), k)\0A\0A/// How many entries.\0Apub let Map.len[K, V] (m: Map[K, V]): Int = m.size\0A\0A// Reserve the known size of the result while keeping its initialized\0A// length at zero. Older compilers use ordinary array growth.\0Alet plum__array_reserve_empty_raw[T] (capacity: Int): Array[T] = []\0A\0Alet map_node_collect[K, V, T]\0A    (node: MapNode[K, V])\0A    (acc: Array[T])\0A    (project: (K, V) -> T): Array[T]\0A= match node {\0A    MapEmpty => acc,\0A    MapLeaf(_, k, v) => acc.push(project(k, v)),\0A    MapCollision(_, entries) => plum__array_fold_context_raw(\0A        entries,\0A        acc,\0A        project,\0A        (),\0A        (),\0A        |out, entry, get, unused1, unused2| out.push(get(entry.key, entry.value))\0A    ),\0A    MapBranch(_, children) => plum__array_fold_context_raw(\0A        children,\0A        acc,\0A        project,\0A        (),\0A        (),\0A        |out, child, get, unused1, unused2| map_node_collect(child, out, get)\0A    ),\0A}\0A\0A/// Every key, in no particular order.\0Apub let Map.keys[K, V] (m: Map[K, V]): Array[K] = match m {\0A    Map { root, size } => map_node_collect(root, plum__array_reserve_empty_raw(size), |k, v| k),\0A}\0A\0A/// Every value, in the same order as `Map.keys`.\0Apub let Map.values[K, V] (m: Map[K, V]): Array[V] = match m {\0A    Map { root, size } => map_node_collect(root, plum__array_reserve_empty_raw(size), |k, v| v),\0A}\0A\0A// The compiler folds both arrays directly, transferring eligible slots.\0A// Older bootstrap compilers can read the same bounded prefix by index.\0Alet plum__array_fold_pair_raw[T, U, A]\0A    (left: Array[T])\0A    (right: Array[U])\0A    (init: A)\0A    (step: (A, T, U) -> A): A\0A= {\0A    let mut out = init;\0A    for i in 0..Int.min(left.len(), right.len()) {\0A        out = step(out, left[i], right[i]);\0A    };\0A    out\0A}\0A\0A/// A map from parallel arrays, stopping at the shorter. A repeated\0A/// key keeps the LAST value.\0Apub let Map.from_arrays[K: Eq + Hash, V] (keys: Array[K]) (values: Array[V]): Map[K, V] =\0A    plum__array_fold_pair_raw(\0A        keys,\0A        values,\0A        Map.new(()),\0A        |acc, key, value| Map.insert(acc, key, value)\0A    )\0A\0A/// A set of `T`, persistent like `Map` — `Set.insert` returns a new\0A/// set. Members need `Eq` and `Hash`. Equal keys hash identically.\0A/// NaN is not a supported key, including inside aggregates, because\0A/// IEEE equality makes it unequal to itself. References use identity.\0Apub struct Set[T] { inner: Map[T, Unit] }\0A\0A// The compiler can hoist the complete literal, including the empty map.\0A/// An empty set.\0Apub let Set.new[T] (): Set[T] = Set { inner: Map { root: MapEmpty, size: 0 } }\0A\0A/// A new set with `x` added. Adding a member twice changes nothing.\0Apub let Set.insert[T: Eq + Hash] (s: Set[T]) (x: T): Set[T] = match s {\0A    Set { inner } => Set { inner: Map.insert(inner, x, ()) },\0A}\0A\0A/// Whether `x` is a member.\0Apub let Set.contains[T: Eq + Hash] (s: Set[T]) (x: T): Bool = Map.contains(s.inner, x)\0A\0A/// A new set without `x`.\0Apub let Set.remove[T: Eq + Hash] (s: Set[T]) (x: T): Set[T] = match s {\0A    Set { inner } => Set { inner: Map.remove(inner, x) },\0A}\0A\0A/// How many members.\0Apub let Set.len[T] (s: Set[T]): Int = Map.len(s.inner)\0A\0A/// Every member, in no particular order.\0Apub let Set.to_array[T] (s: Set[T]): Array[T] = Map.keys(s.inner)\0A\0Aenum SetOperation {\0A    SetAll,\0A    SetAddMissing,\0A    SetErase\0A}\0A\0Alet set_insert_missing[T] (acc: Map[T, Unit]) (hash: Int) (key: T): Map[T, Unit] =\0A    match acc {\0A        Map { root, size } => Map { root: map_node_put(root, hash, key, (), 0, 0), size: size + 1 },\0A    }\0A\0Alet set_apply_key[T: Eq]\0A    (acc: Map[T, Unit])\0A    (operation: SetOperation)\0A    (hash: Int)\0A    (key: T): Map[T, Unit]\0A= match operation {\0A    SetAll => map_insert_hashed(acc, hash, key, ()),\0A    SetAddMissing => if map_node_contains(acc.root, hash, key, 0) { acc }\0A    else { set_insert_missing(acc, hash, key) },\0A    SetErase => map_remove_hashed(acc, hash, key),\0A}\0A\0A// A terminal node stores the complete hash for every key it holds.\0Alet set_collect[T: Eq]\0A    (node: MapNode[T, Unit])\0A    (acc: Map[T, Unit])\0A    (operation: SetOperation): Map[T, Unit]\0A= match node {\0A    MapEmpty => acc,\0A    MapLeaf(hash, key, _) => set_apply_key(acc, operation, hash, key),\0A    MapCollision(hash, entries) => plum__array_fold_context_raw(\0A        entries,\0A        acc,\0A        operation,\0A        hash,\0A        (),\0A        |out, entry, policy, h, unused| set_apply_key(out, policy, h, entry.key)\0A    ),\0A    MapBranch(_, children) => plum__array_fold_context_raw(\0A        children,\0A        acc,\0A        operation,\0A        (),\0A        (),\0A        |out, child, policy, unused1, unused2| set_collect(child, out, policy)\0A    ),\0A}\0A\0Alet set_root[T] (s: Set[T]): MapNode[T, Unit] =\0A    match s {\0A        Set { inner } => match inner {\0A            Map { root, size: _ } => root,\0A        },\0A    }\0A\0A// A scan can prove no matches, record one match, or stop early.\0Aenum SetKeyScan[T] {\0A    NoSetMatch,\0A    OneSetMatch(Int, T),\0A    StopSetScan\0A}\0A\0Alet set_note_match[T] (found: SetKeyScan[T]) (hash: Int) (detail: T): SetKeyScan[T] =\0A    match found {\0A        NoSetMatch => OneSetMatch(hash, detail),\0A        _ => StopSetScan,\0A    }\0A\0Alet set_bucket_coverage[T: Eq]\0A    (entries: Array[MapEntry[T, Unit]])\0A    (right: MapNode[T, Unit])\0A    (hash: Int)\0A    (shift: Int)\0A    (i: Int)\0A    (found: SetKeyScan[Int]): SetKeyScan[Int]\0A=\0A    if i >= entries.len() { found }\0A    else if map_node_contains(right, hash, entries[i].key, shift) {\0A        set_bucket_coverage(entries, right, hash, shift, i + 1, found)\0A    } else {\0A        match set_note_match(found, hash, i + 1) {\0A            StopSetScan => StopSetScan,\0A            next => set_bucket_coverage(entries, right, hash, shift, i + 1, next),\0A        }\0A    }\0A\0Alet set_children_coverage[T: Eq]\0A    (left: Array[MapNode[T, Unit]])\0A    (right: Array[MapNode[T, Unit]])\0A    (bits: Int)\0A    (right_bits: Int)\0A    (shift: Int)\0A    (i: Int)\0A    (found: SetKeyScan[Int]): SetKeyScan[Int]\0A=\0A    if bits == 0 { found }\0A    else {\0A        let bit = bits & - bits;\0A        let other = if (right_bits & bit) == 0 { MapEmpty }\0A        else { right[map_rank(right_bits, bit)] };\0A        match set_node_coverage(left[i], other, shift, found) {\0A            StopSetScan => StopSetScan,\0A            next => set_children_coverage(left, right, bits & ~bit, right_bits, shift, i + 1, next),\0A        }\0A    }\0A\0A// A right terminal checks the complete hash, independent of branch shift.\0Alet set_terminal_coverage[T: Eq]\0A    (left: Array[MapNode[T, Unit]])\0A    (right: MapNode[T, Unit])\0A    (i: Int)\0A    (found: SetKeyScan[Int]): SetKeyScan[Int]\0A=\0A    if i >= left.len() { found }\0A    else {\0A        match set_node_coverage(left[i], right, 0, found) {\0A            StopSetScan => StopSetScan,\0A            next => set_terminal_coverage(left, right, i + 1, next),\0A        }\0A    }\0A\0A// Follow the left paths while aligning right branch slots at each shift.\0A// A right terminal can be checked at any shift using its complete hash.\0A// Record the left position so removal needs no second equality lookup.\0Alet set_node_coverage[T: Eq]\0A    (left: MapNode[T, Unit])\0A    (right: MapNode[T, Unit])\0A    (shift: Int)\0A    (found: SetKeyScan[Int]): SetKeyScan[Int]\0A= match left {\0A    MapEmpty => found,\0A    MapLeaf(hash, key, _) => if map_node_contains(right, hash, key, shift) { found }\0A    else { set_note_match(found, hash, -1) },\0A    MapCollision(hash, entries) => match right {\0A        MapEmpty => StopSetScan,\0A        _ => set_bucket_coverage(entries, right, hash, shift, 0, found),\0A    },\0A    MapBranch(bits, children) => match right {\0A        MapEmpty => StopSetScan,\0A        MapBranch(right_bits, right_children) => set_children_coverage(\0A            children,\0A            right_children,\0A            bits,\0A            right_bits,\0A            shift + 5,\0A            0,\0A            found\0A        ),\0A        _ => set_terminal_coverage(children, right, 0, found),\0A    },\0A}\0A\0Aenum SetOverlapCheck {\0A    SharedMember,\0A    CollisionOrder\0A}\0A\0Alet set_bucket_overlap[T: Eq]\0A    (entries: Array[MapEntry[T, Unit]])\0A    (right: MapNode[T, Unit])\0A    (hash: Int)\0A    (i: Int)\0A    (found: SetKeyScan[T]): SetKeyScan[T]\0A=\0A    if i >= entries.len() { found }\0A    else {\0A        let key = entries[i].key;\0A        if map_node_contains(right, hash, key, 0) {\0A            match set_note_match(found, hash, key) {\0A                StopSetScan => StopSetScan,\0A                next => set_bucket_overlap(entries, right, hash, i + 1, next),\0A            }\0A        } else { set_bucket_overlap(entries, right, hash, i + 1, found) }\0A    }\0A\0Alet set_children_overlap[T: Eq]\0A    (left: Array[MapNode[T, Unit]])\0A    (right: Array[MapNode[T, Unit]])\0A    (left_bits: Int)\0A    (right_bits: Int)\0A    (common: Int)\0A    (shift: Int)\0A    (check: SetOverlapCheck)\0A    (found: SetKeyScan[T]): SetKeyScan[T]\0A= if common == 0 { found } else {\0A    let bit = common & - common;\0A    match set_nodes_overlap(\0A        left[map_rank(left_bits, bit)],\0A        right[map_rank(right_bits, bit)],\0A        shift,\0A        check,\0A        found\0A    ) {\0A        StopSetScan => StopSetScan,\0A        next => set_children_overlap(\0A            left,\0A            right,\0A            left_bits,\0A            right_bits,\0A            common & ~bit,\0A            shift,\0A            check,\0A            next\0A        ),\0A    }\0A}\0A\0A// Only matching bitmap slots can lead to terminals with the same hash.\0A// Union checks whether changing the base can reorder colliding keys.\0A// Difference keeps one equal key and stops when it finds a second.\0Alet set_nodes_overlap[T: Eq]\0A    (left: MapNode[T, Unit])\0A    (right: MapNode[T, Unit])\0A    (shift: Int)\0A    (check: SetOverlapCheck)\0A    (found: SetKeyScan[T]): SetKeyScan[T]\0A= match left {\0A    MapEmpty => found,\0A    MapBranch(left_bits, left_children) => match right {\0A        MapBranch(right_bits, right_children) => set_children_overlap(\0A            left_children,\0A            right_children,\0A            left_bits,\0A            right_bits,\0A            left_bits & right_bits,\0A            shift + 5,\0A            check,\0A            found\0A        ),\0A        _ => set_nodes_overlap(right, left, shift, check, found),\0A    },\0A    MapLeaf(hash, _, _) | MapCollision(hash, _) => match right {\0A        MapEmpty => found,\0A        MapLeaf(h, key, _) => if hash != h { found } else {\0A            match left {\0A                MapLeaf(_, k, _) => {\0A                    let equal = k == key;\0A                    match check {\0A                        SharedMember => if equal { set_note_match(found, hash, key) } else {\0A                            found\0A                        },\0A                        CollisionOrder => if equal { found } else { StopSetScan },\0A                    }\0A                },\0A                MapCollision(_, entries) => match check {\0A                    SharedMember => if map_bucket_find_index(entries, key, 0) >= 0 {\0A                        set_note_match(found, hash, key)\0A                    } else { found },\0A                    CollisionOrder => StopSetScan,\0A                },\0A                _ => found,\0A            }\0A        },\0A        MapCollision(h, entries) => if hash != h { found } else {\0A            match check {\0A                SharedMember => set_bucket_overlap(entries, left, h, 0, found),\0A                CollisionOrder => StopSetScan,\0A            }\0A        },\0A        MapBranch(bits, children) => {\0A            let bit = map_bit(hash, shift);\0A            if (bits & bit) == 0 { found }\0A            else { set_nodes_overlap(left, children[map_rank(bits, bit)], shift + 5, check, found) }\0A        },\0A    },\0A}\0A\0Alet set_preserves_union_order[T: Eq] (left: MapNode[T, Unit]) (right: MapNode[T, Unit]): Bool =\0A    match set_nodes_overlap(left, right, 0, CollisionOrder, NoSetMatch) {\0A        NoSetMatch => true,\0A        _ => false,\0A    }\0A\0A// Separate bitmap slots contain different full hashes. Combine their\0A// packed child arrays without rebuilding either side's descendants.\0Alet set_graft_children[T]\0A    (left_bits: Int)\0A    (left: Array[MapNode[T, Unit]])\0A    (right_bits: Int)\0A    (right: Array[MapNode[T, Unit]]): Array[MapNode[T, Unit]]\0A= if left_bits < (right_bits & - right_bits) { plum__array_concat_exact_raw(left, right) }\0Aelse if right_bits < (left_bits & - left_bits) { plum__array_concat_exact_raw(right, left) }\0Aelse {\0A    let mut slots = left_bits | right_bits;\0A    let mut right_destinations = 0;\0A    let size = left.len() + right.len();\0A    for i in 0..size {\0A        let bit = slots & - slots;\0A        slots = slots & (slots - 1);\0A        if (right_bits & bit) != 0 {\0A            right_destinations = right_destinations | (1 << i);\0A        };\0A    };\0A    plum__array_interleave_exact_raw(left, right, right_destinations)\0A}\0A\0A// A successful graft keeps every key from both inputs. A shared full\0A// hash delegates to the normal union so collision order and equal-key\0A// representatives follow the existing policy.\0Alet set_graft_union[T]\0A    (left: MapNode[T, Unit])\0A    (right: MapNode[T, Unit])\0A    (shift: Int): MapNode[T, Unit]\0A= match left {\0A    MapEmpty => MapEmpty,\0A    MapBranch(left_bits, left_children) => match right {\0A        MapBranch(right_bits, right_children) => if (left_bits & right_bits) == 0 {\0A            MapBranch(\0A                left_bits | right_bits,\0A                set_graft_children(left_bits, left_children, right_bits, right_children)\0A            )\0A        } else if left_bits == right_bits && left_children.len() == 1 {\0A            // The merged branch still needs this level's hash chunk.\0A            match set_graft_union(left_children[0], right_children[0], shift + 5) {\0A                MapEmpty => MapEmpty,\0A                child => MapBranch(left_bits, [child]),\0A            }\0A        } else { MapEmpty },\0A        MapLeaf(hash, _, _) | MapCollision(hash, _) => {\0A            let bit = map_bit(hash, shift);\0A            if (left_bits & bit) == 0 {\0A                let i = map_rank(left_bits, bit);\0A                MapBranch(left_bits | bit, plum__array_insert_raw(left_children, i, right))\0A            } else if left_bits == bit {\0A                match set_graft_union(left_children[0], right, shift + 5) {\0A                    MapEmpty => MapEmpty,\0A                    child => MapBranch(left_bits, [child]),\0A                }\0A            } else { MapEmpty }\0A        },\0A        MapEmpty => MapEmpty,\0A    },\0A    MapLeaf(hash, _, _) | MapCollision(hash, _) => match right {\0A        MapEmpty => MapEmpty,\0A        MapBranch(_, _) => set_graft_union(right, left, shift),\0A        MapLeaf(h, _, _) | MapCollision(h, _) => if hash != h {\0A            map_join(left, hash, right, h, shift)\0A        }\0A        else { MapEmpty },\0A    },\0A}\0A\0Alet set_union_by_insertion[T: Eq] (a: Set[T]) (b: Set[T]): Set[T] =\0A    if Set.len(b) <= Set.len(a)\0A        && set_preserves_union_order(b.inner.root, a.inner.root) {\0A            // Keep the left representative of an equal key, whichever\0A            // set supplies the accumulator.\0A            match a {\0A                Set { inner } => Set {\0A                    inner: set_collect(set_root(b), inner, SetAddMissing)\0A                },\0A            }\0A        }\0A    else {\0A        match b {\0A            Set { inner } => Set { inner: set_collect(set_root(a), inner, SetAll) },\0A        }\0A    }\0A\0A// An edit carries the number of new keys contributed by the right input.\0Aenum SetMergeEdit[T] {\0A    SetMergeKeep,\0A    SetMergeUpdated(MapNode[T, Unit], Int)\0A}\0A\0Alet set_merge_children[T: Eq]\0A    (left_bits: Int)\0A    (left: Array[MapNode[T, Unit]])\0A    (right_bits: Int)\0A    (right: Array[MapNode[T, Unit]])\0A    (shift: Int): SetMergeEdit[T]\0A= {\0A    let bits = left_bits | right_bits;\0A    let size = Int.count_ones(bits);\0A    let mut slots = bits;\0A    let mut left_index = 0;\0A    let mut right_index = 0;\0A    let mut changed = false;\0A    let mut added = 0;\0A    let mut children: Array[MapNode[T, Unit]] = [];\0A    for i in 0..size {\0A        let bit = slots & - slots;\0A        slots = slots & ~bit;\0A        let on_left = (left_bits & bit) != 0;\0A        let on_right = (right_bits & bit) != 0;\0A        let other = if !on_right { MapEmpty }\0A        else if !on_left {\0A            let child = right[right_index];\0A            added = added + set_count_node(child);\0A            child\0A        } else {\0A            match set_merge_union_node(left[left_index], right[right_index], shift) {\0A                SetMergeKeep => MapEmpty,\0A                SetMergeUpdated(child, count) => {\0A                    added = added + count;\0A                    child\0A                },\0A            }\0A        };\0A        match other {\0A            MapEmpty => if changed {\0A                children = children.push(left[left_index]);\0A            },\0A            child => {\0A                if !changed {\0A                    children = plum__array_reserve_empty_raw(size);\0A                    for at in 0..left_index {\0A                        children = children.push(left[at]);\0A                    };\0A                    changed = true;\0A                };\0A                children = children.push(child);\0A            },\0A        };\0A        if on_left {\0A            left_index = left_index + 1;\0A        };\0A        if on_right {\0A            right_index = right_index + 1;\0A        };\0A    };\0A    if changed { SetMergeUpdated(MapBranch(bits, children), added) } else { SetMergeKeep }\0A}\0A\0Alet set_merge_branch_terminal[T: Eq]\0A    (bits: Int)\0A    (children: Array[MapNode[T, Unit]])\0A    (terminal: MapNode[T, Unit])\0A    (hash: Int)\0A    (shift: Int)\0A    (terminal_first: Bool): SetMergeEdit[T]\0A= {\0A    let bit = map_bit(hash, shift);\0A    let index = map_rank(bits, bit);\0A    if (bits & bit) == 0 {\0A        let added = if terminal_first { set_count_children(children) }\0A        else { set_count_node(terminal) };\0A        SetMergeUpdated(\0A            MapBranch(bits | bit, plum__array_insert_raw(children, index, terminal)),\0A            added\0A        )\0A    } else if terminal_first {\0A        let original = children[index];\0A        let mut siblings = 0;\0A        for i in 0..children.len() {\0A            if i != index {\0A                siblings = siblings + set_count_node(children[i]);\0A            };\0A        };\0A        match set_merge_union_node(terminal, original, shift + 5) {\0A            SetMergeKeep => SetMergeUpdated(\0A                MapBranch(bits, children.set(index, terminal)),\0A                siblings\0A            ),\0A            SetMergeUpdated(child, added) =>\0A                SetMergeUpdated(MapBranch(bits, children.set(index, child)), siblings + added),\0A        }\0A    } else {\0A        match set_merge_union_node(children[index], terminal, shift + 5) {\0A            SetMergeKeep => SetMergeKeep,\0A            SetMergeUpdated(child, added) =>\0A                SetMergeUpdated(MapBranch(bits, children.set(index, child)), added),\0A        }\0A    }\0A}\0A\0Alet set_bucket_prefix_length[T: Eq]\0A    (left: Array[MapEntry[T, Unit]])\0A    (right: Array[MapEntry[T, Unit]])\0A    (i: Int)\0A    (end: Int): Int\0A= if i == end || left[i].key != right[i].key { i }\0Aelse { set_bucket_prefix_length(left, right, i + 1, end) }\0A\0Alet set_bucket_common_prefix[T: Eq]\0A    (left: Array[MapEntry[T, Unit]])\0A    (right: Array[MapEntry[T, Unit]]): Int\0A= set_bucket_prefix_length(left, right, 0, Int.min(left.len(), right.len()))\0A\0Alet set_merge_bucket_union[T: Eq]\0A    (left: MapNode[T, Unit])\0A    (right: MapNode[T, Unit]): SetMergeEdit[T]\0A= {\0A    // The right bucket supplies positions and left keys supply representatives.\0A    let base = Map { root: right, size: set_count_node(right) };\0A    match set_collect(left, base, SetAll) {\0A        Map { root, size } => SetMergeUpdated(root, size - set_count_node(left)),\0A    }\0A}\0A\0Alet set_find_bucket_index[T: Eq]\0A    (entries: Array[MapEntry[T, Unit]])\0A    (key: T)\0A    (index: Int)\0A    (end: Int): Int\0A= if index == end { -1 }\0Aelse if entries[index].key == key { index }\0Aelse { set_find_bucket_index(entries, key, index + 1, end) }\0A\0A// Equal replacements keep the original right positions searchable.\0A// Search only that prefix so a unique right buffer can be reused.\0Alet set_merge_collision_entries[T: Eq]\0A    (left: Array[MapEntry[T, Unit]])\0A    (right: Array[MapEntry[T, Unit]])\0A    (prefix: Int): Array[MapEntry[T, Unit]]\0A= {\0A    let end = right.len();\0A    let mut merged = right;\0A    // The common prefix already supplies the positions for these entries.\0A    for i in 0..prefix {\0A        merged = merged.set(i, left[i]);\0A    };\0A    // Keys in the remaining left suffix cannot match an earlier left key.\0A    for i in prefix..left.len() {\0A        let entry = left[i];\0A        let at = set_find_bucket_index(merged, entry.key, prefix, end);\0A        if at < 0 {\0A            merged = merged.push(entry);\0A        }\0A        else {\0A            merged = merged.set(at, entry);\0A        };\0A    };\0A    merged\0A}\0A\0A// The right leaf takes the first position. An equal left entry supplies\0A// its representative and the remaining left entries keep their order.\0Alet set_prepend_bucket_leaf[T]\0A    (entries: Array[MapEntry[T, Unit]])\0A    (key: T)\0A    (position: Int): Array[MapEntry[T, Unit]]\0A= if position < 0 { plum__array_insert_raw(entries, 0, MapEntry { key: key, value: () }) }\0Aelse {\0A    let entry = entries[position];\0A    let mut moved = entries;\0A    for i in 0..position {\0A        let at = position - i;\0A        moved = moved.set(at, moved[at - 1]);\0A    };\0A    moved.set(0, entry)\0A}\0A\0Alet set_merge_union_node[T: Eq]\0A    (left: MapNode[T, Unit])\0A    (right: MapNode[T, Unit])\0A    (shift: Int): SetMergeEdit[T]\0A= match left {\0A    MapEmpty => SetMergeUpdated(right, set_count_node(right)),\0A    MapBranch(left_bits, left_children) => match right {\0A        MapEmpty => SetMergeKeep,\0A        MapBranch(right_bits, right_children) => if (left_bits & right_bits) == 0 {\0A            SetMergeUpdated(\0A                MapBranch(\0A                    left_bits | right_bits,\0A                    set_graft_children(left_bits, left_children, right_bits, right_children)\0A                ),\0A                set_count_children(right_children)\0A            )\0A        } else {\0A            set_merge_children(left_bits, left_children, right_bits, right_children, shift + 5)\0A        },\0A        MapLeaf(hash, _, _) | MapCollision(hash, _) =>\0A            set_merge_branch_terminal(left_bits, left_children, right, hash, shift, false),\0A    },\0A    MapLeaf(hash, _, _) | MapCollision(hash, _) => match right {\0A        MapEmpty => SetMergeKeep,\0A        MapBranch(bits, children) =>\0A            set_merge_branch_terminal(bits, children, left, hash, shift, true),\0A        MapLeaf(h, _, _) | MapCollision(h, _) => if hash != h {\0A            SetMergeUpdated(map_join(left, hash, right, h, shift), set_count_node(right))\0A        } else {\0A            match left {\0A                MapLeaf(_, key, _) => match right {\0A                    MapLeaf(_, k, _) if key == k => SetMergeKeep,\0A                    _ => set_merge_bucket_union(left, right),\0A                },\0A                MapCollision(_, left_entries) => match right {\0A                    MapCollision(_, right_entries) => {\0A                        let prefix = set_bucket_common_prefix(left_entries, right_entries);\0A                        if prefix == right_entries.len() { SetMergeKeep }\0A                        else {\0A                            let merged = set_merge_collision_entries(\0A                                left_entries,\0A                                right_entries,\0A                                prefix\0A                            );\0A                            let added = merged.len() - left_entries.len();\0A                            SetMergeUpdated(MapCollision(hash, merged), added)\0A                        }\0A                    },\0A                    MapLeaf(_, key, _) => {\0A                        let position = map_bucket_find_index(left_entries, key, 0);\0A                        if position == 0 { SetMergeKeep }\0A                        else {\0A                            let merged = set_prepend_bucket_leaf(left_entries, key, position);\0A                            let added = if position < 0 { 1 } else { 0 };\0A                            SetMergeUpdated(MapCollision(hash, merged), added)\0A                        }\0A                    },\0A                    _ => set_merge_bucket_union(left, right),\0A                },\0A                _ => set_merge_bucket_union(left, right),\0A            }\0A        },\0A    },\0A}\0A\0Alet set_union_branch_roots[T: Eq] (a: Set[T]) (b: Set[T]): Set[T] =\0A    match set_merge_union_node(a.inner.root, b.inner.root, 0) {\0A        SetMergeKeep => a,\0A        SetMergeUpdated(root, added) => {\0A            let size = Set.len(a) + added;\0A            // Keep the edit in scope for Map reuse and consume the Set wrapper.\0A            match a {\0A                Set { inner: _ } => Set { inner: Map { root, size } },\0A            }\0A        },\0A    }\0A\0Alet set_union_collision_map[T: Eq]\0A    (left: Array[MapEntry[T, Unit]])\0A    (right: Map[T, Unit])\0A    (prefix: Int): Map[T, Unit]\0A= match right {\0A    Map { root, size } => {\0A        // Finish the Map outside the node match so both cells can be reused.\0A        let merged = match root {\0A            MapCollision(hash, entries) =>\0A                MapCollision(hash, set_merge_collision_entries(left, entries, prefix)),\0A            node => node,\0A        };\0A        let size = set_count_node(merged);\0A        Map { root: merged, size }\0A    },\0A}\0A\0A// Inspect the prefix before consuming the right Set. A negative result\0A// indicates that the right root is outside this same-hash bucket path.\0Alet set_bucket_union_prefix[T: Eq]\0A    (left: Array[MapEntry[T, Unit]])\0A    (hash: Int)\0A    (right: MapNode[T, Unit]): Int\0A= match right {\0A    MapCollision(h, entries) if h == hash => set_bucket_common_prefix(left, entries),\0A    _ => -1,\0A}\0A\0Alet set_union_merge_routes[T: Eq] (a: Set[T]) (b: Set[T]): Set[T] =\0A    match a.inner.root {\0A        // Inserting a small left input avoids counting large right-only subtries.\0A        MapBranch(_, _) if Set.len(a) > Set.len(b) / 8 => match b.inner.root {\0A            MapBranch(_, _) => set_union_branch_roots(a, b),\0A            _ => set_union_by_insertion(a, b),\0A        },\0A        MapCollision(hash, left_entries) => {\0A            let prefix = set_bucket_union_prefix(left_entries, hash, b.inner.root);\0A            if prefix < 0 { set_union_by_insertion(a, b) }\0A            else if prefix == Set.len(b) { a }\0A            else {\0A                match b {\0A                    Set { inner } => Set {\0A                        inner: set_union_collision_map(left_entries, inner, prefix)\0A                    },\0A                }\0A            }\0A        },\0A        _ => set_union_by_insertion(a, b),\0A    }\0A\0A// A miss on a different hash is -2. A new key with the same hash is\0A// -1. An existing key uses its zero-based position, including a leaf at 0.\0Alet set_union_leaf_position[T: Eq]\0A    (node: MapNode[T, Unit])\0A    (hash: Int)\0A    (key: T)\0A    (shift: Int): Int\0A= match node {\0A    MapEmpty => -2,\0A    MapLeaf(h, k, _) => if h != hash { -2 } else if k == key { 0 } else { -1 },\0A    MapCollision(h, entries) => if h != hash { -2 }\0A    else { map_bucket_find_index(entries, key, 0) },\0A    MapBranch(bits, children) => {\0A        let bit = map_bit(hash, shift);\0A        if (bits & bit) == 0 { -2 }\0A        else { set_union_leaf_position(children[map_rank(bits, bit)], hash, key, shift + 5) }\0A    },\0A}\0A\0A// Keep the existing right leaf when the route ends at a missing slot\0A// or at a terminal with a different hash.\0Alet set_union_update_leaf[T]\0A    (node: MapNode[T, Unit])\0A    (hash: Int)\0A    (key: T)\0A    (leaf: MapNode[T, Unit])\0A    (position: Int)\0A    (shift: Int): MapNode[T, Unit]\0A= match node {\0A    MapEmpty => leaf,\0A    MapLeaf(h, old_key, _) => if h != hash { map_join(node, h, leaf, hash, shift) }\0A    else {\0A        MapCollision(h, [MapEntry { key: key, value: () }, MapEntry { key: old_key, value: () }])\0A    },\0A    MapCollision(h, entries) => if h != hash { map_join(node, h, leaf, hash, shift) }\0A    else { MapCollision(h, set_prepend_bucket_leaf(entries, key, position)) },\0A    MapBranch(bits, children) => {\0A        let bit = map_bit(hash, shift);\0A        let i = map_rank(bits, bit);\0A        if (bits & bit) == 0 {\0A            MapBranch(bits | bit, plum__array_insert_raw(children, i, leaf))\0A        }\0A        else {\0A            MapBranch(bits, plum__array_update_raw(\0A                children,\0A                i,\0A                hash,\0A                key,\0A                leaf,\0A                position,\0A                shift + 5,\0A                |child, h, k, right, at, next| set_union_update_leaf(child, h, k, right, at, next)\0A            ))\0A        }\0A    },\0A}\0A\0Alet set_union_update_map[T]\0A    (left: Map[T, Unit])\0A    (hash: Int)\0A    (key: T)\0A    (leaf: MapNode[T, Unit])\0A    (position: Int): Map[T, Unit]\0A= match left {\0A    Map { root, size } => {\0A        let added = if position < 0 { 1 } else { 0 };\0A        Map { root: set_union_update_leaf(root, hash, key, leaf, position, 0), size: size + added }\0A    },\0A}\0A\0Alet set_union_single_leaf[T: Eq] (a: Set[T]) (b: Set[T]): Set[T] = {\0A    let leaf = b.inner.root;\0A    match leaf {\0A        MapLeaf(hash, key, _) => {\0A            let position = set_union_leaf_position(a.inner.root, hash, key, 0);\0A            if position == 0 { a }\0A            else {\0A                match a {\0A                    Set { inner } => Set {\0A                        inner: set_union_update_map(inner, hash, key, leaf, position)\0A                    },\0A                }\0A            }\0A        },\0A        _ => set_union_by_insertion(a, b),\0A    }\0A}\0A\0A// An already selected root can reuse the input's owned wrappers.\0Alet set_replace_map_root[T] (map: Map[T, Unit]) (root: MapNode[T, Unit]) (size: Int): Map[T, Unit] =\0A    match map {\0A        Map { root: _, size: _ } => Map { root, size },\0A    }\0A\0Alet set_replace_root[T] (set: Set[T]) (root: MapNode[T, Unit]) (size: Int): Set[T] =\0A    match set {\0A        Set { inner } => Set { inner: set_replace_map_root(inner, root, size) },\0A    }\0A\0Aenum SetGraftRoute { DisjointBranches, OverlappingBranches, GeneralGraft }\0A\0Alet set_root_graft_route[T]\0A    (left: MapNode[T, Unit])\0A    (right: MapNode[T, Unit]): SetGraftRoute\0A= match left {\0A    MapBranch(left_bits, _) => match right {\0A        MapBranch(right_bits, _) => if (left_bits & right_bits) == 0 { DisjointBranches }\0A        // Equal unary roots can still have disjoint child routes.\0A        else if left_bits == right_bits && (left_bits & (left_bits - 1)) == 0 { GeneralGraft }\0A        else { OverlappingBranches },\0A        _ => GeneralGraft,\0A    },\0A    _ => GeneralGraft,\0A}\0A\0A// This call is only reached after proving the root bitmaps are disjoint.\0Alet set_graft_disjoint_branches[T]\0A    (left: MapNode[T, Unit])\0A    (right: MapNode[T, Unit]): MapNode[T, Unit]\0A= match right {\0A    MapBranch(right_bits, right_children) => match left {\0A        MapBranch(left_bits, left_children) => MapBranch(\0A            left_bits | right_bits,\0A            set_graft_children(left_bits, left_children, right_bits, right_children)\0A        ),\0A        _ => MapEmpty,\0A    },\0A    _ => MapEmpty,\0A}\0A\0Alet set_graft_disjoint_map[T]\0A    (left: Map[T, Unit])\0A    (right: MapNode[T, Unit])\0A    (right_size: Int): Map[T, Unit]\0A= match left {\0A    Map { root, size } => {\0A        let grafted = set_graft_disjoint_branches(root, right);\0A        Map { root: grafted, size: size + right_size }\0A    },\0A}\0A\0A/// Everything in either set.\0Apub let Set.union[T: Eq + Hash] (a: Set[T]) (b: Set[T]): Set[T] = {\0A    let right_size = Set.len(b);\0A    let left_size = Set.len(a);\0A    if left_size == 0 { b }\0A    else if right_size == 0 { a }\0A    else if right_size == 1 { set_union_single_leaf(a, b) }\0A    else {\0A        match set_root_graft_route(a.inner.root, b.inner.root) {\0A            DisjointBranches => match a {\0A                Set { inner } => Set {\0A                    inner: set_graft_disjoint_map(inner, set_root(b), right_size)\0A                },\0A            },\0A            OverlappingBranches => set_union_merge_routes(a, b),\0A            GeneralGraft => match set_graft_union(a.inner.root, b.inner.root, 0) {\0A                MapEmpty => set_union_merge_routes(a, b),\0A                root => set_replace_root(a, root, left_size + right_size),\0A            },\0A        }\0A    }\0A}\0A\0A// Find the left representative of a singleton intersection. A matching\0A// leaf already has the shape needed by the result.\0Alet set_find_leaf[T: Eq]\0A    (node: MapNode[T, Unit])\0A    (hash: Int)\0A    (key: T)\0A    (shift: Int): MapNode[T, Unit]\0A= match node {\0A    MapEmpty => MapEmpty,\0A    MapLeaf(h, k, _) => if h == hash && k == key { node } else { MapEmpty },\0A    MapCollision(h, entries) => if h != hash { MapEmpty } else {\0A        let i = map_bucket_find_index(entries, key, 0);\0A        if i < 0 { MapEmpty } else { MapLeaf(h, entries[i].key, ()) }\0A    },\0A    MapBranch(bits, children) => {\0A        let bit = map_bit(hash, shift);\0A        if (bits & bit) == 0 { MapEmpty }\0A        else { set_find_leaf(children[map_rank(bits, bit)], hash, key, shift + 5) }\0A    },\0A}\0A\0A/// Only what is in both.\0Apub let Set.intersection[T: Eq + Hash] (a: Set[T]) (b: Set[T]): Set[T] = {\0A    let right_size = Set.len(b);\0A    if right_size == 0 { b }\0A    else {\0A        match a.inner.root {\0A            MapEmpty => a,\0A            MapLeaf(hash, key, _) => if map_node_contains(b.inner.root, hash, key, 0) { a }\0A            else { Set.new(()) },\0A            _ => match b.inner.root {\0A                MapLeaf(hash, key, _) => match set_find_leaf(set_root(a), hash, key, 0) {\0A                    MapEmpty => Set.new(()),\0A                    leaf => set_replace_root(b, leaf, 1),\0A                },\0A                _ => {\0A                    let coverage = if Set.len(a) - 1 <= right_size {\0A                        set_node_coverage(a.inner.root, b.inner.root, 0, NoSetMatch)\0A                    } else { StopSetScan };\0A                    match coverage {\0A                        NoSetMatch => a,\0A                        OneSetMatch(hash, position) => match a {\0A                            Set { inner } => Set { inner: map_remove_at(inner, hash, position) },\0A                        },\0A                        StopSetScan => set_prune(a, b, true),\0A                    }\0A                },\0A            },\0A        }\0A    }\0A}\0A\0A// The caller still has the left node for the unchanged case.\0Aenum SetPrune[T] {\0A    SetKeepNode,\0A    SetDropNode,\0A    SetUpdateNode(MapNode[T, Unit])\0A}\0A\0A// Keep the matching suffix as bit masks until the result size is known.\0Alet set_append_bucket_mask[T]\0A    (entries: Array[MapEntry[T, Unit]])\0A    (out: Array[MapEntry[T, Unit]])\0A    (start: Int)\0A    (mask: Int): Array[MapEntry[T, Unit]]\0A= {\0A    let mut kept = out;\0A    for slot in 0..64 {\0A        if (mask & (1 << slot)) != 0 {\0A            kept = kept.push(entries[start + slot]);\0A        };\0A    };\0A    kept\0A}\0A\0Alet set_prune_bucket[T: Eq]\0A    (entries: Array[MapEntry[T, Unit]])\0A    (right: MapNode[T, Unit])\0A    (hash: Int)\0A    (retain_matches: Bool): SetPrune[T]\0A= {\0A    let len = entries.len();\0A    let mut prefix = len;\0A    let mut suffix_size = 0;\0A    let mut first_index = 0;\0A    let mut first_start = 0;\0A    let mut first_mask = 0;\0A    // Further nonempty masks are stored as adjacent start and mask slots.\0A    let mut masks: Array[Int] = [];\0A    for block in 0..((len - 1) / 64 + 1) {\0A        let start = block * 64;\0A        let mut mask = 0;\0A        for i in start..Int.min(start + 64, len) {\0A            if map_node_contains(right, hash, entries[i].key, 0) != retain_matches {\0A                if prefix == len {\0A                    prefix = i;\0A                };\0A            } else if prefix != len {\0A                if suffix_size == 0 {\0A                    first_index = i;\0A                };\0A                mask = mask | (1 << (i - start));\0A                suffix_size = suffix_size + 1;\0A            };\0A        };\0A        if mask != 0 {\0A            if first_mask == 0 {\0A                first_start = start;\0A                first_mask = mask;\0A            } else {\0A                masks = masks.push(start).push(mask);\0A            };\0A        };\0A    };\0A    let size = prefix + suffix_size;\0A    if prefix == len { SetKeepNode }\0A    else if size == 0 { SetDropNode }\0A    else if size == 1 {\0A        let i = if prefix == 1 { 0 } else { first_index };\0A        SetUpdateNode(MapLeaf(hash, entries[i].key, ()))\0A    }\0A    else if suffix_size == 0 { SetUpdateNode(MapCollision(hash, Array.take(entries, prefix))) }\0A    else {\0A        let mut kept = plum__array_reserve_empty_raw(size);\0A        for i in 0..prefix {\0A            kept = kept.push(entries[i]);\0A        };\0A        kept = set_append_bucket_mask(entries, kept, first_start, first_mask);\0A        for i in 0..(masks.len() / 2) {\0A            kept = set_append_bucket_mask(entries, kept, masks[2 * i], masks[2 * i + 1]);\0A        };\0A        SetUpdateNode(MapCollision(hash, kept))\0A    }\0A}\0A\0Alet set_bucket_find_last_match[T: Eq]\0A    (left: Array[MapEntry[T, Unit]])\0A    (right: Array[MapEntry[T, Unit]])\0A    (i: Int): Int\0A= if i < 0 { -1 }\0Aelse if map_bucket_find_index(right, left[i].key, 0) >= 0 { i }\0Aelse { set_bucket_find_last_match(left, right, i - 1) }\0A\0A// Only matching entries add frames. The caller limits the right bucket to sixteen.\0A// Walking backwards lets us fill the exact-size result in left order.\0Alet set_bucket_collect_matches[T: Eq]\0A    (left: Array[MapEntry[T, Unit]])\0A    (right: Array[MapEntry[T, Unit]])\0A    (i: Int)\0A    (count: Int): Array[MapEntry[T, Unit]]\0A= {\0A    let next = if count == right.len() { -1 } else { set_bucket_find_last_match(left, right, i) };\0A    if next < 0 { plum__array_reserve_empty_raw(count) }\0A    else {\0A        set_bucket_collect_matches(left, right, next - 1, count + 1).push(left[next])\0A    }\0A}\0A\0Alet set_prune_sparse_bucket[T: Eq]\0A    (left: Array[MapEntry[T, Unit]])\0A    (right: Array[MapEntry[T, Unit]])\0A    (hash: Int): SetPrune[T]\0A= {\0A    let last = set_bucket_find_last_match(left, right, left.len() - 1);\0A    if last < 0 { SetDropNode }\0A    else {\0A        let previous = set_bucket_find_last_match(left, right, last - 1);\0A        if previous < 0 { SetUpdateNode(MapLeaf(hash, left[last].key, ())) }\0A        else {\0A            let kept = set_bucket_collect_matches(left, right, previous - 1, 2);\0A            SetUpdateNode(MapCollision(hash, kept.push(left[previous]).push(left[last])))\0A        }\0A    }\0A}\0A\0A// Keep the original children until the first edit. Hold a lone survivor\0A// directly so promoting a terminal does not require a temporary array.\0Alet set_prune_branch[T: Eq]\0A    (children: Array[MapNode[T, Unit]])\0A    (right: MapNode[T, Unit])\0A    (bits: Int)\0A    (common: Int)\0A    (shift: Int)\0A    (retain_matches: Bool): SetPrune[T]\0A= if common == 0 {\0A    if retain_matches { SetDropNode } else { SetKeepNode }\0A} else if retain_matches && (common & (common - 1)) == 0 {\0A    let child = children[map_rank(bits, common)];\0A    let other = match right {\0A        MapBranch(right_bits, right_children) => right_children[map_rank(right_bits, common)],\0A        _ => right,\0A    };\0A    let edit = set_prune_nodes(child, other, shift + 5, true);\0A    match edit {\0A        SetKeepNode if common == bits => SetKeepNode,\0A        SetDropNode => SetDropNode,\0A        _ => {\0A            let survivor = match edit {\0A                SetUpdateNode(next) => next,\0A                _ => child,\0A            };\0A            match survivor {\0A                // A branch still routes using the next hash chunk.\0A                MapBranch(_, _) => SetUpdateNode(MapBranch(common, [survivor])),\0A                _ => SetUpdateNode(survivor),\0A            }\0A        },\0A    }\0A} else {\0A    let candidates = if retain_matches { common } else { bits };\0A    let mut todo = candidates;\0A    let mut surviving = candidates;\0A    let mut changed = candidates != bits;\0A    let mut first = MapEmpty;\0A    let mut kept: Array[MapNode[T, Unit]] = [];\0A    for i in 0..Int.count_ones(candidates) {\0A        let bit = todo & - todo;\0A        todo = todo & ~bit;\0A        let child = children[if candidates == bits { i } else { map_rank(bits, bit) }];\0A        let edit = if (common & bit) == 0 { SetKeepNode } else {\0A            let other = match right {\0A                MapBranch(right_bits, right_children) => right_children[map_rank(right_bits, bit)],\0A                _ => right,\0A            };\0A            set_prune_nodes(child, other, shift + 5, retain_matches)\0A        };\0A        let prefix = if changed { 0 } else { i };\0A        let next = match edit {\0A            SetKeepNode => if changed { child } else { MapEmpty },\0A            SetDropNode => {\0A                changed = true;\0A                surviving = surviving & ~bit;\0A                MapEmpty\0A            },\0A            SetUpdateNode(next) => {\0A                changed = true;\0A                next\0A            },\0A        };\0A        if changed {\0A            if prefix == 1 {\0A                first = children[0];\0A            }\0A            else if prefix > 1 {\0A                kept = Array.take(children, prefix);\0A            };\0A            match next {\0A                MapEmpty => (),\0A                _ if kept.len() != 0 => {\0A                    kept = kept.push(next);\0A                },\0A                _ => match first {\0A                    MapEmpty => {\0A                        first = next;\0A                    },\0A                    _ => {\0A                        kept = [first, next];\0A                    },\0A                },\0A            };\0A        };\0A    };\0A    if !changed { SetKeepNode }\0A    else if surviving == 0 { SetDropNode }\0A    else if kept.len() == 0 {\0A        match first {\0A            MapBranch(_, _) => SetUpdateNode(MapBranch(surviving, [first])),\0A            _ => SetUpdateNode(first),\0A        }\0A    } else { SetUpdateNode(MapBranch(surviving, kept)) }\0A}\0A\0A// A right-hand leaf bounds the intersection to one left representative.\0Alet set_prune_singleton[T: Eq]\0A    (left: MapNode[T, Unit])\0A    (hash: Int)\0A    (key: T)\0A    (shift: Int): SetPrune[T]\0A= match set_find_leaf(left, hash, key, shift) {\0A    MapEmpty => SetDropNode,\0A    leaf => SetUpdateNode(leaf),\0A}\0A\0Alet set_prune_nodes[T: Eq]\0A    (left: MapNode[T, Unit])\0A    (right: MapNode[T, Unit])\0A    (shift: Int)\0A    (retain_matches: Bool): SetPrune[T]\0A= {\0A    let nonmember = if retain_matches { SetDropNode } else { SetKeepNode };\0A    match left {\0A        MapEmpty => SetKeepNode,\0A        MapLeaf(hash, key, _) => if map_node_contains(right, hash, key, shift) != retain_matches {\0A            SetDropNode\0A        } else { SetKeepNode },\0A        MapCollision(hash, entries) => match right {\0A            MapEmpty => nonmember,\0A            MapBranch(bits, children) => {\0A                let bit = map_bit(hash, shift);\0A                if (bits & bit) == 0 { nonmember }\0A                else {\0A                    set_prune_nodes(left, children[map_rank(bits, bit)], shift + 5, retain_matches)\0A                }\0A            },\0A            MapLeaf(h, key, _) => if h != hash { nonmember }\0A            else if retain_matches { set_prune_singleton(left, h, key, shift) }\0A            else {\0A                let i = map_bucket_find_index(entries, key, 0);\0A                if i < 0 { SetKeepNode }\0A                else { SetUpdateNode(map_node_remove_present(left, hash, i + 1, shift, false)) }\0A            },\0A            MapCollision(h, other_entries) => if h != hash { nonmember }\0A            else if retain_matches && other_entries.len() <= 16\0A                && other_entries.len() <= entries.len() / 2 {\0A                    set_prune_sparse_bucket(entries, other_entries, hash)\0A                }\0A            else { set_prune_bucket(entries, right, hash, retain_matches) },\0A        },\0A        MapBranch(bits, children) => match right {\0A            MapEmpty => nonmember,\0A            MapBranch(other_bits, _) => set_prune_branch(\0A                children,\0A                right,\0A                bits,\0A                bits & other_bits,\0A                shift,\0A                retain_matches\0A            ),\0A            MapLeaf(hash, key, _) => if retain_matches {\0A                set_prune_singleton(left, hash, key, shift)\0A            } else {\0A                set_prune_branch(children, right, bits, bits & map_bit(hash, shift), shift, false)\0A            },\0A            MapCollision(hash, _) => set_prune_branch(\0A                children,\0A                right,\0A                bits,\0A                bits & map_bit(hash, shift),\0A                shift,\0A                retain_matches\0A            ),\0A        },\0A    }\0A}\0A\0A// Count the result once so unchanged and fully removed subtries need no\0A// allocated records for their sizes during the edit.\0Alet set_count_children[T] (children: Array[MapNode[T, Unit]]): Int = {\0A    let mut size = 0;\0A    for child in children {\0A        size = size + set_count_node(child);\0A    };\0A    size\0A}\0A\0Alet set_count_node[T] (node: MapNode[T, Unit]): Int = match node {\0A    MapEmpty => 0,\0A    MapLeaf(_, _, _) => 1,\0A    MapCollision(_, entries) => entries.len(),\0A    MapBranch(_, children) => set_count_children(children),\0A}\0A\0Alet set_prune[T: Eq] (left: Set[T]) (right: Set[T]) (retain_matches: Bool): Set[T] =\0A    match set_prune_nodes(left.inner.root, right.inner.root, 0, retain_matches) {\0A        SetKeepNode => left,\0A        SetDropNode => Set.new(()),\0A        SetUpdateNode(root) => Set { inner: Map { root: root, size: set_count_node(root) } },\0A    }\0A\0A/// What is in `a` and not in `b`.\0Apub let Set.difference[T: Eq + Hash] (a: Set[T]) (b: Set[T]): Set[T] = {\0A    let right_size = Set.len(b);\0A    if right_size == 0 { a }\0A    else if right_size <= Set.len(a) / 2 {\0A        // Visit at most as many keys as a rebuild would need to insert.\0A        match a {\0A            Set { inner } => Set { inner: set_collect(set_root(b), inner, SetErase) },\0A        }\0A    }\0A    else {\0A        match a.inner.root {\0A            MapLeaf(hash, key, _) => if map_node_contains(b.inner.root, hash, key, 0) {\0A                Set.new(())\0A            } else { a },\0A            _ => match set_nodes_overlap(a.inner.root, b.inner.root, 0, SharedMember, NoSetMatch) {\0A                NoSetMatch => a,\0A                OneSetMatch(hash, key) => match a {\0A                    Set { inner } => Set { inner: map_remove_hashed(inner, hash, key) },\0A                },\0A                StopSetScan => set_prune(a, b, false),\0A            },\0A        }\0A    }\0A}\0A\0A/// A set of the array's elements, discarding duplicates.\0Apub let Set.from_array[T: Eq + Hash] (arr: Array[T]): Set[T] =\0A    Set { inner: Array.fold(arr, Map.new(()), |acc, elem| Map.insert(acc, elem, ())) }\0A\0A// --- JSON ---\0A\0A/// An object member, with a decoded key and JSON value.\0Apub struct JsonEntry { pub key: String, pub value: JsonValue }\0A\0A/// A parsed JSON document.\0A///\0A/// Numbers are binary64 `Float`s and may lose precision when parsed.\0A/// `use Json;` brings in decoders that turn one of these into your own\0A/// types; `Json.int` rejects values outside the safe integer range.\0Apub enum JsonValue {\0A    JsonNull,\0A    JsonBool(Bool),\0A    JsonNumber(Float),\0A    JsonString(String),\0A    JsonArray(Array[JsonValue]),\0A    JsonObject(Array[JsonEntry]),\0A}\0A\0A/// What a JSON parse step consumed: a value, and where to carry on\0A/// from. Public because the parser's own pieces return it; a caller\0A/// wants `json_parse`.\0Apub struct ParseResult[T] { pub value: T, pub next_pos: Int }\0A\0A// Scanning uses byte offsets. JSON punctuation is ASCII, so token and\0A// string-run boundaries never split a UTF-8 code point.\0Alet skip_ws (bytes: Bytes) (pos: Int): Int =\0A    if pos >= bytes_len_raw(bytes) { pos }\0A    else {\0A        let c = bytes_at_raw(bytes, pos);\0A        if c == 32 || c == 9 || c == 10 || c == 13 { skip_ws(bytes, pos + 1) } else { pos }\0A    }\0A\0Alet json_digit (c: Int): Bool = c >= 48 && c <= 57\0A\0Alet parse_digits (bytes: Bytes) (pos: Int): Int =\0A    if pos < bytes_len_raw(bytes) && json_digit(bytes_at_raw(bytes, pos)) {\0A        parse_digits(bytes, pos + 1)\0A    }\0A    else { pos }\0A\0A// Shared lexical scanner for String.parse_float and JSON. No numeric\0A// accumulation or exponent scaling: the runtime converts the token once.\0Alet parse_number (bytes: Bytes) (pos: Int): Result[ParseResult[Float], String] = {\0A    let n = bytes_len_raw(bytes);\0A    let start = if pos < n && bytes_at_raw(bytes, pos) == 45 { pos + 1 } else { pos };\0A    let int_end = parse_digits(bytes, start);\0A    if int_end == start { Err(\22expected digit\22) }\0A    else {\0A        let has_frac = int_end < n && bytes_at_raw(bytes, int_end) == 46;\0A        let frac_end = if has_frac { parse_digits(bytes, int_end + 1) } else { int_end };\0A        if has_frac && frac_end == int_end + 1 { Err(\22expected digit\22) }\0A        else {\0A            let has_exp = frac_end < n\0A                && (bytes_at_raw(bytes, frac_end) == 101 || bytes_at_raw(bytes, frac_end) == 69);\0A            let after_e = frac_end + 1;\0A            let exp_start = if has_exp && after_e < n\0A                && (bytes_at_raw(bytes, after_e) == 45 || bytes_at_raw(bytes, after_e) == 43) {\0A                    after_e + 1\0A                } else { after_e };\0A            let end = if has_exp { parse_digits(bytes, exp_start) } else { frac_end };\0A            if has_exp && end == exp_start { Err(\22expected digit\22) }\0A            else {\0A                let converted = parse_float_raw(str_of_bytes_raw(bytes_slice_raw(bytes, pos, end)));\0A                // Some CRTs return positive zero on negative underflow.\0A                // Preserve the token's sign independently of that behavior.\0A                let value = if converted == 0.0 && start > pos { -0.0 } else { converted };\0A                if Float.is_finite(value) { Ok(ParseResult { value: value, next_pos: end }) }\0A                else { Err(\22float out of range\22) }\0A            }\0A        }\0A    }\0A}\0A\0Alet parse_literal\0A    (bytes: Bytes)\0A    (pos: Int)\0A    (word: String)\0A    (value: JsonValue): Result[ParseResult[JsonValue], String]\0A=\0A    if str_of_bytes_raw(bytes_slice_raw(bytes, pos, pos + word.len())) == word {\0A        Ok(ParseResult { value: value, next_pos: pos + word.len() })\0A    }\0A    else { Err(\22invalid literal\22) }\0A\0Alet json_hex (c: Int): Int =\0A    if c >= 48 && c <= 57 { c - 48 }\0A    else if c >= 65 && c <= 70 { c - 55 }\0A    else if c >= 97 && c <= 102 { c - 87 }\0A    else { -1 }\0A\0Alet json_hex4 (bytes: Bytes) (pos: Int) (left: Int) (acc: Int): Result[Int, String] =\0A    if left == 0 { Ok(acc) }\0A    else if pos >= bytes_len_raw(bytes) { Err(\22invalid unicode escape\22) }\0A    else {\0A        let d = json_hex(bytes_at_raw(bytes, pos));\0A        if d < 0 { Err(\22invalid unicode escape\22) }\0A        else { json_hex4(bytes, pos + 1, left - 1, acc * 16 + d) }\0A    }\0A\0Alet json_codepoint (c: Int): String = str_of_bytes_raw(bytes_from_array_raw(\0A    if c < 128 { [c] }\0A    else if c < 2048 { [192 + c / 64, 128 + c % 64] }\0A    else if c < 65536 { [224 + c / 4096, 128 + (c / 64) % 64, 128 + c % 64] }\0A    else { [240 + c / 262144, 128 + (c / 4096) % 64, 128 + (c / 64) % 64, 128 + c % 64] }\0A))\0A\0Alet json_unicode (bytes: Bytes) (pos: Int): Result[ParseResult[String], String] =\0A    match json_hex4(bytes, pos, 4, 0) {\0A        Err(e) => Err(e),\0A        Ok(c) => if c >= 55296 && c <= 56319 {\0A            if pos + 6 > bytes_len_raw(bytes) || bytes_at_raw(bytes, pos + 4) != 92\0A                || bytes_at_raw(bytes, pos + 5) != 117 { Err(\22invalid unicode surrogate pair\22) }\0A            else {\0A                match json_hex4(bytes, pos + 6, 4, 0) {\0A                    Err(e) => Err(e),\0A                    Ok(low) => if low < 56320 || low > 57343 {\0A                        Err(\22invalid unicode surrogate pair\22)\0A                    }\0A                    else {\0A                        Ok(ParseResult {\0A                            value: json_codepoint(65536 + (c - 55296) * 1024 + low - 56320),\0A                            next_pos: pos + 10\0A                        })\0A                    },\0A                }\0A            }\0A        } else if c >= 56320 && c <= 57343 { Err(\22invalid unicode surrogate pair\22) }\0A        else { Ok(ParseResult { value: json_codepoint(c), next_pos: pos + 4 }) },\0A    }\0A\0A// An ordinary run is copied once into a chunk. Escapes append small\0A// chunks to a uniquely owned growable array, then concat_all copies the\0A// decoded string once. Width is handled by tail calls, not stack frames.\0Alet parse_string_body\0A    (bytes: Bytes)\0A    (pos: Int)\0A    (run: Int)\0A    (parts: Array[String]): Result[ParseResult[String], String]\0A=\0A    if pos >= bytes_len_raw(bytes) { Err(\22unterminated string\22) }\0A    else {\0A        let c = bytes_at_raw(bytes, pos);\0A        if c == 34 || c == 92 {\0A            if pos > run {\0A                parts = parts.push(str_of_bytes_raw(bytes_slice_raw(bytes, run, pos)));\0A            };\0A            if c == 34 { Ok(ParseResult { value: Array.concat_all(parts), next_pos: pos + 1 }) }\0A            else if pos + 1 >= bytes_len_raw(bytes) { Err(\22unterminated escape\22) }\0A            else {\0A                let e = bytes_at_raw(bytes, pos + 1);\0A                let decoded = if e == 117 { json_unicode(bytes, pos + 2) }\0A                else {\0A                    let value = if e == 34 { Ok(\22\5C\22\22) }\0A                    else if e == 92 { Ok(\22\5C\5C\22) }\0A                    else if e == 47 { Ok(\22/\22) }\0A                    else if e == 98 { Ok(json_codepoint(8)) }\0A                    else if e == 102 { Ok(json_codepoint(12)) }\0A                    else if e == 110 { Ok(\22\5Cn\22) }\0A                    else if e == 114 { Ok(\22\5Cr\22) }\0A                    else if e == 116 { Ok(\22\5Ct\22) }\0A                    else { Err(\22unsupported escape sequence\22) };\0A                    match value {\0A                        Err(err) => Err(err),\0A                        Ok(v) => Ok(ParseResult { value: v, next_pos: pos + 2 }),\0A                    }\0A                };\0A                match decoded {\0A                    Err(err) => Err(err),\0A                    Ok(r) => {\0A                        parts = parts.push(r.value);\0A                        parse_string_body(bytes, r.next_pos, r.next_pos, parts)\0A                    },\0A                }\0A            }\0A        }\0A        else if c < 32 { Err(\22unescaped control character\22) }\0A        else { parse_string_body(bytes, pos + 1, run, parts) }\0A    }\0A\0Alet parse_string (bytes: Bytes) (pos: Int): Result[ParseResult[String], String] =\0A    if pos >= bytes_len_raw(bytes) || bytes_at_raw(bytes, pos) != 34 {\0A        Err(\22expected opening quote\22)\0A    }\0A    else { parse_string_body(bytes, pos + 1, pos + 1, []) }\0A\0Alet parse_value (bytes: Bytes) (pos: Int) (depth: Int): Result[ParseResult[JsonValue], String] =\0A    if pos >= bytes_len_raw(bytes) { Err(\22unexpected end of input\22) }\0A    else {\0A        let c = bytes_at_raw(bytes, pos);\0A        if c == 34 {\0A            match parse_string(bytes, pos) {\0A                Ok(r) => Ok(ParseResult { value: JsonString(r.value), next_pos: r.next_pos }),\0A                Err(e) => Err(e),\0A            }\0A        }\0A        else if c == 123 {\0A            if depth >= 128 { Err(\22JSON nesting limit exceeded (128)\22) } else {\0A                parse_object(bytes, pos, depth + 1)\0A            }\0A        }\0A        else if c == 91 {\0A            if depth >= 128 { Err(\22JSON nesting limit exceeded (128)\22) } else {\0A                parse_array(bytes, pos, depth + 1)\0A            }\0A        }\0A        else if c == 116 { parse_literal(bytes, pos, \22true\22, JsonBool(true)) }\0A        else if c == 102 { parse_literal(bytes, pos, \22false\22, JsonBool(false)) }\0A        else if c == 110 { parse_literal(bytes, pos, \22null\22, JsonNull) }\0A        else if json_digit(c) || c == 45 {\0A            let start = if c == 45 { pos + 1 } else { pos };\0A            if start + 1 < bytes_len_raw(bytes) && bytes_at_raw(bytes, start) == 48\0A                && json_digit(bytes_at_raw(bytes, start + 1)) { Err(\22leading zero in JSON number\22) }\0A            else {\0A                match parse_number(bytes, pos) {\0A                    Ok(r) => Ok(ParseResult { value: JsonNumber(r.value), next_pos: r.next_pos }),\0A                    Err(e) => Err(e),\0A                }\0A            }\0A        }\0A        else { Err(\22unexpected character\22) }\0A    }\0A\0Alet parse_array (bytes: Bytes) (pos: Int) (depth: Int): Result[ParseResult[JsonValue], String] = {\0A    let p1 = skip_ws(bytes, pos + 1);\0A    if p1 < bytes_len_raw(bytes) && bytes_at_raw(bytes, p1) == 93 {\0A        Ok(ParseResult { value: JsonArray([]), next_pos: p1 + 1 })\0A    }\0A    else { parse_array_entries(bytes, p1, depth, []) }\0A}\0A\0Alet parse_array_entries\0A    (bytes: Bytes)\0A    (pos: Int)\0A    (depth: Int)\0A    (acc: Array[JsonValue]): Result[ParseResult[JsonValue], String]\0A=\0A    match parse_value(bytes, pos, depth) {\0A        Err(e) => Err(e),\0A        Ok(val_r) => {\0A            acc = acc.push(val_r.value);\0A            let p1 = skip_ws(bytes, val_r.next_pos);\0A            if p1 < bytes_len_raw(bytes) && bytes_at_raw(bytes, p1) == 44 {\0A                parse_array_entries(bytes, skip_ws(bytes, p1 + 1), depth, acc)\0A            }\0A            else if p1 < bytes_len_raw(bytes) && bytes_at_raw(bytes, p1) == 93 {\0A                Ok(ParseResult { value: JsonArray(acc), next_pos: p1 + 1 })\0A            }\0A            else { Err(\22expected ',' or ']'\22) }\0A        }\0A    }\0A\0Alet parse_object (bytes: Bytes) (pos: Int) (depth: Int): Result[ParseResult[JsonValue], String] = {\0A    let p1 = skip_ws(bytes, pos + 1);\0A    if p1 < bytes_len_raw(bytes) && bytes_at_raw(bytes, p1) == 125 {\0A        Ok(ParseResult { value: JsonObject([]), next_pos: p1 + 1 })\0A    }\0A    else { parse_object_entries(bytes, p1, depth, []) }\0A}\0A\0Alet parse_object_entries\0A    (bytes: Bytes)\0A    (pos: Int)\0A    (depth: Int)\0A    (acc: Array[JsonEntry]): Result[ParseResult[JsonValue], String]\0A=\0A    match parse_string(bytes, pos) {\0A        Err(e) => Err(e),\0A        Ok(key_r) => {\0A            let p1 = skip_ws(bytes, key_r.next_pos);\0A            if Array.any(acc, |entry: JsonEntry| entry.key == key_r.value) {\0A                Err(\22duplicate object member name\22)\0A            }\0A            else if p1 >= bytes_len_raw(bytes) || bytes_at_raw(bytes, p1) != 58 {\0A                Err(\22expected ':'\22)\0A            }\0A            else {\0A                let p2 = skip_ws(bytes, p1 + 1);\0A                match parse_value(bytes, p2, depth) {\0A                    Err(e) => Err(e),\0A                    Ok(val_r) => {\0A                        acc = acc.push(JsonEntry { key: key_r.value, value: val_r.value });\0A                        let p3 = skip_ws(bytes, val_r.next_pos);\0A                        if p3 < bytes_len_raw(bytes) && bytes_at_raw(bytes, p3) == 44 {\0A                            parse_object_entries(bytes, skip_ws(bytes, p3 + 1), depth, acc)\0A                        }\0A                        else if p3 < bytes_len_raw(bytes) && bytes_at_raw(bytes, p3) == 125 {\0A                            Ok(ParseResult { value: JsonObject(acc), next_pos: p3 + 1 })\0A                        }\0A                        else { Err(\22expected ',' or '}'\22) }\0A                    }\0A                }\0A            }\0A        }\0A    }\0A\0A/// Parses JSON text.\0A///\0A/// `Err` with a message naming what was expected. Accepts one complete\0A/// value and rejects trailing text after it. Object member names must\0A/// be unique within each object, compared after decoding escapes;\0A/// duplicate names return `Err(\22duplicate object member name\22)`.\0A/// Strings support JSON escapes, including UTF-16 surrogate pairs, and\0A/// reject raw control characters and unpaired surrogates. Numbers must\0A/// follow JSON syntax (no leading zeros).\0A/// Numbers overflowing binary64 return `Err`; underflow rounds to a\0A/// subnormal value or signed zero.\0A/// At most 128 arrays/objects may be nested, counting the root container;\0A/// a deeper container returns `Err(\22JSON nesting limit exceeded (128)\22)`.\0A/// Input bytes and decoded strings use linear storage; this is not a\0A/// total input-size limit. Wide objects still compare each key against\0A/// preceding keys to reject duplicates.\0Apub let json_parse (s: String): Result[JsonValue, String] = {\0A    let bytes = bytes_of_str_raw(s);\0A    let start = skip_ws(bytes, 0);\0A    match parse_value(bytes, start, 0) {\0A        Err(e) => Err(e),\0A        Ok(r) => {\0A            let after = skip_ws(bytes, r.next_pos);\0A            if after == bytes_len_raw(bytes) { Ok(r.value) } else {\0A                Err(\22trailing characters after JSON value\22)\0A            }\0A        }\0A    }\0A}\0A\0A// ASCII escape boundaries cannot split a UTF-8 code point. Scan byte\0A// runs so ordinary text needs neither chars_of nor per-character strings.\0Alet json_run_end (s: Bytes) (pos: Int): Int =\0A    if pos >= bytes_len_raw(s) { pos }\0A    else {\0A        let b = bytes_at_raw(s, pos);\0A        if b == 34 || b == 92 || b < 32 { pos }\0A        else { json_run_end(s, pos + 1) }\0A    }\0A\0Alet json_escape_byte (b: Int): String =\0A    if b == 34 { \22\5C\5C\5C\22\22 }\0A    else if b == 92 { \22\5C\5C\5C\5C\22 }\0A    else if b == 8 { \22\5C\5Cb\22 }\0A    else if b == 12 { \22\5C\5Cf\22 }\0A    else if b == 10 { \22\5C\5Cn\22 }\0A    else if b == 13 { \22\5C\5Cr\22 }\0A    else if b == 9 { \22\5C\5Ct\22 }\0A    else if b < 32 { \22\5C\5Cu00\22.concat(plum__hex_digit(b / 16)).concat(plum__hex_digit(b % 16)) }\0A    else { \22\22 }\0A\0A// One continuation per active container, rather than one per sibling.\0A// Keep the container alive while visiting its children so dropping a\0A// traversal frame cannot recursively destroy the unvisited subtree.\0Aenum JsonWriteStack {\0A    JsonWriteDone,\0A    JsonWriteValue(JsonValue, JsonWriteStack),\0A    JsonWriteArray(Array[JsonValue], Int, JsonWriteStack),\0A    JsonWriteObject(Array[JsonEntry], Int, JsonWriteStack),\0A    JsonWriteString(Bytes, Int, JsonWriteStack),\0A    JsonWriteText(String, JsonWriteStack),\0A}\0A\0A// Every transition is a same-signature tail call (musttail in LLVM).\0A// Append only through self-rebinding here: passing parts through nested\0A// helpers keeps aliases alive and defeats geometric array growth.\0A// concat_all then copies the fragments into one final allocation.\0Alet json_emit (stack: JsonWriteStack) (parts: Array[String]): Result[String, String] = match stack {\0A    JsonWriteDone => Ok(Array.concat_all(parts)),\0A    JsonWriteText(text, rest) => {\0A        parts = parts.push(text);\0A        json_emit(rest, parts)\0A    },\0A    JsonWriteString(s, pos, rest) => {\0A        let end = json_run_end(s, pos);\0A        if end > pos {\0A            parts = parts.push(str_of_bytes_raw(bytes_slice_raw(s, pos, end)));\0A        };\0A        if end == bytes_len_raw(s) {\0A            parts = parts.push(\22\5C\22\22);\0A            json_emit(rest, parts)\0A        } else {\0A            parts = parts.push(json_escape_byte(bytes_at_raw(s, end)));\0A            json_emit(JsonWriteString(s, end + 1, rest), parts)\0A        }\0A    },\0A    JsonWriteValue(v, rest) => match v {\0A        JsonNull => {\0A            parts = parts.push(\22null\22);\0A            json_emit(rest, parts)\0A        },\0A        JsonBool(b) => {\0A            parts = parts.push(if b { \22true\22 } else { \22false\22 });\0A            json_emit(rest, parts)\0A        },\0A        JsonNumber(n) => {\0A            if Float.is_finite(n) {\0A                parts = parts.push(n.to_string());\0A                json_emit(rest, parts)\0A            } else { Err(\22non-finite JSON number\22) }\0A        },\0A        JsonString(s) => {\0A            parts = parts.push(\22\5C\22\22);\0A            json_emit(JsonWriteString(bytes_of_str_raw(s), 0, rest), parts)\0A        },\0A        JsonArray(arr) => {\0A            parts = parts.push(\22[\22);\0A            json_emit(JsonWriteArray(arr, 0, rest), parts)\0A        },\0A        JsonObject(entries) => {\0A            parts = parts.push(\22{\22);\0A            json_emit(JsonWriteObject(entries, 0, rest), parts)\0A        },\0A    },\0A    JsonWriteArray(arr, pos, rest) =>\0A        if pos >= arr.len() {\0A            parts = parts.push(\22]\22);\0A            json_emit(rest, parts)\0A        } else {\0A            if pos > 0 {\0A                parts = parts.push(\22,\22);\0A            };\0A            json_emit(JsonWriteValue(arr[pos], JsonWriteArray(arr, pos + 1, rest)), parts)\0A        },\0A    JsonWriteObject(entries, pos, rest) =>\0A        if pos >= entries.len() {\0A            parts = parts.push(\22}\22);\0A            json_emit(rest, parts)\0A        } else {\0A            let entry = entries[pos];\0A            if pos > 0 {\0A                parts = parts.push(\22,\22);\0A            };\0A            parts = parts.push(\22\5C\22\22);\0A            let next = JsonWriteValue(entry.value, JsonWriteObject(entries, pos + 1, rest));\0A            json_emit(\0A                JsonWriteString(bytes_of_str_raw(entry.key), 0, JsonWriteText(\22:\22, next)),\0A                parts\0A            )\0A        },\0A}\0A\0A/// Renders a `JsonValue` as compact JSON — no spaces, no newlines.\0A///\0A/// Object keys come out in the order they are held, which for a parsed\0A/// document is the order they were read. All U+0000–U+001F control\0A/// characters are escaped, including in keys. Output construction takes\0A/// linear time and space in the output size, with an explicit traversal\0A/// stack proportional to nesting depth instead of native stack recursion.\0A/// Returns `Err(\22non-finite JSON number\22)` for NaN or either infinity,\0A/// including inside arrays and objects. No partial output is returned.\0Apub let json_stringify (v: JsonValue): Result[String, String] =\0A    json_emit(JsonWriteValue(v, JsonWriteDone), [])\0A\0A/// `pub` because the PARSER generates calls to these when it\0A/// desugars `requires`/`ensures`, and that generated code lands in\0A/// the user's own module. Nobody writes them by hand.\0Apub let __contract_require (cond: Bool) (msg: String): Unit =\0A    if cond { () } else { panic_raw(msg) }\0A\0Apub let __contract_ensure (cond: Bool) (msg: String): Unit =\0A    if cond { () } else { panic_raw(msg) }\0A\00" }
+@.str11177 = private global { i64, i64, [156200 x i8] } { i64 -1, i64 156199, [156200 x i8] c"/// A value that may not be there.\0A///\0A/// Plum has no null, so absence is spelled here and the checker makes\0A/// you handle it.\0Apub enum Option[T] { Some(T), None }\0A\0A/// A value, or an explanation of why there isn't one.\0A///\0A/// Failure is an ordinary value: no exceptions, so a function that can\0A/// fail says so in its type.\0Apub enum Result[T, E] { Ok(T), Err(E) }\0A\0A/// The mathematical integer kinds used by checked integer conversions.\0A/// `Signed64` represents both `Int` and its `I64` alias.\0Apub enum IntegerKind {\0A    Signed8,\0A    Signed16,\0A    Signed32,\0A    Signed64,\0A    Unsigned8,\0A    Unsigned16,\0A    Unsigned32,\0A    Unsigned64\0A}\0A\0A/// A checked integer conversion whose value is outside the destination range.\0A/// Contains only source and destination kind tags, not the rejected value or\0A/// an allocated error message. Ordinary Result and error values may allocate.\0Apub struct IntegerConversionError { pub source: IntegerKind, pub destination: IntegerKind }\0A\0A/// Whether there is a value.\0Apub let Option.is_some[T] (o: Option[T]): Bool = match o {\0A    Some(_) => true,\0A    None => false\0A}\0A\0A/// Whether there is no value.\0Apub let Option.is_none[T] (o: Option[T]): Bool = match o {\0A    Some(_) => false,\0A    None => true\0A}\0A\0A/// The first option when it contains a value, or `fallback` otherwise.\0A///\0A/// `fallback` is evaluated whether or not it is needed. Use `or_else`\0A/// when finding the fallback costs something.\0Apub let Option.or[T] (o: Option[T]) (fallback: Option[T]): Option[T] = match o {\0A    Some(_) => o,\0A    None => fallback\0A}\0A\0A/// The first option when it contains a value, or the result of calling\0A/// `f` otherwise. The lazy `or`: `f` runs only when it has to.\0Apub let Option.or_else[T] (o: Option[T]) (f: () -> Option[T]): Option[T] = match o {\0A    Some(_) => o,\0A    None => f()\0A}\0A\0A/// The value, or `fallback` when there is none.\0A///\0A/// `fallback` is evaluated whether or not it is needed. Use\0A/// `unwrap_or_else` when computing it costs something.\0Apub let Option.unwrap_or[T] (o: Option[T]) (fallback: T): T = match o {\0A    Some(v) => v,\0A    None => fallback\0A}\0A\0A/// The value, or the result of calling `f` when there is none. The\0A/// lazy `unwrap_or`: `f` runs only when it has to.\0Apub let Option.unwrap_or_else[T] (o: Option[T]) (f: () -> T): T = match o {\0A    Some(v) => v,\0A    None => f()\0A}\0A\0A/// Transforms the value if there is one, leaving `None` alone.\0Apub let Option.map[T, U] (o: Option[T]) (f: (T) -> U): Option[U] = match o {\0A    Some(v) => Some(f(v)),\0A    None => None\0A}\0A\0A/// Chains an operation that may itself find nothing.\0A///\0A/// `map` with a function returning `Option` would give\0A/// `Option[Option[U]]`; this is the one that keeps it flat.\0Apub let Option.and_then[T, U] (o: Option[T]) (f: (T) -> Option[U]): Option[U] = match o {\0A    Some(v) => f(v),\0A    None => None\0A}\0A\0A/// Turns nothing into an error, so an `Option` can join a chain of\0A/// `Result`s.\0Apub let Option.ok_or[T, E] (o: Option[T]) (err: E): Result[T, E] = match o {\0A    Some(v) => Ok(v),\0A    None => Err(err)\0A}\0A\0A/// Whether this succeeded.\0Apub let Result.is_ok[T, E] (r: Result[T, E]): Bool = match r {\0A    Ok(_) => true,\0A    Err(_) => false\0A}\0A\0A/// Whether this failed.\0Apub let Result.is_err[T, E] (r: Result[T, E]): Bool = match r {\0A    Ok(_) => false,\0A    Err(_) => true\0A}\0A\0A/// The value, or `fallback` on failure — DISCARDING the error. Reach\0A/// for `unwrap_or_else` when the error should shape the answer.\0Apub let Result.unwrap_or[T, E] (r: Result[T, E]) (fallback: T): T = match r {\0A    Ok(v) => v,\0A    Err(_) => fallback\0A}\0A\0A/// The value, or the result of calling `f` with the error. The\0A/// recovery that gets to see what went wrong.\0Apub let Result.unwrap_or_else[T, E] (r: Result[T, E]) (f: (E) -> T): T = match r {\0A    Ok(v) => v,\0A    Err(e) => f(e)\0A}\0A\0A/// Transforms the value on success, leaving an error untouched.\0Apub let Result.map[T, E, U] (r: Result[T, E]) (f: (T) -> U): Result[U, E] = match r {\0A    Ok(v) => Ok(f(v)),\0A    Err(e) => Err(e)\0A}\0A\0A/// Transforms the ERROR, leaving a success untouched. For adding\0A/// context to a failure on its way up.\0Apub let Result.map_err[T, E, F] (r: Result[T, E]) (f: (E) -> F): Result[T, F] = match r {\0A    Ok(v) => Ok(v),\0A    Err(e) => Err(f(e))\0A}\0A\0A/// Chains an operation that may itself fail, stopping at the first\0A/// error. The flat version of `map` over a fallible step.\0Apub let Result.and_then[T, E, U] (r: Result[T, E]) (f: (T) -> Result[U, E]): Result[U, E] =\0A    match r {\0A        Ok(v) => f(v),\0A        Err(e) => Err(e)\0A    }\0A\0A/// Whether the array has no elements.\0Apub let Array.is_empty[T] (xs: Array[T]): Bool = xs.len() == 0\0A\0Alet plum__array_concat_acc[T] (a: Array[T]) (b: Array[T]) (i: Int): Array[T] =\0A    if i >= b.len() { a } else { plum__array_concat_acc(a.push(b[i]), b, i + 1) }\0A\0A/// A new array with `b`'s elements after `a`'s. Neither input is\0A/// changed.\0Apub let Array.concat[T] (a: Array[T]) (b: Array[T]): Array[T] = plum__array_concat_acc(a, b, 0)\0A\0A// Fixed-size merges reuse fitting buffers with up to four spare slots.\0Alet plum__array_concat_exact_raw[T] (a: Array[T]) (b: Array[T]): Array[T] = Array.concat(a, b)\0A\0A// Interleave up to 32 packed elements. A mask bit selects the right array.\0Alet plum__array_interleave_exact_raw[T] (a: Array[T]) (b: Array[T]) (right_slots: Int): Array[T] = {\0A    let total = a.len() + b.len();\0A    let mut merged = plum__array_reserve_empty_raw(total);\0A    let mut left_index = 0;\0A    let mut right_index = 0;\0A    for i in 0..total {\0A        if (right_slots & (1 << i)) != 0 {\0A            merged = merged.push(b[right_index]);\0A            right_index = right_index + 1;\0A        } else {\0A            merged = merged.push(a[left_index]);\0A            left_index = left_index + 1;\0A        };\0A    };\0A    merged\0A}\0A\0Alet plum__array_contains_acc[T] (xs: Array[T]) (needle: T) (i: Int): Bool =\0A    if i >= xs.len() { false } else if xs[i] == needle { true } else {\0A        plum__array_contains_acc(xs, needle, i + 1)\0A    }\0A\0A/// Whether any element equals `needle`, compared structurally.\0Apub let Array.contains[T] (xs: Array[T]) (needle: T): Bool = plum__array_contains_acc(xs, needle, 0)\0A\0Alet plum__array_any_acc[T] (xs: Array[T]) (f: (T) -> Bool) (i: Int): Bool =\0A    if i >= xs.len() { false } else if f(xs[i]) { true } else { plum__array_any_acc(xs, f, i + 1) }\0A\0A/// Whether `f` holds for at least one element. Stops at the first\0A/// that passes; false for an empty array.\0Apub let Array.any[T] (xs: Array[T]) (f: (T) -> Bool): Bool = plum__array_any_acc(xs, f, 0)\0A\0A/// Clamped at both ends, like the real prelude's own: a slice past\0A/// the end is the tail, not a crash, which matters because this\0A/// backend emits no bounds check of its own.\0Alet plum__array_slice_acc[T] (xs: Array[T]) (i: Int) (end: Int) (acc: Array[T]): Array[T] =\0A    if i >= end { acc } else if i >= xs.len() { acc } else {\0A        plum__array_slice_acc(xs, i + 1, end, acc.push(xs[i]))\0A    }\0A\0A/// The elements from `start` up to but NOT including `end`.\0A///\0A/// Out-of-range bounds are clamped rather than an error, and a `start`\0A/// past `end` gives an empty array — so slicing near the end of an\0A/// array needs no arithmetic to stay safe.\0Apub let Array.slice[T] (xs: Array[T]) (start: Int) (end: Int): Array[T] =\0A    plum__array_slice_acc(xs, if start < 0 { 0 } else { start }, end, [])\0A\0A// The native backend uses an owned permutation. Keep the source definition\0A// as a semantic fallback for evaluators without that lowering.\0Alet plum__array_reverse_acc[T] (xs: Array[T]) (i: Int) (acc: Array[T]): Array[T] =\0A    if i < 0 { acc } else { plum__array_reverse_acc(xs, i - 1, acc.push(xs[i])) }\0A\0A/// A new array in the opposite order.\0Apub let Array.reverse[T] (xs: Array[T]): Array[T] = plum__array_reverse_acc(xs, xs.len() - 1, [])\0A\0Alet plum__array_all_acc[T] (xs: Array[T]) (f: (T) -> Bool) (i: Int): Bool =\0A    if i >= xs.len() { true } else if f(xs[i]) { plum__array_all_acc(xs, f, i + 1) } else { false }\0A\0A/// Whether `f` holds for every element. Stops at the first that\0A/// fails; TRUE for an empty array, which is the convention everywhere\0A/// and still surprises people.\0Apub let Array.all[T] (xs: Array[T]) (f: (T) -> Bool): Bool = plum__array_all_acc(xs, f, 0)\0A\0Alet plum__array_find_acc[T] (xs: Array[T]) (f: (T) -> Bool) (i: Int): Option[T] =\0A    if i >= xs.len() { None } else if f(xs[i]) { Some(xs[i]) } else {\0A        plum__array_find_acc(xs, f, i + 1)\0A    }\0A\0A/// The first element `f` accepts, or `None`.\0Apub let Array.find[T] (xs: Array[T]) (f: (T) -> Bool): Option[T] = plum__array_find_acc(xs, f, 0)\0A\0Alet plum__array_find_index_acc[T] (xs: Array[T]) (f: (T) -> Bool) (i: Int): Option[Int] =\0A    if i >= xs.len() { None } else if f(xs[i]) { Some(i) } else {\0A        plum__array_find_index_acc(xs, f, i + 1)\0A    }\0A\0A/// The index of the first element `f` accepts, or `None`.\0Apub let Array.find_index[T] (xs: Array[T]) (f: (T) -> Bool): Option[Int] =\0A    plum__array_find_index_acc(xs, f, 0)\0A\0A/// The index of the first element equal to `needle`, or `None`.\0Apub let Array.index_of[T] (xs: Array[T]) (needle: T): Option[Int] =\0A    Array.find_index(xs, |x| x == needle)\0A\0A/// The first element, or `None` when the array is empty.\0Apub let Array.first[T] (xs: Array[T]): Option[T] =\0A    if Array.is_empty(xs) { None } else { Some(xs[0]) }\0A\0A/// The last element, or `None` when the array is empty.\0Apub let Array.last[T] (xs: Array[T]): Option[T] =\0A    if Array.is_empty(xs) { None } else { Some(xs[xs.len() - 1]) }\0A\0A/// The first `n` elements, or all of them if there are fewer. Never\0A/// an error.\0Apub let Array.take[T] (xs: Array[T]) (n: Int): Array[T] = Array.slice(xs, 0, n)\0A\0A/// Everything after the first `n` elements, or nothing if there are\0A/// fewer.\0Apub let Array.drop[T] (xs: Array[T]) (n: Int): Array[T] = Array.slice(xs, n, xs.len())\0A\0A/// The sum, which OVERFLOWS like any other addition and stops the\0A/// program rather than wrapping.\0Apub let Array.sum_int (xs: Array[Int]): Int = Array.fold(xs, 0, |acc, x| acc + x)\0A\0A/// The sum, left to right. Floating-point addition is not\0A/// associative, so a different order can give a different last digit.\0Apub let Array.sum_float (xs: Array[Float]): Float = Array.fold(xs, 0.0, |acc, x| acc + x)\0A\0A// --- Numbers ---\0A\0A/// The absolute value.\0A///\0A/// `Int.abs` of the most negative `Int` cannot be represented and\0A/// overflows, which stops the program rather than returning a negative\0A/// \22absolute\22 value.\0Apub let Int.abs (a: Int): Int = if a < 0 { 0 - a } else { a }\0A\0A/// The smaller of two.\0Apub let Int.min (a: Int) (b: Int): Int = if a < b { a } else { b }\0A\0A/// The larger of two.\0Apub let Int.max (a: Int) (b: Int): Int = if a > b { a } else { b }\0A\0A/// `x` held between `lo` and `hi` inclusive. A `lo` above `hi` gives\0A/// `hi`, since the upper bound is applied last.\0Apub let Int.clamp (x: Int) (lo: Int) (hi: Int): Int = Int.min(Int.max(x, lo), hi)\0A\0A/// An UNSIGNED right shift: zeros are shifted in, never the sign\0A/// bit. `>>` is arithmetic, because `Int` is signed and `-8 >> 1`\0A/// should be -4; hashing wants the other one, and writing it by\0A/// hand is exactly the sort of thing that is wrong at n = 0 and\0A/// n = 64 in every codebase that tries.\0A///\0A/// The mask is `~(-1 << (64 - n))` and NOT `(1 << (64 - n)) - 1`,\0A/// which is the spelling everyone reaches for first and which traps\0A/// here: at n = 1 that is `(1 << 63) - 1`, and `1 << 63` is\0A/// `Int`'s most negative value, so subtracting one from it is an\0A/// integer overflow. The complement builds the same mask out of a\0A/// shift and a NOT, neither of which can overflow.\0A///\0A/// The two ends are handled before the mask because the mask cannot\0A/// express them: at n = 0 it would need all 64 bits, and `64 - 0`\0A/// is a shift of 64, which this language defines as zero.\0Apub let Int.shr_logical (x: Int) (n: Int): Int =\0A    if n <= 0 { x }\0A    else if n >= 64 { 0 }\0A    else { (x >> n) & ~((0 - 1) << (64 - n)) }\0A\0A/// The number of one bits. Counted a nibble at a time through a\0A/// lookup rather than bit by bit, so it is 16 steps and not 64.\0Apub let Int.count_ones (x: Int): Int = plum__popcount(x, 0, 0)\0A\0Alet plum__popcount (x: Int) (i: Int) (acc: Int): Int =\0A    if i >= 16 { acc }\0A    else { plum__popcount(x, i + 1, acc + PLUM_NIBBLE_ONES[Int.shr_logical(x, i * 4) & 15]) }\0A\0Alet PLUM_NIBBLE_ONES: Array[Int] = [0, 1, 1, 2, 1, 2, 2, 3, 1, 2, 2, 3, 2, 3, 3, 4]\0A\0A/// The absolute value, clearing the sign bit (including on negative zero).\0A/// NaN remains NaN.\0Apub let Float.abs (a: Float): Float = abs_raw(a)\0A\0A/// Whether `x` is neither infinity nor NaN. Includes both signed zeros\0A/// and subnormal values.\0Apub let Float.is_finite (x: Float): Bool = x - x == 0.0\0A\0A/// The smaller of two. NaN does not compare, so a NaN argument gives\0A/// an answer that is not meaningful.\0Apub let Float.min (a: Float) (b: Float): Float = if a < b { a } else { b }\0A\0A/// The larger of two. See `Float.min` on NaN.\0Apub let Float.max (a: Float) (b: Float): Float = if a > b { a } else { b }\0A\0A/// `x` held between `lo` and `hi` inclusive.\0Apub let Float.clamp (x: Float) (lo: Float) (hi: Float): Float = Float.min(Float.max(x, lo), hi)\0A\0A/// --- Strings ---\0A///\0A/// String operations use codepoint boundaries rather than byte\0A/// indices. `String.slice` scans those boundaries directly; operations\0A/// that need individual characters can materialize them with `chars_of`.\0A// Borrow input and return an owned result through the runtime constructor.\0Alet plum__string_reverse_raw (s: String): String = \22\22\0A\0A/// The string with its CHARACTERS (codepoints) reversed, not its bytes.\0A/// Combining marks reverse independently; this does not reverse graphemes.\0A/// Reuses uniquely owned input storage; shared input copies into one exact-sized\0A/// allocation. Uses constant scratch without character arrays or strings.\0A/// Empty output uses static storage; a single character shares input storage.\0Apub let String.reverse (s: String): String = plum__string_reverse_raw(s)\0A\0A/// Whether the string has no bytes.\0Apub let String.is_empty (s: String): Bool = s.len() == 0\0A\0A/// Characters from `start` up to but not including `end`, counted in\0A/// CODEPOINTS rather than bytes. Out-of-range bounds are clamped.\0A/// Scans only as far as the requested boundaries, without allocating an\0A/// array or individual characters. Whole ranges share their owned storage;\0A/// empty ranges use shared static storage. Other ranges copy only the\0A/// selected bytes into compact storage.\0Apub let String.slice (s: String) (start: Int) (end: Int): String = {\0A    let lo = if start < 0 { 0 } else { start };\0A    if end <= lo { \22\22 } else {\0A        let bytes = bytes_of_str_raw(s);\0A        let n = bytes_len_raw(bytes);\0A        let first = if lo == 0 { 0 } else { plum__string_slice_boundary(bytes, n, 1, lo - 1) };\0A        if first >= n { \22\22 } else {\0A            let last = plum__string_slice_boundary(bytes, n, first + 1, end - lo - 1);\0A            str_of_bytes_raw(bytes_slice_raw(bytes, first, last))\0A        }\0A    }\0A}\0A\0A// The first byte of a character was already consumed. Skip its\0A// continuation bytes, then count further character starts until the\0A// requested boundary. This also preserves chars_of's grouping for\0A// malformed raw byte sequences, including a leading continuation run.\0Alet plum__string_slice_boundary (bytes: Bytes) (n: Int) (i: Int) (left: Int): Int =\0A    if i >= n { n } else {\0A        let byte = bytes_at_raw(bytes, i);\0A        if byte >= 128 && byte < 192 { plum__string_slice_boundary(bytes, n, i + 1, left) }\0A        else if left <= 0 { i }\0A        else { plum__string_slice_boundary(bytes, n, i + 1, left - 1) }\0A    }\0A\0A// Borrows the input and returns an owned result; lowered to the runtime.\0Alet plum__string_repeat_raw (s: String) (n: Int): String = \22\22\0A\0A/// The string joined to itself `n` times. Zero or negative counts and\0A/// empty input give an empty string. Repeating nonempty input once shares\0A/// its storage; larger results allocate one buffer without spare capacity.\0Apub let String.repeat (s: String) (n: Int): String = plum__string_repeat_raw(s, n)\0A\0A/// The number of CHARACTERS in `s`, which is not `s.len()`.\0A///\0A/// `.len()` is bytes; everything else in this section is codepoints.\0A/// The two agree on ASCII and part company on anything else, so a\0A/// program that lines text up in columns wants this one; padding\0A/// computed from a byte count puts an accented name in the wrong place.\0A/// The number of CHARACTERS (codepoints). `String.len` is the number\0A/// of BYTES, and the two differ for anything outside ASCII.\0A/// Scans the UTF-8 bytes in linear time and constant space, without\0A/// allocating an array or a string for each character.\0Apub let String.char_len (s: String): Int = {\0A    let bytes = bytes_of_str_raw(s);\0A    let n = bytes_len_raw(bytes);\0A    // chars_of groups the first byte with any following continuation\0A    // bytes, even for malformed text supplied through unsafe code.\0A    if n == 0 { 0 } else { plum__string_count_starts(bytes, n, 1, 1) }\0A}\0A\0A/// Pad `s` to `width` CHARACTERS with `fill`, on the left or the right.\0A///\0A/// A `fill` that is not exactly one character returns `s` untouched, as\0A/// does a string already at least `width` wide. Both are deliberate: a\0A/// formatting helper that returns a `Result` is a formatting helper\0A/// nobody uses, and truncating to fit loses data that padding was never\0A/// asked to remove.\0A/// Padded on the LEFT to `width` characters — right-aligned text.\0A///\0A/// `fill` must be a single character. A string already at or past the\0A/// width is returned unchanged: this pads, it never truncates.\0A/// Unique storage is reused when it already fits; other padded results\0A/// use one compact buffer without intermediate repeated-fill strings.\0Apub let String.pad_left (s: String) (width: Int) (fill: String): String =\0A    plum__pad(s, width, fill, 0)\0A\0A/// Padded on the RIGHT to `width` characters — left-aligned text.\0A/// Never truncates; see `String.pad_left`.\0Apub let String.pad_right (s: String) (width: Int) (fill: String): String =\0A    plum__pad(s, width, fill, 1)\0A\0A// --- Formatting numbers (issue #23) ---\0A//\0A// String interpolation already exists -- `\22${a} + ${b} = ${a + b}\22` --\0A// so building output is not the gap. What was missing is CONTROL over\0A// how a number renders inside one: `${1.0 / 3.0}` gives\0A// 0.3333333333333333 and there was no way to ask for two places, and\0A// `${flags}` printing 20 is the wrong view of a bit field.\0A//\0A// These are the functions a `${x:.2}` syntax would lower to. Shipping\0A// them first means that syntax, if it ever arrives, can be designed\0A// against real usage rather than guessed -- and it stays purely\0A// additive, since it would be sugar over exactly these.\0A\0A/// Centred padding, completing the set beside `pad_left`/`pad_right`.\0A/// An odd remainder goes on the RIGHT, so a column of centred headings\0A/// lines up on its left edge rather than drifting.\0Apub let String.pad_center (s: String) (width: Int) (fill: String): String =\0A    plum__pad(s, width, fill, 2)\0A\0A/// `decimals` places after the point, rounded HALF TO EVEN. Precision is\0A/// clamped to 0..17: negative values act as 0, and values above 17 act as 17.\0A/// The limit leaves one guard digit for deterministic tie handling while\0A/// staying within the precision of a `Float`.\0A///\0A/// --- Why the rounding is done here and not by the C library ---\0A///\0A/// `snprintf(\22%.*f\22)` is correctly rounded on every platform and does\0A/// not give the same answer on all of them. glibc and Microsoft's CRT\0A/// agree on every value whose expansion is not an exact tie (2.675 is\0A/// really 2.674999..., and both render it 2.67) and disagree on ties:\0A/// glibc rounds 0.5, 1.5, 2.5, 3.5 to 0, 2, 2, 4 and the Microsoft CRT\0A/// to 1, 2, 3, 4.\0A///\0A/// A language whose programs print different\0A/// numbers depending on the machine has a worse problem than one whose\0A/// rounding is a line longer, so the decision is made here: the library\0A/// is asked for a high-precision expansion, and the rounding is applied\0A/// to the digits.\0A///\0A/// --- Why half to EVEN ---\0A///\0A/// It is IEEE 754's default (`roundTiesToEven`), which is what glibc\0A/// inherits from the ambient rounding mode rather than choosing, and it\0A/// is unbiased: rounding every tie away from zero accumulates. Summing\0A/// the thousand ties 0.5 .. 999.5 gives 500,500 rounded away and\0A/// 500,000 rounded to even, against an exact 500,000.\0A///\0A/// **`Float.round` rounds half AWAY from zero and that is not an\0A/// inconsistency.** C specifies `round()` that way regardless of the FP\0A/// mode, because it is arithmetic: \22the nearest integer, ties away\22,\0A/// while this is rendering. Every language with both has this pair.\0A///\0A/// --- Why 18 digits is enough to tell a tie from a near-miss ---\0A///\0A/// A tie has to be exact. The gap between neighbouring doubles near any\0A/// value whose fractional digits matter is enormously larger than\0A/// 1e-18: next to 2.5 it is about 4.4e-16, so the value after 2.5\0A/// renders as 2.500000000000000444 and is visibly not a tie. Above\0A/// about 1e3 the fraction is all zeros anyway.\0Apub let Float.to_fixed (x: Float) (decimals: Int): String = {\0A    let d = Int.clamp(decimals, 0, 17);\0A    let raw = float_fixed_raw(x, 18);\0A    // `inf` and `nan` have no digits to round.\0A    let dot = plum__decimal_dot(bytes_of_str_raw(raw), 0, raw.len());\0A    if dot < 0 { raw } else { plum__round_decimals(raw, d, dot) }\0A}\0A\0A// The fixed decimal expansion is ASCII. Search once without a general\0A// substring search's Option result or a second contains/index_of traversal.\0Alet plum__decimal_dot (s: Bytes) (i: Int) (end: Int): Int =\0A    if i >= end { 0 - 1 }\0A    else if bytes_at_raw(s, i) == 46 { i }\0A    else { plum__decimal_dot(s, i + 1, end) }\0A\0Alet plum__round_decimals (s: String) (d: Int) (raw_dot: Int): String = {\0A    let neg = String.starts_with(s, \22-\22);\0A    let body = if neg { String.slice(s, 1, s.len()) } else { s };\0A    let dot = raw_dot - if neg { 1 } else { 0 };\0A    let ip = String.slice(body, 0, dot);\0A    let fp = String.slice(body, dot + 1, body.len());\0A    let keep = String.slice(fp, 0, d);\0A    let rest = String.slice(fp, d, fp.len());\0A    let digits = ip.concat(keep);\0A    let bumped = if plum__rounds_up(digits, rest) { plum__inc_decimal(digits) } else { digits };\0A    let n = bumped.len();\0A    let out_ip = String.slice(bumped, 0, n - d);\0A    let out_fp = String.slice(bumped, n - d, n);\0A    let text = if d == 0 { out_ip } else { out_ip.concat(\22.\22).concat(out_fp) };\0A    // The sign survives a value that rounds to zero: `-0.00` says the\0A    // value was below zero, which is information. C does this too.\0A    if neg { \22-\22.concat(text) } else { text }\0A}\0A\0A/// `rest` is everything being discarded. Above half rounds up, below\0A/// half rounds down, and an EXACT half goes to whichever direction\0A/// leaves the last kept digit even.\0Alet plum__rounds_up (kept: String) (rest: String): Bool =\0A    if String.is_empty(rest) { false }\0A    else {\0A        let first = plum__digit_at(rest, 0);\0A        if first > 5 { true }\0A        else if first < 5 { false }\0A        else if plum__any_nonzero(rest, 1) { true }\0A        else {\0A            // An exact tie. Round to even.\0A            let last = if String.is_empty(kept) { 0 } else { plum__digit_at(kept, kept.len() - 1) };\0A            last - (last / 2) * 2 == 1\0A        }\0A    }\0A\0Alet plum__digit_at (s: String) (i: Int): Int =\0A    // Decimal expansion and assembled digits are ASCII. Preserve the zero\0A    // fallback without allocating a one-character String or an Option cell.\0A    // bytes_at_raw is unchecked: validate the index before reading storage.\0A    if i < 0 || i >= s.len() { 0 }\0A    else {\0A        let v = bytes_at_raw(bytes_of_str_raw(s), i);\0A        if v >= 48 && v <= 57 { v - 48 } else { 0 }\0A    }\0A\0Alet plum__any_nonzero (s: String) (i: Int): Bool =\0A    if i >= s.len() { false }\0A    else if plum__digit_at(s, i) != 0 { true }\0A    else { plum__any_nonzero(s, i + 1) }\0A\0A/// Adds one to a decimal digit string, growing it when every digit\0A/// carries: \22999\22 becomes \221000\22, which is what makes 9.99 round to\0A/// 10.0 without a special case.\0Alet plum__inc_decimal (s: String): String = plum__inc_acc(s, s.len() - 1, \22\22)\0A\0Alet plum__inc_acc (s: String) (i: Int) (acc: String): String =\0A    if i < 0 { \221\22.concat(acc) }\0A    else {\0A        let v = plum__digit_at(s, i) + 1;\0A        if v < 10 { String.slice(s, 0, i).concat(plum__radix_digit(v)).concat(acc) }\0A        else { plum__inc_acc(s, i - 1, \220\22.concat(acc)) }\0A    }\0A\0A/// --- Radix ---\0A///\0A/// SIGNED, and reversible: `Int.to_radix(-255, 16)` is \22-ff\22, which\0A/// `String.parse_int` would read back. That is the opposite of what C\0A/// and Rust print for `%x` on a negative, and it is the choice that\0A/// keeps `to_radix` a number conversion rather than a bit dump. For the\0A/// bit pattern, `Int.to_bits` says so in its name.\0A///\0A/// Radix is clamped to 2..36: one digit per character, `0-9a-z`.\0A/// Digit values select static strings. Multi-digit conversion grows a unique\0A/// accumulator through Perceus reuse, then reverses it into an exact-sized result.\0Apub let Int.to_radix (n: Int) (radix: Int): String = {\0A    let r = Int.clamp(radix, 2, 36);\0A    if n == 0 { \220\22 } else {\0A        // Peel the last digit before negating: Int::MIN has no positive\0A        // counterpart, but its quotient and remainder both do (r >= 2).\0A        let q = n / r;\0A        let tail = n - q * r;\0A        let digit = plum__radix_digit(if n < 0 { 0 - tail } else { tail });\0A        if q == 0 { if n < 0 { \22-\22.concat(digit) } else { digit } }\0A        else {\0A            let backwards = plum__radix_acc(if n < 0 { 0 - q } else { q }, r, digit);\0A            String.reverse(if n < 0 { backwards.concat(\22-\22) } else { backwards })\0A        }\0A    }\0A}\0A\0A// Remaining magnitude is nonnegative. Append least-significant digits into\0A// one owned accumulator; prepending would copy the growing suffix each time.\0Alet plum__radix_acc (n: Int) (r: Int) (acc: String): String =\0A    if n == 0 { acc } else {\0A        plum__radix_acc(n / r, r, acc.concat(plum__radix_digit(n - (n / r) * r)))\0A    }\0A\0A// A finite formatting alphabet needs no per-call arrays, byte buffers or\0A// Result cells. Each arm returns an immutable String literal. A global\0A// chars_of table would eagerly allocate all 36 digit cells and its array.\0A// Callers prove 0 <= v < 36; the fallback remains defensive.\0Alet plum__radix_digit (v: Int): String = match v {\0A    0 => \220\22,\0A    1 => \221\22,\0A    2 => \222\22,\0A    3 => \223\22,\0A    4 => \224\22,\0A    5 => \225\22,\0A    6 => \226\22,\0A    7 => \227\22,\0A    8 => \228\22,\0A    9 => \229\22,\0A    10 => \22a\22,\0A    11 => \22b\22,\0A    12 => \22c\22,\0A    13 => \22d\22,\0A    14 => \22e\22,\0A    15 => \22f\22,\0A    16 => \22g\22,\0A    17 => \22h\22,\0A    18 => \22i\22,\0A    19 => \22j\22,\0A    20 => \22k\22,\0A    21 => \22l\22,\0A    22 => \22m\22,\0A    23 => \22n\22,\0A    24 => \22o\22,\0A    25 => \22p\22,\0A    26 => \22q\22,\0A    27 => \22r\22,\0A    28 => \22s\22,\0A    29 => \22t\22,\0A    30 => \22u\22,\0A    31 => \22v\22,\0A    32 => \22w\22,\0A    33 => \22x\22,\0A    34 => \22y\22,\0A    35 => \22z\22,\0A    _ => \22?\22,\0A}\0A\0A/// Lowercase hex, SIGNED: `-255` is `-ff`, not a two's-complement bit\0A/// pattern. `Int.to_hex_bits` is the one that shows the bits.\0Apub let Int.to_hex (n: Int): String = Int.to_radix(n, 16)\0A\0A/// Binary, SIGNED: `-1` is `-1`. `Int.to_bits` shows all 64 bits.\0Apub let Int.to_binary (n: Int): String = Int.to_radix(n, 2)\0A\0A/// Octal, signed. See `Int.to_radix` for other bases.\0Apub let Int.to_octal (n: Int): String = Int.to_radix(n, 8)\0A\0A/// The BIT PATTERN: all 64 bits, two's complement, most significant\0A/// first. This is the one to reach for with a bit field, where a signed\0A/// reading is not what is wanted. `Int.to_bits(-1)` is sixty-four\0A/// ones, while `Int.to_binary(-1)` is \22-1\22. Both are right about\0A/// different questions.\0Apub let Int.to_bits (n: Int): String = plum__int_bits_raw(n, false)\0A\0A/// The same, in hex: sixteen digits, two's complement, zero padded.\0Apub let Int.to_hex_bits (n: Int): String = plum__int_bits_raw(n, true)\0A\0A// Fixed-width bit patterns need one owned result, with no growth buffers.\0Alet plum__int_bits_raw (n: Int) (hex: Bool): String = \22\22\0A\0A// The kernel consumes s and borrows fill, following Perceus argument ownership.\0Alet plum__string_pad_raw (s: String) (fill: String) (left: Int) (right: Int): String = \22\22\0A\0Alet plum__pad (s: String) (width: Int) (fill: String) (mode: Int): String = {\0A    let n = String.char_len(s);\0A    if String.char_len(fill) != 1 || n >= width { s }\0A    else {\0A        let total = width - n;\0A        let left = if mode == 0 { total } else if mode == 1 { 0 } else { total / 2 };\0A        plum__string_pad_raw(s, fill, left, total - left)\0A    }\0A}\0A\0A/// `print` is `println` without the newline. Its `env_var` and\0A/// file/process neighbours moved to the `Os` module in 0.0.9;\0A/// output stayed here, because a program that prints is not\0A/// thereby doing operating-system work.\0Alet print_raw (s: String): Bool = false\0A\0A/// Writes to standard output with NO trailing newline. `println` is\0A/// the one that adds one.\0Apub let print (s: String): Unit = {\0A    print_raw(s);\0A    ()\0A}\0A\0Alet wrapping_add_raw (a: Int) (b: Int): Int = 0\0A\0Alet wrapping_sub_raw (a: Int) (b: Int): Int = 0\0A\0Alet wrapping_mul_raw (a: Int) (b: Int): Int = 0\0A\0A/// Addition that WRAPS on overflow, two's complement, instead of\0A/// stopping the program.\0A///\0A/// `+` is the one to reach for. It aborts on overflow, deliberately,\0A/// because an integer that silently became negative is a wrong\0A/// answer that keeps running. This is for the cases where wrapping is\0A/// the SPECIFICATION rather than an accident: hashes, checksums,\0A/// fixed-width binary protocols, and generators like PCG or\0A/// splitmix64 that are defined mod 2^64.\0A///\0A/// It is a named function and not an operator so that it is visible\0A/// at the call site. Wrapping should be asked for, not defaulted to.\0Apub let Int.wrapping_add (a: Int) (b: Int): Int = wrapping_add_raw(a, b)\0A\0A/// Subtraction that WRAPS on overflow. See `Int.wrapping_add`.\0Apub let Int.wrapping_sub (a: Int) (b: Int): Int = wrapping_sub_raw(a, b)\0A\0A/// Multiplication that WRAPS on overflow. See `Int.wrapping_add`.\0A///\0A/// This is the one most algorithms actually need: FNV-1a, xxHash and\0A/// splitmix64 are all a wrapping multiply by a large constant\0A/// followed by a mix.\0Apub let Int.wrapping_mul (a: Int) (b: Int): Int = wrapping_mul_raw(a, b)\0A\0A// Fixed-width wrapping uses the same named primitive path as Int.\0Alet i8_wrapping_add_raw (a: I8) (b: I8): I8 = 0\0A\0A/// Adds modulo 2^8; interprets the result as signed two’s complement. Ordinary arithmetic remains checked.\0Apub let I8.wrapping_add (a: I8) (b: I8): I8 = i8_wrapping_add_raw(a, b)\0A\0Alet i8_wrapping_sub_raw (a: I8) (b: I8): I8 = 0\0A\0A/// Subtracts modulo 2^8; interprets the result as signed two’s complement. Ordinary arithmetic remains checked.\0Apub let I8.wrapping_sub (a: I8) (b: I8): I8 = i8_wrapping_sub_raw(a, b)\0A\0Alet i8_wrapping_mul_raw (a: I8) (b: I8): I8 = 0\0A\0A/// Multiplies modulo 2^8; interprets the result as signed two’s complement. Ordinary arithmetic remains checked.\0Apub let I8.wrapping_mul (a: I8) (b: I8): I8 = i8_wrapping_mul_raw(a, b)\0A\0Alet i16_wrapping_add_raw (a: I16) (b: I16): I16 = 0\0A\0A/// Adds modulo 2^16; interprets the result as signed two’s complement. Ordinary arithmetic remains checked.\0Apub let I16.wrapping_add (a: I16) (b: I16): I16 = i16_wrapping_add_raw(a, b)\0A\0Alet i16_wrapping_sub_raw (a: I16) (b: I16): I16 = 0\0A\0A/// Subtracts modulo 2^16; interprets the result as signed two’s complement. Ordinary arithmetic remains checked.\0Apub let I16.wrapping_sub (a: I16) (b: I16): I16 = i16_wrapping_sub_raw(a, b)\0A\0Alet i16_wrapping_mul_raw (a: I16) (b: I16): I16 = 0\0A\0A/// Multiplies modulo 2^16; interprets the result as signed two’s complement. Ordinary arithmetic remains checked.\0Apub let I16.wrapping_mul (a: I16) (b: I16): I16 = i16_wrapping_mul_raw(a, b)\0A\0Alet i32_wrapping_add_raw (a: I32) (b: I32): I32 = 0\0A\0A/// Adds modulo 2^32; interprets the result as signed two’s complement. Ordinary arithmetic remains checked.\0Apub let I32.wrapping_add (a: I32) (b: I32): I32 = i32_wrapping_add_raw(a, b)\0A\0Alet i32_wrapping_sub_raw (a: I32) (b: I32): I32 = 0\0A\0A/// Subtracts modulo 2^32; interprets the result as signed two’s complement. Ordinary arithmetic remains checked.\0Apub let I32.wrapping_sub (a: I32) (b: I32): I32 = i32_wrapping_sub_raw(a, b)\0A\0Alet i32_wrapping_mul_raw (a: I32) (b: I32): I32 = 0\0A\0A/// Multiplies modulo 2^32; interprets the result as signed two’s complement. Ordinary arithmetic remains checked.\0Apub let I32.wrapping_mul (a: I32) (b: I32): I32 = i32_wrapping_mul_raw(a, b)\0A\0Alet u8_wrapping_add_raw (a: U8) (b: U8): U8 = 0\0A\0A/// Adds modulo 2^8; returns the unsigned low bits. Ordinary arithmetic remains checked.\0Apub let U8.wrapping_add (a: U8) (b: U8): U8 = u8_wrapping_add_raw(a, b)\0A\0Alet u8_wrapping_sub_raw (a: U8) (b: U8): U8 = 0\0A\0A/// Subtracts modulo 2^8; returns the unsigned low bits. Ordinary arithmetic remains checked.\0Apub let U8.wrapping_sub (a: U8) (b: U8): U8 = u8_wrapping_sub_raw(a, b)\0A\0Alet u8_wrapping_mul_raw (a: U8) (b: U8): U8 = 0\0A\0A/// Multiplies modulo 2^8; returns the unsigned low bits. Ordinary arithmetic remains checked.\0Apub let U8.wrapping_mul (a: U8) (b: U8): U8 = u8_wrapping_mul_raw(a, b)\0A\0Alet u16_wrapping_add_raw (a: U16) (b: U16): U16 = 0\0A\0A/// Adds modulo 2^16; returns the unsigned low bits. Ordinary arithmetic remains checked.\0Apub let U16.wrapping_add (a: U16) (b: U16): U16 = u16_wrapping_add_raw(a, b)\0A\0Alet u16_wrapping_sub_raw (a: U16) (b: U16): U16 = 0\0A\0A/// Subtracts modulo 2^16; returns the unsigned low bits. Ordinary arithmetic remains checked.\0Apub let U16.wrapping_sub (a: U16) (b: U16): U16 = u16_wrapping_sub_raw(a, b)\0A\0Alet u16_wrapping_mul_raw (a: U16) (b: U16): U16 = 0\0A\0A/// Multiplies modulo 2^16; returns the unsigned low bits. Ordinary arithmetic remains checked.\0Apub let U16.wrapping_mul (a: U16) (b: U16): U16 = u16_wrapping_mul_raw(a, b)\0A\0Alet u32_wrapping_add_raw (a: U32) (b: U32): U32 = 0\0A\0A/// Adds modulo 2^32; returns the unsigned low bits. Ordinary arithmetic remains checked.\0Apub let U32.wrapping_add (a: U32) (b: U32): U32 = u32_wrapping_add_raw(a, b)\0A\0Alet u32_wrapping_sub_raw (a: U32) (b: U32): U32 = 0\0A\0A/// Subtracts modulo 2^32; returns the unsigned low bits. Ordinary arithmetic remains checked.\0Apub let U32.wrapping_sub (a: U32) (b: U32): U32 = u32_wrapping_sub_raw(a, b)\0A\0Alet u32_wrapping_mul_raw (a: U32) (b: U32): U32 = 0\0A\0A/// Multiplies modulo 2^32; returns the unsigned low bits. Ordinary arithmetic remains checked.\0Apub let U32.wrapping_mul (a: U32) (b: U32): U32 = u32_wrapping_mul_raw(a, b)\0A\0Alet u64_wrapping_add_raw (a: U64) (b: U64): U64 = 0\0A\0A/// Adds modulo 2^64; returns the unsigned low bits. Ordinary arithmetic remains checked.\0Apub let U64.wrapping_add (a: U64) (b: U64): U64 = u64_wrapping_add_raw(a, b)\0A\0Alet u64_wrapping_sub_raw (a: U64) (b: U64): U64 = 0\0A\0A/// Subtracts modulo 2^64; returns the unsigned low bits. Ordinary arithmetic remains checked.\0Apub let U64.wrapping_sub (a: U64) (b: U64): U64 = u64_wrapping_sub_raw(a, b)\0A\0Alet u64_wrapping_mul_raw (a: U64) (b: U64): U64 = 0\0A\0A/// Multiplies modulo 2^64; returns the unsigned low bits. Ordinary arithmetic remains checked.\0Apub let U64.wrapping_mul (a: U64) (b: U64): U64 = u64_wrapping_mul_raw(a, b)\0A\0A// Fixed-width bit helpers retain the Int helper conventions.\0Alet i8_shr_logical_raw (x: I8) (n: Int): I8 = 0\0A\0A/// Shifts the low 8 bits right with zero fill. Nonpositive counts return x; counts at least 8 return zero. The result retains I8.\0Apub let I8.shr_logical (x: I8) (n: Int): I8 = i8_shr_logical_raw(x, n)\0A\0Alet i8_count_ones_raw (x: I8): Int = 0\0A\0A/// Counts one bits within the 8-bit representation, excluding any sign extension. Returns an Int in 0..8 inclusive.\0Apub let I8.count_ones (x: I8): Int = i8_count_ones_raw(x)\0A\0Alet i16_shr_logical_raw (x: I16) (n: Int): I16 = 0\0A\0A/// Shifts the low 16 bits right with zero fill. Nonpositive counts return x; counts at least 16 return zero. The result retains I16.\0Apub let I16.shr_logical (x: I16) (n: Int): I16 = i16_shr_logical_raw(x, n)\0A\0Alet i16_count_ones_raw (x: I16): Int = 0\0A\0A/// Counts one bits within the 16-bit representation, excluding any sign extension. Returns an Int in 0..16 inclusive.\0Apub let I16.count_ones (x: I16): Int = i16_count_ones_raw(x)\0A\0Alet i32_shr_logical_raw (x: I32) (n: Int): I32 = 0\0A\0A/// Shifts the low 32 bits right with zero fill. Nonpositive counts return x; counts at least 32 return zero. The result retains I32.\0Apub let I32.shr_logical (x: I32) (n: Int): I32 = i32_shr_logical_raw(x, n)\0A\0Alet i32_count_ones_raw (x: I32): Int = 0\0A\0A/// Counts one bits within the 32-bit representation, excluding any sign extension. Returns an Int in 0..32 inclusive.\0Apub let I32.count_ones (x: I32): Int = i32_count_ones_raw(x)\0A\0Alet u8_shr_logical_raw (x: U8) (n: Int): U8 = 0\0A\0A/// Shifts the low 8 bits right with zero fill. Nonpositive counts return x; counts at least 8 return zero. The result retains U8.\0Apub let U8.shr_logical (x: U8) (n: Int): U8 = u8_shr_logical_raw(x, n)\0A\0Alet u8_count_ones_raw (x: U8): Int = 0\0A\0A/// Counts one bits within the 8-bit representation, excluding any sign extension. Returns an Int in 0..8 inclusive.\0Apub let U8.count_ones (x: U8): Int = u8_count_ones_raw(x)\0A\0Alet u16_shr_logical_raw (x: U16) (n: Int): U16 = 0\0A\0A/// Shifts the low 16 bits right with zero fill. Nonpositive counts return x; counts at least 16 return zero. The result retains U16.\0Apub let U16.shr_logical (x: U16) (n: Int): U16 = u16_shr_logical_raw(x, n)\0A\0Alet u16_count_ones_raw (x: U16): Int = 0\0A\0A/// Counts one bits within the 16-bit representation, excluding any sign extension. Returns an Int in 0..16 inclusive.\0Apub let U16.count_ones (x: U16): Int = u16_count_ones_raw(x)\0A\0Alet u32_shr_logical_raw (x: U32) (n: Int): U32 = 0\0A\0A/// Shifts the low 32 bits right with zero fill. Nonpositive counts return x; counts at least 32 return zero. The result retains U32.\0Apub let U32.shr_logical (x: U32) (n: Int): U32 = u32_shr_logical_raw(x, n)\0A\0Alet u32_count_ones_raw (x: U32): Int = 0\0A\0A/// Counts one bits within the 32-bit representation, excluding any sign extension. Returns an Int in 0..32 inclusive.\0Apub let U32.count_ones (x: U32): Int = u32_count_ones_raw(x)\0A\0Alet u64_shr_logical_raw (x: U64) (n: Int): U64 = 0\0A\0A/// Shifts the low 64 bits right with zero fill. Nonpositive counts return x; counts at least 64 return zero. The result retains U64.\0Apub let U64.shr_logical (x: U64) (n: Int): U64 = u64_shr_logical_raw(x, n)\0A\0Alet u64_count_ones_raw (x: U64): Int = 0\0A\0A/// Counts one bits within the 64-bit representation, excluding any sign extension. Returns an Int in 0..64 inclusive.\0Apub let U64.count_ones (x: U64): Int = u64_count_ones_raw(x)\0A\0A// i traverses the borrowed prefix [0, n); no optional byte cell is needed.\0Alet plum__string_hash_acc (b: Bytes) (i: Int) (n: Int) (h: Int): Int =\0A    if i >= n { h & 9223372036854775807 }\0A    else {\0A        plum__string_hash_acc(b, i + 1, n, Int.wrapping_mul(h ^ bytes_at_raw(b, i), 1099511628211))\0A    }\0A\0A/// A hash of the string's bytes, for bucketing.\0A///\0A/// Not stable across releases and not cryptographic — do not persist\0A/// it, and do not use it for anything security-related.\0A///\0A/// Borrows input and allocates no temporary storage while hashing.\0A///\0A/// FNV-1a, kept in Plum now that `Int.wrapping_mul` can express its\0A/// modulo-2^64 multiply. The final sign-bit mask is required: `Map`\0A/// uses the result with `%`, which needs a non-negative index.\0Apub let String.hash (s: String): Int = {\0A    let b = s.as_bytes();\0A    plum__string_hash_acc(b, 0, b.len(), -3750763034362895579)\0A}\0A\0A/// Whether a one-character string is an ASCII space, tab, newline or\0A/// carriage return. Unicode spaces are not included.\0Apub let String.is_ascii_ws (c: String): Bool = c == \22 \22 || c == \22\5Ct\22 || c == \22\5Cn\22 || c == \22\5Cr\22\0A\0A// KMP failure links: the longest proper prefix that is also a suffix\0A// of the bytes matched so far. Following a link never advances the\0A// input, and never repeats comparisons for a discarded prefix.\0Alet plum__string_search_fallback\0A    (needle: Bytes)\0A    (links: Array[Int])\0A    (matched: Int)\0A    (byte: Int): Int\0A=\0A    if matched > 0 && bytes_at_raw(needle, matched) != byte {\0A        plum__string_search_fallback(needle, links, links[matched - 1], byte)\0A    } else { matched }\0A\0A// Self-rebinding keeps the table uniquely owned while it grows, so\0A// push reuses storage and total table construction remains linear.\0Alet plum__string_search_links (needle: Bytes): Array[Int] = {\0A    let mut links = [0];\0A    let mut matched = 0;\0A    for i in 1..bytes_len_raw(needle) {\0A        let byte = bytes_at_raw(needle, i);\0A        let prefix = plum__string_search_fallback(needle, links, matched, byte);\0A        matched = if bytes_at_raw(needle, prefix) == byte { prefix + 1 } else { 0 };\0A        links = links.push(matched);\0A    };\0A    links\0A}\0A\0Alet plum__string_search_bytes\0A    (s: Bytes)\0A    (needle: Bytes)\0A    (links: Array[Int])\0A    (i: Int)\0A    (matched: Int): Option[Int]\0A=\0A    if i >= bytes_len_raw(s) { None }\0A    else {\0A        let byte = bytes_at_raw(s, i);\0A        let prefix = plum__string_search_fallback(needle, links, matched, byte);\0A        let next = if bytes_at_raw(needle, prefix) == byte { prefix + 1 } else { 0 };\0A        if next == bytes_len_raw(needle) { Some(i + 1 - next) }\0A        else { plum__string_search_bytes(s, needle, links, i + 1, next) }\0A    }\0A\0A// Count non-continuation bytes in a borrowed UTF-8 prefix. Shared by\0A// character counts and the conversion of search offsets to codepoints.\0Alet plum__string_count_starts (s: Bytes) (end: Int) (i: Int) (count: Int): Int =\0A    if i >= end { count }\0A    else {\0A        let byte = bytes_at_raw(s, i);\0A        plum__string_count_starts(\0A            s,\0A            end,\0A            i + 1,\0A            count + if byte < 128 || byte >= 192 { 1 } else { 0 }\0A        )\0A    }\0A\0A/// The CHARACTER index where `needle` first appears, or `None`.\0A/// An empty needle matches at zero. Uses linear time in the UTF-8\0A/// byte lengths and auxiliary storage proportional to the needle's\0A/// byte length; the input text is borrowed without copying.\0Apub let String.index_of (s: String) (needle: String): Option[Int] =\0A    if needle.len() == 0 { Some(0) }\0A    else if needle.len() > s.len() { None }\0A    else {\0A        let text = bytes_of_str_raw(s);\0A        let pattern = bytes_of_str_raw(needle);\0A        let links = plum__string_search_links(pattern);\0A        match plum__string_search_bytes(text, pattern, links, 0, 0) {\0A            Some(offset) => Some(plum__string_count_starts(text, offset, 0, 0)),\0A            None => None,\0A        }\0A    }\0A\0A/// --- Namespaced forms of the string METHODS ---\0A///\0A/// `.len()`, `.split()`, `.replace()` and friends are compiler\0A/// PRIMITIVES lowered straight to IR, so they existed only as\0A/// methods, while `String.slice`/`index_of`/`lines`/`repeat`/\0A/// `trim_start`/`trim_end` are ordinary prelude functions and so\0A/// existed only namespaced. That split tracks how each one happens\0A/// to be implemented, which is invisible from outside and produced\0A/// a genuinely confusing surface: `\22x\22.trim()` worked and\0A/// `String.trim(\22x\22)` did not, while `String.trim_start(\22x\22)`\0A/// worked and `\22x\22.trim_start()` did not. Same family, opposite\0A/// rules, no way to tell which without trying.\0A///\0A/// The rule now: `String.f(s, ..)` always works. Some also have\0A/// method sugar. These wrappers cost nothing when unused --\0A/// dead-function elimination drops them.\0A/// The number of BYTES. `String.char_len` is the character count, and\0A/// the two differ for anything outside ASCII.\0Apub let String.len (s: String): Int = s.len()\0A\0A/// Splits on every occurrence of `sep`.\0A///\0A/// A separator at either end produces an empty piece, so splitting\0A/// `\5C\22,a,\5C\22` on `\5C\22,\5C\22` gives three pieces. Splitting on an empty\0A/// separator gives the characters.\0Apub let String.split (s: String) (sep: String): Array[String] = s.split(sep)\0A\0A/// Whether `needle` appears anywhere.\0Apub let String.contains (s: String) (needle: String): Bool = s.contains(needle)\0A\0A/// Whether the string begins with `prefix`.\0Apub let String.starts_with (s: String) (prefix: String): Bool = s.starts_with(prefix)\0A\0A/// Whether the string ends with `suffix`.\0Apub let String.ends_with (s: String) (suffix: String): Bool = s.ends_with(suffix)\0A\0A/// Every occurrence of `from` replaced with `to`. An empty `from`\0A/// leaves the string alone rather than looping.\0A/// Unchanged nonempty results share the input cell. Equal-byte-length changes\0A/// may reuse uniquely owned storage; other changed results allocate exactly.\0A/// Empty results use static storage.\0Apub let String.replace (s: String) (from: String) (to: String): String = s.replace(from, to)\0A\0A/// Uppercased using the platform's one-codepoint Unicode mapping. This\0A/// does not perform multi-codepoint expansions (for example, ß to SS).\0A/// POSIX uses the initialized UTF-8 locale; Windows maps the BMP only\0A/// and leaves supplementary codepoints unchanged. Mappings can vary by OS.\0A/// Unchanged nonempty results share input storage. Changed results may reuse\0A/// uniquely owned storage when every mapped codepoint keeps its byte width;\0A/// otherwise they allocate exactly. Empty results use static storage.\0Apub let String.to_upper (s: String): String = s.to_upper()\0A\0A/// Lowercased with the same platform mapping and storage rules as `String.to_upper`.\0Apub let String.to_lower (s: String): String = s.to_lower()\0A\0A/// Whitespace removed from both ends, including Unicode spaces.\0A/// Unchanged input shares its owned storage; changed input copies only\0A/// the retained UTF-8 bytes.\0Apub let String.trim (s: String): String = s.trim()\0A\0Alet bytes_of_str_raw (s: String): Bytes = bytes_of_str_raw(s)\0A\0Alet str_of_bytes_raw (b: Bytes): String = \22\22\0A\0Alet bytes_len_raw (b: Bytes): Int = 0\0A\0Alet bytes_at_raw (b: Bytes) (i: Int): Int = 0\0A\0Alet bytes_slice_raw (b: Bytes) (start: Int) (end: Int): Bytes = bytes_slice_raw(b, start, end)\0A\0Alet bytes_concat_raw (a: Bytes) (b: Bytes): Bytes = bytes_concat_raw(a, b)\0A\0Alet bytes_from_array_raw (xs: Array[Int]): Bytes = bytes_from_array_raw(xs)\0A\0A/// No bytes.\0Apub let Bytes.empty (): Bytes = bytes_of_str_raw(\22\22)\0A\0A/// How many bytes.\0Apub let Bytes.len (b: Bytes): Int = bytes_len_raw(b)\0A\0A/// Whether there are no bytes.\0Apub let Bytes.is_empty (b: Bytes): Bool = bytes_len_raw(b) == 0\0A\0A/// Free in both directions at runtime; the DIRECTION is what differs.\0A/// Every String is bytes, so this one is total.\0A/// The string's bytes, as UTF-8. No copy of the text is decoded, so\0A/// this is the cheap direction.\0Apub let String.as_bytes (s: String): Bytes = bytes_of_str_raw(s)\0A\0A/// The string's UTF-8 bytes. The same as `String.as_bytes`, named for\0A/// a caller thinking in bytes.\0Apub let Bytes.from_string (s: String): Bytes = bytes_of_str_raw(s)\0A\0A/// Not every Bytes is a String, so this one is not. This is the ONE\0A/// place the UTF-8 promise is established rather than assumed. The\0A/// reason the two types are distinct at all.\0A/// Written in Plum, not as a runtime primitive, because it needs\0A/// nothing the two byte primitives above do not already provide --\0A/// and this prelude's rule is that only what CANNOT be written here\0A/// goes into hand-written IR.\0A///\0A/// Full UTF-8, not just a lead-byte check: the ranges below reject\0A/// overlong encodings (C0/C1, and E0/F0 with a too-small second\0A/// byte), the UTF-16 surrogate block (ED A0..BF, which is why ED is\0A/// singled out), and anything past U+10FFFF (F5..FF, and F4 with a\0A/// second byte over 8F). A validator that only checked continuation\0A/// bytes would accept all four, and each one is a real way for a\0A/// decoder downstream to disagree about what this buffer says.\0Alet plum__is_cont (b: Bytes) (i: Int): Bool = {\0A    let v = bytes_at_raw(b, i);\0A    v >= 128 && v <= 191\0A}\0A\0Alet plum__utf8_ok (b: Bytes) (i: Int) (n: Int): Bool =\0A    if i >= n { true }\0A    else {\0A        let c = bytes_at_raw(b, i);\0A        // ASCII.\0A        if c < 128 { plum__utf8_ok(b, i + 1, n) }\0A        // A continuation byte with no lead (80..BF), or an overlong\0A        // two-byte form (C0/C1).\0A        else if c < 194 { false }\0A        // Two bytes: C2..DF.\0A        else if c < 224 {\0A            if i + 1 >= n { false }\0A            else if !plum__is_cont(b, i + 1) { false }\0A            else { plum__utf8_ok(b, i + 2, n) }\0A        }\0A        // Three bytes: E0..EF. E0 must not be overlong (second byte\0A        // A0..BF) and ED must not encode a surrogate (second byte\0A        // 80..9F).\0A        else if c < 240 {\0A            if i + 2 >= n { false }\0A            else {\0A                let c1 = bytes_at_raw(b, i + 1);\0A                let lo = if c == 224 { 160 } else { 128 };\0A                let hi = if c == 237 { 159 } else { 191 };\0A                if c1 < lo || c1 > hi { false }\0A                else if !plum__is_cont(b, i + 2) { false }\0A                else { plum__utf8_ok(b, i + 3, n) }\0A            }\0A        }\0A        // Four bytes: F0..F4. F0 must not be overlong (second byte\0A        // 90..BF) and F4 must not exceed U+10FFFF (second byte\0A        // 80..8F).\0A        else if c < 245 {\0A            if i + 3 >= n { false }\0A            else {\0A                let c1 = bytes_at_raw(b, i + 1);\0A                let lo = if c == 240 { 144 } else { 128 };\0A                let hi = if c == 244 { 143 } else { 191 };\0A                if c1 < lo || c1 > hi { false }\0A                else if !plum__is_cont(b, i + 2) { false }\0A                else if !plum__is_cont(b, i + 3) { false }\0A                else { plum__utf8_ok(b, i + 4, n) }\0A            }\0A        }\0A        // F5..FF: past the end of the encodable range.\0A        else { false }\0A    }\0A\0A/// Whether these bytes are valid UTF-8, without building a string.\0Apub let Bytes.is_utf8 (b: Bytes): Bool = plum__utf8_ok(b, 0, bytes_len_raw(b))\0A\0A/// Decodes UTF-8 into a string.\0A///\0A/// `Err` when the bytes are not valid UTF-8 — which is why this is a\0A/// `Result` and `String.as_bytes` is not. Bytes arrive from files and\0A/// sockets, and not all of them are text.\0Apub let Bytes.as_string (b: Bytes): Result[String, String] =\0A    if Bytes.is_utf8(b) { Ok(str_of_bytes_raw(b)) }\0A    else { Err(\22Bytes.as_string: not valid UTF-8\22) }\0A\0A/// BYTE indices, throughout. `Bytes.slice` can and will split a\0A/// multi-byte character in half, which is the operation `String`\0A/// deliberately does not offer, and the reason a program reaching for\0A/// bytes reached for them.\0A///\0A/// Clamped rather than aborting, matching `Array.slice`.\0A/// Bytes from `start` up to but not including `end`, with bounds\0A/// clamped. A slice can split a multi-byte character, so the result is\0A/// not guaranteed to be valid UTF-8.\0A/// Whole ranges share their owned storage; empty ranges use shared static\0A/// storage. Other ranges copy only the selected bytes into compact storage.\0Apub let Bytes.slice (b: Bytes) (start: Int) (end: Int): Bytes = {\0A    let n = bytes_len_raw(b);\0A    let lo = if start < 0 { 0 } else if start > n { n } else { start };\0A    let hi = if end < lo { lo } else if end > n { n } else { end };\0A    bytes_slice_raw(b, lo, hi)\0A}\0A\0A/// The two runs of bytes, joined.\0Apub let Bytes.concat (a: Bytes) (b: Bytes): Bytes = bytes_concat_raw(a, b)\0A\0A/// `None` rather than an abort for an out-of-range index: a byte\0A/// buffer is usually being walked by a parser that does not know how\0A/// long it is yet, and `Option` is how the rest of this prelude says\0A/// \22nothing there\22 (`Array.first`, `Map.get`).\0A/// The byte at `i` as a number 0-255, or `None` when out of range.\0Apub let Bytes.at (b: Bytes) (i: Int): Option[Int] =\0A    if i < 0 { None } else if i >= bytes_len_raw(b) { None } else { Some(bytes_at_raw(b, i)) }\0A\0A/// Each element is one byte, 0-255. Values outside that range are\0A/// masked to their low 8 bits rather than rejected. `from_array` is\0A/// a construction helper, and a `Result` here would put error handling\0A/// in front of every literal buffer.\0A/// Bytes from numbers. Values outside 0-255 are truncated to their\0A/// low eight bits.\0Apub let Bytes.from_array (xs: Array[Int]): Bytes = bytes_from_array_raw(xs)\0A\0A/// The way back in from C, and the counterpart to `.as_cstr()`.\0A///\0A/// Takes an explicit LENGTH, which is the whole difference from\0A/// `RawCStr.as_string()`: that one stops at the first NUL because a\0A/// `char*` alone cannot say how long it is, and any C API returning\0A/// bytes has to hand back a count separately. Given the count, this\0A/// is binary-safe. Given a wrong one, it reads whatever is\0A/// next in memory, exactly as the equivalent C would.\0A///\0A/// COPIES into a fresh cell. C buffers are routinely static, reused\0A/// on the next call, or freed by the callee; the copy is what makes\0A/// the result an ordinary owned Plum value.\0Alet bytes_from_cstr_raw (c: RawCStr) (len: Int): Bytes = unsafe { bytes_from_cstr_raw(c, len) }\0A\0A/// Copies `len` bytes from a C pointer.\0A///\0A/// Requires an `unsafe` block and all arguments at the call site;\0A/// it cannot be used as a function value or partially applied.\0A/// For positive `len`, the caller must ensure `c` points to at least\0A/// `len` readable bytes that remain valid throughout the copy.\0A/// No pointer, lifetime, or allocation-bound validation is performed.\0A/// Nonpositive lengths return empty bytes without reading `c`.\0A/// The result owns a fresh copy, including any embedded NUL bytes;\0A/// the source is neither retained nor freed.\0Apub let Bytes.from_cstr (c: RawCStr) (len: Int): Bytes = unsafe {\0A    if len <= 0 { Bytes.empty() } else { bytes_from_cstr_raw(c, len) }\0A}\0A\0A// Borrows b and returns independent owned Array[Int] storage.\0Alet plum__bytes_to_array_raw (b: Bytes): Array[Int] = []\0A\0A/// The bytes as numbers 0-255, using one exact-sized array allocation.\0A/// The result is independent of the input; empty results use static storage.\0Apub let Bytes.to_array (b: Bytes): Array[Int] = plum__bytes_to_array_raw(b)\0A\0A/// Lowercase hex, two characters per byte, no separator.\0A///\0A/// This is what `.to_string()` would have to be if `Bytes` had one,\0A/// and the reason it does not: hex is A rendering, not THE rendering,\0A/// and picking it silently would make `.to_string()` mean something\0A/// different on this type than on every other. Named explicitly, the\0A/// caller decides.\0Alet plum__hex_digit (v: Int): String =\0A    if v == 0 { \220\22 } else if v == 1 { \221\22 } else if v == 2 { \222\22 } else if v == 3 { \223\22 }\0A    else if v == 4 { \224\22 } else if v == 5 { \225\22 } else if v == 6 { \226\22 } else if v == 7 { \227\22 }\0A    else if v == 8 { \228\22 } else if v == 9 { \229\22 } else if v == 10 { \22a\22 } else if v == 11 { \22b\22 }\0A    else if v == 12 { \22c\22 } else if v == 13 { \22d\22 } else if v == 14 { \22e\22 } else { \22f\22 }\0A\0A// Implemented by the generated runtime; borrows b and returns owned storage.\0Alet plum__bytes_to_hex_raw (b: Bytes): String = \22\22\0A\0A/// Lowercase hex, two characters per byte. `Encoding.hex_decode`\0A/// reads it back. A nonempty result uses one exact-sized allocation;\0A/// an empty result uses shared static storage.\0Apub let Bytes.to_hex (b: Bytes): String = plum__bytes_to_hex_raw(b)\0A\0A// The runtime plans and fills a known-size result while borrowing all inputs.\0Alet plum__string_join_raw (parts: Array[String]) (sep: String): String = \22\22\0A\0A/// Joins parts in order with `sep` between adjacent entries. Empty parts\0A/// still contribute separator boundaries.\0A///\0A/// Copies parts and separators directly into one exact-sized allocation.\0A/// Empty output uses shared static storage.\0Apub let Array.join (parts: Array[String]) (sep: String): String = plum__string_join_raw(parts, sep)\0A\0A/// Int's minimum, which CANNOT be written as a literal: its\0A/// magnitude is out of range as a positive number, so the lexer\0A/// rejects `9223372036854775808` before any sign is applied.\0Alet plum__int_min (u: Unit): Int = 0 - 9223372036854775807 - 1\0A\0A// chars_of groups following continuation bytes with the preceding byte,\0A// even for unsafe raw Strings. Only accept a sign/digit as a one-byte unit.\0Alet plum__string_parse_int_acc\0A    (s: String)\0A    (bytes: Bytes)\0A    (n: Int)\0A    (i: Int)\0A    (acc: Int)\0A    (any: Bool)\0A    (negative: Bool): Result[Int, String]\0A=\0A    if i >= n { if any { Ok(acc) } else { Err(\22expected at least one digit\22) } }\0A    else {\0A        let byte = bytes_at_raw(bytes, i);\0A        if byte < 48 || byte > 57 || (i + 1 < n && plum__is_cont(bytes, i + 1)) {\0A            // Accepted prefix units are single ASCII bytes, so i is also\0A            // the character index here. Reuse String.slice's grouping for\0A            // the first rejected unit instead of adding another decoder.\0A            Err(\22expected a digit, found \22.concat(String.slice(s, i, i + 1)))\0A        } else {\0A            let digit = byte - 48;\0A            // Check range before checked multiplication/addition. Negative\0A            // accumulation represents Int::MIN without negating its magnitude.\0A            if negative {\0A                if acc < 0 - 922337203685477580 { Err(\22integer out of range\22) }\0A                else if acc * 10 < plum__int_min(()) + digit { Err(\22integer out of range\22) }\0A                else {\0A                    plum__string_parse_int_acc(s, bytes, n, i + 1, acc * 10 - digit, true, negative)\0A                }\0A            } else if acc > 922337203685477580 { Err(\22integer out of range\22) }\0A            else if acc * 10 > 9223372036854775807 - digit { Err(\22integer out of range\22) }\0A            else {\0A                plum__string_parse_int_acc(s, bytes, n, i + 1, acc * 10 + digit, true, negative)\0A            }\0A        }\0A    }\0A\0A/// Parses a decimal integer, with an optional leading `-`.\0A///\0A/// `Err` on anything else, including an empty string, surrounding\0A/// spaces, and a number too large for an `Int`. No `0x` or `0b`\0A/// prefixes — this is the inverse of `to_string`, not a literal\0A/// parser. Scans ASCII digits directly without a character array;\0A/// the first invalid character keeps the existing diagnostic.\0Apub let String.parse_int (s: String): Result[Int, String] = {\0A    let bytes = bytes_of_str_raw(s);\0A    let n = bytes_len_raw(bytes);\0A    if n == 0 { Err(\22empty string\22) } else {\0A        let negative = bytes_at_raw(bytes, 0) == 45 && (n == 1 || !plum__is_cont(bytes, 1));\0A        plum__string_parse_int_acc(s, bytes, n, if negative { 1 } else { 0 }, 0, false, negative)\0A    }\0A}\0A\0A/// `String.parse_float` DELEGATES to the JSON number parser below,\0A/// exactly as the real prelude does.\0A///\0A/// It used to have a hand-written parser here, on the reasoning that\0A/// dragging a JSON parser in to read a float would be absurd. That\0A/// reasoning cost twice. The hand-written version accumulated the\0A/// fraction digit by digit against a repeatedly-divided 0.1, so\0A/// `0.000001` parsed as 1.0000000000000002e-06, invisible until\0A/// floats started printing every digit that matters. And its own\0A/// comment admitted the second cost: \22no exponent, which is a real\0A/// narrowing, stated rather than discovered\22. Stated, but it made\0A/// the two compilers DISAGREE. `String.parse_float(\221e3\22)` gave\0A/// 1000 under the real compiler and an error here.\0A///\0A/// The JSON parser was already in this same prelude, already\0A/// handling exponents, already correct. Reusing it is not absurd;\0A/// writing a second one was.\0A/// Overflow returns `Err`; underflow follows binary64 rounding to a\0A/// subnormal value or signed zero.\0Apub let String.parse_float (s: String): Result[Float, String] = {\0A    let cs = bytes_of_str_raw(s);\0A    match parse_number(cs, 0) {\0A        Ok(r) => if r.next_pos == bytes_len_raw(cs) { Ok(r.value) } else {\0A            Err(\22trailing characters after number\22)\0A        },\0A        Err(e) => Err(e),\0A    }\0A}\0A\0A// --- Sorting ---\0A\0A// Merge into a fresh, uniquely owned accumulator. Tail calls move it\0A// into the next push, so growth is amortized O(1) per element. Taking\0A// the left element on equality preserves the original order of ties.\0Alet plum__array_sort_merge_acc[T]\0A    (left: Array[T])\0A    (right: Array[T])\0A    (le: (T, T) -> Bool)\0A    (i: Int)\0A    (j: Int)\0A    (acc: Array[T]): Array[T]\0A=\0A    if i >= left.len() {\0A        if j >= right.len() { acc }\0A        else { plum__array_sort_merge_acc(left, right, le, i, j + 1, acc.push(right[j])) }\0A    } else if j >= right.len() {\0A        plum__array_sort_merge_acc(left, right, le, i + 1, j, acc.push(left[i]))\0A    } else if le(left[i], right[j]) {\0A        plum__array_sort_merge_acc(left, right, le, i + 1, j, acc.push(left[i]))\0A    } else {\0A        plum__array_sort_merge_acc(left, right, le, i, j + 1, acc.push(right[j]))\0A    }\0A\0A// Split index ranges rather than copying slices of the input. Only\0A// the sorted runs and merge output allocate, with O(n) peak storage\0A// and O(log n) stack depth for the recursive splits.\0Alet plum__array_sort_range[T] (arr: Array[T]) (le: (T, T) -> Bool) (lo: Int) (hi: Int): Array[T] =\0A    if hi <= lo { [] }\0A    else if hi - lo == 1 { [arr[lo]] }\0A    else {\0A        let mid = lo + (hi - lo) / 2;\0A        let left = plum__array_sort_range(arr, le, lo, mid);\0A        let right = plum__array_sort_range(arr, le, mid, hi);\0A        plum__array_sort_merge_acc(left, right, le, 0, 0, [])\0A    }\0A\0A/// Sorted by a \5C\22less than or equal\5C\22 predicate.\0A///\0A/// STABLE: elements `le` considers equivalent keep their original\0A/// order, which is what makes sorting by one key and then another\0A/// produce the ordering people expect.\0A///\0A/// Merge sort with O(n log n) comparisons and O(n) auxiliary storage.\0Apub let Array.sort_by[T] (arr: Array[T]) (le: (T, T) -> Bool): Array[T] =\0A    plum__array_sort_range(arr, le, 0, arr.len())\0A\0A/// Sorted ascending.\0Apub let Array.sort_int (arr: Array[Int]): Array[Int] = Array.sort_by(arr, |a: Int, b: Int| a <= b)\0A\0A/// Sorted ascending. NaN does not compare, so an array containing one\0A/// has no meaningful order.\0Apub let Array.sort_float (arr: Array[Float]): Array[Float] =\0A    Array.sort_by(arr, |a: Float, b: Float| a <= b)\0A\0A// `Array.sort_string` is deliberately ABSENT: the real prelude compares\0A// via `a.runes()`, and this compiler has no `.runes()` primitive. It\0A// belongs with `Float.sqrt` and friends -- the group that needs a\0A// runtime primitive rather than prelude source -- not here.\0A\0A// --- Zip ---\0A\0A/// A named struct, not a tuple, exactly as the real prelude has it.\0Apub struct Zipped[A, B] { pub first: A, pub second: B }\0A\0A// The current compiler lowers this private traversal to an exact-sized\0A// array and a paired fill. The source body supports older bootstrap compilers.\0Alet plum__array_zip_with_raw[T, U, V]\0A    (a: Array[T])\0A    (b: Array[U])\0A    (pair: (T, U) -> V): Array[V]\0A= {\0A    let mut out = [];\0A    for i in 0..Int.min(a.len(), b.len()) {\0A        out = out.push(pair(a[i], b[i]));\0A    };\0A    out\0A}\0A\0A/// Pairs elements positionally, stopping at the shorter array.\0Apub let Array.zip[T, U] (a: Array[T]) (b: Array[U]): Array[Zipped[T, U]] =\0A    plum__array_zip_with_raw(a, b, |first, second| Zipped { first: first, second: second })\0A\0A// --- String trimming ---\0A\0Alet plum__string_trim_start_raw (s: String): String = \22\22\0A\0Alet plum__string_trim_end_raw (s: String): String = \22\22\0A\0A/// Whitespace removed from the start, using the same Unicode whitespace\0A/// predicate as String.trim. Unchanged input shares its owned storage;\0A/// changed nonempty input copies only the retained UTF-8 bytes. Empty\0A/// results use shared static storage.\0Apub let String.trim_start (s: String): String = plum__string_trim_start_raw(s)\0A\0A/// Whitespace removed from the end, using the same Unicode whitespace\0A/// predicate as String.trim. Unchanged input shares its owned storage;\0A/// changed nonempty input copies only the retained UTF-8 bytes. Empty\0A/// results use shared static storage.\0Apub let String.trim_end (s: String): String = plum__string_trim_end_raw(s)\0A\0A/// Split on newlines.\0A///\0A/// A trailing newline produces a final empty piece, since the text\0A/// after it is empty — which is what makes joining the result back\0A/// with newlines give the original.\0Apub let String.lines (s: String): Array[String] = s.split(\22\5Cn\22)\0A\0A// --- Numbers that need the runtime ---\0A\0A/// The real prelude writes these as `unsafe { fabs(x) }`,\0A/// `unsafe { sqrt(x) }` and friends.\0A/// This backend has no `extern \22C\22`/`unsafe` support, so they reach the\0A/// same libm functions as runtime primitives instead.\0Alet abs_raw (x: Float): Float = 0.0\0A\0Alet sqrt_raw (x: Float): Float = 0.0\0A\0Alet pow_raw (b: Float) (e: Float): Float = 0.0\0A\0Alet floor_raw (x: Float): Float = 0.0\0A\0Alet ceil_raw (x: Float): Float = 0.0\0A\0Alet round_raw (x: Float): Float = 0.0\0A\0Alet sin_raw (x: Float): Float = 0.0\0A\0Alet cos_raw (x: Float): Float = 0.0\0A\0Alet tan_raw (x: Float): Float = 0.0\0A\0Alet asin_raw (x: Float): Float = 0.0\0A\0Alet acos_raw (x: Float): Float = 0.0\0A\0Alet atan_raw (x: Float): Float = 0.0\0A\0Alet atan2_raw (y: Float) (x: Float): Float = 0.0\0A\0Alet log_raw (x: Float): Float = 0.0\0A\0Alet log2_raw (x: Float): Float = 0.0\0A\0Alet log10_raw (x: Float): Float = 0.0\0A\0Alet exp_raw (x: Float): Float = 0.0\0A\0Alet float_fixed_raw (x: Float) (decimals: Int): String = \22\22\0A\0Alet random_raw (ignored: Bool): Float = 0.0\0A\0A/// The square root. Negative input gives NaN rather than failing.\0Apub let Float.sqrt (x: Float): Float = sqrt_raw(x)\0A\0A/// `base` raised to `exp`. A fractional exponent of a negative base\0A/// gives NaN.\0Apub let Float.pow (base: Float) (exp: Float): Float = pow_raw(base, exp)\0A\0A/// The largest whole number no greater than `x` — toward negative\0A/// infinity, so `floor(-2.5)` is `-3.0`.\0Apub let Float.floor (x: Float): Float = floor_raw(x)\0A\0A/// The smallest whole number no less than `x`.\0Apub let Float.ceil (x: Float): Float = ceil_raw(x)\0A\0A/// The nearest whole number, halves AWAY FROM ZERO: `round(2.5)` is\0A/// `3.0` and `round(-2.5)` is `-3.0`.\0A///\0A/// `Float.to_fixed` rounds halves to EVEN, which is not an\0A/// inconsistency — it is what C, Python, Rust and Java all do, because\0A/// rounding is arithmetic and formatting is rendering.\0Apub let Float.round (x: Float): Float = round_raw(x)\0A\0A/// A float in `[0.0, 1.0)` from a process-wide generator seeded from\0A/// the clock.\0A///\0A/// Different every run, and NOT reproducible. `Rng.from_seed` is the\0A/// one for a test or a replay.\0Apub let Float.random (): Float = random_raw(true)\0A\0A/// A float in `[lo, hi)`, from the same unseeded generator as\0A/// `Float.random`.\0Apub let Float.random_range (lo: Float) (hi: Float): Float = lo + (hi - lo) * Float.random(())\0A\0A/// --- Trigonometry, logs and constants (issue #20) ---\0A///\0A/// Angles are RADIANS everywhere, which is what libm takes and what the\0A/// inverse functions return. `Float.radians` and `Float.degrees` convert\0A/// at the edges, so a program that thinks in degrees converts once\0A/// rather than scattering `* 3.14159 / 180.0`.\0A/// Sine of an angle in RADIANS.\0Apub let Float.sin (x: Float): Float = sin_raw(x)\0A\0A/// Cosine of an angle in radians.\0Apub let Float.cos (x: Float): Float = cos_raw(x)\0A\0A/// Tangent of an angle in radians. Grows without bound near odd\0A/// multiples of pi/2 rather than failing.\0Apub let Float.tan (x: Float): Float = tan_raw(x)\0A\0A/// The angle in radians whose sine is `x`, in `[-pi/2, pi/2]`. NaN\0A/// outside `[-1, 1]`.\0Apub let Float.asin (x: Float): Float = asin_raw(x)\0A\0A/// The angle in radians whose cosine is `x`, in `[0, pi]`. NaN\0A/// outside `[-1, 1]`.\0Apub let Float.acos (x: Float): Float = acos_raw(x)\0A\0A/// The angle in radians whose tangent is `x`. `Float.atan2` is the\0A/// one that knows which quadrant.\0Apub let Float.atan (x: Float): Float = atan_raw(x)\0A\0A/// `atan2(y, x)`, in that order, matching libm, Go, Python\0A/// and Java all use, and the reason it exists: it knows which QUADRANT\0A/// the point is in, which `atan(y / x)` cannot, and it does not divide\0A/// by zero when `x` is 0.\0Apub let Float.atan2 (y: Float) (x: Float): Float = atan2_raw(y, x)\0A\0A/// Natural log. `log2` and `log10` are separate rather than\0A/// `log(x) / log(2.0)`, because libm computes them directly and the\0A/// division loses accuracy at exactly the powers people check.\0A/// The natural logarithm. NaN for a negative argument, and negative\0A/// infinity at zero.\0Apub let Float.log (x: Float): Float = log_raw(x)\0A\0A/// Base-2 logarithm, computed directly rather than as a division —\0A/// which is what keeps `log2(8.0)` exactly `3.0`.\0Apub let Float.log2 (x: Float): Float = log2_raw(x)\0A\0A/// Base-10 logarithm, computed directly. See `Float.log2`.\0Apub let Float.log10 (x: Float): Float = log10_raw(x)\0A\0A/// `e` raised to `x`.\0Apub let Float.exp (x: Float): Float = exp_raw(x)\0A\0A/// Constants as FUNCTIONS, because `Float.` is a type namespace and\0A/// `T.f(x)` is how a name gets into it. Written out to the last digit a\0A/// double can hold rather than computed, so they are exact literals and\0A/// not a rounding of something else.\0A/// Pi, to the last digit a double holds.\0Apub let Float.pi (): Float = 3.141592653589793\0A\0A/// Two pi — a full turn, which is the more useful constant when\0A/// working with angles.\0Apub let Float.tau (): Float = 6.283185307179586\0A\0A/// Euler's number.\0Apub let Float.e (): Float = 2.718281828459045\0A\0A/// Degrees to radians. Every trigonometric function here takes\0A/// radians, so this is the conversion at the edge.\0Apub let Float.radians (degrees: Float): Float = degrees * 3.141592653589793 / 180.0\0A\0A/// Radians to degrees.\0Apub let Float.degrees (radians: Float): Float = radians * 180.0 / 3.141592653589793\0A\0A/// --- Seeded, reproducible random numbers (issue #20) ---\0A///\0A/// `Float.random` reads a process-global generator seeded from the\0A/// clock, which is right for \22give me something different each run\22 and\0A/// useless for a test or a replay. An `Rng` is a VALUE: same seed, same\0A/// sequence, on every platform and every run.\0A///\0A/// Every call returns the NEXT GENERATOR alongside the number, rather\0A/// than mutating in place, so a generator is as ordinary a value as an\0A/// `Int`. Threading it by hand is the cost; being able to replay a game\0A/// from a seed, or write a test that cannot flake, is what it buys. A\0A/// `Ref[Rng]` is the opt-in for in-place update.\0A///\0A/// --- Which generator, and why ---\0A///\0A/// SplitMix64: a small, modern 64-bit generator with a full 2^64\0A/// period. It is fast, has excellent bit diffusion, and is the right\0A/// generator when reproducibility and simple state matter more than\0A/// cryptographic secrecy. The wrapping multiply and logical shifts it\0A/// needs became expressible when `Int.wrapping_mul` and bitwise\0A/// operators landed.\0A///\0A/// **Not for cryptography, keys, tokens or passwords.** It is a\0A/// statistical generator and its entire state is recoverable from two\0A/// outputs.\0Apub struct Rng { state: Int }\0A\0Alet RNG_GAMMA: Int = -7046029254386353131\0A\0Alet RNG_MIX_1: Int = -4658895280553007687\0A\0Alet RNG_MIX_2: Int = -7723592293110705685\0A\0Alet RNG_RANGE: Int = 9223372036854775807\0A\0A/// Any `Int` is a legal seed, including zero and negatives. SplitMix64\0A/// has no forbidden state, unlike generators whose all-zero state gets\0A/// stuck, so the seed is kept exactly rather than folded into a range.\0Apub let Rng.from_seed (seed: Int): Rng = Rng { state: seed }\0A\0Alet plum__mod_floor (a: Int) (m: Int): Int = {\0A    let r = a - (a / m) * m;\0A    if r < 0 { r + m } else { r }\0A}\0A\0A/// The raw step: advance by SplitMix64's golden-ratio increment, then\0A/// mix all 64 bits. Keep the sign bit here: wide integer ranges need\0A/// the full signed domain. Each caller reduces the output as needed.\0Alet rng_step (r: Rng): (Rng, Int) = {\0A    let next = Rng { state: Int.wrapping_add(r.state, RNG_GAMMA) };\0A    let z1 = Int.wrapping_mul(next.state ^ Int.shr_logical(next.state, 30), RNG_MIX_1);\0A    let z2 = Int.wrapping_mul(z1 ^ Int.shr_logical(z1, 27), RNG_MIX_2);\0A    (next, z2 ^ Int.shr_logical(z2, 31))\0A}\0A\0A/// A `Float` in `[0.0, 1.0)`. Use 53 exactly representable bits so\0A/// converting to `Float` cannot round the largest sample up to `1.0`.\0A/// The generator advances exactly once, as for previous versions;\0A/// float samples may differ because the discarded low bits no longer round.\0Apub let Rng.float (r: Rng): (Rng, Float) = {\0A    let (next, z) = rng_step(r);\0A    (next, Int.shr_logical(z & RNG_RANGE, 10).to_float() / 9007199254740992.0)\0A}\0A\0A/// A float in `[lo, hi)`, and the next generator.\0Apub let Rng.float_range (r: Rng) (lo: Float) (hi: Float): (Rng, Float) = {\0A    let (next, f) = Rng.float(r);\0A    (next, lo + (hi - lo) * f)\0A}\0A\0A/// `[lo, hi)`, the upper bound EXCLUDED, so `int_range(r, 0, xs.len())`\0A/// is an index into `xs` and needs no `- 1` anywhere.\0A/// All ordered `Int` bounds are supported, even when `hi - lo` would\0A/// overflow. `hi` must itself be an `Int`, so the maximum `Int` cannot\0A/// be included as a result of this half-open API.\0A///\0A/// Rejection sampling, not `z % span`. The modulo is biased whenever the\0A/// span does not divide the generator's range evenly: the low values\0A/// come up more often, by about one part in `range / span`. That is\0A/// invisible in a game and fatal in a shuffle, and the loop costs an\0A/// extra step only on the fraction of draws that land in the leftover\0A/// tail. Widths through the maximum `Int` preserve their seeded sequences.\0A/// Wider ranges reject full signed samples outside `[lo, hi)` instead;\0A/// they accept at least half of the domain, averaging at most two draws.\0A///\0A/// An empty or backwards range returns `lo` and does not draw, because\0A/// there is no number to return and a panic here would make an ordinary\0A/// off-by-one crash a program at random.\0Apub let Rng.int_range (r: Rng) (lo: Int) (hi: Int): (Rng, Int) = {\0A    if hi <= lo { (r, lo) } else {\0A        let span = Int.wrapping_sub(hi, lo);\0A        if span < 0 { rng_wide(r, lo, hi) } else { rng_below(r, span, lo) }\0A    }\0A}\0A\0A// Tail recursion keeps retries in constant stack space. No span or\0A// offset arithmetic is needed for ranges at least 2^63 wide.\0Alet rng_wide (r: Rng) (lo: Int) (hi: Int): (Rng, Int) = {\0A    let (next, z) = rng_step(r);\0A    if z < lo || z >= hi { rng_wide(next, lo, hi) } else { (next, z) }\0A}\0A\0Alet rng_below (r: Rng) (span: Int) (lo: Int): (Rng, Int) = {\0A    let range = RNG_RANGE;\0A    let limit = range - plum__mod_floor(range, span);\0A    let (next, raw) = rng_step(r);\0A    let z = raw & RNG_RANGE;\0A    if z >= limit { rng_below(next, span, lo) } else { (next, lo + plum__mod_floor(z, span)) }\0A}\0A\0A/// A boolean, evenly, and the next generator.\0Apub let Rng.bool (r: Rng): (Rng, Bool) = {\0A    let (next, v) = Rng.int_range(r, 0, 2);\0A    (next, v == 1)\0A}\0A\0A/// Fisher-Yates, walking from the end so every permutation is equally\0A/// likely. The naive version, swapping each element with any other, is\0A/// not uniform, and looks fine until somebody counts.\0Apub let Rng.shuffle[T] (r: Rng) (xs: Array[T]): (Rng, Array[T]) =\0A    rng_shuffle_acc(r, xs, xs.len() - 1)\0A\0Alet rng_shuffle_acc[T] (r: Rng) (xs: Array[T]) (i: Int): (Rng, Array[T]) =\0A    if i <= 0 { (r, xs) } else {\0A        let (next, j) = Rng.int_range(r, 0, i + 1);\0A        rng_shuffle_acc(next, plum__swap(xs, i, j), i - 1)\0A    }\0A\0Alet plum__swap[T] (xs: Array[T]) (i: Int) (j: Int): Array[T] =\0A    if i == j { xs } else {\0A        let a = xs[i];\0A        let b = xs[j];\0A        xs.set(i, b).set(j, a)\0A    }\0A\0A/// One element, or `None` from an empty array.\0Apub let Rng.choice[T] (r: Rng) (xs: Array[T]): (Rng, Option[T]) =\0A    if Array.is_empty(xs) { (r, None) } else {\0A        let (next, i) = Rng.int_range(r, 0, xs.len());\0A        (next, Some(xs[i]))\0A    }\0A\0A// --- String ordering ---\0A\0A/// Byte-lexicographic, which for UTF-8 IS codepoint order, so this\0A/// agrees with the real prelude's rune-by-rune comparison without\0A/// needing a `.runes()` decoder.\0Alet string_concat_all_raw (parts: Array[String]): String = \22\22\0A\0A/// Concatenates parts in order, without a separator. The compiler's own\0A/// emitter uses this for collected output fragments.\0A///\0A/// Uses checked sizes and one exact-sized allocation for nonempty output;\0A/// empty output uses shared static storage.\0Apub let Array.concat_all (parts: Array[String]): String = string_concat_all_raw(parts)\0A\0A/// Decimal text to the NEAREST double, via libc `strtod`.\0A///\0A/// `parse_number` below validates the grammar and finds where the\0A/// number ends, and that part was always right. What it got wrong was\0A/// the VALUE: building it as `mantissa * 10^exp` in floating point\0A/// accumulates rounding error, so `9.21258e-07` parsed to a double\0A/// one ulp away and `parse_float(x.to_string()) != x`. `to_string`\0A/// goes to real lengths to guarantee that round trip, retrying\0A/// at 15, 16 and 17 digits until `strtod` agrees, so the inverse\0A/// has to be the same `strtod`, not an approximation of it.\0A///\0A/// Found by a property test on 2026-08-25. The Rust interpreter\0A/// computed the identical wrong double, so `interp-check` agreed\0A/// with it and saw nothing.\0Alet parse_float_raw (s: String): Float = 0.0\0A\0Alet string_cmp_raw (a: String) (b: String): Int = 0\0A\0A/// Sorted by BYTE order, not by any locale's alphabet — so uppercase\0A/// sorts before lowercase, and accented letters sort after `z`.\0Apub let Array.sort_string (arr: Array[String]): Array[String] =\0A    Array.sort_by(arr, |a: String, b: String| a <= b)\0A\0A// --- Assertions ---\0A//\0A// Mirrored from the real prelude, message for message: a test that\0A// fails should read the same whichever compiler ran it.\0A\0A/// Stops the program unless `cond` holds.\0A///\0A/// For a condition the code depends on, not for input validation:\0A/// there is no way to catch this.\0Apub let assert (cond: Bool): Unit =\0A    if cond { () } else { panic_raw(\22assertion failed\22) }\0A\0A/// Stops the program unless the two are equal, printing BOTH — which\0A/// is the difference from `assert(a == b)` and the reason to prefer\0A/// it in a test.\0Apub let assert_eq[T] (a: T) (b: T): Unit =\0A    if a == b { () } else {\0A        panic_raw(\0A            \22assertion failed: left != right\5Cn  left:  \22.concat(a.to_string()).concat(\22\5Cn  right: \22)\0A                .concat(b.to_string())\0A        )\0A    }\0A\0A/// Stops the program if the two are equal, printing them.\0Apub let assert_ne[T] (a: T) (b: T): Unit =\0A    if a != b { () } else {\0A        panic_raw(\0A            \22assertion failed: left == right\5Cn  left:  \22.concat(a.to_string()).concat(\22\5Cn  right: \22)\0A                .concat(b.to_string())\0A        )\0A    }\0A\0A// --- Collections: Map and Set ---\0A\0A/// One key and value stored in a map collision bucket.\0Apub struct MapEntry[K, V] { key: K, value: V }\0A\0A// Single entries live directly in leaves. Only equal complete hashes need\0A// a collision array. Branch arrays are bounded by the bitmap's 32 slots.\0Aenum MapNode[K, V] {\0A    MapEmpty,\0A    MapLeaf(Int, K, V),\0A    MapCollision(Int, Array[MapEntry[K, V]]),\0A    MapBranch(Int, Array[MapNode[K, V]]),\0A}\0A\0A/// A hash map from `K` to `V`.\0A///\0A/// PERSISTENT: `Map.insert` returns a new map and leaves the original\0A/// alone, so a map can be shared without copying defensively. Keys\0A/// need `Eq` and `Hash`. Equal keys hash identically.\0A/// NaN is not a supported key, including inside aggregates, because\0A/// IEEE equality makes it unequal to itself. References use identity.\0Apub struct Map[K, V] { root: MapNode[K, V], size: Int }\0A\0Alet value_hash[T: Hash] (x: T): Int = x.hash()\0A\0Alet map_bit (hash: Int) (shift: Int): Int = 1 << (Int.shr_logical(hash, shift) & 31)\0A\0Alet map_rank (bits: Int) (bit: Int): Int = Int.count_ones(bits & (bit - 1))\0A\0Alet map_bucket_find_index[K: Eq, V] (bucket: Array[MapEntry[K, V]]) (k: K) (i: Int): Int =\0A    if i >= bucket.len() { -1 }\0A    else if bucket[i].key == k { i }\0A    else { map_bucket_find_index(bucket, k, i + 1) }\0A\0A// Joining distinct complete hashes must diverge before all hash bits are\0A// consumed. Keeping this separate also handles a collision node as a child.\0Alet map_join[K, V]\0A    (a: MapNode[K, V])\0A    (ah: Int)\0A    (b: MapNode[K, V])\0A    (bh: Int)\0A    (shift: Int): MapNode[K, V]\0A= {\0A    let abit = map_bit(ah, shift);\0A    let bbit = map_bit(bh, shift);\0A    if abit == bbit { MapBranch(abit, [map_join(a, ah, b, bh, shift + 5)]) }\0A    else if abit < bbit { MapBranch(abit | bbit, [a, b]) }\0A    else { MapBranch(abit | bbit, [b, a]) }\0A}\0A\0A// The compiler lowers this to the consuming array growth path plus a\0A// suffix shift. The source body supports older bootstrap compilers.\0Alet plum__array_insert_raw[T] (xs: Array[T]) (at: Int) (value: T): Array[T] = {\0A    let mut out = [];\0A    for i in 0..xs.len() {\0A        if i == at {\0A            out = out.push(value);\0A        };\0A        out = out.push(xs[i]);\0A    };\0A    if at == xs.len() {\0A        out = out.push(value);\0A    };\0A    out\0A}\0A\0A// Trie buffers can release excess capacity after deletion. The source body\0A// supports older bootstrap compilers.\0Alet plum__array_remove_compact_raw[T] (xs: Array[T]) (at: Int): Array[T] = xs.remove(at)\0A\0A// Pass callback arguments directly so the recursive update needs neither\0A// a captured closure nor a boxed context at each level of the trie.\0Alet plum__array_update_raw[T, A, B, C, D, E]\0A    (xs: Array[T])\0A    (at: Int)\0A    (a: A)\0A    (b: B)\0A    (c: C)\0A    (d: D)\0A    (e: E)\0A    (update: (T, A, B, C, D, E) -> T): Array[T]\0A= xs.set(at, update(xs[at], a, b, c, d, e))\0A\0A// Pass context without a closure per child array. The source body\0A// supports older bootstrap compilers.\0Alet plum__array_fold_context_raw[T, A, B, C, D]\0A    (xs: Array[T])\0A    (init: A)\0A    (b: B)\0A    (c: C)\0A    (d: D)\0A    (step: (A, T, B, C, D) -> A): A\0A= Array.fold(xs, init, |acc, item| step(acc, item, b, c, d))\0A\0Alet map_node_get[K: Eq, V] (node: MapNode[K, V]) (hash: Int) (key: K) (shift: Int): Option[V] =\0A    match node {\0A        MapEmpty => None,\0A        MapLeaf(h, k, v) => if h == hash && k == key { Some(v) } else { None },\0A        MapCollision(h, entries) => if h != hash { None } else {\0A            let i = map_bucket_find_index(entries, key, 0);\0A            if i < 0 { None } else { Some(entries[i].value) }\0A        },\0A        MapBranch(bits, children) => {\0A            let bit = map_bit(hash, shift);\0A            if (bits & bit) == 0 { None }\0A            else { map_node_get(children[map_rank(bits, bit)], hash, key, shift + 5) }\0A        },\0A    }\0A\0A// Presence checks must not allocate an Option or retain a stored value.\0Alet map_node_contains[K: Eq, V] (node: MapNode[K, V]) (hash: Int) (key: K) (shift: Int): Bool =\0A    match node {\0A        MapEmpty => false,\0A        MapLeaf(h, k, _) => h == hash && k == key,\0A        MapCollision(h, entries) => h == hash && map_bucket_find_index(entries, key, 0) >= 0,\0A        MapBranch(bits, children) => {\0A            let bit = map_bit(hash, shift);\0A            (bits & bit) != 0\0A                && map_node_contains(children[map_rank(bits, bit)], hash, key, shift + 5)\0A        },\0A    }\0A\0A// The new entry needs its own cell. Keep the collision node's reset token\0A// in the caller so it can rebuild the node at its original size.\0Alet map_bucket_append[K, V]\0A    (entries: Array[MapEntry[K, V]])\0A    (key: K)\0A    (value: V): Array[MapEntry[K, V]]\0A= entries.push(MapEntry { key: key, value: value })\0A\0Alet map_node_put[K, V]\0A    (node: MapNode[K, V])\0A    (hash: Int)\0A    (key: K)\0A    (value: V)\0A    (position: Int)\0A    (shift: Int): MapNode[K, V]\0A= match node {\0A    MapEmpty => MapLeaf(hash, key, value),\0A    MapLeaf(h, k, v) => if h != hash { map_join(node, h, MapLeaf(hash, key, value), hash, shift) }\0A    else if position < 0 { MapLeaf(hash, key, value) }\0A    else {\0A        MapCollision(hash, [MapEntry { key: k, value: v }, MapEntry { key: key, value: value }])\0A    },\0A    MapCollision(h, entries) => if h != hash {\0A        map_join(node, h, MapLeaf(hash, key, value), hash, shift)\0A    }\0A    else {\0A        MapCollision(\0A            hash,\0A            if position == 0 { map_bucket_append(entries, key, value) }\0A            else {\0A                plum__array_update_raw(\0A                    entries,\0A                    position - 1,\0A                    key,\0A                    value,\0A                    (),\0A                    (),\0A                    (),\0A                    |previous, k, v, unused1, unused2, unused3| MapEntry {\0A                        key: k,\0A                        value: v,\0A                        ..previous\0A                    }\0A                )\0A            }\0A        )\0A    },\0A    MapBranch(bits, children) => {\0A        let bit = map_bit(hash, shift);\0A        let i = map_rank(bits, bit);\0A        if (bits & bit) == 0 {\0A            MapBranch(bits | bit, plum__array_insert_raw(children, i, MapLeaf(hash, key, value)))\0A        }\0A        else {\0A            MapBranch(bits, plum__array_update_raw(\0A                children,\0A                i,\0A                hash,\0A                key,\0A                value,\0A                position,\0A                shift + 5,\0A                |child, h, k, v, at, next| map_node_put(child, h, k, v, at, next)\0A            ))\0A        }\0A    },\0A}\0A\0A// Return -1 for a matching leaf, 0 on a miss, or a one-based collision\0A// position. The update can use this result without comparing the key again.\0Alet map_node_key_position[K: Eq, V]\0A    (node: MapNode[K, V])\0A    (hash: Int)\0A    (key: K)\0A    (shift: Int): Int\0A= match node {\0A    MapEmpty => 0,\0A    MapLeaf(h, k, _) => if h == hash && k == key { -1 } else { 0 },\0A    MapCollision(h, entries) => if h == hash { map_bucket_find_index(entries, key, 0) + 1 } else {\0A        0\0A    },\0A    MapBranch(bits, children) => {\0A        let bit = map_bit(hash, shift);\0A        if (bits & bit) == 0 { 0 }\0A        else { map_node_key_position(children[map_rank(bits, bit)], hash, key, shift + 5) }\0A    },\0A}\0A\0A// A unary branch can be dropped when removing a key leaves just one\0A// full hash. Follow the unary prefix to the first split.\0Alet map_unary_survivor[K, V]\0A    (node: MapNode[K, V])\0A    (hash: Int)\0A    (shift: Int): MapNode[K, V]\0A= match node {\0A    MapBranch(bits, children) => if children.len() == 1 {\0A        map_unary_survivor(children[0], hash, shift + 5)\0A    } else if children.len() == 2 {\0A        let i = map_rank(bits, map_bit(hash, shift));\0A        match children[i] {\0A            MapLeaf(_, _, _) => {\0A                let sibling = children[1 - i];\0A                match sibling {\0A                    MapLeaf(_, _, _) | MapCollision(_, _) => sibling,\0A                    _ => MapEmpty,\0A                }\0A            },\0A            _ => MapEmpty,\0A        }\0A    } else { MapEmpty },\0A    _ => MapEmpty,\0A}\0A\0A// The caller has proved the key exists. This lets the match release or\0A// reset the old node before handing its children into the update.\0Alet map_node_remove_present[K, V]\0A    (node: MapNode[K, V])\0A    (hash: Int)\0A    (position: Int)\0A    (shift: Int)\0A    (probe_unary: Bool): MapNode[K, V]\0A= match node {\0A    MapEmpty => MapEmpty,\0A    MapLeaf(_, _, _) => MapEmpty,\0A    MapCollision(h, entries) => {\0A        let i = position - 1;\0A        if entries.len() == 2 {\0A            let survivor = entries[1 - i];\0A            MapLeaf(h, survivor.key, survivor.value)\0A        } else { MapCollision(h, plum__array_remove_compact_raw(entries, i)) }\0A    },\0A    MapBranch(bits, children) => {\0A        let unary = children.len() == 1;\0A        let survivor = if unary && probe_unary && position < 0 {\0A            map_unary_survivor(children[0], hash, shift + 5)\0A        }\0A        else { MapEmpty };\0A        let promote_unary = match survivor {\0A            MapEmpty => false,\0A            _ => true,\0A        };\0A        if promote_unary { survivor } else {\0A            let bit = map_bit(hash, shift);\0A            let i = map_rank(bits, bit);\0A            let leaf = match children[i] {\0A                MapLeaf(_, _, _) => true,\0A                _ => false,\0A            };\0A            // A branch or collision represents at least two entries. Only a\0A            // leaf child disappears when we remove a single key.\0A            if leaf {\0A                // Read a terminal survivor from the original array. A branch\0A                // survivor still needs the current level's shift.\0A                let promote = children.len() == 2 && match children[1 - i] {\0A                    MapLeaf(_, _, _) => true,\0A                    MapCollision(_, _) => true,\0A                    _ => false,\0A                };\0A                if promote { children[1 - i] }\0A                else { MapBranch(bits & ~bit, plum__array_remove_compact_raw(children, i)) }\0A            }\0A            else {\0A                let rest = plum__array_update_raw(\0A                    children,\0A                    i,\0A                    hash,\0A                    position,\0A                    shift + 5,\0A                    // A failed probe already covered the unary prefix.\0A                    !unary,\0A                    (),\0A                    |child, h, at, next, probe, unused| map_node_remove_present(\0A                        child,\0A                        h,\0A                        at,\0A                        next,\0A                        probe\0A                    )\0A                );\0A                // A recursive removal can turn the only child into a terminal.\0A                if unary {\0A                    match rest[0] {\0A                        MapLeaf(_, _, _) => rest[0],\0A                        MapCollision(_, _) => rest[0],\0A                        _ => MapBranch(bits, rest),\0A                    }\0A                } else { MapBranch(bits, rest) }\0A            }\0A        }\0A    },\0A}\0A\0A/// An empty map.\0Apub let Map.new[K, V] (): Map[K, V] = Map { root: MapEmpty, size: 0 }\0A\0A// Matching the wrapper lets Perceus reset it and pass the root to the\0A// trie update before rebuilding the wrapper. A shared map keeps its root.\0Alet map_insert_hashed[K: Eq, V] (m: Map[K, V]) (hash: Int) (k: K) (v: V): Map[K, V] =\0A    match m {\0A        Map { root, size } => {\0A            let position = map_node_key_position(root, hash, k, 0);\0A            let added = if position == 0 { 1 } else { 0 };\0A            Map { root: map_node_put(root, hash, k, v, position, 0), size: size + added }\0A        },\0A    }\0A\0A/// A NEW map with `k` set to `v`, replacing any previous value. The\0A/// original is unchanged. Only the affected trie path is rebuilt.\0Apub let Map.insert[K: Eq + Hash, V] (m: Map[K, V]) (k: K) (v: V): Map[K, V] =\0A    map_insert_hashed(m, value_hash(k), k, v)\0A\0A/// The value for `k`, or `None`.\0Apub let Map.get[K: Eq + Hash, V] (m: Map[K, V]) (k: K): Option[V] =\0A    map_node_get(m.root, value_hash(k), k, 0)\0A\0A/// Whether `k` has a value.\0Apub let Map.contains[K: Eq + Hash, V] (m: Map[K, V]) (k: K): Bool =\0A    map_node_contains(m.root, value_hash(k), k, 0)\0A\0A// The caller supplies a leaf (-1) or a one-based collision position.\0Alet map_remove_at[K, V] (m: Map[K, V]) (hash: Int) (position: Int): Map[K, V] =\0A    match m {\0A        Map { root, size } => Map {\0A            root: map_node_remove_present(root, hash, position, 0, true),\0A            size: size - 1\0A        },\0A    }\0A\0Alet map_remove_hashed[K: Eq, V] (m: Map[K, V]) (hash: Int) (k: K): Map[K, V] = {\0A    let position = map_node_key_position(m.root, hash, k, 0);\0A    if position == 0 { m } else { map_remove_at(m, hash, position) }\0A}\0A\0A/// A new map without `k`. Removing an absent key is not an error.\0Apub let Map.remove[K: Eq + Hash, V] (m: Map[K, V]) (k: K): Map[K, V] =\0A    map_remove_hashed(m, value_hash(k), k)\0A\0A/// How many entries.\0Apub let Map.len[K, V] (m: Map[K, V]): Int = m.size\0A\0A// Reserve the known size of the result while keeping its initialized\0A// length at zero. Older compilers use ordinary array growth.\0Alet plum__array_reserve_empty_raw[T] (capacity: Int): Array[T] = []\0A\0Alet map_node_collect[K, V, T]\0A    (node: MapNode[K, V])\0A    (acc: Array[T])\0A    (project: (K, V) -> T): Array[T]\0A= match node {\0A    MapEmpty => acc,\0A    MapLeaf(_, k, v) => acc.push(project(k, v)),\0A    MapCollision(_, entries) => plum__array_fold_context_raw(\0A        entries,\0A        acc,\0A        project,\0A        (),\0A        (),\0A        |out, entry, get, unused1, unused2| out.push(get(entry.key, entry.value))\0A    ),\0A    MapBranch(_, children) => plum__array_fold_context_raw(\0A        children,\0A        acc,\0A        project,\0A        (),\0A        (),\0A        |out, child, get, unused1, unused2| map_node_collect(child, out, get)\0A    ),\0A}\0A\0A/// Every key, in no particular order.\0Apub let Map.keys[K, V] (m: Map[K, V]): Array[K] = match m {\0A    Map { root, size } => map_node_collect(root, plum__array_reserve_empty_raw(size), |k, v| k),\0A}\0A\0A/// Every value, in the same order as `Map.keys`.\0Apub let Map.values[K, V] (m: Map[K, V]): Array[V] = match m {\0A    Map { root, size } => map_node_collect(root, plum__array_reserve_empty_raw(size), |k, v| v),\0A}\0A\0A// The compiler folds both arrays directly, transferring eligible slots.\0A// Older bootstrap compilers can read the same bounded prefix by index.\0Alet plum__array_fold_pair_raw[T, U, A]\0A    (left: Array[T])\0A    (right: Array[U])\0A    (init: A)\0A    (step: (A, T, U) -> A): A\0A= {\0A    let mut out = init;\0A    for i in 0..Int.min(left.len(), right.len()) {\0A        out = step(out, left[i], right[i]);\0A    };\0A    out\0A}\0A\0A/// A map from parallel arrays, stopping at the shorter. A repeated\0A/// key keeps the LAST value.\0Apub let Map.from_arrays[K: Eq + Hash, V] (keys: Array[K]) (values: Array[V]): Map[K, V] =\0A    plum__array_fold_pair_raw(\0A        keys,\0A        values,\0A        Map.new(()),\0A        |acc, key, value| Map.insert(acc, key, value)\0A    )\0A\0A/// A set of `T`, persistent like `Map` — `Set.insert` returns a new\0A/// set. Members need `Eq` and `Hash`. Equal keys hash identically.\0A/// NaN is not a supported key, including inside aggregates, because\0A/// IEEE equality makes it unequal to itself. References use identity.\0Apub struct Set[T] { inner: Map[T, Unit] }\0A\0A// The compiler can hoist the complete literal, including the empty map.\0A/// An empty set.\0Apub let Set.new[T] (): Set[T] = Set { inner: Map { root: MapEmpty, size: 0 } }\0A\0A/// A new set with `x` added. Adding a member twice changes nothing.\0Apub let Set.insert[T: Eq + Hash] (s: Set[T]) (x: T): Set[T] = match s {\0A    Set { inner } => Set { inner: Map.insert(inner, x, ()) },\0A}\0A\0A/// Whether `x` is a member.\0Apub let Set.contains[T: Eq + Hash] (s: Set[T]) (x: T): Bool = Map.contains(s.inner, x)\0A\0Alet set_remove_hashed[T: Eq] (s: Set[T]) (hash: Int) (key: T): Set[T] = {\0A    let position = map_node_key_position(s.inner.root, hash, key, 0);\0A    if position == 0 { s }\0A    else {\0A        match s {\0A            Set { inner } => Set { inner: map_remove_at(inner, hash, position) },\0A        }\0A    }\0A}\0A\0A/// A new set without `x`.\0Apub let Set.remove[T: Eq + Hash] (s: Set[T]) (x: T): Set[T] =\0A    set_remove_hashed(s, value_hash(x), x)\0A\0A/// How many members.\0Apub let Set.len[T] (s: Set[T]): Int = Map.len(s.inner)\0A\0A/// Every member, in no particular order.\0Apub let Set.to_array[T] (s: Set[T]): Array[T] = Map.keys(s.inner)\0A\0Aenum SetOperation {\0A    SetAll,\0A    SetAddMissing,\0A    SetErase\0A}\0A\0Alet set_insert_missing[T] (acc: Map[T, Unit]) (hash: Int) (key: T): Map[T, Unit] =\0A    match acc {\0A        Map { root, size } => Map { root: map_node_put(root, hash, key, (), 0, 0), size: size + 1 },\0A    }\0A\0Alet set_apply_key[T: Eq]\0A    (acc: Map[T, Unit])\0A    (operation: SetOperation)\0A    (hash: Int)\0A    (key: T): Map[T, Unit]\0A= match operation {\0A    SetAll => map_insert_hashed(acc, hash, key, ()),\0A    SetAddMissing => if map_node_contains(acc.root, hash, key, 0) { acc }\0A    else { set_insert_missing(acc, hash, key) },\0A    SetErase => map_remove_hashed(acc, hash, key),\0A}\0A\0A// A terminal node stores the complete hash for every key it holds.\0Alet set_collect[T: Eq]\0A    (node: MapNode[T, Unit])\0A    (acc: Map[T, Unit])\0A    (operation: SetOperation): Map[T, Unit]\0A= match node {\0A    MapEmpty => acc,\0A    MapLeaf(hash, key, _) => set_apply_key(acc, operation, hash, key),\0A    MapCollision(hash, entries) => plum__array_fold_context_raw(\0A        entries,\0A        acc,\0A        operation,\0A        hash,\0A        (),\0A        |out, entry, policy, h, unused| set_apply_key(out, policy, h, entry.key)\0A    ),\0A    MapBranch(_, children) => plum__array_fold_context_raw(\0A        children,\0A        acc,\0A        operation,\0A        (),\0A        (),\0A        |out, child, policy, unused1, unused2| set_collect(child, out, policy)\0A    ),\0A}\0A\0Alet set_root[T] (s: Set[T]): MapNode[T, Unit] =\0A    match s {\0A        Set { inner } => match inner {\0A            Map { root, size: _ } => root,\0A        },\0A    }\0A\0A// A scan can prove no matches, record one match, or stop early.\0Aenum SetKeyScan[T] {\0A    NoSetMatch,\0A    OneSetMatch(Int, T),\0A    StopSetScan\0A}\0A\0Alet set_note_match[T] (found: SetKeyScan[T]) (hash: Int) (detail: T): SetKeyScan[T] =\0A    match found {\0A        NoSetMatch => OneSetMatch(hash, detail),\0A        _ => StopSetScan,\0A    }\0A\0Alet set_bucket_coverage[T: Eq]\0A    (entries: Array[MapEntry[T, Unit]])\0A    (right: MapNode[T, Unit])\0A    (hash: Int)\0A    (shift: Int)\0A    (i: Int)\0A    (found: SetKeyScan[Int]): SetKeyScan[Int]\0A=\0A    if i >= entries.len() { found }\0A    else if map_node_contains(right, hash, entries[i].key, shift) {\0A        set_bucket_coverage(entries, right, hash, shift, i + 1, found)\0A    } else {\0A        match set_note_match(found, hash, i + 1) {\0A            StopSetScan => StopSetScan,\0A            next => set_bucket_coverage(entries, right, hash, shift, i + 1, next),\0A        }\0A    }\0A\0Alet set_children_coverage[T: Eq]\0A    (left: Array[MapNode[T, Unit]])\0A    (right: Array[MapNode[T, Unit]])\0A    (bits: Int)\0A    (right_bits: Int)\0A    (shift: Int)\0A    (i: Int)\0A    (found: SetKeyScan[Int]): SetKeyScan[Int]\0A=\0A    if bits == 0 { found }\0A    else {\0A        let bit = bits & - bits;\0A        let other = if (right_bits & bit) == 0 { MapEmpty }\0A        else { right[map_rank(right_bits, bit)] };\0A        match set_node_coverage(left[i], other, shift, found) {\0A            StopSetScan => StopSetScan,\0A            next => set_children_coverage(left, right, bits & ~bit, right_bits, shift, i + 1, next),\0A        }\0A    }\0A\0A// A right terminal checks the complete hash, independent of branch shift.\0Alet set_terminal_coverage[T: Eq]\0A    (left: Array[MapNode[T, Unit]])\0A    (right: MapNode[T, Unit])\0A    (i: Int)\0A    (found: SetKeyScan[Int]): SetKeyScan[Int]\0A=\0A    if i >= left.len() { found }\0A    else {\0A        match set_node_coverage(left[i], right, 0, found) {\0A            StopSetScan => StopSetScan,\0A            next => set_terminal_coverage(left, right, i + 1, next),\0A        }\0A    }\0A\0A// Follow the left paths while aligning right branch slots at each shift.\0A// A right terminal can be checked at any shift using its complete hash.\0A// Record the left position so removal needs no second equality lookup.\0Alet set_node_coverage[T: Eq]\0A    (left: MapNode[T, Unit])\0A    (right: MapNode[T, Unit])\0A    (shift: Int)\0A    (found: SetKeyScan[Int]): SetKeyScan[Int]\0A= match left {\0A    MapEmpty => found,\0A    MapLeaf(hash, key, _) => if map_node_contains(right, hash, key, shift) { found }\0A    else { set_note_match(found, hash, -1) },\0A    MapCollision(hash, entries) => match right {\0A        MapEmpty => StopSetScan,\0A        _ => set_bucket_coverage(entries, right, hash, shift, 0, found),\0A    },\0A    MapBranch(bits, children) => match right {\0A        MapEmpty => StopSetScan,\0A        MapBranch(right_bits, right_children) => set_children_coverage(\0A            children,\0A            right_children,\0A            bits,\0A            right_bits,\0A            shift + 5,\0A            0,\0A            found\0A        ),\0A        _ => set_terminal_coverage(children, right, 0, found),\0A    },\0A}\0A\0Aenum SetOverlapCheck {\0A    SharedMember,\0A    CollisionOrder\0A}\0A\0Alet set_bucket_overlap[T: Eq]\0A    (entries: Array[MapEntry[T, Unit]])\0A    (right: MapNode[T, Unit])\0A    (hash: Int)\0A    (i: Int)\0A    (found: SetKeyScan[T]): SetKeyScan[T]\0A=\0A    if i >= entries.len() { found }\0A    else {\0A        let key = entries[i].key;\0A        if map_node_contains(right, hash, key, 0) {\0A            match set_note_match(found, hash, key) {\0A                StopSetScan => StopSetScan,\0A                next => set_bucket_overlap(entries, right, hash, i + 1, next),\0A            }\0A        } else { set_bucket_overlap(entries, right, hash, i + 1, found) }\0A    }\0A\0Alet set_children_overlap[T: Eq]\0A    (left: Array[MapNode[T, Unit]])\0A    (right: Array[MapNode[T, Unit]])\0A    (left_bits: Int)\0A    (right_bits: Int)\0A    (common: Int)\0A    (shift: Int)\0A    (check: SetOverlapCheck)\0A    (found: SetKeyScan[T]): SetKeyScan[T]\0A= if common == 0 { found } else {\0A    let bit = common & - common;\0A    match set_nodes_overlap(\0A        left[map_rank(left_bits, bit)],\0A        right[map_rank(right_bits, bit)],\0A        shift,\0A        check,\0A        found\0A    ) {\0A        StopSetScan => StopSetScan,\0A        next => set_children_overlap(\0A            left,\0A            right,\0A            left_bits,\0A            right_bits,\0A            common & ~bit,\0A            shift,\0A            check,\0A            next\0A        ),\0A    }\0A}\0A\0A// Only matching bitmap slots can lead to terminals with the same hash.\0A// Union checks whether changing the base can reorder colliding keys.\0A// Difference keeps one equal key and stops when it finds a second.\0Alet set_nodes_overlap[T: Eq]\0A    (left: MapNode[T, Unit])\0A    (right: MapNode[T, Unit])\0A    (shift: Int)\0A    (check: SetOverlapCheck)\0A    (found: SetKeyScan[T]): SetKeyScan[T]\0A= match left {\0A    MapEmpty => found,\0A    MapBranch(left_bits, left_children) => match right {\0A        MapBranch(right_bits, right_children) => set_children_overlap(\0A            left_children,\0A            right_children,\0A            left_bits,\0A            right_bits,\0A            left_bits & right_bits,\0A            shift + 5,\0A            check,\0A            found\0A        ),\0A        _ => set_nodes_overlap(right, left, shift, check, found),\0A    },\0A    MapLeaf(hash, _, _) | MapCollision(hash, _) => match right {\0A        MapEmpty => found,\0A        MapLeaf(h, key, _) => if hash != h { found } else {\0A            match left {\0A                MapLeaf(_, k, _) => {\0A                    let equal = k == key;\0A                    match check {\0A                        SharedMember => if equal { set_note_match(found, hash, key) } else {\0A                            found\0A                        },\0A                        CollisionOrder => if equal { found } else { StopSetScan },\0A                    }\0A                },\0A                MapCollision(_, entries) => match check {\0A                    SharedMember => if map_bucket_find_index(entries, key, 0) >= 0 {\0A                        set_note_match(found, hash, key)\0A                    } else { found },\0A                    CollisionOrder => StopSetScan,\0A                },\0A                _ => found,\0A            }\0A        },\0A        MapCollision(h, entries) => if hash != h { found } else {\0A            match check {\0A                SharedMember => set_bucket_overlap(entries, left, h, 0, found),\0A                CollisionOrder => StopSetScan,\0A            }\0A        },\0A        MapBranch(bits, children) => {\0A            let bit = map_bit(hash, shift);\0A            if (bits & bit) == 0 { found }\0A            else { set_nodes_overlap(left, children[map_rank(bits, bit)], shift + 5, check, found) }\0A        },\0A    },\0A}\0A\0Alet set_preserves_union_order[T: Eq] (left: MapNode[T, Unit]) (right: MapNode[T, Unit]): Bool =\0A    match set_nodes_overlap(left, right, 0, CollisionOrder, NoSetMatch) {\0A        NoSetMatch => true,\0A        _ => false,\0A    }\0A\0A// Separate bitmap slots contain different full hashes. Combine their\0A// packed child arrays without rebuilding either side's descendants.\0Alet set_graft_children[T]\0A    (left_bits: Int)\0A    (left: Array[MapNode[T, Unit]])\0A    (right_bits: Int)\0A    (right: Array[MapNode[T, Unit]]): Array[MapNode[T, Unit]]\0A= if left_bits < (right_bits & - right_bits) { plum__array_concat_exact_raw(left, right) }\0Aelse if right_bits < (left_bits & - left_bits) { plum__array_concat_exact_raw(right, left) }\0Aelse {\0A    let mut slots = left_bits | right_bits;\0A    let mut right_destinations = 0;\0A    let size = left.len() + right.len();\0A    for i in 0..size {\0A        let bit = slots & - slots;\0A        slots = slots & (slots - 1);\0A        if (right_bits & bit) != 0 {\0A            right_destinations = right_destinations | (1 << i);\0A        };\0A    };\0A    plum__array_interleave_exact_raw(left, right, right_destinations)\0A}\0A\0A// A successful graft keeps every key from both inputs. A shared full\0A// hash delegates to the normal union so collision order and equal-key\0A// representatives follow the existing policy.\0Alet set_graft_union[T]\0A    (left: MapNode[T, Unit])\0A    (right: MapNode[T, Unit])\0A    (shift: Int): MapNode[T, Unit]\0A= match left {\0A    MapEmpty => MapEmpty,\0A    MapBranch(left_bits, left_children) => match right {\0A        MapBranch(right_bits, right_children) => if (left_bits & right_bits) == 0 {\0A            MapBranch(\0A                left_bits | right_bits,\0A                set_graft_children(left_bits, left_children, right_bits, right_children)\0A            )\0A        } else if left_bits == right_bits && left_children.len() == 1 {\0A            // The merged branch still needs this level's hash chunk.\0A            match set_graft_union(left_children[0], right_children[0], shift + 5) {\0A                MapEmpty => MapEmpty,\0A                child => MapBranch(left_bits, [child]),\0A            }\0A        } else { MapEmpty },\0A        MapLeaf(hash, _, _) | MapCollision(hash, _) => {\0A            let bit = map_bit(hash, shift);\0A            if (left_bits & bit) == 0 {\0A                let i = map_rank(left_bits, bit);\0A                MapBranch(left_bits | bit, plum__array_insert_raw(left_children, i, right))\0A            } else if left_bits == bit {\0A                match set_graft_union(left_children[0], right, shift + 5) {\0A                    MapEmpty => MapEmpty,\0A                    child => MapBranch(left_bits, [child]),\0A                }\0A            } else { MapEmpty }\0A        },\0A        MapEmpty => MapEmpty,\0A    },\0A    MapLeaf(hash, _, _) | MapCollision(hash, _) => match right {\0A        MapEmpty => MapEmpty,\0A        MapBranch(_, _) => set_graft_union(right, left, shift),\0A        MapLeaf(h, _, _) | MapCollision(h, _) => if hash != h {\0A            map_join(left, hash, right, h, shift)\0A        }\0A        else { MapEmpty },\0A    },\0A}\0A\0Alet set_union_by_insertion[T: Eq] (a: Set[T]) (b: Set[T]): Set[T] =\0A    if Set.len(b) <= Set.len(a)\0A        && set_preserves_union_order(b.inner.root, a.inner.root) {\0A            // Keep the left representative of an equal key, whichever\0A            // set supplies the accumulator.\0A            match a {\0A                Set { inner } => Set {\0A                    inner: set_collect(set_root(b), inner, SetAddMissing)\0A                },\0A            }\0A        }\0A    else {\0A        match b {\0A            Set { inner } => Set { inner: set_collect(set_root(a), inner, SetAll) },\0A        }\0A    }\0A\0A// An edit carries the number of new keys contributed by the right input.\0Aenum SetMergeEdit[T] {\0A    SetMergeKeep,\0A    SetMergeUpdated(MapNode[T, Unit], Int)\0A}\0A\0Alet set_merge_children[T: Eq]\0A    (left_bits: Int)\0A    (left: Array[MapNode[T, Unit]])\0A    (right_bits: Int)\0A    (right: Array[MapNode[T, Unit]])\0A    (shift: Int): SetMergeEdit[T]\0A= {\0A    let bits = left_bits | right_bits;\0A    let size = Int.count_ones(bits);\0A    let mut slots = bits;\0A    let mut left_index = 0;\0A    let mut right_index = 0;\0A    let mut changed = false;\0A    let mut added = 0;\0A    let mut children: Array[MapNode[T, Unit]] = [];\0A    for i in 0..size {\0A        let bit = slots & - slots;\0A        slots = slots & ~bit;\0A        let on_left = (left_bits & bit) != 0;\0A        let on_right = (right_bits & bit) != 0;\0A        let other = if !on_right { MapEmpty }\0A        else if !on_left {\0A            let child = right[right_index];\0A            added = added + set_count_node(child);\0A            child\0A        } else {\0A            match set_merge_union_node(left[left_index], right[right_index], shift) {\0A                SetMergeKeep => MapEmpty,\0A                SetMergeUpdated(child, count) => {\0A                    added = added + count;\0A                    child\0A                },\0A            }\0A        };\0A        match other {\0A            MapEmpty => if changed {\0A                children = children.push(left[left_index]);\0A            },\0A            child => {\0A                if !changed {\0A                    children = plum__array_reserve_empty_raw(size);\0A                    for at in 0..left_index {\0A                        children = children.push(left[at]);\0A                    };\0A                    changed = true;\0A                };\0A                children = children.push(child);\0A            },\0A        };\0A        if on_left {\0A            left_index = left_index + 1;\0A        };\0A        if on_right {\0A            right_index = right_index + 1;\0A        };\0A    };\0A    if changed { SetMergeUpdated(MapBranch(bits, children), added) } else { SetMergeKeep }\0A}\0A\0Alet set_merge_branch_terminal[T: Eq]\0A    (bits: Int)\0A    (children: Array[MapNode[T, Unit]])\0A    (terminal: MapNode[T, Unit])\0A    (hash: Int)\0A    (shift: Int)\0A    (terminal_first: Bool): SetMergeEdit[T]\0A= {\0A    let bit = map_bit(hash, shift);\0A    let index = map_rank(bits, bit);\0A    if (bits & bit) == 0 {\0A        let added = if terminal_first { set_count_children(children) }\0A        else { set_count_node(terminal) };\0A        SetMergeUpdated(\0A            MapBranch(bits | bit, plum__array_insert_raw(children, index, terminal)),\0A            added\0A        )\0A    } else if terminal_first {\0A        let original = children[index];\0A        let mut siblings = 0;\0A        for i in 0..children.len() {\0A            if i != index {\0A                siblings = siblings + set_count_node(children[i]);\0A            };\0A        };\0A        match set_merge_union_node(terminal, original, shift + 5) {\0A            SetMergeKeep => SetMergeUpdated(\0A                MapBranch(bits, children.set(index, terminal)),\0A                siblings\0A            ),\0A            SetMergeUpdated(child, added) =>\0A                SetMergeUpdated(MapBranch(bits, children.set(index, child)), siblings + added),\0A        }\0A    } else {\0A        match set_merge_union_node(children[index], terminal, shift + 5) {\0A            SetMergeKeep => SetMergeKeep,\0A            SetMergeUpdated(child, added) =>\0A                SetMergeUpdated(MapBranch(bits, children.set(index, child)), added),\0A        }\0A    }\0A}\0A\0Alet set_bucket_prefix_length[T: Eq]\0A    (left: Array[MapEntry[T, Unit]])\0A    (right: Array[MapEntry[T, Unit]])\0A    (i: Int)\0A    (end: Int): Int\0A= if i == end || left[i].key != right[i].key { i }\0Aelse { set_bucket_prefix_length(left, right, i + 1, end) }\0A\0Alet set_bucket_common_prefix[T: Eq]\0A    (left: Array[MapEntry[T, Unit]])\0A    (right: Array[MapEntry[T, Unit]]): Int\0A= set_bucket_prefix_length(left, right, 0, Int.min(left.len(), right.len()))\0A\0Alet set_merge_bucket_union[T: Eq]\0A    (left: MapNode[T, Unit])\0A    (right: MapNode[T, Unit]): SetMergeEdit[T]\0A= {\0A    // The right bucket supplies positions and left keys supply representatives.\0A    let base = Map { root: right, size: set_count_node(right) };\0A    match set_collect(left, base, SetAll) {\0A        Map { root, size } => SetMergeUpdated(root, size - set_count_node(left)),\0A    }\0A}\0A\0Alet set_find_bucket_index[T: Eq]\0A    (entries: Array[MapEntry[T, Unit]])\0A    (key: T)\0A    (index: Int)\0A    (end: Int): Int\0A= if index == end { -1 }\0Aelse if entries[index].key == key { index }\0Aelse { set_find_bucket_index(entries, key, index + 1, end) }\0A\0A// Equal replacements keep the original right positions searchable.\0A// Search only that prefix so a unique right buffer can be reused.\0Alet set_merge_collision_entries[T: Eq]\0A    (left: Array[MapEntry[T, Unit]])\0A    (right: Array[MapEntry[T, Unit]])\0A    (prefix: Int): Array[MapEntry[T, Unit]]\0A= {\0A    let end = right.len();\0A    let mut merged = right;\0A    // The common prefix already supplies the positions for these entries.\0A    for i in 0..prefix {\0A        merged = merged.set(i, left[i]);\0A    };\0A    // Keys in the remaining left suffix cannot match an earlier left key.\0A    for i in prefix..left.len() {\0A        let entry = left[i];\0A        let at = set_find_bucket_index(merged, entry.key, prefix, end);\0A        if at < 0 {\0A            merged = merged.push(entry);\0A        }\0A        else {\0A            merged = merged.set(at, entry);\0A        };\0A    };\0A    merged\0A}\0A\0A// The right leaf takes the first position. An equal left entry supplies\0A// its representative and the remaining left entries keep their order.\0Alet set_prepend_bucket_leaf[T]\0A    (entries: Array[MapEntry[T, Unit]])\0A    (key: T)\0A    (position: Int): Array[MapEntry[T, Unit]]\0A= if position < 0 { plum__array_insert_raw(entries, 0, MapEntry { key: key, value: () }) }\0Aelse {\0A    let entry = entries[position];\0A    let mut moved = entries;\0A    for i in 0..position {\0A        let at = position - i;\0A        moved = moved.set(at, moved[at - 1]);\0A    };\0A    moved.set(0, entry)\0A}\0A\0Alet set_merge_union_node[T: Eq]\0A    (left: MapNode[T, Unit])\0A    (right: MapNode[T, Unit])\0A    (shift: Int): SetMergeEdit[T]\0A= match left {\0A    MapEmpty => SetMergeUpdated(right, set_count_node(right)),\0A    MapBranch(left_bits, left_children) => match right {\0A        MapEmpty => SetMergeKeep,\0A        MapBranch(right_bits, right_children) => if (left_bits & right_bits) == 0 {\0A            SetMergeUpdated(\0A                MapBranch(\0A                    left_bits | right_bits,\0A                    set_graft_children(left_bits, left_children, right_bits, right_children)\0A                ),\0A                set_count_children(right_children)\0A            )\0A        } else {\0A            set_merge_children(left_bits, left_children, right_bits, right_children, shift + 5)\0A        },\0A        MapLeaf(hash, _, _) | MapCollision(hash, _) =>\0A            set_merge_branch_terminal(left_bits, left_children, right, hash, shift, false),\0A    },\0A    MapLeaf(hash, _, _) | MapCollision(hash, _) => match right {\0A        MapEmpty => SetMergeKeep,\0A        MapBranch(bits, children) =>\0A            set_merge_branch_terminal(bits, children, left, hash, shift, true),\0A        MapLeaf(h, _, _) | MapCollision(h, _) => if hash != h {\0A            SetMergeUpdated(map_join(left, hash, right, h, shift), set_count_node(right))\0A        } else {\0A            match left {\0A                MapLeaf(_, key, _) => match right {\0A                    MapLeaf(_, k, _) if key == k => SetMergeKeep,\0A                    _ => set_merge_bucket_union(left, right),\0A                },\0A                MapCollision(_, left_entries) => match right {\0A                    MapCollision(_, right_entries) => {\0A                        let prefix = set_bucket_common_prefix(left_entries, right_entries);\0A                        if prefix == right_entries.len() { SetMergeKeep }\0A                        else {\0A                            let merged = set_merge_collision_entries(\0A                                left_entries,\0A                                right_entries,\0A                                prefix\0A                            );\0A                            let added = merged.len() - left_entries.len();\0A                            SetMergeUpdated(MapCollision(hash, merged), added)\0A                        }\0A                    },\0A                    MapLeaf(_, key, _) => {\0A                        let position = map_bucket_find_index(left_entries, key, 0);\0A                        if position == 0 { SetMergeKeep }\0A                        else {\0A                            let merged = set_prepend_bucket_leaf(left_entries, key, position);\0A                            let added = if position < 0 { 1 } else { 0 };\0A                            SetMergeUpdated(MapCollision(hash, merged), added)\0A                        }\0A                    },\0A                    _ => set_merge_bucket_union(left, right),\0A                },\0A                _ => set_merge_bucket_union(left, right),\0A            }\0A        },\0A    },\0A}\0A\0Alet set_union_branch_roots[T: Eq] (a: Set[T]) (b: Set[T]): Set[T] =\0A    match set_merge_union_node(a.inner.root, b.inner.root, 0) {\0A        SetMergeKeep => a,\0A        SetMergeUpdated(root, added) => {\0A            let size = Set.len(a) + added;\0A            // Keep the edit in scope for Map reuse and consume the Set wrapper.\0A            match a {\0A                Set { inner: _ } => Set { inner: Map { root, size } },\0A            }\0A        },\0A    }\0A\0Alet set_union_collision_map[T: Eq]\0A    (left: Array[MapEntry[T, Unit]])\0A    (right: Map[T, Unit])\0A    (prefix: Int): Map[T, Unit]\0A= match right {\0A    Map { root, size } => {\0A        // Finish the Map outside the node match so both cells can be reused.\0A        let merged = match root {\0A            MapCollision(hash, entries) =>\0A                MapCollision(hash, set_merge_collision_entries(left, entries, prefix)),\0A            node => node,\0A        };\0A        let size = set_count_node(merged);\0A        Map { root: merged, size }\0A    },\0A}\0A\0A// Inspect the prefix before consuming the right Set. A negative result\0A// indicates that the right root is outside this same-hash bucket path.\0Alet set_bucket_union_prefix[T: Eq]\0A    (left: Array[MapEntry[T, Unit]])\0A    (hash: Int)\0A    (right: MapNode[T, Unit]): Int\0A= match right {\0A    MapCollision(h, entries) if h == hash => set_bucket_common_prefix(left, entries),\0A    _ => -1,\0A}\0A\0Alet set_union_merge_routes[T: Eq] (a: Set[T]) (b: Set[T]): Set[T] =\0A    match a.inner.root {\0A        // Inserting a small left input avoids counting large right-only subtries.\0A        MapBranch(_, _) if Set.len(a) > Set.len(b) / 8 => match b.inner.root {\0A            MapBranch(_, _) => set_union_branch_roots(a, b),\0A            _ => set_union_by_insertion(a, b),\0A        },\0A        MapCollision(hash, left_entries) => {\0A            let prefix = set_bucket_union_prefix(left_entries, hash, b.inner.root);\0A            if prefix < 0 { set_union_by_insertion(a, b) }\0A            else if prefix == Set.len(b) { a }\0A            else {\0A                match b {\0A                    Set { inner } => Set {\0A                        inner: set_union_collision_map(left_entries, inner, prefix)\0A                    },\0A                }\0A            }\0A        },\0A        _ => set_union_by_insertion(a, b),\0A    }\0A\0A// A miss on a different hash is -2. A new key with the same hash is\0A// -1. An existing key uses its zero-based position, including a leaf at 0.\0Alet set_union_leaf_position[T: Eq]\0A    (node: MapNode[T, Unit])\0A    (hash: Int)\0A    (key: T)\0A    (shift: Int): Int\0A= match node {\0A    MapEmpty => -2,\0A    MapLeaf(h, k, _) => if h != hash { -2 } else if k == key { 0 } else { -1 },\0A    MapCollision(h, entries) => if h != hash { -2 }\0A    else { map_bucket_find_index(entries, key, 0) },\0A    MapBranch(bits, children) => {\0A        let bit = map_bit(hash, shift);\0A        if (bits & bit) == 0 { -2 }\0A        else { set_union_leaf_position(children[map_rank(bits, bit)], hash, key, shift + 5) }\0A    },\0A}\0A\0A// Keep the existing right leaf when the route ends at a missing slot\0A// or at a terminal with a different hash.\0Alet set_union_update_leaf[T]\0A    (node: MapNode[T, Unit])\0A    (hash: Int)\0A    (key: T)\0A    (leaf: MapNode[T, Unit])\0A    (position: Int)\0A    (shift: Int): MapNode[T, Unit]\0A= match node {\0A    MapEmpty => leaf,\0A    MapLeaf(h, old_key, _) => if h != hash { map_join(node, h, leaf, hash, shift) }\0A    else {\0A        MapCollision(h, [MapEntry { key: key, value: () }, MapEntry { key: old_key, value: () }])\0A    },\0A    MapCollision(h, entries) => if h != hash { map_join(node, h, leaf, hash, shift) }\0A    else { MapCollision(h, set_prepend_bucket_leaf(entries, key, position)) },\0A    MapBranch(bits, children) => {\0A        let bit = map_bit(hash, shift);\0A        let i = map_rank(bits, bit);\0A        if (bits & bit) == 0 {\0A            MapBranch(bits | bit, plum__array_insert_raw(children, i, leaf))\0A        }\0A        else {\0A            MapBranch(bits, plum__array_update_raw(\0A                children,\0A                i,\0A                hash,\0A                key,\0A                leaf,\0A                position,\0A                shift + 5,\0A                |child, h, k, right, at, next| set_union_update_leaf(child, h, k, right, at, next)\0A            ))\0A        }\0A    },\0A}\0A\0Alet set_union_update_map[T]\0A    (left: Map[T, Unit])\0A    (hash: Int)\0A    (key: T)\0A    (leaf: MapNode[T, Unit])\0A    (position: Int): Map[T, Unit]\0A= match left {\0A    Map { root, size } => {\0A        let added = if position < 0 { 1 } else { 0 };\0A        Map { root: set_union_update_leaf(root, hash, key, leaf, position, 0), size: size + added }\0A    },\0A}\0A\0Alet set_union_single_leaf[T: Eq] (a: Set[T]) (b: Set[T]): Set[T] = {\0A    let leaf = b.inner.root;\0A    match leaf {\0A        MapLeaf(hash, key, _) => {\0A            let position = set_union_leaf_position(a.inner.root, hash, key, 0);\0A            if position == 0 { a }\0A            else {\0A                match a {\0A                    Set { inner } => Set {\0A                        inner: set_union_update_map(inner, hash, key, leaf, position)\0A                    },\0A                }\0A            }\0A        },\0A        _ => set_union_by_insertion(a, b),\0A    }\0A}\0A\0A// An already selected root can reuse the input's owned wrappers.\0Alet set_replace_map_root[T] (map: Map[T, Unit]) (root: MapNode[T, Unit]) (size: Int): Map[T, Unit] =\0A    match map {\0A        Map { root: _, size: _ } => Map { root, size },\0A    }\0A\0Alet set_replace_root[T] (set: Set[T]) (root: MapNode[T, Unit]) (size: Int): Set[T] =\0A    match set {\0A        Set { inner } => Set { inner: set_replace_map_root(inner, root, size) },\0A    }\0A\0Aenum SetGraftRoute { DisjointBranches, OverlappingBranches, GeneralGraft }\0A\0Alet set_root_graft_route[T]\0A    (left: MapNode[T, Unit])\0A    (right: MapNode[T, Unit]): SetGraftRoute\0A= match left {\0A    MapBranch(left_bits, _) => match right {\0A        MapBranch(right_bits, _) => if (left_bits & right_bits) == 0 { DisjointBranches }\0A        // Equal unary roots can still have disjoint child routes.\0A        else if left_bits == right_bits && (left_bits & (left_bits - 1)) == 0 { GeneralGraft }\0A        else { OverlappingBranches },\0A        _ => GeneralGraft,\0A    },\0A    _ => GeneralGraft,\0A}\0A\0A// This call is only reached after proving the root bitmaps are disjoint.\0Alet set_graft_disjoint_branches[T]\0A    (left: MapNode[T, Unit])\0A    (right: MapNode[T, Unit]): MapNode[T, Unit]\0A= match right {\0A    MapBranch(right_bits, right_children) => match left {\0A        MapBranch(left_bits, left_children) => MapBranch(\0A            left_bits | right_bits,\0A            set_graft_children(left_bits, left_children, right_bits, right_children)\0A        ),\0A        _ => MapEmpty,\0A    },\0A    _ => MapEmpty,\0A}\0A\0Alet set_graft_disjoint_map[T]\0A    (left: Map[T, Unit])\0A    (right: MapNode[T, Unit])\0A    (right_size: Int): Map[T, Unit]\0A= match left {\0A    Map { root, size } => {\0A        let grafted = set_graft_disjoint_branches(root, right);\0A        Map { root: grafted, size: size + right_size }\0A    },\0A}\0A\0A/// Everything in either set.\0Apub let Set.union[T: Eq + Hash] (a: Set[T]) (b: Set[T]): Set[T] = {\0A    let right_size = Set.len(b);\0A    let left_size = Set.len(a);\0A    if left_size == 0 { b }\0A    else if right_size == 0 { a }\0A    else if right_size == 1 { set_union_single_leaf(a, b) }\0A    else {\0A        match set_root_graft_route(a.inner.root, b.inner.root) {\0A            DisjointBranches => match a {\0A                Set { inner } => Set {\0A                    inner: set_graft_disjoint_map(inner, set_root(b), right_size)\0A                },\0A            },\0A            OverlappingBranches => set_union_merge_routes(a, b),\0A            GeneralGraft => match set_graft_union(a.inner.root, b.inner.root, 0) {\0A                MapEmpty => set_union_merge_routes(a, b),\0A                root => set_replace_root(a, root, left_size + right_size),\0A            },\0A        }\0A    }\0A}\0A\0A// Find the left representative of a singleton intersection. A matching\0A// leaf already has the shape needed by the result.\0Alet set_find_leaf[T: Eq]\0A    (node: MapNode[T, Unit])\0A    (hash: Int)\0A    (key: T)\0A    (shift: Int): MapNode[T, Unit]\0A= match node {\0A    MapEmpty => MapEmpty,\0A    MapLeaf(h, k, _) => if h == hash && k == key { node } else { MapEmpty },\0A    MapCollision(h, entries) => if h != hash { MapEmpty } else {\0A        let i = map_bucket_find_index(entries, key, 0);\0A        if i < 0 { MapEmpty } else { MapLeaf(h, entries[i].key, ()) }\0A    },\0A    MapBranch(bits, children) => {\0A        let bit = map_bit(hash, shift);\0A        if (bits & bit) == 0 { MapEmpty }\0A        else { set_find_leaf(children[map_rank(bits, bit)], hash, key, shift + 5) }\0A    },\0A}\0A\0A/// Only what is in both.\0Apub let Set.intersection[T: Eq + Hash] (a: Set[T]) (b: Set[T]): Set[T] = {\0A    let right_size = Set.len(b);\0A    if right_size == 0 { b }\0A    else {\0A        match a.inner.root {\0A            MapEmpty => a,\0A            MapLeaf(hash, key, _) => if map_node_contains(b.inner.root, hash, key, 0) { a }\0A            else { Set.new(()) },\0A            _ => match b.inner.root {\0A                MapLeaf(hash, key, _) => match set_find_leaf(set_root(a), hash, key, 0) {\0A                    MapEmpty => Set.new(()),\0A                    leaf => set_replace_root(b, leaf, 1),\0A                },\0A                _ => {\0A                    let coverage = if Set.len(a) - 1 <= right_size {\0A                        set_node_coverage(a.inner.root, b.inner.root, 0, NoSetMatch)\0A                    } else { StopSetScan };\0A                    match coverage {\0A                        NoSetMatch => a,\0A                        OneSetMatch(hash, position) => match a {\0A                            Set { inner } => Set { inner: map_remove_at(inner, hash, position) },\0A                        },\0A                        StopSetScan => set_prune(a, b, true),\0A                    }\0A                },\0A            },\0A        }\0A    }\0A}\0A\0A// The caller still has the left node for the unchanged case.\0Aenum SetPrune[T] {\0A    SetKeepNode,\0A    SetDropNode,\0A    SetUpdateNode(MapNode[T, Unit])\0A}\0A\0A// Keep the matching suffix as bit masks until the result size is known.\0Alet set_append_bucket_mask[T]\0A    (entries: Array[MapEntry[T, Unit]])\0A    (out: Array[MapEntry[T, Unit]])\0A    (start: Int)\0A    (mask: Int): Array[MapEntry[T, Unit]]\0A= {\0A    let mut kept = out;\0A    for slot in 0..64 {\0A        if (mask & (1 << slot)) != 0 {\0A            kept = kept.push(entries[start + slot]);\0A        };\0A    };\0A    kept\0A}\0A\0Alet set_prune_bucket[T: Eq]\0A    (entries: Array[MapEntry[T, Unit]])\0A    (right: MapNode[T, Unit])\0A    (hash: Int)\0A    (retain_matches: Bool): SetPrune[T]\0A= {\0A    let len = entries.len();\0A    let mut prefix = len;\0A    let mut suffix_size = 0;\0A    let mut first_index = 0;\0A    let mut first_start = 0;\0A    let mut first_mask = 0;\0A    // Further nonempty masks are stored as adjacent start and mask slots.\0A    let mut masks: Array[Int] = [];\0A    for block in 0..((len - 1) / 64 + 1) {\0A        let start = block * 64;\0A        let mut mask = 0;\0A        for i in start..Int.min(start + 64, len) {\0A            if map_node_contains(right, hash, entries[i].key, 0) != retain_matches {\0A                if prefix == len {\0A                    prefix = i;\0A                };\0A            } else if prefix != len {\0A                if suffix_size == 0 {\0A                    first_index = i;\0A                };\0A                mask = mask | (1 << (i - start));\0A                suffix_size = suffix_size + 1;\0A            };\0A        };\0A        if mask != 0 {\0A            if first_mask == 0 {\0A                first_start = start;\0A                first_mask = mask;\0A            } else {\0A                masks = masks.push(start).push(mask);\0A            };\0A        };\0A    };\0A    let size = prefix + suffix_size;\0A    if prefix == len { SetKeepNode }\0A    else if size == 0 { SetDropNode }\0A    else if size == 1 {\0A        let i = if prefix == 1 { 0 } else { first_index };\0A        SetUpdateNode(MapLeaf(hash, entries[i].key, ()))\0A    }\0A    else if suffix_size == 0 { SetUpdateNode(MapCollision(hash, Array.take(entries, prefix))) }\0A    else {\0A        let mut kept = plum__array_reserve_empty_raw(size);\0A        for i in 0..prefix {\0A            kept = kept.push(entries[i]);\0A        };\0A        kept = set_append_bucket_mask(entries, kept, first_start, first_mask);\0A        for i in 0..(masks.len() / 2) {\0A            kept = set_append_bucket_mask(entries, kept, masks[2 * i], masks[2 * i + 1]);\0A        };\0A        SetUpdateNode(MapCollision(hash, kept))\0A    }\0A}\0A\0Alet set_bucket_find_last_match[T: Eq]\0A    (left: Array[MapEntry[T, Unit]])\0A    (right: Array[MapEntry[T, Unit]])\0A    (i: Int): Int\0A= if i < 0 { -1 }\0Aelse if map_bucket_find_index(right, left[i].key, 0) >= 0 { i }\0Aelse { set_bucket_find_last_match(left, right, i - 1) }\0A\0A// Only matching entries add frames. The caller limits the right bucket to sixteen.\0A// Walking backwards lets us fill the exact-size result in left order.\0Alet set_bucket_collect_matches[T: Eq]\0A    (left: Array[MapEntry[T, Unit]])\0A    (right: Array[MapEntry[T, Unit]])\0A    (i: Int)\0A    (count: Int): Array[MapEntry[T, Unit]]\0A= {\0A    let next = if count == right.len() { -1 } else { set_bucket_find_last_match(left, right, i) };\0A    if next < 0 { plum__array_reserve_empty_raw(count) }\0A    else {\0A        set_bucket_collect_matches(left, right, next - 1, count + 1).push(left[next])\0A    }\0A}\0A\0Alet set_prune_sparse_bucket[T: Eq]\0A    (left: Array[MapEntry[T, Unit]])\0A    (right: Array[MapEntry[T, Unit]])\0A    (hash: Int): SetPrune[T]\0A= {\0A    let last = set_bucket_find_last_match(left, right, left.len() - 1);\0A    if last < 0 { SetDropNode }\0A    else {\0A        let previous = set_bucket_find_last_match(left, right, last - 1);\0A        if previous < 0 { SetUpdateNode(MapLeaf(hash, left[last].key, ())) }\0A        else {\0A            let kept = set_bucket_collect_matches(left, right, previous - 1, 2);\0A            SetUpdateNode(MapCollision(hash, kept.push(left[previous]).push(left[last])))\0A        }\0A    }\0A}\0A\0A// Keep the original children until the first edit. Hold a lone survivor\0A// directly so promoting a terminal does not require a temporary array.\0Alet set_prune_branch[T: Eq]\0A    (children: Array[MapNode[T, Unit]])\0A    (right: MapNode[T, Unit])\0A    (bits: Int)\0A    (common: Int)\0A    (shift: Int)\0A    (retain_matches: Bool): SetPrune[T]\0A= if common == 0 {\0A    if retain_matches { SetDropNode } else { SetKeepNode }\0A} else if retain_matches && (common & (common - 1)) == 0 {\0A    let child = children[map_rank(bits, common)];\0A    let other = match right {\0A        MapBranch(right_bits, right_children) => right_children[map_rank(right_bits, common)],\0A        _ => right,\0A    };\0A    let edit = set_prune_nodes(child, other, shift + 5, true);\0A    match edit {\0A        SetKeepNode if common == bits => SetKeepNode,\0A        SetDropNode => SetDropNode,\0A        _ => {\0A            let survivor = match edit {\0A                SetUpdateNode(next) => next,\0A                _ => child,\0A            };\0A            match survivor {\0A                // A branch still routes using the next hash chunk.\0A                MapBranch(_, _) => SetUpdateNode(MapBranch(common, [survivor])),\0A                _ => SetUpdateNode(survivor),\0A            }\0A        },\0A    }\0A} else {\0A    let candidates = if retain_matches { common } else { bits };\0A    let mut todo = candidates;\0A    let mut surviving = candidates;\0A    let mut changed = candidates != bits;\0A    let mut first = MapEmpty;\0A    let mut kept: Array[MapNode[T, Unit]] = [];\0A    for i in 0..Int.count_ones(candidates) {\0A        let bit = todo & - todo;\0A        todo = todo & ~bit;\0A        let child = children[if candidates == bits { i } else { map_rank(bits, bit) }];\0A        let edit = if (common & bit) == 0 { SetKeepNode } else {\0A            let other = match right {\0A                MapBranch(right_bits, right_children) => right_children[map_rank(right_bits, bit)],\0A                _ => right,\0A            };\0A            set_prune_nodes(child, other, shift + 5, retain_matches)\0A        };\0A        let prefix = if changed { 0 } else { i };\0A        let next = match edit {\0A            SetKeepNode => if changed { child } else { MapEmpty },\0A            SetDropNode => {\0A                changed = true;\0A                surviving = surviving & ~bit;\0A                MapEmpty\0A            },\0A            SetUpdateNode(next) => {\0A                changed = true;\0A                next\0A            },\0A        };\0A        if changed {\0A            if prefix == 1 {\0A                first = children[0];\0A            }\0A            else if prefix > 1 {\0A                kept = Array.take(children, prefix);\0A            };\0A            match next {\0A                MapEmpty => (),\0A                _ if kept.len() != 0 => {\0A                    kept = kept.push(next);\0A                },\0A                _ => match first {\0A                    MapEmpty => {\0A                        first = next;\0A                    },\0A                    _ => {\0A                        kept = [first, next];\0A                    },\0A                },\0A            };\0A        };\0A    };\0A    if !changed { SetKeepNode }\0A    else if surviving == 0 { SetDropNode }\0A    else if kept.len() == 0 {\0A        match first {\0A            MapBranch(_, _) => SetUpdateNode(MapBranch(surviving, [first])),\0A            _ => SetUpdateNode(first),\0A        }\0A    } else { SetUpdateNode(MapBranch(surviving, kept)) }\0A}\0A\0A// A right-hand leaf bounds the intersection to one left representative.\0Alet set_prune_singleton[T: Eq]\0A    (left: MapNode[T, Unit])\0A    (hash: Int)\0A    (key: T)\0A    (shift: Int): SetPrune[T]\0A= match set_find_leaf(left, hash, key, shift) {\0A    MapEmpty => SetDropNode,\0A    leaf => SetUpdateNode(leaf),\0A}\0A\0Alet set_prune_nodes[T: Eq]\0A    (left: MapNode[T, Unit])\0A    (right: MapNode[T, Unit])\0A    (shift: Int)\0A    (retain_matches: Bool): SetPrune[T]\0A= {\0A    let nonmember = if retain_matches { SetDropNode } else { SetKeepNode };\0A    match left {\0A        MapEmpty => SetKeepNode,\0A        MapLeaf(hash, key, _) => if map_node_contains(right, hash, key, shift) != retain_matches {\0A            SetDropNode\0A        } else { SetKeepNode },\0A        MapCollision(hash, entries) => match right {\0A            MapEmpty => nonmember,\0A            MapBranch(bits, children) => {\0A                let bit = map_bit(hash, shift);\0A                if (bits & bit) == 0 { nonmember }\0A                else {\0A                    set_prune_nodes(left, children[map_rank(bits, bit)], shift + 5, retain_matches)\0A                }\0A            },\0A            MapLeaf(h, key, _) => if h != hash { nonmember }\0A            else if retain_matches { set_prune_singleton(left, h, key, shift) }\0A            else {\0A                let i = map_bucket_find_index(entries, key, 0);\0A                if i < 0 { SetKeepNode }\0A                else { SetUpdateNode(map_node_remove_present(left, hash, i + 1, shift, false)) }\0A            },\0A            MapCollision(h, other_entries) => if h != hash { nonmember }\0A            else if retain_matches && other_entries.len() <= 16\0A                && other_entries.len() <= entries.len() / 2 {\0A                    set_prune_sparse_bucket(entries, other_entries, hash)\0A                }\0A            else { set_prune_bucket(entries, right, hash, retain_matches) },\0A        },\0A        MapBranch(bits, children) => match right {\0A            MapEmpty => nonmember,\0A            MapBranch(other_bits, _) => set_prune_branch(\0A                children,\0A                right,\0A                bits,\0A                bits & other_bits,\0A                shift,\0A                retain_matches\0A            ),\0A            MapLeaf(hash, key, _) => if retain_matches {\0A                set_prune_singleton(left, hash, key, shift)\0A            } else {\0A                set_prune_branch(children, right, bits, bits & map_bit(hash, shift), shift, false)\0A            },\0A            MapCollision(hash, _) => set_prune_branch(\0A                children,\0A                right,\0A                bits,\0A                bits & map_bit(hash, shift),\0A                shift,\0A                retain_matches\0A            ),\0A        },\0A    }\0A}\0A\0A// Count the result once so unchanged and fully removed subtries need no\0A// allocated records for their sizes during the edit.\0Alet set_count_children[T] (children: Array[MapNode[T, Unit]]): Int = {\0A    let mut size = 0;\0A    for child in children {\0A        size = size + set_count_node(child);\0A    };\0A    size\0A}\0A\0Alet set_count_node[T] (node: MapNode[T, Unit]): Int = match node {\0A    MapEmpty => 0,\0A    MapLeaf(_, _, _) => 1,\0A    MapCollision(_, entries) => entries.len(),\0A    MapBranch(_, children) => set_count_children(children),\0A}\0A\0Alet set_prune[T: Eq] (left: Set[T]) (right: Set[T]) (retain_matches: Bool): Set[T] =\0A    match set_prune_nodes(left.inner.root, right.inner.root, 0, retain_matches) {\0A        SetKeepNode => left,\0A        SetDropNode => Set.new(()),\0A        SetUpdateNode(root) => Set { inner: Map { root: root, size: set_count_node(root) } },\0A    }\0A\0A/// What is in `a` and not in `b`.\0Apub let Set.difference[T: Eq + Hash] (a: Set[T]) (b: Set[T]): Set[T] = {\0A    let right_size = Set.len(b);\0A    if right_size == 0 { a }\0A    else if right_size <= Set.len(a) / 2 {\0A        // Visit at most as many keys as a rebuild would need to insert.\0A        match b.inner.root {\0A            MapLeaf(hash, key, _) => set_remove_hashed(a, hash, key),\0A            _ => match a {\0A                Set { inner } => Set { inner: set_collect(set_root(b), inner, SetErase) },\0A            },\0A        }\0A    }\0A    else {\0A        match a.inner.root {\0A            MapLeaf(hash, key, _) => if map_node_contains(b.inner.root, hash, key, 0) {\0A                Set.new(())\0A            } else { a },\0A            _ => match set_nodes_overlap(a.inner.root, b.inner.root, 0, SharedMember, NoSetMatch) {\0A                NoSetMatch => a,\0A                OneSetMatch(hash, key) => set_remove_hashed(a, hash, key),\0A                StopSetScan => set_prune(a, b, false),\0A            },\0A        }\0A    }\0A}\0A\0A/// A set of the array's elements, discarding duplicates.\0Apub let Set.from_array[T: Eq + Hash] (arr: Array[T]): Set[T] =\0A    Set { inner: Array.fold(arr, Map.new(()), |acc, elem| Map.insert(acc, elem, ())) }\0A\0A// --- JSON ---\0A\0A/// An object member, with a decoded key and JSON value.\0Apub struct JsonEntry { pub key: String, pub value: JsonValue }\0A\0A/// A parsed JSON document.\0A///\0A/// Numbers are binary64 `Float`s and may lose precision when parsed.\0A/// `use Json;` brings in decoders that turn one of these into your own\0A/// types; `Json.int` rejects values outside the safe integer range.\0Apub enum JsonValue {\0A    JsonNull,\0A    JsonBool(Bool),\0A    JsonNumber(Float),\0A    JsonString(String),\0A    JsonArray(Array[JsonValue]),\0A    JsonObject(Array[JsonEntry]),\0A}\0A\0A/// What a JSON parse step consumed: a value, and where to carry on\0A/// from. Public because the parser's own pieces return it; a caller\0A/// wants `json_parse`.\0Apub struct ParseResult[T] { pub value: T, pub next_pos: Int }\0A\0A// Scanning uses byte offsets. JSON punctuation is ASCII, so token and\0A// string-run boundaries never split a UTF-8 code point.\0Alet skip_ws (bytes: Bytes) (pos: Int): Int =\0A    if pos >= bytes_len_raw(bytes) { pos }\0A    else {\0A        let c = bytes_at_raw(bytes, pos);\0A        if c == 32 || c == 9 || c == 10 || c == 13 { skip_ws(bytes, pos + 1) } else { pos }\0A    }\0A\0Alet json_digit (c: Int): Bool = c >= 48 && c <= 57\0A\0Alet parse_digits (bytes: Bytes) (pos: Int): Int =\0A    if pos < bytes_len_raw(bytes) && json_digit(bytes_at_raw(bytes, pos)) {\0A        parse_digits(bytes, pos + 1)\0A    }\0A    else { pos }\0A\0A// Shared lexical scanner for String.parse_float and JSON. No numeric\0A// accumulation or exponent scaling: the runtime converts the token once.\0Alet parse_number (bytes: Bytes) (pos: Int): Result[ParseResult[Float], String] = {\0A    let n = bytes_len_raw(bytes);\0A    let start = if pos < n && bytes_at_raw(bytes, pos) == 45 { pos + 1 } else { pos };\0A    let int_end = parse_digits(bytes, start);\0A    if int_end == start { Err(\22expected digit\22) }\0A    else {\0A        let has_frac = int_end < n && bytes_at_raw(bytes, int_end) == 46;\0A        let frac_end = if has_frac { parse_digits(bytes, int_end + 1) } else { int_end };\0A        if has_frac && frac_end == int_end + 1 { Err(\22expected digit\22) }\0A        else {\0A            let has_exp = frac_end < n\0A                && (bytes_at_raw(bytes, frac_end) == 101 || bytes_at_raw(bytes, frac_end) == 69);\0A            let after_e = frac_end + 1;\0A            let exp_start = if has_exp && after_e < n\0A                && (bytes_at_raw(bytes, after_e) == 45 || bytes_at_raw(bytes, after_e) == 43) {\0A                    after_e + 1\0A                } else { after_e };\0A            let end = if has_exp { parse_digits(bytes, exp_start) } else { frac_end };\0A            if has_exp && end == exp_start { Err(\22expected digit\22) }\0A            else {\0A                let converted = parse_float_raw(str_of_bytes_raw(bytes_slice_raw(bytes, pos, end)));\0A                // Some CRTs return positive zero on negative underflow.\0A                // Preserve the token's sign independently of that behavior.\0A                let value = if converted == 0.0 && start > pos { -0.0 } else { converted };\0A                if Float.is_finite(value) { Ok(ParseResult { value: value, next_pos: end }) }\0A                else { Err(\22float out of range\22) }\0A            }\0A        }\0A    }\0A}\0A\0Alet parse_literal\0A    (bytes: Bytes)\0A    (pos: Int)\0A    (word: String)\0A    (value: JsonValue): Result[ParseResult[JsonValue], String]\0A=\0A    if str_of_bytes_raw(bytes_slice_raw(bytes, pos, pos + word.len())) == word {\0A        Ok(ParseResult { value: value, next_pos: pos + word.len() })\0A    }\0A    else { Err(\22invalid literal\22) }\0A\0Alet json_hex (c: Int): Int =\0A    if c >= 48 && c <= 57 { c - 48 }\0A    else if c >= 65 && c <= 70 { c - 55 }\0A    else if c >= 97 && c <= 102 { c - 87 }\0A    else { -1 }\0A\0Alet json_hex4 (bytes: Bytes) (pos: Int) (left: Int) (acc: Int): Result[Int, String] =\0A    if left == 0 { Ok(acc) }\0A    else if pos >= bytes_len_raw(bytes) { Err(\22invalid unicode escape\22) }\0A    else {\0A        let d = json_hex(bytes_at_raw(bytes, pos));\0A        if d < 0 { Err(\22invalid unicode escape\22) }\0A        else { json_hex4(bytes, pos + 1, left - 1, acc * 16 + d) }\0A    }\0A\0Alet json_codepoint (c: Int): String = str_of_bytes_raw(bytes_from_array_raw(\0A    if c < 128 { [c] }\0A    else if c < 2048 { [192 + c / 64, 128 + c % 64] }\0A    else if c < 65536 { [224 + c / 4096, 128 + (c / 64) % 64, 128 + c % 64] }\0A    else { [240 + c / 262144, 128 + (c / 4096) % 64, 128 + (c / 64) % 64, 128 + c % 64] }\0A))\0A\0Alet json_unicode (bytes: Bytes) (pos: Int): Result[ParseResult[String], String] =\0A    match json_hex4(bytes, pos, 4, 0) {\0A        Err(e) => Err(e),\0A        Ok(c) => if c >= 55296 && c <= 56319 {\0A            if pos + 6 > bytes_len_raw(bytes) || bytes_at_raw(bytes, pos + 4) != 92\0A                || bytes_at_raw(bytes, pos + 5) != 117 { Err(\22invalid unicode surrogate pair\22) }\0A            else {\0A                match json_hex4(bytes, pos + 6, 4, 0) {\0A                    Err(e) => Err(e),\0A                    Ok(low) => if low < 56320 || low > 57343 {\0A                        Err(\22invalid unicode surrogate pair\22)\0A                    }\0A                    else {\0A                        Ok(ParseResult {\0A                            value: json_codepoint(65536 + (c - 55296) * 1024 + low - 56320),\0A                            next_pos: pos + 10\0A                        })\0A                    },\0A                }\0A            }\0A        } else if c >= 56320 && c <= 57343 { Err(\22invalid unicode surrogate pair\22) }\0A        else { Ok(ParseResult { value: json_codepoint(c), next_pos: pos + 4 }) },\0A    }\0A\0A// An ordinary run is copied once into a chunk. Escapes append small\0A// chunks to a uniquely owned growable array, then concat_all copies the\0A// decoded string once. Width is handled by tail calls, not stack frames.\0Alet parse_string_body\0A    (bytes: Bytes)\0A    (pos: Int)\0A    (run: Int)\0A    (parts: Array[String]): Result[ParseResult[String], String]\0A=\0A    if pos >= bytes_len_raw(bytes) { Err(\22unterminated string\22) }\0A    else {\0A        let c = bytes_at_raw(bytes, pos);\0A        if c == 34 || c == 92 {\0A            if pos > run {\0A                parts = parts.push(str_of_bytes_raw(bytes_slice_raw(bytes, run, pos)));\0A            };\0A            if c == 34 { Ok(ParseResult { value: Array.concat_all(parts), next_pos: pos + 1 }) }\0A            else if pos + 1 >= bytes_len_raw(bytes) { Err(\22unterminated escape\22) }\0A            else {\0A                let e = bytes_at_raw(bytes, pos + 1);\0A                let decoded = if e == 117 { json_unicode(bytes, pos + 2) }\0A                else {\0A                    let value = if e == 34 { Ok(\22\5C\22\22) }\0A                    else if e == 92 { Ok(\22\5C\5C\22) }\0A                    else if e == 47 { Ok(\22/\22) }\0A                    else if e == 98 { Ok(json_codepoint(8)) }\0A                    else if e == 102 { Ok(json_codepoint(12)) }\0A                    else if e == 110 { Ok(\22\5Cn\22) }\0A                    else if e == 114 { Ok(\22\5Cr\22) }\0A                    else if e == 116 { Ok(\22\5Ct\22) }\0A                    else { Err(\22unsupported escape sequence\22) };\0A                    match value {\0A                        Err(err) => Err(err),\0A                        Ok(v) => Ok(ParseResult { value: v, next_pos: pos + 2 }),\0A                    }\0A                };\0A                match decoded {\0A                    Err(err) => Err(err),\0A                    Ok(r) => {\0A                        parts = parts.push(r.value);\0A                        parse_string_body(bytes, r.next_pos, r.next_pos, parts)\0A                    },\0A                }\0A            }\0A        }\0A        else if c < 32 { Err(\22unescaped control character\22) }\0A        else { parse_string_body(bytes, pos + 1, run, parts) }\0A    }\0A\0Alet parse_string (bytes: Bytes) (pos: Int): Result[ParseResult[String], String] =\0A    if pos >= bytes_len_raw(bytes) || bytes_at_raw(bytes, pos) != 34 {\0A        Err(\22expected opening quote\22)\0A    }\0A    else { parse_string_body(bytes, pos + 1, pos + 1, []) }\0A\0Alet parse_value (bytes: Bytes) (pos: Int) (depth: Int): Result[ParseResult[JsonValue], String] =\0A    if pos >= bytes_len_raw(bytes) { Err(\22unexpected end of input\22) }\0A    else {\0A        let c = bytes_at_raw(bytes, pos);\0A        if c == 34 {\0A            match parse_string(bytes, pos) {\0A                Ok(r) => Ok(ParseResult { value: JsonString(r.value), next_pos: r.next_pos }),\0A                Err(e) => Err(e),\0A            }\0A        }\0A        else if c == 123 {\0A            if depth >= 128 { Err(\22JSON nesting limit exceeded (128)\22) } else {\0A                parse_object(bytes, pos, depth + 1)\0A            }\0A        }\0A        else if c == 91 {\0A            if depth >= 128 { Err(\22JSON nesting limit exceeded (128)\22) } else {\0A                parse_array(bytes, pos, depth + 1)\0A            }\0A        }\0A        else if c == 116 { parse_literal(bytes, pos, \22true\22, JsonBool(true)) }\0A        else if c == 102 { parse_literal(bytes, pos, \22false\22, JsonBool(false)) }\0A        else if c == 110 { parse_literal(bytes, pos, \22null\22, JsonNull) }\0A        else if json_digit(c) || c == 45 {\0A            let start = if c == 45 { pos + 1 } else { pos };\0A            if start + 1 < bytes_len_raw(bytes) && bytes_at_raw(bytes, start) == 48\0A                && json_digit(bytes_at_raw(bytes, start + 1)) { Err(\22leading zero in JSON number\22) }\0A            else {\0A                match parse_number(bytes, pos) {\0A                    Ok(r) => Ok(ParseResult { value: JsonNumber(r.value), next_pos: r.next_pos }),\0A                    Err(e) => Err(e),\0A                }\0A            }\0A        }\0A        else { Err(\22unexpected character\22) }\0A    }\0A\0Alet parse_array (bytes: Bytes) (pos: Int) (depth: Int): Result[ParseResult[JsonValue], String] = {\0A    let p1 = skip_ws(bytes, pos + 1);\0A    if p1 < bytes_len_raw(bytes) && bytes_at_raw(bytes, p1) == 93 {\0A        Ok(ParseResult { value: JsonArray([]), next_pos: p1 + 1 })\0A    }\0A    else { parse_array_entries(bytes, p1, depth, []) }\0A}\0A\0Alet parse_array_entries\0A    (bytes: Bytes)\0A    (pos: Int)\0A    (depth: Int)\0A    (acc: Array[JsonValue]): Result[ParseResult[JsonValue], String]\0A=\0A    match parse_value(bytes, pos, depth) {\0A        Err(e) => Err(e),\0A        Ok(val_r) => {\0A            acc = acc.push(val_r.value);\0A            let p1 = skip_ws(bytes, val_r.next_pos);\0A            if p1 < bytes_len_raw(bytes) && bytes_at_raw(bytes, p1) == 44 {\0A                parse_array_entries(bytes, skip_ws(bytes, p1 + 1), depth, acc)\0A            }\0A            else if p1 < bytes_len_raw(bytes) && bytes_at_raw(bytes, p1) == 93 {\0A                Ok(ParseResult { value: JsonArray(acc), next_pos: p1 + 1 })\0A            }\0A            else { Err(\22expected ',' or ']'\22) }\0A        }\0A    }\0A\0Alet parse_object (bytes: Bytes) (pos: Int) (depth: Int): Result[ParseResult[JsonValue], String] = {\0A    let p1 = skip_ws(bytes, pos + 1);\0A    if p1 < bytes_len_raw(bytes) && bytes_at_raw(bytes, p1) == 125 {\0A        Ok(ParseResult { value: JsonObject([]), next_pos: p1 + 1 })\0A    }\0A    else { parse_object_entries(bytes, p1, depth, []) }\0A}\0A\0Alet parse_object_entries\0A    (bytes: Bytes)\0A    (pos: Int)\0A    (depth: Int)\0A    (acc: Array[JsonEntry]): Result[ParseResult[JsonValue], String]\0A=\0A    match parse_string(bytes, pos) {\0A        Err(e) => Err(e),\0A        Ok(key_r) => {\0A            let p1 = skip_ws(bytes, key_r.next_pos);\0A            if Array.any(acc, |entry: JsonEntry| entry.key == key_r.value) {\0A                Err(\22duplicate object member name\22)\0A            }\0A            else if p1 >= bytes_len_raw(bytes) || bytes_at_raw(bytes, p1) != 58 {\0A                Err(\22expected ':'\22)\0A            }\0A            else {\0A                let p2 = skip_ws(bytes, p1 + 1);\0A                match parse_value(bytes, p2, depth) {\0A                    Err(e) => Err(e),\0A                    Ok(val_r) => {\0A                        acc = acc.push(JsonEntry { key: key_r.value, value: val_r.value });\0A                        let p3 = skip_ws(bytes, val_r.next_pos);\0A                        if p3 < bytes_len_raw(bytes) && bytes_at_raw(bytes, p3) == 44 {\0A                            parse_object_entries(bytes, skip_ws(bytes, p3 + 1), depth, acc)\0A                        }\0A                        else if p3 < bytes_len_raw(bytes) && bytes_at_raw(bytes, p3) == 125 {\0A                            Ok(ParseResult { value: JsonObject(acc), next_pos: p3 + 1 })\0A                        }\0A                        else { Err(\22expected ',' or '}'\22) }\0A                    }\0A                }\0A            }\0A        }\0A    }\0A\0A/// Parses JSON text.\0A///\0A/// `Err` with a message naming what was expected. Accepts one complete\0A/// value and rejects trailing text after it. Object member names must\0A/// be unique within each object, compared after decoding escapes;\0A/// duplicate names return `Err(\22duplicate object member name\22)`.\0A/// Strings support JSON escapes, including UTF-16 surrogate pairs, and\0A/// reject raw control characters and unpaired surrogates. Numbers must\0A/// follow JSON syntax (no leading zeros).\0A/// Numbers overflowing binary64 return `Err`; underflow rounds to a\0A/// subnormal value or signed zero.\0A/// At most 128 arrays/objects may be nested, counting the root container;\0A/// a deeper container returns `Err(\22JSON nesting limit exceeded (128)\22)`.\0A/// Input bytes and decoded strings use linear storage; this is not a\0A/// total input-size limit. Wide objects still compare each key against\0A/// preceding keys to reject duplicates.\0Apub let json_parse (s: String): Result[JsonValue, String] = {\0A    let bytes = bytes_of_str_raw(s);\0A    let start = skip_ws(bytes, 0);\0A    match parse_value(bytes, start, 0) {\0A        Err(e) => Err(e),\0A        Ok(r) => {\0A            let after = skip_ws(bytes, r.next_pos);\0A            if after == bytes_len_raw(bytes) { Ok(r.value) } else {\0A                Err(\22trailing characters after JSON value\22)\0A            }\0A        }\0A    }\0A}\0A\0A// ASCII escape boundaries cannot split a UTF-8 code point. Scan byte\0A// runs so ordinary text needs neither chars_of nor per-character strings.\0Alet json_run_end (s: Bytes) (pos: Int): Int =\0A    if pos >= bytes_len_raw(s) { pos }\0A    else {\0A        let b = bytes_at_raw(s, pos);\0A        if b == 34 || b == 92 || b < 32 { pos }\0A        else { json_run_end(s, pos + 1) }\0A    }\0A\0Alet json_escape_byte (b: Int): String =\0A    if b == 34 { \22\5C\5C\5C\22\22 }\0A    else if b == 92 { \22\5C\5C\5C\5C\22 }\0A    else if b == 8 { \22\5C\5Cb\22 }\0A    else if b == 12 { \22\5C\5Cf\22 }\0A    else if b == 10 { \22\5C\5Cn\22 }\0A    else if b == 13 { \22\5C\5Cr\22 }\0A    else if b == 9 { \22\5C\5Ct\22 }\0A    else if b < 32 { \22\5C\5Cu00\22.concat(plum__hex_digit(b / 16)).concat(plum__hex_digit(b % 16)) }\0A    else { \22\22 }\0A\0A// One continuation per active container, rather than one per sibling.\0A// Keep the container alive while visiting its children so dropping a\0A// traversal frame cannot recursively destroy the unvisited subtree.\0Aenum JsonWriteStack {\0A    JsonWriteDone,\0A    JsonWriteValue(JsonValue, JsonWriteStack),\0A    JsonWriteArray(Array[JsonValue], Int, JsonWriteStack),\0A    JsonWriteObject(Array[JsonEntry], Int, JsonWriteStack),\0A    JsonWriteString(Bytes, Int, JsonWriteStack),\0A    JsonWriteText(String, JsonWriteStack),\0A}\0A\0A// Every transition is a same-signature tail call (musttail in LLVM).\0A// Append only through self-rebinding here: passing parts through nested\0A// helpers keeps aliases alive and defeats geometric array growth.\0A// concat_all then copies the fragments into one final allocation.\0Alet json_emit (stack: JsonWriteStack) (parts: Array[String]): Result[String, String] = match stack {\0A    JsonWriteDone => Ok(Array.concat_all(parts)),\0A    JsonWriteText(text, rest) => {\0A        parts = parts.push(text);\0A        json_emit(rest, parts)\0A    },\0A    JsonWriteString(s, pos, rest) => {\0A        let end = json_run_end(s, pos);\0A        if end > pos {\0A            parts = parts.push(str_of_bytes_raw(bytes_slice_raw(s, pos, end)));\0A        };\0A        if end == bytes_len_raw(s) {\0A            parts = parts.push(\22\5C\22\22);\0A            json_emit(rest, parts)\0A        } else {\0A            parts = parts.push(json_escape_byte(bytes_at_raw(s, end)));\0A            json_emit(JsonWriteString(s, end + 1, rest), parts)\0A        }\0A    },\0A    JsonWriteValue(v, rest) => match v {\0A        JsonNull => {\0A            parts = parts.push(\22null\22);\0A            json_emit(rest, parts)\0A        },\0A        JsonBool(b) => {\0A            parts = parts.push(if b { \22true\22 } else { \22false\22 });\0A            json_emit(rest, parts)\0A        },\0A        JsonNumber(n) => {\0A            if Float.is_finite(n) {\0A                parts = parts.push(n.to_string());\0A                json_emit(rest, parts)\0A            } else { Err(\22non-finite JSON number\22) }\0A        },\0A        JsonString(s) => {\0A            parts = parts.push(\22\5C\22\22);\0A            json_emit(JsonWriteString(bytes_of_str_raw(s), 0, rest), parts)\0A        },\0A        JsonArray(arr) => {\0A            parts = parts.push(\22[\22);\0A            json_emit(JsonWriteArray(arr, 0, rest), parts)\0A        },\0A        JsonObject(entries) => {\0A            parts = parts.push(\22{\22);\0A            json_emit(JsonWriteObject(entries, 0, rest), parts)\0A        },\0A    },\0A    JsonWriteArray(arr, pos, rest) =>\0A        if pos >= arr.len() {\0A            parts = parts.push(\22]\22);\0A            json_emit(rest, parts)\0A        } else {\0A            if pos > 0 {\0A                parts = parts.push(\22,\22);\0A            };\0A            json_emit(JsonWriteValue(arr[pos], JsonWriteArray(arr, pos + 1, rest)), parts)\0A        },\0A    JsonWriteObject(entries, pos, rest) =>\0A        if pos >= entries.len() {\0A            parts = parts.push(\22}\22);\0A            json_emit(rest, parts)\0A        } else {\0A            let entry = entries[pos];\0A            if pos > 0 {\0A                parts = parts.push(\22,\22);\0A            };\0A            parts = parts.push(\22\5C\22\22);\0A            let next = JsonWriteValue(entry.value, JsonWriteObject(entries, pos + 1, rest));\0A            json_emit(\0A                JsonWriteString(bytes_of_str_raw(entry.key), 0, JsonWriteText(\22:\22, next)),\0A                parts\0A            )\0A        },\0A}\0A\0A/// Renders a `JsonValue` as compact JSON — no spaces, no newlines.\0A///\0A/// Object keys come out in the order they are held, which for a parsed\0A/// document is the order they were read. All U+0000–U+001F control\0A/// characters are escaped, including in keys. Output construction takes\0A/// linear time and space in the output size, with an explicit traversal\0A/// stack proportional to nesting depth instead of native stack recursion.\0A/// Returns `Err(\22non-finite JSON number\22)` for NaN or either infinity,\0A/// including inside arrays and objects. No partial output is returned.\0Apub let json_stringify (v: JsonValue): Result[String, String] =\0A    json_emit(JsonWriteValue(v, JsonWriteDone), [])\0A\0A/// `pub` because the PARSER generates calls to these when it\0A/// desugars `requires`/`ensures`, and that generated code lands in\0A/// the user's own module. Nobody writes them by hand.\0Apub let __contract_require (cond: Bool) (msg: String): Unit =\0A    if cond { () } else { panic_raw(msg) }\0A\0Apub let __contract_ensure (cond: Bool) (msg: String): Unit =\0A    if cond { () } else { panic_raw(msg) }\0A\00" }
 define ptr @plum.f.codegen.cg_prelude_src.0.(i1 %p0) !dbg !900 {
 entry:
   %s0 = alloca i1, !dbg !901
@@ -80325,7 +80325,7 @@ L14369:
   store i64 %t14372, ptr %t14368, !dbg !1118
   br label %L14371, !dbg !1118
 L14370:
-  ; plum.off 137927
+  ; plum.off 138243
   %t14374 = load ptr, ptr %s0, !dbg !1119
   call void @plum_rc_inc(ptr %t14374), !dbg !1119
   %t14375 = load i64, ptr %s1, !dbg !1119
@@ -80469,7 +80469,7 @@ L14418:
   store ptr @.const14423, ptr %t14417, !dbg !1121
   br label %L14420, !dbg !1121
 L14419:
-  ; plum.off 144958
+  ; plum.off 145274
   %t14425 = load ptr, ptr %s0, !dbg !1122
   call void @plum_rc_inc(ptr %t14425), !dbg !1122
   %t14426 = load i64, ptr %s1, !dbg !1122
@@ -80784,7 +80784,7 @@ L14587:
   %t14590 = load i1, ptr %t14585, !dbg !1122
   br i1 %t14590, label %L14592, label %L14593, !dbg !1122
 L14592:
-  ; plum.off 145863
+  ; plum.off 146179
   %t14596 = load i64, ptr %t14424, !dbg !1122
   %t14597 = icmp eq i64 %t14596, 45, !dbg !1122
   br i1 %t14597, label %L14599, label %L14600, !dbg !1122
@@ -89736,7 +89736,7 @@ reset_no18439:
   call void @plum.h.rel.E$3cprelude$3e$2eJsonWriteStack.0.(ptr %reset_old18439), !dbg !1406
   br label %reset_done18439, !dbg !1406
 reset_done18439:
-  ; plum.off 152342
+  ; plum.off 152658
   %t18440 = load ptr, ptr %s1, !dbg !1407
   store ptr null, ptr %s1, !dbg !1407
   %t18441 = load ptr, ptr %t18432, !dbg !1407
@@ -89865,19 +89865,19 @@ reset_no18471:
   call void @plum.h.rel.E$3cprelude$3e$2eJsonWriteStack.0.(ptr %reset_old18471), !dbg !1407
   br label %reset_done18471, !dbg !1407
 reset_done18471:
-  ; plum.off 152453
+  ; plum.off 152769
   %t18473 = load ptr, ptr %t18459, !dbg !1407
   call void @plum_rc_inc(ptr %t18473), !dbg !1407
   %t18474 = load i64, ptr %t18464, !dbg !1407
   %t18475 = call i64 @plum.f.$3cprelude$3e.json_run_end.0.(ptr %t18473, i64 %t18474), !dbg !1407
   store i64 %t18475, ptr %t18472, !dbg !1407
-  ; plum.off 152493
+  ; plum.off 152809
   %t18476 = load i64, ptr %t18472, !dbg !1407
   %t18477 = load i64, ptr %t18464, !dbg !1407
   %t18478 = icmp sgt i64 %t18476, %t18477, !dbg !1407
   br i1 %t18478, label %L18480, label %L18481, !dbg !1407
 L18480:
-  ; plum.off 152520
+  ; plum.off 152836
   %t18483 = load ptr, ptr %s1, !dbg !1407
   store ptr null, ptr %s1, !dbg !1407
   %t18484 = load ptr, ptr %t18459, !dbg !1407
@@ -89917,7 +89917,7 @@ L18502:
   %t18459_dead18505_0 = load ptr, ptr %t18459, !dbg !1407
   call void @plum_rel_str(ptr %t18459_dead18505_0), !dbg !1407
   store ptr null, ptr %t18459, !dbg !1407
-  ; plum.off 152648
+  ; plum.off 152964
   %t18506 = load ptr, ptr %s1, !dbg !1407
   store ptr null, ptr %s1, !dbg !1407
   %t18509 = call ptr @plum_array_push_grow(ptr %t18506, i1 1, ptr @plum.h.rel.SArray.1.s), !dbg !1407
@@ -90001,7 +90001,7 @@ Ltail66:
   store ptr %t18518, ptr %t18501, !dbg !1407
   br label %L18504, !dbg !1407
 L18503:
-  ; plum.off 152738
+  ; plum.off 153054
   %t18519 = load ptr, ptr %s1, !dbg !1407
   store ptr null, ptr %s1, !dbg !1407
   %t18520 = load ptr, ptr %t18459, !dbg !1407
@@ -90187,7 +90187,7 @@ reset_no18573:
   call void @plum.h.rel.E$3cprelude$3e$2eJsonValue.0.(ptr %reset_old18573), !dbg !1407
   br label %reset_done18573, !dbg !1407
 reset_done18573:
-  ; plum.off 152954
+  ; plum.off 153270
   %t18574 = load ptr, ptr %s1, !dbg !1407
   store ptr null, ptr %s1, !dbg !1407
   %t18577 = call ptr @plum_array_push_grow(ptr %t18574, i1 1, ptr @plum.h.rel.SArray.1.s), !dbg !1407
@@ -90298,7 +90298,7 @@ reset_no18595:
   call void @plum.h.rel.E$3cprelude$3e$2eJsonValue.0.(ptr %reset_old18595), !dbg !1407
   br label %reset_done18595, !dbg !1407
 reset_done18595:
-  ; plum.off 153065
+  ; plum.off 153381
   %t18596 = load ptr, ptr %s1, !dbg !1407
   store ptr null, ptr %s1, !dbg !1407
   %t18597 = load i1, ptr %t18593, !dbg !1407
@@ -90423,7 +90423,7 @@ reset_done18626:
   %t18628 = call i1 @plum.f.$3cprelude$3e.Float$2eis_finite.0.(double %t18627), !dbg !1407
   br i1 %t18628, label %L18630, label %L18631, !dbg !1407
 L18630:
-  ; plum.off 153244
+  ; plum.off 153560
   %t18633 = load ptr, ptr %s1, !dbg !1407
   store ptr null, ptr %s1, !dbg !1407
   %t18634 = load double, ptr %t18624, !dbg !1407
@@ -90547,7 +90547,7 @@ reset_no18659:
   call void @plum.h.rel.E$3cprelude$3e$2eJsonValue.0.(ptr %reset_old18659), !dbg !1407
   br label %reset_done18659, !dbg !1407
 reset_done18659:
-  ; plum.off 153421
+  ; plum.off 153737
   %t18660 = load ptr, ptr %s1, !dbg !1407
   store ptr null, ptr %s1, !dbg !1407
   %t18663 = call ptr @plum_array_push_grow(ptr %t18660, i1 1, ptr @plum.h.rel.SArray.1.s), !dbg !1407
@@ -90685,7 +90685,7 @@ reset_no18692:
   call void @plum.h.rel.E$3cprelude$3e$2eJsonValue.0.(ptr %reset_old18692), !dbg !1407
   br label %reset_done18692, !dbg !1407
 reset_done18692:
-  ; plum.off 153574
+  ; plum.off 153890
   %t18693 = load ptr, ptr %s1, !dbg !1407
   store ptr null, ptr %s1, !dbg !1407
   %t18696 = call ptr @plum_array_push_grow(ptr %t18693, i1 1, ptr @plum.h.rel.SArray.1.s), !dbg !1407
@@ -90821,7 +90821,7 @@ reset_no18724:
   call void @plum.h.rel.E$3cprelude$3e$2eJsonValue.0.(ptr %reset_old18724), !dbg !1407
   br label %reset_done18724, !dbg !1407
 reset_done18724:
-  ; plum.off 153714
+  ; plum.off 154030
   %t18725 = load ptr, ptr %s1, !dbg !1407
   store ptr null, ptr %s1, !dbg !1407
   %t18728 = call ptr @plum_array_push_grow(ptr %t18725, i1 1, ptr @plum.h.rel.SArray.1.s), !dbg !1407
@@ -90988,7 +90988,7 @@ L18773:
   %t18755_dead18776_0 = load ptr, ptr %t18755, !dbg !1407
   call void @plum.h.rel.SArray.1.E$3cprelude$3e$2eJsonValue.0.(ptr %t18755_dead18776_0), !dbg !1407
   store ptr null, ptr %t18755, !dbg !1407
-  ; plum.off 153901
+  ; plum.off 154217
   %t18777 = load ptr, ptr %s1, !dbg !1407
   store ptr null, ptr %s1, !dbg !1407
   %t18780 = call ptr @plum_array_push_grow(ptr %t18777, i1 1, ptr @plum.h.rel.SArray.1.s), !dbg !1407
@@ -91072,12 +91072,12 @@ Ltail74:
   store ptr %t18789, ptr %t18772, !dbg !1407
   br label %L18775, !dbg !1407
 L18774:
-  ; plum.off 153990
+  ; plum.off 154306
   %t18790 = load i64, ptr %t18760, !dbg !1407
   %t18791 = icmp sgt i64 %t18790, 0, !dbg !1407
   br i1 %t18791, label %L18793, label %L18794, !dbg !1407
 L18793:
-  ; plum.off 154019
+  ; plum.off 154335
   %t18796 = load ptr, ptr %s1, !dbg !1407
   store ptr null, ptr %s1, !dbg !1407
   %t18799 = call ptr @plum_array_push_grow(ptr %t18796, i1 1, ptr @plum.h.rel.SArray.1.s), !dbg !1407
@@ -91277,7 +91277,7 @@ L18867:
   %t18849_dead18870_0 = load ptr, ptr %t18849, !dbg !1407
   call void @plum.h.rel.SArray.1.S$3cprelude$3e$2eJsonEntry.0.(ptr %t18849_dead18870_0), !dbg !1407
   store ptr null, ptr %t18849, !dbg !1407
-  ; plum.off 154250
+  ; plum.off 154566
   %t18871 = load ptr, ptr %s1, !dbg !1407
   store ptr null, ptr %s1, !dbg !1407
   %t18874 = call ptr @plum_array_push_grow(ptr %t18871, i1 1, ptr @plum.h.rel.SArray.1.s), !dbg !1407
@@ -91361,7 +91361,7 @@ Ltail76:
   store ptr %t18883, ptr %t18866, !dbg !1407
   br label %L18869, !dbg !1407
 L18868:
-  ; plum.off 154339
+  ; plum.off 154655
   %t18885 = load ptr, ptr %t18849, !dbg !1407
   %t18886 = load i64, ptr %t18854, !dbg !1407
   %t18887 = call i64 @plum_array_check_index(ptr %t18885, i64 %t18886), !dbg !1407
@@ -91374,12 +91374,12 @@ L18868:
   call void @plum.h.rel.S$3cprelude$3e$2eJsonEntry.0.(ptr %t18884_pre), !dbg !1407
   store ptr null, ptr %t18884, !dbg !1407
   store ptr %t18891, ptr %t18884, !dbg !1407
-  ; plum.off 154377
+  ; plum.off 154693
   %t18892 = load i64, ptr %t18854, !dbg !1407
   %t18893 = icmp sgt i64 %t18892, 0, !dbg !1407
   br i1 %t18893, label %L18895, label %L18896, !dbg !1407
 L18895:
-  ; plum.off 154406
+  ; plum.off 154722
   %t18898 = load ptr, ptr %s1, !dbg !1407
   store ptr null, ptr %s1, !dbg !1407
   %t18901 = call ptr @plum_array_push_grow(ptr %t18898, i1 1, ptr @plum.h.rel.SArray.1.s), !dbg !1407
@@ -91400,7 +91400,7 @@ L18896:
   br label %L18897, !dbg !1407
 L18897:
   %t18908 = load i1, ptr %t18894, !dbg !1407
-  ; plum.off 154458
+  ; plum.off 154774
   %t18909 = load ptr, ptr %s1, !dbg !1407
   store ptr null, ptr %s1, !dbg !1407
   %t18912 = call ptr @plum_array_push_grow(ptr %t18909, i1 1, ptr @plum.h.rel.SArray.1.s), !dbg !1407
@@ -91414,7 +91414,7 @@ L18897:
   call void @plum.h.rel.SArray.1.s(ptr %s1_a18918), !dbg !1407
   store ptr null, ptr %s1, !dbg !1407
   store ptr %t18912, ptr %s1, !dbg !1407
-  ; plum.off 154496
+  ; plum.off 154812
   %t18920 = load ptr, ptr %t18884, !dbg !1407
   %t18921 = getelementptr i8, ptr %t18920, i64 16, !dbg !1407
   %t18922 = load ptr, ptr %t18921, !dbg !1407
@@ -116655,7 +116655,7 @@ entry:
   %t30819 = alloca i64, !dbg !2016
   %t30841 = alloca ptr, !dbg !2016
   %t30833 = alloca i1, !dbg !2016
-  ; plum.off 147572
+  ; plum.off 147888
   %t30820 = load ptr, ptr %s0, !dbg !2017
   call void @plum_rc_inc(ptr %t30820), !dbg !2017
   %t30821 = load i64, ptr %s1, !dbg !2017
@@ -116748,7 +116748,7 @@ entry:
   %t30865 = alloca i64, !dbg !2019
   %t30887 = alloca ptr, !dbg !2019
   %t30879 = alloca i1, !dbg !2019
-  ; plum.off 146499
+  ; plum.off 146815
   %t30866 = load ptr, ptr %s0, !dbg !2020
   call void @plum_rc_inc(ptr %t30866), !dbg !2020
   %t30867 = load i64, ptr %s1, !dbg !2020
@@ -116996,13 +116996,13 @@ entry:
   %t31170 = alloca double, !dbg !2026
   %t31163 = alloca i1, !dbg !2026
   %t31179 = alloca ptr, !dbg !2026
-  ; plum.off 138530
+  ; plum.off 138846
   %t30970 = load ptr, ptr %s0, !dbg !2027
   call void @plum_rc_inc(ptr %t30970), !dbg !2027
   %t30971 = call i64 @plum_str_len(ptr %t30970), !dbg !2027
   call void @plum_rel_str(ptr %t30970), !dbg !2027
   store i64 %t30971, ptr %t30969, !dbg !2027
-  ; plum.off 138564
+  ; plum.off 138880
   %t30973 = load i64, ptr %s1, !dbg !2027
   %t30974 = load i64, ptr %t30969, !dbg !2027
   %t30975 = icmp slt i64 %t30973, %t30974, !dbg !2027
@@ -117040,7 +117040,7 @@ L30986:
 L30987:
   %t30996 = load i64, ptr %t30984, !dbg !2027
   store i64 %t30996, ptr %t30972, !dbg !2027
-  ; plum.off 138651
+  ; plum.off 138967
   %t30998 = load ptr, ptr %s0, !dbg !2027
   call void @plum_rc_inc(ptr %t30998), !dbg !2027
   %t30999 = load i64, ptr %t30972, !dbg !2027
@@ -117054,7 +117054,7 @@ L31005:
   store ptr @.const31010, ptr %t31004, !dbg !2027
   br label %L31007, !dbg !2027
 L31006:
-  ; plum.off 138762
+  ; plum.off 139078
   %t31012 = load i64, ptr %t30997, !dbg !2027
   %t31013 = load i64, ptr %t30969, !dbg !2027
   %t31014 = icmp slt i64 %t31012, %t31013, !dbg !2027
@@ -117072,7 +117072,7 @@ L31016:
 L31017:
   %t31022 = load i1, ptr %t31015, !dbg !2027
   store i1 %t31022, ptr %t31011, !dbg !2027
-  ; plum.off 138836
+  ; plum.off 139152
   %t31024 = load i1, ptr %t31011, !dbg !2027
   br i1 %t31024, label %L31026, label %L31027, !dbg !2027
 L31026:
@@ -117123,7 +117123,7 @@ L31055:
   store ptr @.const31060, ptr %t31054, !dbg !2027
   br label %L31057, !dbg !2027
 L31056:
-  ; plum.off 139018
+  ; plum.off 139334
   %t31062 = load i64, ptr %t31023, !dbg !2027
   %t31063 = load i64, ptr %t30969, !dbg !2027
   %t31064 = icmp slt i64 %t31062, %t31063, !dbg !2027
@@ -117154,7 +117154,7 @@ L31074:
 L31067:
   %t31080 = load i1, ptr %t31065, !dbg !2027
   store i1 %t31080, ptr %t31061, !dbg !2027
-  ; plum.off 139155
+  ; plum.off 139471
   %t31082 = load i64, ptr %t31023, !dbg !2027
   %t31083 = call { i64, i1 } @llvm.sadd.with.overflow.i64(i64 %t31082, i64 1), !dbg !2027
   %t31084 = extractvalue { i64, i1 } %t31083, 0, !dbg !2027
@@ -117166,7 +117166,7 @@ L31088:
   unreachable, !dbg !2027
 L31087:
   store i64 %t31084, ptr %t31081, !dbg !2027
-  ; plum.off 139195
+  ; plum.off 139511
   %t31090 = load i1, ptr %t31061, !dbg !2027
   store i1 0, ptr %t31091, !dbg !2027
   br i1 %t31090, label %L31092, label %L31093, !dbg !2027
@@ -117225,7 +117225,7 @@ L31116:
 L31117:
   %t31126 = load i64, ptr %t31114, !dbg !2027
   store i64 %t31126, ptr %t31089, !dbg !2027
-  ; plum.off 139413
+  ; plum.off 139729
   %t31128 = load i1, ptr %t31061, !dbg !2027
   br i1 %t31128, label %L31130, label %L31131, !dbg !2027
 L31130:
@@ -117258,7 +117258,7 @@ L31147:
   store ptr @.const31152, ptr %t31146, !dbg !2027
   br label %L31149, !dbg !2027
 L31148:
-  ; plum.off 139592
+  ; plum.off 139908
   %t31154 = load ptr, ptr %s0, !dbg !2027
   store ptr null, ptr %s0, !dbg !2027
   %t31155 = load i64, ptr %s1, !dbg !2027
@@ -117270,7 +117270,7 @@ L31148:
   %t31159 = call double @plum_parse_float_raw(ptr %t31158), !dbg !2027
   call void @plum_rel_str(ptr %t31158), !dbg !2027
   store double %t31159, ptr %t31153, !dbg !2027
-  ; plum.off 139843
+  ; plum.off 140159
   %t31161 = load double, ptr %t31153, !dbg !2027
   %t31162 = fcmp oeq double %t31161, 0.0, !dbg !2027
   store i1 0, ptr %t31163, !dbg !2027
@@ -126147,7 +126147,7 @@ L35185:
   store i64 %t35188, ptr %t35184, !dbg !2263
   br label %L35187, !dbg !2263
 L35186:
-  ; plum.off 150875
+  ; plum.off 151191
   %t35190 = load ptr, ptr %s0, !dbg !2264
   call void @plum_rc_inc(ptr %t35190), !dbg !2264
   %t35191 = load i64, ptr %s1, !dbg !2264
@@ -179315,7 +179315,7 @@ L68831:
   store ptr @.const68836, ptr %t68830, !dbg !3166
   br label %L68833, !dbg !3166
 L68832:
-  ; plum.off 142835
+  ; plum.off 143151
   %t68838 = load ptr, ptr %s0, !dbg !3167
   call void @plum_rc_inc(ptr %t68838), !dbg !3167
   %t68839 = load i64, ptr %s1, !dbg !3167
@@ -179335,13 +179335,13 @@ L68845:
   %t68848 = load i1, ptr %t68843, !dbg !3167
   br i1 %t68848, label %L68850, label %L68851, !dbg !3167
 L68850:
-  ; plum.off 142913
+  ; plum.off 143229
   %t68853 = load i64, ptr %s1, !dbg !3167
   %t68854 = load i64, ptr %s2, !dbg !3167
   %t68855 = icmp sgt i64 %t68853, %t68854, !dbg !3167
   br i1 %t68855, label %L68857, label %L68858, !dbg !3167
 L68857:
-  ; plum.off 142944
+  ; plum.off 143260
   %t68860 = load ptr, ptr %s3, !dbg !3167
   store ptr null, ptr %s3, !dbg !3167
   %t68861 = load ptr, ptr %s0, !dbg !3167
@@ -179420,7 +179420,7 @@ L68905:
   store ptr @.const68910, ptr %t68904, !dbg !3167
   br label %L68907, !dbg !3167
 L68906:
-  ; plum.off 143246
+  ; plum.off 143562
   %t68912 = load ptr, ptr %s0, !dbg !3167
   call void @plum_rc_inc(ptr %t68912), !dbg !3167
   %t68913 = load i64, ptr %s1, !dbg !3167
@@ -179436,7 +179436,7 @@ L68918:
   %t68920 = call i64 @plum_bytes_at(ptr %t68912, i64 %t68915), !dbg !3167
   call void @plum_rel_str(ptr %t68912), !dbg !3167
   store i64 %t68920, ptr %t68911, !dbg !3167
-  ; plum.off 143300
+  ; plum.off 143616
   %t68922 = load i64, ptr %t68911, !dbg !3167
   %t68923 = icmp eq i64 %t68922, 117, !dbg !3167
   br i1 %t68923, label %L68925, label %L68926, !dbg !3167
@@ -179457,7 +179457,7 @@ L68934:
   store ptr %t68936, ptr %t68924, !dbg !3167
   br label %L68927, !dbg !3167
 L68926:
-  ; plum.off 143402
+  ; plum.off 143718
   %t68938 = load i64, ptr %t68911, !dbg !3167
   %t68939 = icmp eq i64 %t68938, 34, !dbg !3167
   br i1 %t68939, label %L68941, label %L68942, !dbg !3167
@@ -179784,7 +179784,7 @@ reset_no69105:
   call void @plum.h.rel.E$3cprelude$3e$2eResult.2.S$3cprelude$3e$2eParseResult.1.ss(ptr %reset_old69105), !dbg !3167
   br label %reset_done69105, !dbg !3167
 reset_done69105:
-  ; plum.off 144208
+  ; plum.off 144524
   %t69106 = load ptr, ptr %s3, !dbg !3167
   store ptr null, ptr %s3, !dbg !3167
   %t69107 = load ptr, ptr %t69103, !dbg !3167
@@ -180131,7 +180131,7 @@ reset_no69183:
   call void @plum.h.rel.E$3cprelude$3e$2eResult.2.S$3cprelude$3e$2eParseResult.1.ss(ptr %reset_old69183), !dbg !3169
   br label %reset_done69183, !dbg !3169
 reset_done69183:
-  ; plum.off 148052
+  ; plum.off 148368
   %t69185 = load ptr, ptr %s0, !dbg !3170
   call void @plum_rc_inc(ptr %t69185), !dbg !3170
   %t69186 = load ptr, ptr %t69181, !dbg !3170
@@ -180181,7 +180181,7 @@ L69225:
   store ptr @.const69230, ptr %t69224, !dbg !3170
   br label %L69227, !dbg !3170
 L69226:
-  ; plum.off 148403
+  ; plum.off 148719
   %t69232 = load ptr, ptr %s0, !dbg !3170
   call void @plum_rc_inc(ptr %t69232), !dbg !3170
   %t69233 = load i64, ptr %t69184, !dbg !3170
@@ -180280,7 +180280,7 @@ reset_no69273:
   call void @plum.h.rel.E$3cprelude$3e$2eResult.2.S$3cprelude$3e$2eParseResult.1.E$3cprelude$3e$2eJsonValue.0.s(ptr %reset_old69273), !dbg !3170
   br label %reset_done69273, !dbg !3170
 reset_done69273:
-  ; plum.off 148587
+  ; plum.off 148903
   %t69274 = load ptr, ptr %s3, !dbg !3170
   store ptr null, ptr %s3, !dbg !3170
   %t69275 = load ptr, ptr %t69181, !dbg !3170
@@ -180317,7 +180317,7 @@ L69286:
   call void @plum.h.rel.SArray.1.S$3cprelude$3e$2eJsonEntry.0.(ptr %s3_a69295), !dbg !3170
   store ptr null, ptr %s3, !dbg !3170
   store ptr %t69289, ptr %s3, !dbg !3170
-  ; plum.off 148679
+  ; plum.off 148995
   %t69297 = load ptr, ptr %s0, !dbg !3170
   call void @plum_rc_inc(ptr %t69297), !dbg !3170
   %t69298 = load ptr, ptr %t69271, !dbg !3170
@@ -180657,7 +180657,7 @@ reset_no69419:
   call void @plum.h.rel.E$3cprelude$3e$2eResult.2.S$3cprelude$3e$2eParseResult.1.E$3cprelude$3e$2eJsonValue.0.s(ptr %reset_old69419), !dbg !3172
   br label %reset_done69419, !dbg !3172
 reset_done69419:
-  ; plum.off 146981
+  ; plum.off 147297
   %t69420 = load ptr, ptr %s3, !dbg !3173
   store ptr null, ptr %s3, !dbg !3173
   %t69421 = load ptr, ptr %t69417, !dbg !3173
@@ -180675,7 +180675,7 @@ reset_done69419:
   call void @plum.h.rel.SArray.1.E$3cprelude$3e$2eJsonValue.0.(ptr %s3_a69430), !dbg !3173
   store ptr null, ptr %s3, !dbg !3173
   store ptr %t69424, ptr %s3, !dbg !3173
-  ; plum.off 147022
+  ; plum.off 147338
   %t69432 = load ptr, ptr %s0, !dbg !3173
   call void @plum_rc_inc(ptr %t69432), !dbg !3173
   %t69433 = load ptr, ptr %t69417, !dbg !3173
@@ -244394,14 +244394,14 @@ L86453:
   ret i1 %t86497, !dbg !3855
 }
 
-@.const86506 = private global <{ i64, i64, [16 x i8] }> <{ i64 -1, i64 60, [16 x i8] zeroinitializer }>
-@.const86528 = private global <{ i64, i64, [16 x i8] }> <{ i64 -1, i64 62, [16 x i8] zeroinitializer }>
-@.const86533 = private global <{ i64, i64, [16 x i8] }> <{ i64 -1, i64 63, [16 x i8] zeroinitializer }>
-@.const86538 = private global <{ i64, i64, [16 x i8] }> <{ i64 -1, i64 65, [16 x i8] zeroinitializer }>
-@.const86543 = private global <{ i64, i64, [16 x i8] }> <{ i64 -1, i64 66, [16 x i8] zeroinitializer }>
-@.const86548 = private global <{ i64, i64, [16 x i8] }> <{ i64 -1, i64 67, [16 x i8] zeroinitializer }>
-@.const86570 = private global <{ i64, i64, [16 x i8] }> <{ i64 -1, i64 69, [16 x i8] zeroinitializer }>
-@.const86575 = private global <{ i64, i64, [16 x i8] }> <{ i64 -1, i64 64, [16 x i8] zeroinitializer }>
+@.const86506 = private global <{ i64, i64, [16 x i8] }> <{ i64 -1, i64 55, [16 x i8] zeroinitializer }>
+@.const86528 = private global <{ i64, i64, [16 x i8] }> <{ i64 -1, i64 57, [16 x i8] zeroinitializer }>
+@.const86533 = private global <{ i64, i64, [16 x i8] }> <{ i64 -1, i64 58, [16 x i8] zeroinitializer }>
+@.const86538 = private global <{ i64, i64, [16 x i8] }> <{ i64 -1, i64 60, [16 x i8] zeroinitializer }>
+@.const86543 = private global <{ i64, i64, [16 x i8] }> <{ i64 -1, i64 61, [16 x i8] zeroinitializer }>
+@.const86548 = private global <{ i64, i64, [16 x i8] }> <{ i64 -1, i64 62, [16 x i8] zeroinitializer }>
+@.const86570 = private global <{ i64, i64, [16 x i8] }> <{ i64 -1, i64 64, [16 x i8] zeroinitializer }>
+@.const86575 = private global <{ i64, i64, [16 x i8] }> <{ i64 -1, i64 59, [16 x i8] zeroinitializer }>
 @.str86591 = private global { i64, i64, [5 x i8] } { i64 -1, i64 4, [5 x i8] c"Task\00" }
 @.str86598 = private global { i64, i64, [7 x i8] } { i64 -1, i64 6, [7 x i8] c"Sender\00" }
 @.str86606 = private global { i64, i64, [9 x i8] } { i64 -1, i64 8, [9 x i8] c"Receiver\00" }
@@ -244446,10 +244446,10 @@ entry:
 
 @plum.l.86754_cell = private constant { i64, ptr, ptr } { i64 -1, ptr @plum.l.86754, ptr @plum.l.86754_rel }
 
-@.const86795 = private global <{ i64, i64, [16 x i8] }> <{ i64 -1, i64 64, [16 x i8] zeroinitializer }>
+@.const86795 = private global <{ i64, i64, [16 x i8] }> <{ i64 -1, i64 59, [16 x i8] zeroinitializer }>
 @.str86805 = private global { i64, i64, [29 x i8] } { i64 -1, i64 28, [29 x i8] c"internal: generic parameter \00" }
 @.str86809 = private global { i64, i64, [47 x i8] } { i64 -1, i64 46, [47 x i8] c" reached codegen — generics aren't supported\00" }
-@.const86814 = private global <{ i64, i64, [16 x i8] }> <{ i64 -1, i64 64, [16 x i8] zeroinitializer }>
+@.const86814 = private global <{ i64, i64, [16 x i8] }> <{ i64 -1, i64 59, [16 x i8] zeroinitializer }>
 define ptr @plum.f.codegen.cg_of_ity.0.(ptr %p0) !dbg !3856 {
 entry:
   %s0 = alloca ptr, !dbg !3857
@@ -244555,7 +244555,7 @@ L86521:
 L86522:
   %t86519 = phi ptr [ %t86518, %L86520 ], [ %t86517, %L86521 ], !dbg !3857
   %t86519_t = getelementptr i8, ptr %t86519, i64 8, !dbg !3857
-  store i64 61, ptr %t86519_t, !dbg !3857
+  store i64 56, ptr %t86519_t, !dbg !3857
   %t86523 = getelementptr i8, ptr %t86519, i64 16, !dbg !3857
   store ptr %t86516, ptr %t86523, !dbg !3857
   store ptr %t86519, ptr %t86499, !dbg !3857
@@ -244718,7 +244718,7 @@ L86563:
 L86564:
   %t86561 = phi ptr [ %t86560, %L86562 ], [ %t86559, %L86563 ], !dbg !3857
   %t86561_t = getelementptr i8, ptr %t86561, i64 8, !dbg !3857
-  store i64 68, ptr %t86561_t, !dbg !3857
+  store i64 63, ptr %t86561_t, !dbg !3857
   %t86565 = getelementptr i8, ptr %t86561, i64 16, !dbg !3857
   store ptr %t86558, ptr %t86565, !dbg !3857
   store ptr %t86561, ptr %t86499, !dbg !3857
@@ -244845,7 +244845,7 @@ L86619:
 L86620:
   %t86617 = phi ptr [ %t86616, %L86618 ], [ %t86615, %L86619 ], !dbg !3857
   %t86617_t = getelementptr i8, ptr %t86617, i64 8, !dbg !3857
-  store i64 75, ptr %t86617_t, !dbg !3857
+  store i64 70, ptr %t86617_t, !dbg !3857
   %t86621 = getelementptr i8, ptr %t86617, i64 16, !dbg !3857
   store ptr %t86614, ptr %t86621, !dbg !3857
   store ptr %t86617, ptr %t86610, !dbg !3857
@@ -244878,7 +244878,7 @@ L86641:
 L86642:
   %t86639 = phi ptr [ %t86638, %L86640 ], [ %t86637, %L86641 ], !dbg !3857
   %t86639_t = getelementptr i8, ptr %t86639, i64 8, !dbg !3857
-  store i64 72, ptr %t86639_t, !dbg !3857
+  store i64 67, ptr %t86639_t, !dbg !3857
   %t86643 = getelementptr i8, ptr %t86639, i64 16, !dbg !3857
   store ptr %t86636, ptr %t86643, !dbg !3857
   store ptr %t86639, ptr %t86626, !dbg !3857
@@ -244898,7 +244898,7 @@ L86649:
 L86650:
   %t86647 = phi ptr [ %t86646, %L86648 ], [ %t86645, %L86649 ], !dbg !3857
   %t86647_t = getelementptr i8, ptr %t86647, i64 8, !dbg !3857
-  store i64 70, ptr %t86647_t, !dbg !3857
+  store i64 65, ptr %t86647_t, !dbg !3857
   %t86651 = getelementptr i8, ptr %t86647, i64 16, !dbg !3857
   store ptr %t86644, ptr %t86651, !dbg !3857
   store ptr %t86647, ptr %t86626, !dbg !3857
@@ -244955,7 +244955,7 @@ L86669:
 L86670:
   %t86667 = phi ptr [ %t86666, %L86668 ], [ %t86665, %L86669 ], !dbg !3857
   %t86667_t = getelementptr i8, ptr %t86667, i64 8, !dbg !3857
-  store i64 76, ptr %t86667_t, !dbg !3857
+  store i64 71, ptr %t86667_t, !dbg !3857
   %t86671 = getelementptr i8, ptr %t86667, i64 16, !dbg !3857
   store ptr %t86664, ptr %t86671, !dbg !3857
   store ptr %t86667, ptr %t86499, !dbg !3857
@@ -245006,7 +245006,7 @@ L86690:
 L86691:
   %t86688 = phi ptr [ %t86687, %L86689 ], [ %t86686, %L86690 ], !dbg !3857
   %t86688_t = getelementptr i8, ptr %t86688, i64 8, !dbg !3857
-  store i64 71, ptr %t86688_t, !dbg !3857
+  store i64 66, ptr %t86688_t, !dbg !3857
   %t86692 = getelementptr i8, ptr %t86688, i64 16, !dbg !3857
   store ptr %t86685, ptr %t86692, !dbg !3857
   store ptr %t86688, ptr %t86499, !dbg !3857
@@ -245096,7 +245096,7 @@ L86740:
 L86741:
   %t86738 = phi ptr [ %t86737, %L86739 ], [ %t86736, %L86740 ], !dbg !3857
   %t86738_t = getelementptr i8, ptr %t86738, i64 8, !dbg !3857
-  store i64 73, ptr %t86738_t, !dbg !3857
+  store i64 68, ptr %t86738_t, !dbg !3857
   %t86742 = getelementptr i8, ptr %t86738, i64 16, !dbg !3857
   store ptr %t86712, ptr %t86742, !dbg !3857
   %t86743 = getelementptr i8, ptr %t86738, i64 24, !dbg !3857
@@ -245177,7 +245177,7 @@ L86784:
 L86785:
   %t86782 = phi ptr [ %t86781, %L86783 ], [ %t86780, %L86784 ], !dbg !3857
   %t86782_t = getelementptr i8, ptr %t86782, i64 8, !dbg !3857
-  store i64 74, ptr %t86782_t, !dbg !3857
+  store i64 69, ptr %t86782_t, !dbg !3857
   %t86786 = getelementptr i8, ptr %t86782, i64 16, !dbg !3857
   store ptr %t86758, ptr %t86786, !dbg !3857
   store ptr %t86782, ptr %t86499, !dbg !3857
@@ -245310,12 +245310,12 @@ L86500:
 @.str86984 = private global { i64, i64, [1 x i8] } { i64 -1, i64 0, [1 x i8] c"\00" }
 @.str86991 = private global { i64, i64, [2 x i8] } { i64 -1, i64 1, [2 x i8] c"1\00" }
 @.str86993 = private global { i64, i64, [2 x i8] } { i64 -1, i64 1, [2 x i8] c"0\00" }
-@.const86996 = private global <{ i64, i64, [16 x i8] }> <{ i64 -1, i64 63, [16 x i8] zeroinitializer }>
+@.const86996 = private global <{ i64, i64, [16 x i8] }> <{ i64 -1, i64 58, [16 x i8] zeroinitializer }>
 @.str87053 = private global { i64, i64, [1 x i8] } { i64 -1, i64 0, [1 x i8] c"\00" }
 @.str87055 = private global { i64, i64, [1 x i8] } { i64 -1, i64 0, [1 x i8] c"\00" }
 @.str87057 = private global { i64, i64, [1 x i8] } { i64 -1, i64 0, [1 x i8] c"\00" }
 @.str87062 = private global { i64, i64, [6 x i8] } { i64 -1, i64 5, [6 x i8] c"@.str\00" }
-@.const87067 = private global <{ i64, i64, [16 x i8] }> <{ i64 -1, i64 65, [16 x i8] zeroinitializer }>
+@.const87067 = private global <{ i64, i64, [16 x i8] }> <{ i64 -1, i64 60, [16 x i8] zeroinitializer }>
 @.str87203 = private global { i64, i64, [3 x i8] } { i64 -1, i64 2, [3 x i8] c"  \00" }
 @.str87207 = private global { i64, i64, [9 x i8] } { i64 -1, i64 8, [9 x i8] c" = load \00" }
 @.str87213 = private global { i64, i64, [7 x i8] } { i64 -1, i64 6, [7 x i8] c", ptr \00" }
@@ -259326,7 +259326,7 @@ entry:
 L88151:
   %t88152p = getelementptr i8, ptr %t88147, i64 8, !dbg !3867
   %t88152 = load i64, ptr %t88152p, !dbg !3867
-  %t88153 = icmp eq i64 %t88152, 60, !dbg !3867
+  %t88153 = icmp eq i64 %t88152, 55, !dbg !3867
   br i1 %t88153, label %L88154, label %L88157, !dbg !3867
 L88154:
   %match_owner88148_reset88154 = load ptr, ptr %match_owner88148, !dbg !3867
@@ -259337,7 +259337,7 @@ L88154:
 L88157:
   %t88158p = getelementptr i8, ptr %t88147, i64 8, !dbg !3867
   %t88158 = load i64, ptr %t88158p, !dbg !3867
-  %t88159 = icmp eq i64 %t88158, 61, !dbg !3867
+  %t88159 = icmp eq i64 %t88158, 56, !dbg !3867
   %t88160 = getelementptr i8, ptr %t88147, i64 16, !dbg !3867
   %t88161 = load ptr, ptr %t88160, !dbg !3867
   %t88163 = and i1 %t88159, 1, !dbg !3867
@@ -259351,7 +259351,7 @@ L88164:
 L88167:
   %t88168p = getelementptr i8, ptr %t88147, i64 8, !dbg !3867
   %t88168 = load i64, ptr %t88168p, !dbg !3867
-  %t88169 = icmp eq i64 %t88168, 62, !dbg !3867
+  %t88169 = icmp eq i64 %t88168, 57, !dbg !3867
   br i1 %t88169, label %L88170, label %L88173, !dbg !3867
 L88170:
   %match_owner88148_reset88170 = load ptr, ptr %match_owner88148, !dbg !3867
@@ -259362,7 +259362,7 @@ L88170:
 L88173:
   %t88174p = getelementptr i8, ptr %t88147, i64 8, !dbg !3867
   %t88174 = load i64, ptr %t88174p, !dbg !3867
-  %t88175 = icmp eq i64 %t88174, 63, !dbg !3867
+  %t88175 = icmp eq i64 %t88174, 58, !dbg !3867
   br i1 %t88175, label %L88176, label %L88179, !dbg !3867
 L88176:
   %match_owner88148_reset88176 = load ptr, ptr %match_owner88148, !dbg !3867
@@ -259373,7 +259373,7 @@ L88176:
 L88179:
   %t88180p = getelementptr i8, ptr %t88147, i64 8, !dbg !3867
   %t88180 = load i64, ptr %t88180p, !dbg !3867
-  %t88181 = icmp eq i64 %t88180, 64, !dbg !3867
+  %t88181 = icmp eq i64 %t88180, 59, !dbg !3867
   br i1 %t88181, label %L88182, label %L88185, !dbg !3867
 L88182:
   %match_owner88148_reset88182 = load ptr, ptr %match_owner88148, !dbg !3867
@@ -259384,7 +259384,7 @@ L88182:
 L88185:
   %t88186p = getelementptr i8, ptr %t88147, i64 8, !dbg !3867
   %t88186 = load i64, ptr %t88186p, !dbg !3867
-  %t88187 = icmp eq i64 %t88186, 65, !dbg !3867
+  %t88187 = icmp eq i64 %t88186, 60, !dbg !3867
   br i1 %t88187, label %L88188, label %L88191, !dbg !3867
 L88188:
   %match_owner88148_reset88188 = load ptr, ptr %match_owner88148, !dbg !3867
@@ -259395,7 +259395,7 @@ L88188:
 L88191:
   %t88192p = getelementptr i8, ptr %t88147, i64 8, !dbg !3867
   %t88192 = load i64, ptr %t88192p, !dbg !3867
-  %t88193 = icmp eq i64 %t88192, 66, !dbg !3867
+  %t88193 = icmp eq i64 %t88192, 61, !dbg !3867
   br i1 %t88193, label %L88194, label %L88197, !dbg !3867
 L88194:
   %match_owner88148_reset88194 = load ptr, ptr %match_owner88148, !dbg !3867
@@ -259406,7 +259406,7 @@ L88194:
 L88197:
   %t88198p = getelementptr i8, ptr %t88147, i64 8, !dbg !3867
   %t88198 = load i64, ptr %t88198p, !dbg !3867
-  %t88199 = icmp eq i64 %t88198, 67, !dbg !3867
+  %t88199 = icmp eq i64 %t88198, 62, !dbg !3867
   br i1 %t88199, label %L88200, label %L88203, !dbg !3867
 L88200:
   %match_owner88148_reset88200 = load ptr, ptr %match_owner88148, !dbg !3867
@@ -259417,7 +259417,7 @@ L88200:
 L88203:
   %t88204p = getelementptr i8, ptr %t88147, i64 8, !dbg !3867
   %t88204 = load i64, ptr %t88204p, !dbg !3867
-  %t88205 = icmp eq i64 %t88204, 68, !dbg !3867
+  %t88205 = icmp eq i64 %t88204, 63, !dbg !3867
   %t88206 = getelementptr i8, ptr %t88147, i64 16, !dbg !3867
   %t88207 = load ptr, ptr %t88206, !dbg !3867
   %t88209 = and i1 %t88205, 1, !dbg !3867
@@ -259431,7 +259431,7 @@ L88210:
 L88213:
   %t88214p = getelementptr i8, ptr %t88147, i64 8, !dbg !3867
   %t88214 = load i64, ptr %t88214p, !dbg !3867
-  %t88215 = icmp eq i64 %t88214, 69, !dbg !3867
+  %t88215 = icmp eq i64 %t88214, 64, !dbg !3867
   br i1 %t88215, label %L88216, label %L88219, !dbg !3867
 L88216:
   %match_owner88148_reset88216 = load ptr, ptr %match_owner88148, !dbg !3867
@@ -259442,7 +259442,7 @@ L88216:
 L88219:
   %t88220p = getelementptr i8, ptr %t88147, i64 8, !dbg !3867
   %t88220 = load i64, ptr %t88220p, !dbg !3867
-  %t88221 = icmp eq i64 %t88220, 70, !dbg !3867
+  %t88221 = icmp eq i64 %t88220, 65, !dbg !3867
   %t88222 = getelementptr i8, ptr %t88147, i64 16, !dbg !3867
   %t88223 = load ptr, ptr %t88222, !dbg !3867
   %t88225 = and i1 %t88221, 1, !dbg !3867
@@ -259456,7 +259456,7 @@ L88226:
 L88229:
   %t88230p = getelementptr i8, ptr %t88147, i64 8, !dbg !3867
   %t88230 = load i64, ptr %t88230p, !dbg !3867
-  %t88231 = icmp eq i64 %t88230, 71, !dbg !3867
+  %t88231 = icmp eq i64 %t88230, 66, !dbg !3867
   %t88232 = getelementptr i8, ptr %t88147, i64 16, !dbg !3867
   %t88233 = load ptr, ptr %t88232, !dbg !3867
   %t88235 = and i1 %t88231, 1, !dbg !3867
@@ -259470,7 +259470,7 @@ L88236:
 L88239:
   %t88240p = getelementptr i8, ptr %t88147, i64 8, !dbg !3867
   %t88240 = load i64, ptr %t88240p, !dbg !3867
-  %t88241 = icmp eq i64 %t88240, 72, !dbg !3867
+  %t88241 = icmp eq i64 %t88240, 67, !dbg !3867
   %t88242 = getelementptr i8, ptr %t88147, i64 16, !dbg !3867
   %t88243 = load ptr, ptr %t88242, !dbg !3867
   %t88245 = and i1 %t88241, 1, !dbg !3867
@@ -259484,7 +259484,7 @@ L88246:
 L88249:
   %t88250p = getelementptr i8, ptr %t88147, i64 8, !dbg !3867
   %t88250 = load i64, ptr %t88250p, !dbg !3867
-  %t88251 = icmp eq i64 %t88250, 76, !dbg !3867
+  %t88251 = icmp eq i64 %t88250, 71, !dbg !3867
   %t88252 = getelementptr i8, ptr %t88147, i64 16, !dbg !3867
   %t88253 = load ptr, ptr %t88252, !dbg !3867
   %t88255 = and i1 %t88251, 1, !dbg !3867
@@ -259498,7 +259498,7 @@ L88256:
 L88259:
   %t88260p = getelementptr i8, ptr %t88147, i64 8, !dbg !3867
   %t88260 = load i64, ptr %t88260p, !dbg !3867
-  %t88261 = icmp eq i64 %t88260, 73, !dbg !3867
+  %t88261 = icmp eq i64 %t88260, 68, !dbg !3867
   %t88262 = getelementptr i8, ptr %t88147, i64 16, !dbg !3867
   %t88263 = load ptr, ptr %t88262, !dbg !3867
   %t88265 = and i1 %t88261, 1, !dbg !3867
@@ -259515,7 +259515,7 @@ L88270:
 L88273:
   %t88274p = getelementptr i8, ptr %t88147, i64 8, !dbg !3867
   %t88274 = load i64, ptr %t88274p, !dbg !3867
-  %t88275 = icmp eq i64 %t88274, 74, !dbg !3867
+  %t88275 = icmp eq i64 %t88274, 69, !dbg !3867
   %t88276 = getelementptr i8, ptr %t88147, i64 16, !dbg !3867
   %t88277 = load ptr, ptr %t88276, !dbg !3867
   %t88279 = and i1 %t88275, 1, !dbg !3867
@@ -259529,7 +259529,7 @@ L88280:
 L88283:
   %t88284p = getelementptr i8, ptr %t88147, i64 8, !dbg !3867
   %t88284 = load i64, ptr %t88284p, !dbg !3867
-  %t88285 = icmp eq i64 %t88284, 75, !dbg !3867
+  %t88285 = icmp eq i64 %t88284, 70, !dbg !3867
   %t88286 = getelementptr i8, ptr %t88147, i64 16, !dbg !3867
   %t88287 = load ptr, ptr %t88286, !dbg !3867
   %t88289 = and i1 %t88285, 1, !dbg !3867
@@ -259585,7 +259585,7 @@ entry:
 L88298:
   %t88299p = getelementptr i8, ptr %t88294, i64 8, !dbg !3869
   %t88299 = load i64, ptr %t88299p, !dbg !3869
-  %t88300 = icmp eq i64 %t88299, 60, !dbg !3869
+  %t88300 = icmp eq i64 %t88299, 55, !dbg !3869
   br i1 %t88300, label %L88301, label %L88304, !dbg !3869
 L88301:
   %match_owner88295_reset88301 = load ptr, ptr %match_owner88295, !dbg !3869
@@ -259596,7 +259596,7 @@ L88301:
 L88304:
   %t88305p = getelementptr i8, ptr %t88294, i64 8, !dbg !3869
   %t88305 = load i64, ptr %t88305p, !dbg !3869
-  %t88306 = icmp eq i64 %t88305, 61, !dbg !3869
+  %t88306 = icmp eq i64 %t88305, 56, !dbg !3869
   %t88307 = getelementptr i8, ptr %t88294, i64 16, !dbg !3869
   %t88308 = load ptr, ptr %t88307, !dbg !3869
   %t88310 = and i1 %t88306, 1, !dbg !3869
@@ -259610,7 +259610,7 @@ L88311:
 L88314:
   %t88315p = getelementptr i8, ptr %t88294, i64 8, !dbg !3869
   %t88315 = load i64, ptr %t88315p, !dbg !3869
-  %t88316 = icmp eq i64 %t88315, 62, !dbg !3869
+  %t88316 = icmp eq i64 %t88315, 57, !dbg !3869
   br i1 %t88316, label %L88317, label %L88320, !dbg !3869
 L88317:
   %match_owner88295_reset88317 = load ptr, ptr %match_owner88295, !dbg !3869
@@ -259621,7 +259621,7 @@ L88317:
 L88320:
   %t88321p = getelementptr i8, ptr %t88294, i64 8, !dbg !3869
   %t88321 = load i64, ptr %t88321p, !dbg !3869
-  %t88322 = icmp eq i64 %t88321, 63, !dbg !3869
+  %t88322 = icmp eq i64 %t88321, 58, !dbg !3869
   br i1 %t88322, label %L88323, label %L88326, !dbg !3869
 L88323:
   %match_owner88295_reset88323 = load ptr, ptr %match_owner88295, !dbg !3869
@@ -259632,7 +259632,7 @@ L88323:
 L88326:
   %t88327p = getelementptr i8, ptr %t88294, i64 8, !dbg !3869
   %t88327 = load i64, ptr %t88327p, !dbg !3869
-  %t88328 = icmp eq i64 %t88327, 64, !dbg !3869
+  %t88328 = icmp eq i64 %t88327, 59, !dbg !3869
   br i1 %t88328, label %L88329, label %L88332, !dbg !3869
 L88329:
   %match_owner88295_reset88329 = load ptr, ptr %match_owner88295, !dbg !3869
@@ -259643,7 +259643,7 @@ L88329:
 L88332:
   %t88333p = getelementptr i8, ptr %t88294, i64 8, !dbg !3869
   %t88333 = load i64, ptr %t88333p, !dbg !3869
-  %t88334 = icmp eq i64 %t88333, 65, !dbg !3869
+  %t88334 = icmp eq i64 %t88333, 60, !dbg !3869
   br i1 %t88334, label %L88335, label %L88338, !dbg !3869
 L88335:
   %match_owner88295_reset88335 = load ptr, ptr %match_owner88295, !dbg !3869
@@ -259654,7 +259654,7 @@ L88335:
 L88338:
   %t88339p = getelementptr i8, ptr %t88294, i64 8, !dbg !3869
   %t88339 = load i64, ptr %t88339p, !dbg !3869
-  %t88340 = icmp eq i64 %t88339, 66, !dbg !3869
+  %t88340 = icmp eq i64 %t88339, 61, !dbg !3869
   br i1 %t88340, label %L88341, label %L88344, !dbg !3869
 L88341:
   %match_owner88295_reset88341 = load ptr, ptr %match_owner88295, !dbg !3869
@@ -259665,7 +259665,7 @@ L88341:
 L88344:
   %t88345p = getelementptr i8, ptr %t88294, i64 8, !dbg !3869
   %t88345 = load i64, ptr %t88345p, !dbg !3869
-  %t88346 = icmp eq i64 %t88345, 67, !dbg !3869
+  %t88346 = icmp eq i64 %t88345, 62, !dbg !3869
   br i1 %t88346, label %L88347, label %L88350, !dbg !3869
 L88347:
   %match_owner88295_reset88347 = load ptr, ptr %match_owner88295, !dbg !3869
@@ -259676,7 +259676,7 @@ L88347:
 L88350:
   %t88351p = getelementptr i8, ptr %t88294, i64 8, !dbg !3869
   %t88351 = load i64, ptr %t88351p, !dbg !3869
-  %t88352 = icmp eq i64 %t88351, 68, !dbg !3869
+  %t88352 = icmp eq i64 %t88351, 63, !dbg !3869
   %t88353 = getelementptr i8, ptr %t88294, i64 16, !dbg !3869
   %t88354 = load ptr, ptr %t88353, !dbg !3869
   %t88356 = and i1 %t88352, 1, !dbg !3869
@@ -259690,7 +259690,7 @@ L88357:
 L88360:
   %t88361p = getelementptr i8, ptr %t88294, i64 8, !dbg !3869
   %t88361 = load i64, ptr %t88361p, !dbg !3869
-  %t88362 = icmp eq i64 %t88361, 69, !dbg !3869
+  %t88362 = icmp eq i64 %t88361, 64, !dbg !3869
   br i1 %t88362, label %L88363, label %L88366, !dbg !3869
 L88363:
   %match_owner88295_reset88363 = load ptr, ptr %match_owner88295, !dbg !3869
@@ -259701,7 +259701,7 @@ L88363:
 L88366:
   %t88367p = getelementptr i8, ptr %t88294, i64 8, !dbg !3869
   %t88367 = load i64, ptr %t88367p, !dbg !3869
-  %t88368 = icmp eq i64 %t88367, 70, !dbg !3869
+  %t88368 = icmp eq i64 %t88367, 65, !dbg !3869
   %t88369 = getelementptr i8, ptr %t88294, i64 16, !dbg !3869
   %t88370 = load ptr, ptr %t88369, !dbg !3869
   %t88372 = and i1 %t88368, 1, !dbg !3869
@@ -259715,7 +259715,7 @@ L88373:
 L88376:
   %t88377p = getelementptr i8, ptr %t88294, i64 8, !dbg !3869
   %t88377 = load i64, ptr %t88377p, !dbg !3869
-  %t88378 = icmp eq i64 %t88377, 71, !dbg !3869
+  %t88378 = icmp eq i64 %t88377, 66, !dbg !3869
   %t88379 = getelementptr i8, ptr %t88294, i64 16, !dbg !3869
   %t88380 = load ptr, ptr %t88379, !dbg !3869
   %t88382 = and i1 %t88378, 1, !dbg !3869
@@ -259729,7 +259729,7 @@ L88383:
 L88386:
   %t88387p = getelementptr i8, ptr %t88294, i64 8, !dbg !3869
   %t88387 = load i64, ptr %t88387p, !dbg !3869
-  %t88388 = icmp eq i64 %t88387, 72, !dbg !3869
+  %t88388 = icmp eq i64 %t88387, 67, !dbg !3869
   %t88389 = getelementptr i8, ptr %t88294, i64 16, !dbg !3869
   %t88390 = load ptr, ptr %t88389, !dbg !3869
   %t88392 = and i1 %t88388, 1, !dbg !3869
@@ -259743,7 +259743,7 @@ L88393:
 L88396:
   %t88397p = getelementptr i8, ptr %t88294, i64 8, !dbg !3869
   %t88397 = load i64, ptr %t88397p, !dbg !3869
-  %t88398 = icmp eq i64 %t88397, 76, !dbg !3869
+  %t88398 = icmp eq i64 %t88397, 71, !dbg !3869
   %t88399 = getelementptr i8, ptr %t88294, i64 16, !dbg !3869
   %t88400 = load ptr, ptr %t88399, !dbg !3869
   %t88402 = and i1 %t88398, 1, !dbg !3869
@@ -259757,7 +259757,7 @@ L88403:
 L88406:
   %t88407p = getelementptr i8, ptr %t88294, i64 8, !dbg !3869
   %t88407 = load i64, ptr %t88407p, !dbg !3869
-  %t88408 = icmp eq i64 %t88407, 73, !dbg !3869
+  %t88408 = icmp eq i64 %t88407, 68, !dbg !3869
   %t88409 = getelementptr i8, ptr %t88294, i64 16, !dbg !3869
   %t88410 = load ptr, ptr %t88409, !dbg !3869
   %t88412 = and i1 %t88408, 1, !dbg !3869
@@ -259774,7 +259774,7 @@ L88417:
 L88420:
   %t88421p = getelementptr i8, ptr %t88294, i64 8, !dbg !3869
   %t88421 = load i64, ptr %t88421p, !dbg !3869
-  %t88422 = icmp eq i64 %t88421, 74, !dbg !3869
+  %t88422 = icmp eq i64 %t88421, 69, !dbg !3869
   %t88423 = getelementptr i8, ptr %t88294, i64 16, !dbg !3869
   %t88424 = load ptr, ptr %t88423, !dbg !3869
   %t88426 = and i1 %t88422, 1, !dbg !3869
@@ -259788,7 +259788,7 @@ L88427:
 L88430:
   %t88431p = getelementptr i8, ptr %t88294, i64 8, !dbg !3869
   %t88431 = load i64, ptr %t88431p, !dbg !3869
-  %t88432 = icmp eq i64 %t88431, 75, !dbg !3869
+  %t88432 = icmp eq i64 %t88431, 70, !dbg !3869
   %t88433 = getelementptr i8, ptr %t88294, i64 16, !dbg !3869
   %t88434 = load ptr, ptr %t88433, !dbg !3869
   %t88436 = and i1 %t88432, 1, !dbg !3869
@@ -263597,7 +263597,7 @@ L90361:
 L90383:
   %t90384p = getelementptr i8, ptr %t90379, i64 8, !dbg !3980
   %t90384 = load i64, ptr %t90384p, !dbg !3980
-  %t90385 = icmp eq i64 %t90384, 64, !dbg !3980
+  %t90385 = icmp eq i64 %t90384, 59, !dbg !3980
   br i1 %t90385, label %L90386, label %L90398, !dbg !3980
 L90386:
   %frontier90387 = load ptr, ptr %match_owner90380, !dbg !3980
@@ -306938,7 +306938,7 @@ entry:
 L108545:
   %t108546p = getelementptr i8, ptr %t108541, i64 8, !dbg !4768
   %t108546 = load i64, ptr %t108546p, !dbg !4768
-  %t108547 = icmp eq i64 %t108546, 61, !dbg !4768
+  %t108547 = icmp eq i64 %t108546, 56, !dbg !4768
   %t108548 = getelementptr i8, ptr %t108541, i64 16, !dbg !4768
   %t108549 = load ptr, ptr %t108548, !dbg !4768
   %t108551 = and i1 %t108547, 1, !dbg !4768
@@ -306952,7 +306952,7 @@ L108552:
 L108553:
   %t108554p = getelementptr i8, ptr %t108541, i64 8, !dbg !4768
   %t108554 = load i64, ptr %t108554p, !dbg !4768
-  %t108555 = icmp eq i64 %t108554, 60, !dbg !4768
+  %t108555 = icmp eq i64 %t108554, 55, !dbg !4768
   br i1 %t108555, label %L108556, label %L108557, !dbg !4768
 L108556:
   %match_owner108542_reset108556 = load ptr, ptr %match_owner108542, !dbg !4768
@@ -306963,7 +306963,7 @@ L108556:
 L108557:
   %t108558p = getelementptr i8, ptr %t108541, i64 8, !dbg !4768
   %t108558 = load i64, ptr %t108558p, !dbg !4768
-  %t108559 = icmp eq i64 %t108558, 62, !dbg !4768
+  %t108559 = icmp eq i64 %t108558, 57, !dbg !4768
   br i1 %t108559, label %L108560, label %L108561, !dbg !4768
 L108560:
   %match_owner108542_reset108560 = load ptr, ptr %match_owner108542, !dbg !4768
@@ -306974,7 +306974,7 @@ L108560:
 L108561:
   %t108562p = getelementptr i8, ptr %t108541, i64 8, !dbg !4768
   %t108562 = load i64, ptr %t108562p, !dbg !4768
-  %t108563 = icmp eq i64 %t108562, 63, !dbg !4768
+  %t108563 = icmp eq i64 %t108562, 58, !dbg !4768
   br i1 %t108563, label %L108564, label %L108565, !dbg !4768
 L108564:
   %match_owner108542_reset108564 = load ptr, ptr %match_owner108542, !dbg !4768
@@ -306985,7 +306985,7 @@ L108564:
 L108565:
   %t108566p = getelementptr i8, ptr %t108541, i64 8, !dbg !4768
   %t108566 = load i64, ptr %t108566p, !dbg !4768
-  %t108567 = icmp eq i64 %t108566, 64, !dbg !4768
+  %t108567 = icmp eq i64 %t108566, 59, !dbg !4768
   br i1 %t108567, label %L108568, label %L108569, !dbg !4768
 L108568:
   %match_owner108542_reset108568 = load ptr, ptr %match_owner108542, !dbg !4768
@@ -306996,7 +306996,7 @@ L108568:
 L108569:
   %t108570p = getelementptr i8, ptr %t108541, i64 8, !dbg !4768
   %t108570 = load i64, ptr %t108570p, !dbg !4768
-  %t108571 = icmp eq i64 %t108570, 66, !dbg !4768
+  %t108571 = icmp eq i64 %t108570, 61, !dbg !4768
   br i1 %t108571, label %L108572, label %L108573, !dbg !4768
 L108572:
   %match_owner108542_reset108572 = load ptr, ptr %match_owner108542, !dbg !4768
@@ -307007,7 +307007,7 @@ L108572:
 L108573:
   %t108574p = getelementptr i8, ptr %t108541, i64 8, !dbg !4768
   %t108574 = load i64, ptr %t108574p, !dbg !4768
-  %t108575 = icmp eq i64 %t108574, 67, !dbg !4768
+  %t108575 = icmp eq i64 %t108574, 62, !dbg !4768
   br i1 %t108575, label %L108576, label %L108577, !dbg !4768
 L108576:
   %match_owner108542_reset108576 = load ptr, ptr %match_owner108542, !dbg !4768
@@ -307018,7 +307018,7 @@ L108576:
 L108577:
   %t108578p = getelementptr i8, ptr %t108541, i64 8, !dbg !4768
   %t108578 = load i64, ptr %t108578p, !dbg !4768
-  %t108579 = icmp eq i64 %t108578, 68, !dbg !4768
+  %t108579 = icmp eq i64 %t108578, 63, !dbg !4768
   %t108580 = getelementptr i8, ptr %t108541, i64 16, !dbg !4768
   %t108581 = load ptr, ptr %t108580, !dbg !4768
   %t108583 = and i1 %t108579, 1, !dbg !4768
@@ -307032,7 +307032,7 @@ L108584:
 L108585:
   %t108586p = getelementptr i8, ptr %t108541, i64 8, !dbg !4768
   %t108586 = load i64, ptr %t108586p, !dbg !4768
-  %t108587 = icmp eq i64 %t108586, 75, !dbg !4768
+  %t108587 = icmp eq i64 %t108586, 70, !dbg !4768
   %t108588 = getelementptr i8, ptr %t108541, i64 16, !dbg !4768
   %t108589 = load ptr, ptr %t108588, !dbg !4768
   %t108591 = and i1 %t108587, 1, !dbg !4768
@@ -307046,7 +307046,7 @@ L108592:
 L108593:
   %t108594p = getelementptr i8, ptr %t108541, i64 8, !dbg !4768
   %t108594 = load i64, ptr %t108594p, !dbg !4768
-  %t108595 = icmp eq i64 %t108594, 69, !dbg !4768
+  %t108595 = icmp eq i64 %t108594, 64, !dbg !4768
   br i1 %t108595, label %L108596, label %L108597, !dbg !4768
 L108596:
   %match_owner108542_reset108596 = load ptr, ptr %match_owner108542, !dbg !4768
@@ -307057,7 +307057,7 @@ L108596:
 L108597:
   %t108598p = getelementptr i8, ptr %t108541, i64 8, !dbg !4768
   %t108598 = load i64, ptr %t108598p, !dbg !4768
-  %t108599 = icmp eq i64 %t108598, 65, !dbg !4768
+  %t108599 = icmp eq i64 %t108598, 60, !dbg !4768
   br i1 %t108599, label %L108600, label %L108601, !dbg !4768
 L108600:
   %match_owner108542_reset108600 = load ptr, ptr %match_owner108542, !dbg !4768
@@ -307068,7 +307068,7 @@ L108600:
 L108601:
   %t108602p = getelementptr i8, ptr %t108541, i64 8, !dbg !4768
   %t108602 = load i64, ptr %t108602p, !dbg !4768
-  %t108603 = icmp eq i64 %t108602, 70, !dbg !4768
+  %t108603 = icmp eq i64 %t108602, 65, !dbg !4768
   %t108604 = getelementptr i8, ptr %t108541, i64 16, !dbg !4768
   %t108605 = load ptr, ptr %t108604, !dbg !4768
   %t108607 = and i1 %t108603, 1, !dbg !4768
@@ -307082,7 +307082,7 @@ L108608:
 L108609:
   %t108610p = getelementptr i8, ptr %t108541, i64 8, !dbg !4768
   %t108610 = load i64, ptr %t108610p, !dbg !4768
-  %t108611 = icmp eq i64 %t108610, 71, !dbg !4768
+  %t108611 = icmp eq i64 %t108610, 66, !dbg !4768
   %t108612 = getelementptr i8, ptr %t108541, i64 16, !dbg !4768
   %t108613 = load ptr, ptr %t108612, !dbg !4768
   %t108615 = and i1 %t108611, 1, !dbg !4768
@@ -307096,7 +307096,7 @@ L108616:
 L108617:
   %t108618p = getelementptr i8, ptr %t108541, i64 8, !dbg !4768
   %t108618 = load i64, ptr %t108618p, !dbg !4768
-  %t108619 = icmp eq i64 %t108618, 72, !dbg !4768
+  %t108619 = icmp eq i64 %t108618, 67, !dbg !4768
   %t108620 = getelementptr i8, ptr %t108541, i64 16, !dbg !4768
   %t108621 = load ptr, ptr %t108620, !dbg !4768
   %t108623 = and i1 %t108619, 1, !dbg !4768
@@ -307110,7 +307110,7 @@ L108624:
 L108625:
   %t108626p = getelementptr i8, ptr %t108541, i64 8, !dbg !4768
   %t108626 = load i64, ptr %t108626p, !dbg !4768
-  %t108627 = icmp eq i64 %t108626, 73, !dbg !4768
+  %t108627 = icmp eq i64 %t108626, 68, !dbg !4768
   %t108628 = getelementptr i8, ptr %t108541, i64 16, !dbg !4768
   %t108629 = load ptr, ptr %t108628, !dbg !4768
   %t108631 = and i1 %t108627, 1, !dbg !4768
@@ -307127,7 +307127,7 @@ L108636:
 L108637:
   %t108638p = getelementptr i8, ptr %t108541, i64 8, !dbg !4768
   %t108638 = load i64, ptr %t108638p, !dbg !4768
-  %t108639 = icmp eq i64 %t108638, 76, !dbg !4768
+  %t108639 = icmp eq i64 %t108638, 71, !dbg !4768
   %t108640 = getelementptr i8, ptr %t108541, i64 16, !dbg !4768
   %t108641 = load ptr, ptr %t108640, !dbg !4768
   %t108643 = and i1 %t108639, 1, !dbg !4768
@@ -307141,7 +307141,7 @@ L108644:
 L108645:
   %t108646p = getelementptr i8, ptr %t108541, i64 8, !dbg !4768
   %t108646 = load i64, ptr %t108646p, !dbg !4768
-  %t108647 = icmp eq i64 %t108646, 74, !dbg !4768
+  %t108647 = icmp eq i64 %t108646, 69, !dbg !4768
   %t108648 = getelementptr i8, ptr %t108541, i64 16, !dbg !4768
   %t108649 = load ptr, ptr %t108648, !dbg !4768
   %t108651 = and i1 %t108647, 1, !dbg !4768
@@ -309249,7 +309249,7 @@ entry:
 @.str109498 = private global { i64, i64, [1 x i8] } { i64 -1, i64 0, [1 x i8] c"\00" }
 @.str109500 = private global { i64, i64, [1 x i8] } { i64 -1, i64 0, [1 x i8] c"\00" }
 @.str109502 = private global { i64, i64, [1 x i8] } { i64 -1, i64 0, [1 x i8] c"\00" }
-@.const109506 = private global <{ i64, i64, [16 x i8] }> <{ i64 -1, i64 62, [16 x i8] zeroinitializer }>
+@.const109506 = private global <{ i64, i64, [16 x i8] }> <{ i64 -1, i64 57, [16 x i8] zeroinitializer }>
 define ptr @plum.f.codegen.cg_float_literal.0.(double %p0, i64 %p1) !dbg !4807 {
 entry:
   %s0 = alloca double, !dbg !4808
@@ -309282,7 +309282,7 @@ entry:
 @.str109520 = private global { i64, i64, [1 x i8] } { i64 -1, i64 0, [1 x i8] c"\00" }
 @.str109522 = private global { i64, i64, [1 x i8] } { i64 -1, i64 0, [1 x i8] c"\00" }
 @.str109524 = private global { i64, i64, [2 x i8] } { i64 -1, i64 1, [2 x i8] c"0\00" }
-@.const109526 = private global <{ i64, i64, [16 x i8] }> <{ i64 -1, i64 64, [16 x i8] zeroinitializer }>
+@.const109526 = private global <{ i64, i64, [16 x i8] }> <{ i64 -1, i64 59, [16 x i8] zeroinitializer }>
 define ptr @plum.f.codegen.cg_unit_emit.0.(i64 %p0) !dbg !4809 {
 entry:
   %s0 = alloca i64, !dbg !4810
@@ -309864,7 +309864,7 @@ L109790:
 @.str109871 = private global { i64, i64, [2 x i8] } { i64 -1, i64 1, [2 x i8] c"0\00" }
 @.const109932 = private global <{ i64, i64 }> <{ i64 -1, i64 151 }>
 @.const110007 = private global <{ i64, i64 }> <{ i64 -1, i64 149 }>
-@.const110015 = private global <{ i64, i64, [16 x i8] }> <{ i64 -1, i64 60, [16 x i8] zeroinitializer }>
+@.const110015 = private global <{ i64, i64, [16 x i8] }> <{ i64 -1, i64 55, [16 x i8] zeroinitializer }>
 @.str110023 = private global { i64, i64, [28 x i8] } { i64 -1, i64 27, [28 x i8] c"llvm.ssub.with.overflow.i64\00" }
 @.str110025 = private global { i64, i64, [2 x i8] } { i64 -1, i64 1, [2 x i8] c"0\00" }
 define ptr @plum.f.codegen.cg_unary.0.(ptr %p0, ptr %p1, i64 %p2, ptr %p3, ptr %p4) !dbg !4826 {
@@ -309930,7 +309930,7 @@ entry:
 L109814:
   %t109815p = getelementptr i8, ptr %t109810, i64 8, !dbg !4829
   %t109815 = load i64, ptr %t109815p, !dbg !4829
-  %t109816 = icmp eq i64 %t109815, 61, !dbg !4829
+  %t109816 = icmp eq i64 %t109815, 56, !dbg !4829
   %t109817 = getelementptr i8, ptr %t109810, i64 16, !dbg !4829
   %t109818 = load ptr, ptr %t109817, !dbg !4829
   %t109821 = and i1 %t109816, 1, !dbg !4829
@@ -311296,7 +311296,7 @@ L110446:
 @.str110631 = private global { i64, i64, [1 x i8] } { i64 -1, i64 0, [1 x i8] c"\00" }
 @.str110644 = private global { i64, i64, [1 x i8] } { i64 -1, i64 0, [1 x i8] c"\00" }
 @.str110653 = private global { i64, i64, [2 x i8] } { i64 -1, i64 1, [2 x i8] c"0\00" }
-@.const110655 = private global <{ i64, i64, [16 x i8] }> <{ i64 -1, i64 64, [16 x i8] zeroinitializer }>
+@.const110655 = private global <{ i64, i64, [16 x i8] }> <{ i64 -1, i64 59, [16 x i8] zeroinitializer }>
 define ptr @plum.f.codegen.cg_block_ty.0.(ptr %p0, ptr %p1, i64 %p2, ptr %p3, ptr %p4, i1 %p5, ptr %p6) !dbg !4851 {
 entry:
   %s0 = alloca ptr, !dbg !4852
@@ -311890,7 +311890,7 @@ L110705:
 L110763:
   %t110764p = getelementptr i8, ptr %t110759, i64 8, !dbg !4860
   %t110764 = load i64, ptr %t110764p, !dbg !4860
-  %t110765 = icmp eq i64 %t110764, 70, !dbg !4860
+  %t110765 = icmp eq i64 %t110764, 65, !dbg !4860
   %t110766 = getelementptr i8, ptr %t110759, i64 16, !dbg !4860
   %t110767 = load ptr, ptr %t110766, !dbg !4860
   %t110770 = and i1 %t110765, 1, !dbg !4860
@@ -312361,7 +312361,7 @@ L111013:
 L111014:
   %t111016 = phi ptr [ %t111010, %L111012 ], [ %t111015, %L111013 ], !dbg !4872
   %t111016_t = getelementptr i8, ptr %t111016, i64 8, !dbg !4872
-  store i64 76, ptr %t111016_t, !dbg !4872
+  store i64 71, ptr %t111016_t, !dbg !4872
   %t111043 = getelementptr i8, ptr %t111016, i64 16, !dbg !4872
   store ptr %t111009, ptr %t111043, !dbg !4872
   %t111044 = load ptr, ptr %t110918, !dbg !4872
@@ -313588,7 +313588,7 @@ L111678:
   ret ptr %t111680, !dbg !4892
 }
 
-@.const111804 = private global <{ i64, i64, [16 x i8] }> <{ i64 -1, i64 60, [16 x i8] zeroinitializer }>
+@.const111804 = private global <{ i64, i64, [16 x i8] }> <{ i64 -1, i64 55, [16 x i8] zeroinitializer }>
 @.const111805 = private global <{ i64, i64, [16 x i8] }> <{ i64 -1, i64 309, [16 x i8] zeroinitializer }>
 @.str111858 = private global { i64, i64, [13 x i8] } { i64 -1, i64 12, [13 x i8] c"  store i64 \00" }
 @.str111865 = private global { i64, i64, [7 x i8] } { i64 -1, i64 6, [7 x i8] c", ptr \00" }
@@ -313631,7 +313631,7 @@ L111678:
 @.str112044 = private global { i64, i64, [3 x i8] } { i64 -1, i64 2, [3 x i8] c"  \00" }
 @.str112049 = private global { i64, i64, [15 x i8] } { i64 -1, i64 14, [15 x i8] c" = alloca i64\0A\00" }
 @.str112088 = private global { i64, i64, [2 x i8] } { i64 -1, i64 1, [2 x i8] c"0\00" }
-@.const112090 = private global <{ i64, i64, [16 x i8] }> <{ i64 -1, i64 64, [16 x i8] zeroinitializer }>
+@.const112090 = private global <{ i64, i64, [16 x i8] }> <{ i64 -1, i64 59, [16 x i8] zeroinitializer }>
 define ptr @plum.f.codegen.cg_for.0.(ptr %p0, ptr %p1, i64 %p2, ptr %p3, ptr %p4, ptr %p5, ptr %p6) !dbg !4893 {
 entry:
   %s0 = alloca ptr, !dbg !4894
@@ -314358,7 +314358,7 @@ L112104:
 @.str112592 = private global { i64, i64, [11 x i8] } { i64 -1, i64 10, [11 x i8] c" = alloca \00" }
 @.str112597 = private global { i64, i64, [2 x i8] } { i64 -1, i64 1, [2 x i8] c"\0A\00" }
 @.str112624 = private global { i64, i64, [2 x i8] } { i64 -1, i64 1, [2 x i8] c"0\00" }
-@.const112626 = private global <{ i64, i64, [16 x i8] }> <{ i64 -1, i64 64, [16 x i8] zeroinitializer }>
+@.const112626 = private global <{ i64, i64, [16 x i8] }> <{ i64 -1, i64 59, [16 x i8] zeroinitializer }>
 define ptr @plum.f.codegen.cg_for_array.0.(ptr %p0, ptr %p1, i64 %p2, ptr %p3, ptr %p4, ptr %p5) !dbg !4910 {
 entry:
   %s0 = alloca ptr, !dbg !4911
@@ -318072,17 +318072,17 @@ L113950:
 @.str114162 = private global { i64, i64, [13 x i8] } { i64 -1, i64 12, [13 x i8] c"round_to_int\00" }
 @.str114175 = private global { i64, i64, [10 x i8] } { i64 -1, i64 9, [10 x i8] c"ends_with\00" }
 @.str114192 = private global { i64, i64, [20 x i8] } { i64 -1, i64 19, [20 x i8] c"@plum_str_ends_with\00" }
-@.const114194 = private global <{ i64, i64, [16 x i8] }> <{ i64 -1, i64 63, [16 x i8] zeroinitializer }>
+@.const114194 = private global <{ i64, i64, [16 x i8] }> <{ i64 -1, i64 58, [16 x i8] zeroinitializer }>
 @.str114197 = private global { i64, i64, [12 x i8] } { i64 -1, i64 11, [12 x i8] c"starts_with\00" }
 @.str114214 = private global { i64, i64, [22 x i8] } { i64 -1, i64 21, [22 x i8] c"@plum_str_starts_with\00" }
-@.const114216 = private global <{ i64, i64, [16 x i8] }> <{ i64 -1, i64 63, [16 x i8] zeroinitializer }>
+@.const114216 = private global <{ i64, i64, [16 x i8] }> <{ i64 -1, i64 58, [16 x i8] zeroinitializer }>
 @.str114219 = private global { i64, i64, [9 x i8] } { i64 -1, i64 8, [9 x i8] c"contains\00" }
 @.str114236 = private global { i64, i64, [19 x i8] } { i64 -1, i64 18, [19 x i8] c"@plum_str_contains\00" }
-@.const114238 = private global <{ i64, i64, [16 x i8] }> <{ i64 -1, i64 63, [16 x i8] zeroinitializer }>
+@.const114238 = private global <{ i64, i64, [16 x i8] }> <{ i64 -1, i64 58, [16 x i8] zeroinitializer }>
 @.str114241 = private global { i64, i64, [6 x i8] } { i64 -1, i64 5, [6 x i8] c"split\00" }
 @.str114258 = private global { i64, i64, [16 x i8] } { i64 -1, i64 15, [16 x i8] c"@plum_str_split\00" }
-@.const114260 = private global <{ i64, i64, [16 x i8] }> <{ i64 -1, i64 65, [16 x i8] zeroinitializer }>
-@.const114261 = private global <{ i64, i64, ptr, [8 x i8] }> <{ i64 -1, i64 72, ptr @.const114260, [8 x i8] zeroinitializer }>
+@.const114260 = private global <{ i64, i64, [16 x i8] }> <{ i64 -1, i64 60, [16 x i8] zeroinitializer }>
+@.const114261 = private global <{ i64, i64, ptr, [8 x i8] }> <{ i64 -1, i64 67, ptr @.const114260, [8 x i8] zeroinitializer }>
 @.str114264 = private global { i64, i64, [8 x i8] } { i64 -1, i64 7, [8 x i8] c"replace\00" }
 @.str114291 = private global { i64, i64, [18 x i8] } { i64 -1, i64 17, [18 x i8] c"@plum_str_replace\00" }
 @.str114295 = private global { i64, i64, [9 x i8] } { i64 -1, i64 8, [9 x i8] c"to_upper\00" }
@@ -319887,8 +319887,8 @@ L114500:
 
 @.str114770 = private global { i64, i64, [1 x i8] } { i64 -1, i64 0, [1 x i8] c"\00" }
 @.const114772 = private global <{ i64, i64 }> <{ i64 -1, i64 0 }>
-@.const114792 = private global <{ i64, i64, [16 x i8] }> <{ i64 -1, i64 64, [16 x i8] zeroinitializer }>
-@.const114796 = private global <{ i64, i64, [16 x i8] }> <{ i64 -1, i64 63, [16 x i8] zeroinitializer }>
+@.const114792 = private global <{ i64, i64, [16 x i8] }> <{ i64 -1, i64 59, [16 x i8] zeroinitializer }>
+@.const114796 = private global <{ i64, i64, [16 x i8] }> <{ i64 -1, i64 58, [16 x i8] zeroinitializer }>
 @.str114804 = private global { i64, i64, [14 x i8] } { i64 -1, i64 13, [14 x i8] c"  call void @\00" }
 @.str114808 = private global { i64, i64, [2 x i8] } { i64 -1, i64 1, [2 x i8] c"(\00" }
 @.str114816 = private global { i64, i64, [3 x i8] } { i64 -1, i64 2, [3 x i8] c")\0A\00" }
@@ -320071,7 +320071,7 @@ L114822:
 L114861:
   %t114862p = getelementptr i8, ptr %t114857, i64 8, !dbg !4993
   %t114862 = load i64, ptr %t114862p, !dbg !4993
-  %t114863 = icmp eq i64 %t114862, 61, !dbg !4993
+  %t114863 = icmp eq i64 %t114862, 56, !dbg !4993
   %t114864 = getelementptr i8, ptr %t114857, i64 16, !dbg !4993
   %t114865 = load ptr, ptr %t114864, !dbg !4993
   %t114868 = and i1 %t114863, 1, !dbg !4993
@@ -320312,7 +320312,7 @@ L114960:
   ret ptr %t114962, !dbg !4993
 }
 
-@.const115017 = private global <{ i64, i64, [16 x i8] }> <{ i64 -1, i64 66, [16 x i8] zeroinitializer }>
+@.const115017 = private global <{ i64, i64, [16 x i8] }> <{ i64 -1, i64 61, [16 x i8] zeroinitializer }>
 define ptr @plum.f.codegen.cg_as_cstr.0.(ptr %p0, ptr %p1, i64 %p2, ptr %p3) !dbg !4994 {
 entry:
   %s0 = alloca ptr, !dbg !4995
@@ -320420,7 +320420,7 @@ L115025:
   ret ptr %t115027, !dbg !4996
 }
 
-@.const115057 = private global <{ i64, i64, [16 x i8] }> <{ i64 -1, i64 66, [16 x i8] zeroinitializer }>
+@.const115057 = private global <{ i64, i64, [16 x i8] }> <{ i64 -1, i64 61, [16 x i8] zeroinitializer }>
 @.str115094 = private global { i64, i64, [3 x i8] } { i64 -1, i64 2, [3 x i8] c"  \00" }
 @.str115098 = private global { i64, i64, [26 x i8] } { i64 -1, i64 25, [26 x i8] c" = getelementptr i8, ptr \00" }
 @.str115105 = private global { i64, i64, [10 x i8] } { i64 -1, i64 9, [10 x i8] c", i64 16\0A\00" }
@@ -320430,7 +320430,7 @@ L115025:
 @.str115121 = private global { i64, i64, [3 x i8] } { i64 -1, i64 2, [3 x i8] c")\0A\00" }
 @.const115130 = private global <{ i64, i64, [16 x i8] }> <{ i64 -1, i64 317, [16 x i8] zeroinitializer }>
 @.str115135 = private global { i64, i64, [1 x i8] } { i64 -1, i64 0, [1 x i8] c"\00" }
-@.const115149 = private global <{ i64, i64, [16 x i8] }> <{ i64 -1, i64 65, [16 x i8] zeroinitializer }>
+@.const115149 = private global <{ i64, i64, [16 x i8] }> <{ i64 -1, i64 60, [16 x i8] zeroinitializer }>
 define ptr @plum.f.codegen.cg_as_string.0.(ptr %p0, ptr %p1, i64 %p2, ptr %p3) !dbg !4997 {
 entry:
   %s0 = alloca ptr, !dbg !4998
@@ -320681,7 +320681,7 @@ L115163:
 @.const115222 = private global <{ i64, i64 }> <{ i64 -1, i64 228 }>
 @.const115225 = private global <{ i64, i64 }> <{ i64 -1, i64 245 }>
 @.const115236 = private global <{ i64, i64 }> <{ i64 -1, i64 228 }>
-@.const115242 = private global <{ i64, i64, [16 x i8] }> <{ i64 -1, i64 60, [16 x i8] zeroinitializer }>
+@.const115242 = private global <{ i64, i64, [16 x i8] }> <{ i64 -1, i64 55, [16 x i8] zeroinitializer }>
 @.str115352 = private global { i64, i64, [5 x i8] } { i64 -1, i64 4, [5 x i8] c"sext\00" }
 @.str115354 = private global { i64, i64, [5 x i8] } { i64 -1, i64 4, [5 x i8] c"zext\00" }
 @.str115360 = private global { i64, i64, [3 x i8] } { i64 -1, i64 2, [3 x i8] c"  \00" }
@@ -320695,7 +320695,7 @@ L115163:
 @.str115405 = private global { i64, i64, [9 x i8] } { i64 -1, i64 8, [9 x i8] c" to i64\0A\00" }
 @.const115456 = private global <{ i64, i64 }> <{ i64 -1, i64 243 }>
 @.const115464 = private global <{ i64, i64 }> <{ i64 -1, i64 228 }>
-@.const115470 = private global <{ i64, i64, [16 x i8] }> <{ i64 -1, i64 60, [16 x i8] zeroinitializer }>
+@.const115470 = private global <{ i64, i64, [16 x i8] }> <{ i64 -1, i64 55, [16 x i8] zeroinitializer }>
 @.str115550 = private global { i64, i64, [7 x i8] } { i64 -1, i64 6, [7 x i8] c"Result\00" }
 @.str115563 = private global { i64, i64, [3 x i8] } { i64 -1, i64 2, [3 x i8] c"Ok\00" }
 @.str115566 = private global { i64, i64, [5 x i8] } { i64 -1, i64 4, [5 x i8] c"i64 \00" }
@@ -320942,7 +320942,7 @@ L115247:
 L115248:
   %t115250 = phi ptr [ %t115244, %L115246 ], [ %t115249, %L115247 ], !dbg !5011
   %t115250_t = getelementptr i8, ptr %t115250, i64 8, !dbg !5011
-  store i64 61, ptr %t115250_t, !dbg !5011
+  store i64 56, ptr %t115250_t, !dbg !5011
   %t115277 = getelementptr i8, ptr %t115250, i64 16, !dbg !5011
   store ptr %t115243, ptr %t115277, !dbg !5011
   store ptr %t115250, ptr %t115238, !dbg !5011
@@ -321277,7 +321277,7 @@ L115475:
 L115476:
   %t115478 = phi ptr [ %t115472, %L115474 ], [ %t115477, %L115475 ], !dbg !5015
   %t115478_t = getelementptr i8, ptr %t115478, i64 8, !dbg !5015
-  store i64 61, ptr %t115478_t, !dbg !5015
+  store i64 56, ptr %t115478_t, !dbg !5015
   %t115505 = getelementptr i8, ptr %t115478, i64 16, !dbg !5015
   store ptr %t115471, ptr %t115505, !dbg !5015
   store ptr %t115478, ptr %t115466, !dbg !5015
@@ -321804,7 +321804,7 @@ L115852:
 L115853:
   %t115855 = phi ptr [ %t115849, %L115851 ], [ %t115854, %L115852 ], !dbg !5025
   %t115855_t = getelementptr i8, ptr %t115855, i64 8, !dbg !5025
-  store i64 71, ptr %t115855_t, !dbg !5025
+  store i64 66, ptr %t115855_t, !dbg !5025
   %t115868 = getelementptr i8, ptr %t115855, i64 16, !dbg !5025
   store ptr %t115848, ptr %t115868, !dbg !5025
   %t115869 = load ptr, ptr %t115702, !dbg !5025
@@ -321994,7 +321994,7 @@ L115230:
 @.str116261 = private global { i64, i64, [7 x i8] } { i64 -1, i64 6, [7 x i8] c", ptr \00" }
 @.str116266 = private global { i64, i64, [9 x i8] } { i64 -1, i64 8, [9 x i8] c", align \00" }
 @.str116284 = private global { i64, i64, [2 x i8] } { i64 -1, i64 1, [2 x i8] c"\0A\00" }
-@.const116295 = private global <{ i64, i64, [16 x i8] }> <{ i64 -1, i64 64, [16 x i8] zeroinitializer }>
+@.const116295 = private global <{ i64, i64, [16 x i8] }> <{ i64 -1, i64 59, [16 x i8] zeroinitializer }>
 @.str116301 = private global { i64, i64, [2 x i8] } { i64 -1, i64 1, [2 x i8] c"0\00" }
 define ptr @plum.f.codegen.cg_raw_pointer.0.(ptr %p0, ptr %p1, i64 %p2, ptr %p3, ptr %p4, ptr %p5) !dbg !5026 {
 entry:
@@ -323717,7 +323717,7 @@ L116959:
 L116960:
   %t116962 = phi ptr [ %t116956, %L116958 ], [ %t116961, %L116959 ], !dbg !5061
   %t116962_t = getelementptr i8, ptr %t116962, i64 8, !dbg !5061
-  store i64 71, ptr %t116962_t, !dbg !5061
+  store i64 66, ptr %t116962_t, !dbg !5061
   %t116975 = getelementptr i8, ptr %t116962, i64 16, !dbg !5061
   store ptr %t116955, ptr %t116975, !dbg !5061
   %t116976 = load ptr, ptr %t116529, !dbg !5061
@@ -324702,7 +324702,7 @@ L117473:
 @.str117641 = private global { i64, i64, [4 x i8] } { i64 -1, i64 3, [4 x i8] c"i64\00" }
 @.str117643 = private global { i64, i64, [2 x i8] } { i64 -1, i64 1, [2 x i8] c"0\00" }
 @.str117674 = private global { i64, i64, [5 x i8] } { i64 -1, i64 4, [5 x i8] c"Task\00" }
-@.const117676 = private global <{ i64, i64, ptr, [8 x i8] }> <{ i64 -1, i64 75, ptr @.str117674, [8 x i8] zeroinitializer }>
+@.const117676 = private global <{ i64, i64, ptr, [8 x i8] }> <{ i64 -1, i64 70, ptr @.str117674, [8 x i8] zeroinitializer }>
 define ptr @plum.f.codegen.cg_spawn.0.(ptr %p0, ptr %p1, i64 %p2, ptr %p3) !dbg !5083 {
 entry:
   %s0 = alloca ptr, !dbg !5084
@@ -325360,18 +325360,18 @@ L117839:
   ret ptr %t117841, !dbg !5099
 }
 
-@.const117864 = private global <{ i64, i64, [16 x i8] }> <{ i64 -1, i64 65, [16 x i8] zeroinitializer }>
+@.const117864 = private global <{ i64, i64, [16 x i8] }> <{ i64 -1, i64 60, [16 x i8] zeroinitializer }>
 @.str117884 = private global { i64, i64, [3 x i8] } { i64 -1, i64 2, [3 x i8] c"  \00" }
 @.str117889 = private global { i64, i64, [30 x i8] } { i64 -1, i64 29, [30 x i8] c" = call i1 @plum_println(ptr \00" }
 @.str117896 = private global { i64, i64, [3 x i8] } { i64 -1, i64 2, [3 x i8] c")\0A\00" }
-@.const117913 = private global <{ i64, i64, [16 x i8] }> <{ i64 -1, i64 64, [16 x i8] zeroinitializer }>
+@.const117913 = private global <{ i64, i64, [16 x i8] }> <{ i64 -1, i64 59, [16 x i8] zeroinitializer }>
 @.str117965 = private global { i64, i64, [3 x i8] } { i64 -1, i64 2, [3 x i8] c"  \00" }
 @.str117970 = private global { i64, i64, [30 x i8] } { i64 -1, i64 29, [30 x i8] c" = call i1 @plum_println(ptr \00" }
 @.str117977 = private global { i64, i64, [3 x i8] } { i64 -1, i64 2, [3 x i8] c")\0A\00" }
 @.str117985 = private global { i64, i64, [31 x i8] } { i64 -1, i64 30, [31 x i8] c"  call void @plum_rel_str(ptr \00" }
 @.str117991 = private global { i64, i64, [3 x i8] } { i64 -1, i64 2, [3 x i8] c")\0A\00" }
 @.str117994 = private global { i64, i64, [1 x i8] } { i64 -1, i64 0, [1 x i8] c"\00" }
-@.const118008 = private global <{ i64, i64, [16 x i8] }> <{ i64 -1, i64 64, [16 x i8] zeroinitializer }>
+@.const118008 = private global <{ i64, i64, [16 x i8] }> <{ i64 -1, i64 59, [16 x i8] zeroinitializer }>
 define ptr @plum.f.codegen.cg_println.0.(ptr %p0, ptr %p1, i64 %p2, ptr %p3) !dbg !5100 {
 entry:
   %s0 = alloca ptr, !dbg !5101
@@ -329005,7 +329005,7 @@ L119574:
   ret ptr %t119580, !dbg !5170
 }
 
-@.const119581 = private global <{ i64, i64, [16 x i8] }> <{ i64 -1, i64 55, [16 x i8] zeroinitializer }>
+@.const119581 = private global <{ i64, i64, [16 x i8] }> <{ i64 -1, i64 72, [16 x i8] zeroinitializer }>
 @.const119582 = private global <{ i64, i64 }> <{ i64 -1, i64 0 }>
 @.const119583 = private global <{ i64, i64 }> <{ i64 -1, i64 0 }>
 @.const119585 = private global <{ i64, i64 }> <{ i64 -1, i64 0 }>
@@ -333224,7 +333224,7 @@ entry:
 L121264:
   %t121265p = getelementptr i8, ptr %t121260, i64 8, !dbg !5246
   %t121265 = load i64, ptr %t121265p, !dbg !5246
-  %t121266 = icmp eq i64 %t121265, 63, !dbg !5246
+  %t121266 = icmp eq i64 %t121265, 58, !dbg !5246
   br i1 %t121266, label %L121267, label %L121284, !dbg !5246
 L121267:
   %match_owner121261_reset121267 = load ptr, ptr %match_owner121261, !dbg !5246
@@ -333254,7 +333254,7 @@ L121267:
 L121284:
   %t121285p = getelementptr i8, ptr %t121260, i64 8, !dbg !5246
   %t121285 = load i64, ptr %t121285p, !dbg !5246
-  %t121286 = icmp eq i64 %t121285, 61, !dbg !5246
+  %t121286 = icmp eq i64 %t121285, 56, !dbg !5246
   %t121287 = getelementptr i8, ptr %t121260, i64 16, !dbg !5246
   %t121288 = load ptr, ptr %t121287, !dbg !5246
   %t121291 = and i1 %t121286, 1, !dbg !5246
@@ -333412,7 +333412,7 @@ entry:
 L121367:
   %t121368p = getelementptr i8, ptr %t121363, i64 8, !dbg !5250
   %t121368 = load i64, ptr %t121368p, !dbg !5250
-  %t121369 = icmp eq i64 %t121368, 61, !dbg !5250
+  %t121369 = icmp eq i64 %t121368, 56, !dbg !5250
   %t121370 = getelementptr i8, ptr %t121363, i64 16, !dbg !5250
   %t121371 = load ptr, ptr %t121370, !dbg !5250
   %t121374 = and i1 %t121369, 1, !dbg !5250
@@ -333485,7 +333485,7 @@ entry:
 L121394:
   %t121395p = getelementptr i8, ptr %t121390, i64 8, !dbg !5252
   %t121395 = load i64, ptr %t121395p, !dbg !5252
-  %t121396 = icmp eq i64 %t121395, 64, !dbg !5252
+  %t121396 = icmp eq i64 %t121395, 59, !dbg !5252
   br i1 %t121396, label %L121397, label %L121401, !dbg !5252
 L121397:
   %frontier121398 = load ptr, ptr %match_owner121391, !dbg !5252
@@ -333505,7 +333505,7 @@ frontier_done121398:
 L121401:
   %t121402p = getelementptr i8, ptr %t121390, i64 8, !dbg !5252
   %t121402 = load i64, ptr %t121402p, !dbg !5252
-  %t121403 = icmp eq i64 %t121402, 61, !dbg !5252
+  %t121403 = icmp eq i64 %t121402, 56, !dbg !5252
   %t121404 = getelementptr i8, ptr %t121390, i64 16, !dbg !5252
   %t121405 = load ptr, ptr %t121404, !dbg !5252
   %t121408 = and i1 %t121403, 1, !dbg !5252
@@ -333583,7 +333583,7 @@ entry:
 L121426:
   %t121427p = getelementptr i8, ptr %t121422, i64 8, !dbg !5254
   %t121427 = load i64, ptr %t121427p, !dbg !5254
-  %t121428 = icmp eq i64 %t121427, 64, !dbg !5254
+  %t121428 = icmp eq i64 %t121427, 59, !dbg !5254
   br i1 %t121428, label %L121429, label %L121433, !dbg !5254
 L121429:
   %frontier121430 = load ptr, ptr %match_owner121423, !dbg !5254
@@ -333603,7 +333603,7 @@ frontier_done121430:
 L121433:
   %t121434p = getelementptr i8, ptr %t121422, i64 8, !dbg !5254
   %t121434 = load i64, ptr %t121434p, !dbg !5254
-  %t121435 = icmp eq i64 %t121434, 63, !dbg !5254
+  %t121435 = icmp eq i64 %t121434, 58, !dbg !5254
   br i1 %t121435, label %L121436, label %L121440, !dbg !5254
 L121436:
   %frontier121437 = load ptr, ptr %match_owner121423, !dbg !5254
@@ -333623,7 +333623,7 @@ frontier_done121437:
 L121440:
   %t121441p = getelementptr i8, ptr %t121422, i64 8, !dbg !5254
   %t121441 = load i64, ptr %t121441p, !dbg !5254
-  %t121442 = icmp eq i64 %t121441, 61, !dbg !5254
+  %t121442 = icmp eq i64 %t121441, 56, !dbg !5254
   %t121443 = getelementptr i8, ptr %t121422, i64 16, !dbg !5254
   %t121444 = load ptr, ptr %t121443, !dbg !5254
   %t121447 = and i1 %t121442, 1, !dbg !5254
@@ -340121,7 +340121,7 @@ L124733:
   store ptr @.const124738, ptr %t124732, !dbg !5419
   br label %L124735, !dbg !5419
 L124734:
-  ; plum.off 140802
+  ; plum.off 141118
   %t124740 = load ptr, ptr %s0, !dbg !5420
   call void @plum_rc_inc(ptr %t124740), !dbg !5420
   %t124741 = load i64, ptr %s1, !dbg !5420
@@ -372851,7 +372851,7 @@ L138092:
 L138099:
   %t138100p = getelementptr i8, ptr %t138095, i64 8, !dbg !5991
   %t138100 = load i64, ptr %t138100p, !dbg !5991
-  %t138101 = icmp eq i64 %t138100, 62, !dbg !5991
+  %t138101 = icmp eq i64 %t138100, 57, !dbg !5991
   br i1 %t138101, label %L138102, label %L138117, !dbg !5991
 L138102:
   %match_owner138096_reset138102 = load ptr, ptr %match_owner138096, !dbg !5991
@@ -373395,7 +373395,7 @@ L138380:
 @.str138560 = private global { i64, i64, [2 x i8] } { i64 -1, i64 1, [2 x i8] c"\0A\00" }
 @.str138564 = private global { i64, i64, [3 x i8] } { i64 -1, i64 2, [3 x i8] c"  \00" }
 @.str138568 = private global { i64, i64, [14 x i8] } { i64 -1, i64 13, [14 x i8] c" = alloca i1\0A\00" }
-@.const138594 = private global <{ i64, i64, [16 x i8] }> <{ i64 -1, i64 63, [16 x i8] zeroinitializer }>
+@.const138594 = private global <{ i64, i64, [16 x i8] }> <{ i64 -1, i64 58, [16 x i8] zeroinitializer }>
 define ptr @plum.f.codegen.cg_shortcircuit.0.(ptr %p0, ptr %p1, i64 %p2, ptr %p3, ptr %p4, i1 %p5) !dbg !6003 {
 entry:
   %s0 = alloca ptr, !dbg !6004
@@ -373805,12 +373805,12 @@ L138608:
 }
 
 @.str138698 = private global { i64, i64, [41 x i8] } { i64 -1, i64 40, [41 x i8] c"RawPtr does not support binary operators\00" }
-@.const138759 = private global <{ i64, i64, [16 x i8] }> <{ i64 -1, i64 63, [16 x i8] zeroinitializer }>
+@.const138759 = private global <{ i64, i64, [16 x i8] }> <{ i64 -1, i64 58, [16 x i8] zeroinitializer }>
 @.str138805 = private global { i64, i64, [3 x i8] } { i64 -1, i64 2, [3 x i8] c"  \00" }
 @.str138810 = private global { i64, i64, [11 x i8] } { i64 -1, i64 10, [11 x i8] c" = xor i1 \00" }
 @.str138817 = private global { i64, i64, [8 x i8] } { i64 -1, i64 7, [8 x i8] c", true\0A\00" }
-@.const138824 = private global <{ i64, i64, [16 x i8] }> <{ i64 -1, i64 63, [16 x i8] zeroinitializer }>
-@.const138866 = private global <{ i64, i64, [16 x i8] }> <{ i64 -1, i64 65, [16 x i8] zeroinitializer }>
+@.const138824 = private global <{ i64, i64, [16 x i8] }> <{ i64 -1, i64 58, [16 x i8] zeroinitializer }>
+@.const138866 = private global <{ i64, i64, [16 x i8] }> <{ i64 -1, i64 60, [16 x i8] zeroinitializer }>
 @.str138889 = private global { i64, i64, [3 x i8] } { i64 -1, i64 2, [3 x i8] c"  \00" }
 @.str138893 = private global { i64, i64, [35 x i8] } { i64 -1, i64 34, [35 x i8] c" = call i64 @plum_str_cmp_raw(ptr \00" }
 @.str138900 = private global { i64, i64, [7 x i8] } { i64 -1, i64 6, [7 x i8] c", ptr \00" }
@@ -373819,7 +373819,7 @@ L138608:
 @.str138915 = private global { i64, i64, [4 x i8] } { i64 -1, i64 3, [4 x i8] c" = \00" }
 @.str138921 = private global { i64, i64, [6 x i8] } { i64 -1, i64 5, [6 x i8] c" i64 \00" }
 @.str138926 = private global { i64, i64, [5 x i8] } { i64 -1, i64 4, [5 x i8] c", 0\0A\00" }
-@.const138944 = private global <{ i64, i64, [16 x i8] }> <{ i64 -1, i64 63, [16 x i8] zeroinitializer }>
+@.const138944 = private global <{ i64, i64, [16 x i8] }> <{ i64 -1, i64 58, [16 x i8] zeroinitializer }>
 @.const139009 = private global <{ i64, i64 }> <{ i64 -1, i64 228 }>
 @.str139214 = private global { i64, i64, [3 x i8] } { i64 -1, i64 2, [3 x i8] c"  \00" }
 @.str139220 = private global { i64, i64, [4 x i8] } { i64 -1, i64 3, [4 x i8] c" = \00" }
@@ -374020,7 +374020,7 @@ entry:
 L138690:
   %t138691p = getelementptr i8, ptr %t138686, i64 8, !dbg !6023
   %t138691 = load i64, ptr %t138691p, !dbg !6023
-  %t138692 = icmp eq i64 %t138691, 68, !dbg !6023
+  %t138692 = icmp eq i64 %t138691, 63, !dbg !6023
   %t138693 = getelementptr i8, ptr %t138686, i64 16, !dbg !6023
   %t138694 = load ptr, ptr %t138693, !dbg !6023
   %t138696 = and i1 %t138692, 1, !dbg !6023
@@ -374495,7 +374495,7 @@ L138987:
 L138997:
   %t138998p = getelementptr i8, ptr %t138993, i64 8, !dbg !6031
   %t138998 = load i64, ptr %t138998p, !dbg !6031
-  %t138999 = icmp eq i64 %t138998, 61, !dbg !6031
+  %t138999 = icmp eq i64 %t138998, 56, !dbg !6031
   %t139000 = getelementptr i8, ptr %t138993, i64 16, !dbg !6031
   %t139001 = load ptr, ptr %t139000, !dbg !6031
   %t139004 = and i1 %t138999, 1, !dbg !6031
@@ -381206,7 +381206,7 @@ L141939:
 L141940:
   %t141942 = phi ptr [ %t141936, %L141938 ], [ %t141941, %L141939 ], !dbg !6127
   %t141942_t = getelementptr i8, ptr %t141942, i64 8, !dbg !6127
-  store i64 70, ptr %t141942_t, !dbg !6127
+  store i64 65, ptr %t141942_t, !dbg !6127
   %t141953 = getelementptr i8, ptr %t141942, i64 16, !dbg !6127
   store ptr %t141935, ptr %t141953, !dbg !6127
   %t141954 = load ptr, ptr %t141896, !dbg !6127
@@ -381822,7 +381822,7 @@ L142349:
 L142350:
   %t142352 = phi ptr [ %t142346, %L142348 ], [ %t142351, %L142349 ], !dbg !6135
   %t142352_t = getelementptr i8, ptr %t142352, i64 8, !dbg !6135
-  store i64 70, ptr %t142352_t, !dbg !6135
+  store i64 65, ptr %t142352_t, !dbg !6135
   %t142357 = getelementptr i8, ptr %t142352, i64 16, !dbg !6135
   store ptr %t142345, ptr %t142357, !dbg !6135
   %t142358 = load ptr, ptr %t142199, !dbg !6135
@@ -382204,7 +382204,7 @@ L142509:
 L142510:
   %t142512 = phi ptr [ %t142506, %L142508 ], [ %t142511, %L142509 ], !dbg !6142
   %t142512_t = getelementptr i8, ptr %t142512, i64 8, !dbg !6142
-  store i64 70, ptr %t142512_t, !dbg !6142
+  store i64 65, ptr %t142512_t, !dbg !6142
   %t142517 = getelementptr i8, ptr %t142512, i64 16, !dbg !6142
   store ptr %t142505, ptr %t142517, !dbg !6142
   %t142518 = load ptr, ptr %t142469, !dbg !6142
@@ -382772,7 +382772,7 @@ entry:
 L142754:
   %t142755p = getelementptr i8, ptr %t142750, i64 8, !dbg !6156
   %t142755 = load i64, ptr %t142755p, !dbg !6156
-  %t142756 = icmp eq i64 %t142755, 73, !dbg !6156
+  %t142756 = icmp eq i64 %t142755, 68, !dbg !6156
   %t142757 = getelementptr i8, ptr %t142750, i64 16, !dbg !6156
   %t142758 = load ptr, ptr %t142757, !dbg !6156
   %t142761 = and i1 %t142756, 1, !dbg !6156
@@ -385345,7 +385345,7 @@ L144082:
 L144083:
   %t144085 = phi ptr [ %t144079, %L144081 ], [ %t144084, %L144082 ], !dbg !6223
   %t144085_t = getelementptr i8, ptr %t144085, i64 8, !dbg !6223
-  store i64 72, ptr %t144085_t, !dbg !6223
+  store i64 67, ptr %t144085_t, !dbg !6223
   %t144092 = getelementptr i8, ptr %t144085, i64 16, !dbg !6223
   store ptr %t144078, ptr %t144092, !dbg !6223
   %t144093 = load i64, ptr %t143750, !dbg !6223
@@ -389624,7 +389624,7 @@ L146337:
 }
 
 @.str146394 = private global { i64, i64, [27 x i8] } { i64 -1, i64 26, [27 x i8] c"expected a closure, found \00" }
-@.const146401 = private global <{ i64, i64, [16 x i8] }> <{ i64 -1, i64 64, [16 x i8] zeroinitializer }>
+@.const146401 = private global <{ i64, i64, [16 x i8] }> <{ i64 -1, i64 59, [16 x i8] zeroinitializer }>
 define ptr @plum.f.codegen.cg_closure_ret.0.(ptr %p0) !dbg !6340 {
 entry:
   %s0 = alloca ptr, !dbg !6341
@@ -389641,7 +389641,7 @@ entry:
 L146377:
   %t146378p = getelementptr i8, ptr %t146373, i64 8, !dbg !6341
   %t146378 = load i64, ptr %t146378p, !dbg !6341
-  %t146379 = icmp eq i64 %t146378, 73, !dbg !6341
+  %t146379 = icmp eq i64 %t146378, 68, !dbg !6341
   %t146380 = getelementptr i8, ptr %t146373, i64 16, !dbg !6341
   %t146381 = load ptr, ptr %t146380, !dbg !6341
   %t146383 = and i1 %t146379, 1, !dbg !6341
@@ -390138,7 +390138,7 @@ entry:
 L146611:
   %t146612p = getelementptr i8, ptr %t146607, i64 8, !dbg !6366
   %t146612 = load i64, ptr %t146612p, !dbg !6366
-  %t146613 = icmp eq i64 %t146612, 73, !dbg !6366
+  %t146613 = icmp eq i64 %t146612, 68, !dbg !6366
   %t146614 = getelementptr i8, ptr %t146607, i64 16, !dbg !6366
   %t146615 = load ptr, ptr %t146614, !dbg !6366
   %t146618 = and i1 %t146613, 1, !dbg !6366
@@ -390215,7 +390215,7 @@ L146609:
   ret ptr %t146645, !dbg !6366
 }
 
-@.const146694 = private global <{ i64, i64, [16 x i8] }> <{ i64 -1, i64 60, [16 x i8] zeroinitializer }>
+@.const146694 = private global <{ i64, i64, [16 x i8] }> <{ i64 -1, i64 55, [16 x i8] zeroinitializer }>
 define ptr @plum.f.codegen.cg_hash.0.(ptr %p0, ptr %p1, i64 %p2, ptr %p3) !dbg !6367 {
 entry:
   %s0 = alloca ptr, !dbg !6368
@@ -390381,20 +390381,20 @@ L146702:
 @.str146753 = private global { i64, i64, [3 x i8] } { i64 -1, i64 2, [3 x i8] c"  \00" }
 @.str146758 = private global { i64, i64, [37 x i8] } { i64 -1, i64 36, [37 x i8] c" = call ptr @plum_int_to_string(i64 \00" }
 @.str146765 = private global { i64, i64, [3 x i8] } { i64 -1, i64 2, [3 x i8] c")\0A\00" }
-@.const146778 = private global <{ i64, i64, [16 x i8] }> <{ i64 -1, i64 65, [16 x i8] zeroinitializer }>
+@.const146778 = private global <{ i64, i64, [16 x i8] }> <{ i64 -1, i64 60, [16 x i8] zeroinitializer }>
 @.str146826 = private global { i64, i64, [3 x i8] } { i64 -1, i64 2, [3 x i8] c"  \00" }
 @.str146830 = private global { i64, i64, [14 x i8] } { i64 -1, i64 13, [14 x i8] c" = call ptr @\00" }
 @.str146836 = private global { i64, i64, [6 x i8] } { i64 -1, i64 5, [6 x i8] c"(i64 \00" }
 @.str146843 = private global { i64, i64, [3 x i8] } { i64 -1, i64 2, [3 x i8] c")\0A\00" }
-@.const146857 = private global <{ i64, i64, [16 x i8] }> <{ i64 -1, i64 65, [16 x i8] zeroinitializer }>
+@.const146857 = private global <{ i64, i64, [16 x i8] }> <{ i64 -1, i64 60, [16 x i8] zeroinitializer }>
 @.str146900 = private global { i64, i64, [3 x i8] } { i64 -1, i64 2, [3 x i8] c"  \00" }
 @.str146905 = private global { i64, i64, [42 x i8] } { i64 -1, i64 41, [42 x i8] c" = call ptr @plum_float_to_string(double \00" }
 @.str146912 = private global { i64, i64, [3 x i8] } { i64 -1, i64 2, [3 x i8] c")\0A\00" }
-@.const146925 = private global <{ i64, i64, [16 x i8] }> <{ i64 -1, i64 65, [16 x i8] zeroinitializer }>
+@.const146925 = private global <{ i64, i64, [16 x i8] }> <{ i64 -1, i64 60, [16 x i8] zeroinitializer }>
 @.str146968 = private global { i64, i64, [3 x i8] } { i64 -1, i64 2, [3 x i8] c"  \00" }
 @.str146973 = private global { i64, i64, [37 x i8] } { i64 -1, i64 36, [37 x i8] c" = call ptr @plum_bool_to_string(i1 \00" }
 @.str146980 = private global { i64, i64, [3 x i8] } { i64 -1, i64 2, [3 x i8] c")\0A\00" }
-@.const146993 = private global <{ i64, i64, [16 x i8] }> <{ i64 -1, i64 65, [16 x i8] zeroinitializer }>
+@.const146993 = private global <{ i64, i64, [16 x i8] }> <{ i64 -1, i64 60, [16 x i8] zeroinitializer }>
 @.str147033 = private global { i64, i64, [25 x i8] } { i64 -1, i64 24, [25 x i8] c"Unit has no .to_string()\00" }
 @.str147044 = private global { i64, i64, [59 x i8] } { i64 -1, i64 58, [59 x i8] c".to_string() on a CStr isn't supported -- use .as_string()\00" }
 @.str147055 = private global { i64, i64, [62 x i8] } { i64 -1, i64 61, [62 x i8] c".to_string() on a RawCStr isn't supported -- use .as_string()\00" }
@@ -390457,7 +390457,7 @@ entry:
 L146741:
   %t146742p = getelementptr i8, ptr %t146737, i64 8, !dbg !6375
   %t146742 = load i64, ptr %t146742p, !dbg !6375
-  %t146743 = icmp eq i64 %t146742, 65, !dbg !6375
+  %t146743 = icmp eq i64 %t146742, 60, !dbg !6375
   br i1 %t146743, label %L146744, label %L146746, !dbg !6375
 L146744:
   %match_owner146738_reset146744 = load ptr, ptr %match_owner146738, !dbg !6375
@@ -390470,7 +390470,7 @@ L146744:
 L146746:
   %t146747p = getelementptr i8, ptr %t146737, i64 8, !dbg !6375
   %t146747 = load i64, ptr %t146747p, !dbg !6375
-  %t146748 = icmp eq i64 %t146747, 60, !dbg !6375
+  %t146748 = icmp eq i64 %t146747, 55, !dbg !6375
   br i1 %t146748, label %L146749, label %L146814, !dbg !6375
 L146749:
   %match_owner146738_reset146749 = load ptr, ptr %match_owner146738, !dbg !6375
@@ -390569,7 +390569,7 @@ L146792:
 L146814:
   %t146815p = getelementptr i8, ptr %t146737, i64 8, !dbg !6375
   %t146815 = load i64, ptr %t146815p, !dbg !6375
-  %t146816 = icmp eq i64 %t146815, 61, !dbg !6375
+  %t146816 = icmp eq i64 %t146815, 56, !dbg !6375
   %t146817 = getelementptr i8, ptr %t146737, i64 16, !dbg !6375
   %t146818 = load ptr, ptr %t146817, !dbg !6375
   %t146821 = and i1 %t146816, 1, !dbg !6375
@@ -390685,7 +390685,7 @@ L146871:
 L146893:
   %t146894p = getelementptr i8, ptr %t146737, i64 8, !dbg !6375
   %t146894 = load i64, ptr %t146894p, !dbg !6375
-  %t146895 = icmp eq i64 %t146894, 62, !dbg !6375
+  %t146895 = icmp eq i64 %t146894, 57, !dbg !6375
   br i1 %t146895, label %L146896, label %L146961, !dbg !6375
 L146896:
   %match_owner146738_reset146896 = load ptr, ptr %match_owner146738, !dbg !6375
@@ -390784,7 +390784,7 @@ L146939:
 L146961:
   %t146962p = getelementptr i8, ptr %t146737, i64 8, !dbg !6375
   %t146962 = load i64, ptr %t146962p, !dbg !6375
-  %t146963 = icmp eq i64 %t146962, 63, !dbg !6375
+  %t146963 = icmp eq i64 %t146962, 58, !dbg !6375
   br i1 %t146963, label %L146964, label %L147029, !dbg !6375
 L146964:
   %match_owner146738_reset146964 = load ptr, ptr %match_owner146738, !dbg !6375
@@ -390883,7 +390883,7 @@ L147007:
 L147029:
   %t147030p = getelementptr i8, ptr %t146737, i64 8, !dbg !6375
   %t147030 = load i64, ptr %t147030p, !dbg !6375
-  %t147031 = icmp eq i64 %t147030, 64, !dbg !6375
+  %t147031 = icmp eq i64 %t147030, 59, !dbg !6375
   br i1 %t147031, label %L147032, label %L147040, !dbg !6375
 L147032:
   %match_owner146738_reset147032 = load ptr, ptr %match_owner146738, !dbg !6375
@@ -390900,7 +390900,7 @@ L147032:
 L147040:
   %t147041p = getelementptr i8, ptr %t146737, i64 8, !dbg !6376
   %t147041 = load i64, ptr %t147041p, !dbg !6376
-  %t147042 = icmp eq i64 %t147041, 66, !dbg !6376
+  %t147042 = icmp eq i64 %t147041, 61, !dbg !6376
   br i1 %t147042, label %L147043, label %L147051, !dbg !6376
 L147043:
   %match_owner146738_reset147043 = load ptr, ptr %match_owner146738, !dbg !6376
@@ -390917,7 +390917,7 @@ L147043:
 L147051:
   %t147052p = getelementptr i8, ptr %t146737, i64 8, !dbg !6377
   %t147052 = load i64, ptr %t147052p, !dbg !6377
-  %t147053 = icmp eq i64 %t147052, 67, !dbg !6377
+  %t147053 = icmp eq i64 %t147052, 62, !dbg !6377
   br i1 %t147053, label %L147054, label %L147062, !dbg !6377
 L147054:
   %match_owner146738_reset147054 = load ptr, ptr %match_owner146738, !dbg !6377
@@ -390934,7 +390934,7 @@ L147054:
 L147062:
   %t147063p = getelementptr i8, ptr %t146737, i64 8, !dbg !6378
   %t147063 = load i64, ptr %t147063p, !dbg !6378
-  %t147064 = icmp eq i64 %t147063, 68, !dbg !6378
+  %t147064 = icmp eq i64 %t147063, 63, !dbg !6378
   %t147065 = getelementptr i8, ptr %t146737, i64 16, !dbg !6378
   %t147066 = load ptr, ptr %t147065, !dbg !6378
   %t147068 = and i1 %t147064, 1, !dbg !6378
@@ -390954,7 +390954,7 @@ L147069:
 L147077:
   %t147078p = getelementptr i8, ptr %t146737, i64 8, !dbg !6379
   %t147078 = load i64, ptr %t147078p, !dbg !6379
-  %t147079 = icmp eq i64 %t147078, 69, !dbg !6379
+  %t147079 = icmp eq i64 %t147078, 64, !dbg !6379
   br i1 %t147079, label %L147080, label %L147088, !dbg !6379
 L147080:
   %match_owner146738_reset147080 = load ptr, ptr %match_owner146738, !dbg !6379
@@ -390971,7 +390971,7 @@ L147080:
 L147088:
   %t147089p = getelementptr i8, ptr %t146737, i64 8, !dbg !6380
   %t147089 = load i64, ptr %t147089p, !dbg !6380
-  %t147090 = icmp eq i64 %t147089, 70, !dbg !6380
+  %t147090 = icmp eq i64 %t147089, 65, !dbg !6380
   %t147091 = getelementptr i8, ptr %t146737, i64 16, !dbg !6380
   %t147092 = load ptr, ptr %t147091, !dbg !6380
   %t147094 = and i1 %t147090, 1, !dbg !6380
@@ -391000,7 +391000,7 @@ L147095:
 L147106:
   %t147107p = getelementptr i8, ptr %t146737, i64 8, !dbg !6380
   %t147107 = load i64, ptr %t147107p, !dbg !6380
-  %t147108 = icmp eq i64 %t147107, 71, !dbg !6380
+  %t147108 = icmp eq i64 %t147107, 66, !dbg !6380
   %t147109 = getelementptr i8, ptr %t146737, i64 16, !dbg !6380
   %t147110 = load ptr, ptr %t147109, !dbg !6380
   %t147112 = and i1 %t147108, 1, !dbg !6380
@@ -391029,7 +391029,7 @@ L147113:
 L147124:
   %t147125p = getelementptr i8, ptr %t146737, i64 8, !dbg !6380
   %t147125 = load i64, ptr %t147125p, !dbg !6380
-  %t147126 = icmp eq i64 %t147125, 72, !dbg !6380
+  %t147126 = icmp eq i64 %t147125, 67, !dbg !6380
   %t147127 = getelementptr i8, ptr %t146737, i64 16, !dbg !6380
   %t147128 = load ptr, ptr %t147127, !dbg !6380
   %t147130 = and i1 %t147126, 1, !dbg !6380
@@ -391058,7 +391058,7 @@ L147131:
 L147142:
   %t147143p = getelementptr i8, ptr %t146737, i64 8, !dbg !6380
   %t147143 = load i64, ptr %t147143p, !dbg !6380
-  %t147144 = icmp eq i64 %t147143, 76, !dbg !6380
+  %t147144 = icmp eq i64 %t147143, 71, !dbg !6380
   %t147145 = getelementptr i8, ptr %t146737, i64 16, !dbg !6380
   %t147146 = load ptr, ptr %t147145, !dbg !6380
   %t147148 = and i1 %t147144, 1, !dbg !6380
@@ -391078,7 +391078,7 @@ L147149:
 L147157:
   %t147158p = getelementptr i8, ptr %t146737, i64 8, !dbg !6381
   %t147158 = load i64, ptr %t147158p, !dbg !6381
-  %t147159 = icmp eq i64 %t147158, 73, !dbg !6381
+  %t147159 = icmp eq i64 %t147158, 68, !dbg !6381
   %t147160 = getelementptr i8, ptr %t146737, i64 16, !dbg !6381
   %t147161 = load ptr, ptr %t147160, !dbg !6381
   %t147163 = and i1 %t147159, 1, !dbg !6381
@@ -391101,7 +391101,7 @@ L147168:
 L147176:
   %t147177p = getelementptr i8, ptr %t146737, i64 8, !dbg !6382
   %t147177 = load i64, ptr %t147177p, !dbg !6382
-  %t147178 = icmp eq i64 %t147177, 74, !dbg !6382
+  %t147178 = icmp eq i64 %t147177, 69, !dbg !6382
   %t147179 = getelementptr i8, ptr %t146737, i64 16, !dbg !6382
   %t147180 = load ptr, ptr %t147179, !dbg !6382
   %t147182 = and i1 %t147178, 1, !dbg !6382
@@ -391121,7 +391121,7 @@ L147183:
 L147191:
   %t147192p = getelementptr i8, ptr %t146737, i64 8, !dbg !6383
   %t147192 = load i64, ptr %t147192p, !dbg !6383
-  %t147193 = icmp eq i64 %t147192, 75, !dbg !6383
+  %t147193 = icmp eq i64 %t147192, 70, !dbg !6383
   %t147194 = getelementptr i8, ptr %t146737, i64 16, !dbg !6383
   %t147195 = load ptr, ptr %t147194, !dbg !6383
   %t147198 = and i1 %t147193, 1, !dbg !6383
@@ -391188,7 +391188,7 @@ L146739:
 @.str147245 = private global { i64, i64, [40 x i8] } { i64 -1, i64 39, [40 x i8] c" = call ptr @plum_str_concat_reuse(ptr \00" }
 @.str147252 = private global { i64, i64, [7 x i8] } { i64 -1, i64 6, [7 x i8] c", ptr \00" }
 @.str147259 = private global { i64, i64, [3 x i8] } { i64 -1, i64 2, [3 x i8] c")\0A\00" }
-@.const147288 = private global <{ i64, i64, [16 x i8] }> <{ i64 -1, i64 65, [16 x i8] zeroinitializer }>
+@.const147288 = private global <{ i64, i64, [16 x i8] }> <{ i64 -1, i64 60, [16 x i8] zeroinitializer }>
 define ptr @plum.f.codegen.cg_concat.0.(ptr %p0, ptr %p1, i64 %p2, ptr %p3, ptr %p4) !dbg !6385 {
 entry:
   %s0 = alloca ptr, !dbg !6386
@@ -391405,7 +391405,7 @@ L147302:
 @.str147381 = private global { i64, i64, [13 x i8] } { i64 -1, i64 12, [13 x i8] c" = call i64 \00" }
 @.str147386 = private global { i64, i64, [6 x i8] } { i64 -1, i64 5, [6 x i8] c"(ptr \00" }
 @.str147393 = private global { i64, i64, [3 x i8] } { i64 -1, i64 2, [3 x i8] c")\0A\00" }
-@.const147410 = private global <{ i64, i64, [16 x i8] }> <{ i64 -1, i64 60, [16 x i8] zeroinitializer }>
+@.const147410 = private global <{ i64, i64, [16 x i8] }> <{ i64 -1, i64 55, [16 x i8] zeroinitializer }>
 define ptr @plum.f.codegen.cg_len.0.(ptr %p0, ptr %p1, i64 %p2, ptr %p3) !dbg !6390 {
 entry:
   %s0 = alloca ptr, !dbg !6391
@@ -391457,7 +391457,7 @@ entry:
 L147344:
   %t147345p = getelementptr i8, ptr %t147340, i64 8, !dbg !6394
   %t147345 = load i64, ptr %t147345p, !dbg !6394
-  %t147346 = icmp eq i64 %t147345, 65, !dbg !6394
+  %t147346 = icmp eq i64 %t147345, 60, !dbg !6394
   br i1 %t147346, label %L147347, label %L147350, !dbg !6394
 L147347:
   %match_owner147341_reset147347 = load ptr, ptr %match_owner147341, !dbg !6394
@@ -391468,7 +391468,7 @@ L147347:
 L147350:
   %t147351p = getelementptr i8, ptr %t147340, i64 8, !dbg !6394
   %t147351 = load i64, ptr %t147351p, !dbg !6394
-  %t147352 = icmp eq i64 %t147351, 72, !dbg !6394
+  %t147352 = icmp eq i64 %t147351, 67, !dbg !6394
   %t147353 = getelementptr i8, ptr %t147340, i64 16, !dbg !6394
   %t147354 = load ptr, ptr %t147353, !dbg !6394
   %t147356 = and i1 %t147352, 1, !dbg !6394
@@ -392532,7 +392532,7 @@ L147930:
 @.str148054 = private global { i64, i64, [7 x i8] } { i64 -1, i64 6, [7 x i8] c", ptr \00" }
 @.str148059 = private global { i64, i64, [2 x i8] } { i64 -1, i64 1, [2 x i8] c"\0A\00" }
 @.str148088 = private global { i64, i64, [2 x i8] } { i64 -1, i64 1, [2 x i8] c"0\00" }
-@.const148090 = private global <{ i64, i64, [16 x i8] }> <{ i64 -1, i64 64, [16 x i8] zeroinitializer }>
+@.const148090 = private global <{ i64, i64, [16 x i8] }> <{ i64 -1, i64 59, [16 x i8] zeroinitializer }>
 define ptr @plum.f.codegen.cg_ref_set.0.(ptr %p0, ptr %p1, i64 %p2, ptr %p3, ptr %p4) !dbg !6415 {
 entry:
   %s0 = alloca ptr, !dbg !6416
@@ -392880,7 +392880,7 @@ entry:
 L148138:
   %t148139p = getelementptr i8, ptr %t148134, i64 8, !dbg !6424
   %t148139 = load i64, ptr %t148139p, !dbg !6424
-  %t148140 = icmp eq i64 %t148139, 76, !dbg !6424
+  %t148140 = icmp eq i64 %t148139, 71, !dbg !6424
   %t148141 = getelementptr i8, ptr %t148134, i64 16, !dbg !6424
   %t148142 = load ptr, ptr %t148141, !dbg !6424
   %t148145 = and i1 %t148140, 1, !dbg !6424
@@ -393107,7 +393107,7 @@ L148136:
 @.str148282 = private global { i64, i64, [3 x i8] } { i64 -1, i64 2, [3 x i8] c"  \00" }
 @.str148287 = private global { i64, i64, [15 x i8] } { i64 -1, i64 14, [15 x i8] c" = sitofp i64 \00" }
 @.str148294 = private global { i64, i64, [12 x i8] } { i64 -1, i64 11, [12 x i8] c" to double\0A\00" }
-@.const148307 = private global <{ i64, i64, [16 x i8] }> <{ i64 -1, i64 62, [16 x i8] zeroinitializer }>
+@.const148307 = private global <{ i64, i64, [16 x i8] }> <{ i64 -1, i64 57, [16 x i8] zeroinitializer }>
 define ptr @plum.f.codegen.cg_to_float.0.(ptr %p0, ptr %p1, i64 %p2, ptr %p3) !dbg !6429 {
 entry:
   %s0 = alloca ptr, !dbg !6430
@@ -393253,7 +393253,7 @@ L148321:
 @.str148357 = private global { i64, i64, [3 x i8] } { i64 -1, i64 2, [3 x i8] c"  \00" }
 @.str148362 = private global { i64, i64, [39 x i8] } { i64 -1, i64 38, [39 x i8] c" = call i64 @plum_float_to_int(double \00" }
 @.str148369 = private global { i64, i64, [3 x i8] } { i64 -1, i64 2, [3 x i8] c")\0A\00" }
-@.const148382 = private global <{ i64, i64, [16 x i8] }> <{ i64 -1, i64 60, [16 x i8] zeroinitializer }>
+@.const148382 = private global <{ i64, i64, [16 x i8] }> <{ i64 -1, i64 55, [16 x i8] zeroinitializer }>
 define ptr @plum.f.codegen.cg_to_int.0.(ptr %p0, ptr %p1, i64 %p2, ptr %p3) !dbg !6433 {
 entry:
   %s0 = alloca ptr, !dbg !6434
@@ -393399,7 +393399,7 @@ L148396:
 @.str148432 = private global { i64, i64, [3 x i8] } { i64 -1, i64 2, [3 x i8] c"  \00" }
 @.str148437 = private global { i64, i64, [45 x i8] } { i64 -1, i64 44, [45 x i8] c" = call i64 @plum_float_round_to_int(double \00" }
 @.str148444 = private global { i64, i64, [3 x i8] } { i64 -1, i64 2, [3 x i8] c")\0A\00" }
-@.const148457 = private global <{ i64, i64, [16 x i8] }> <{ i64 -1, i64 60, [16 x i8] zeroinitializer }>
+@.const148457 = private global <{ i64, i64, [16 x i8] }> <{ i64 -1, i64 55, [16 x i8] zeroinitializer }>
 define ptr @plum.f.codegen.cg_round_to_int.0.(ptr %p0, ptr %p1, i64 %p2, ptr %p3) !dbg !6437 {
 entry:
   %s0 = alloca ptr, !dbg !6438
@@ -393797,7 +393797,7 @@ L148599:
 @.str148646 = private global { i64, i64, [2 x i8] } { i64 -1, i64 1, [2 x i8] c"(\00" }
 @.str148654 = private global { i64, i64, [3 x i8] } { i64 -1, i64 2, [3 x i8] c")\0A\00" }
 @.str148663 = private global { i64, i64, [1 x i8] } { i64 -1, i64 0, [1 x i8] c"\00" }
-@.const148677 = private global <{ i64, i64, [16 x i8] }> <{ i64 -1, i64 65, [16 x i8] zeroinitializer }>
+@.const148677 = private global <{ i64, i64, [16 x i8] }> <{ i64 -1, i64 60, [16 x i8] zeroinitializer }>
 define ptr @plum.f.codegen.cg_str_consume.0.(ptr %p0, ptr %p1, i64 %p2, ptr %p3, ptr %p4) !dbg !6446 {
 entry:
   %s0 = alloca ptr, !dbg !6447
@@ -393990,7 +393990,7 @@ L148691:
 @.str148746 = private global { i64, i64, [13 x i8] } { i64 -1, i64 12, [13 x i8] c" = call ptr \00" }
 @.str148751 = private global { i64, i64, [6 x i8] } { i64 -1, i64 5, [6 x i8] c"(ptr \00" }
 @.str148758 = private global { i64, i64, [3 x i8] } { i64 -1, i64 2, [3 x i8] c")\0A\00" }
-@.const148775 = private global <{ i64, i64, [16 x i8] }> <{ i64 -1, i64 65, [16 x i8] zeroinitializer }>
+@.const148775 = private global <{ i64, i64, [16 x i8] }> <{ i64 -1, i64 60, [16 x i8] zeroinitializer }>
 define ptr @plum.f.codegen.cg_str_unop.0.(ptr %p0, ptr %p1, i64 %p2, ptr %p3, ptr %p4) !dbg !6450 {
 entry:
   %s0 = alloca ptr, !dbg !6451
@@ -394628,12 +394628,12 @@ entry:
   ret ptr %t148982, !dbg !6467
 }
 
-@.const149049 = private global <{ i64, i64, [16 x i8] }> <{ i64 -1, i64 63, [16 x i8] zeroinitializer }>
+@.const149049 = private global <{ i64, i64, [16 x i8] }> <{ i64 -1, i64 58, [16 x i8] zeroinitializer }>
 @.str149076 = private global { i64, i64, [3 x i8] } { i64 -1, i64 2, [3 x i8] c"  \00" }
 @.str149081 = private global { i64, i64, [12 x i8] } { i64 -1, i64 11, [12 x i8] c" = zext i1 \00" }
 @.str149093 = private global { i64, i64, [9 x i8] } { i64 -1, i64 8, [9 x i8] c" to i32\0A\00" }
 @.str149097 = private global { i64, i64, [5 x i8] } { i64 -1, i64 4, [5 x i8] c"i32 \00" }
-@.const149109 = private global <{ i64, i64, [16 x i8] }> <{ i64 -1, i64 66, [16 x i8] zeroinitializer }>
+@.const149109 = private global <{ i64, i64, [16 x i8] }> <{ i64 -1, i64 61, [16 x i8] zeroinitializer }>
 @.str149136 = private global { i64, i64, [3 x i8] } { i64 -1, i64 2, [3 x i8] c"  \00" }
 @.str149140 = private global { i64, i64, [26 x i8] } { i64 -1, i64 25, [26 x i8] c" = getelementptr i8, ptr \00" }
 @.str149152 = private global { i64, i64, [10 x i8] } { i64 -1, i64 9, [10 x i8] c", i64 16\0A\00" }
@@ -395033,7 +395033,7 @@ L149113:
 L149172:
   %t149173p = getelementptr i8, ptr %t149168, i64 8, !dbg !6472
   %t149173 = load i64, ptr %t149173p, !dbg !6472
-  %t149174 = icmp eq i64 %t149173, 61, !dbg !6472
+  %t149174 = icmp eq i64 %t149173, 56, !dbg !6472
   %t149175 = getelementptr i8, ptr %t149168, i64 16, !dbg !6472
   %t149176 = load ptr, ptr %t149175, !dbg !6472
   %t149179 = and i1 %t149174, 1, !dbg !6472
@@ -395479,7 +395479,7 @@ entry:
   store ptr null, ptr %s0, !dbg !6483
   %t149342 = call ptr @plum_alloc(i64 32), !dbg !6483
   %t149342_t = getelementptr i8, ptr %t149342, i64 8, !dbg !6483
-  store i64 61, ptr %t149342_t, !dbg !6483
+  store i64 56, ptr %t149342_t, !dbg !6483
   %t149343 = getelementptr i8, ptr %t149342, i64 16, !dbg !6483
   store ptr %t149341, ptr %t149343, !dbg !6483
   %t149344 = call ptr @plum.f.codegen.cg_c_ret.0.(ptr %t149342), !dbg !6483
@@ -397012,7 +397012,7 @@ L150161:
 L150162:
   %t150164 = phi ptr [ %t150158, %L150160 ], [ %t150163, %L150161 ], !dbg !6524
   %t150164_t = getelementptr i8, ptr %t150164, i64 8, !dbg !6524
-  store i64 71, ptr %t150164_t, !dbg !6524
+  store i64 66, ptr %t150164_t, !dbg !6524
   %t150165 = getelementptr i8, ptr %t150164, i64 16, !dbg !6524
   store ptr %t150157, ptr %t150165, !dbg !6524
   %t150166 = load i64, ptr %s1, !dbg !6524
@@ -397743,7 +397743,7 @@ L150281:
 @.str150552 = private global { i64, i64, [1 x i8] } { i64 -1, i64 0, [1 x i8] c"\00" }
 @.str150554 = private global { i64, i64, [1 x i8] } { i64 -1, i64 0, [1 x i8] c"\00" }
 @.str150556 = private global { i64, i64, [1 x i8] } { i64 -1, i64 0, [1 x i8] c"\00" }
-@.const150559 = private global <{ i64, i64, [16 x i8] }> <{ i64 -1, i64 60, [16 x i8] zeroinitializer }>
+@.const150559 = private global <{ i64, i64, [16 x i8] }> <{ i64 -1, i64 55, [16 x i8] zeroinitializer }>
 @.str150650 = private global { i64, i64, [3 x i8] } { i64 -1, i64 2, [3 x i8] c"  \00" }
 @.str150655 = private global { i64, i64, [26 x i8] } { i64 -1, i64 25, [26 x i8] c" = getelementptr i8, ptr \00" }
 @.str150662 = private global { i64, i64, [7 x i8] } { i64 -1, i64 6, [7 x i8] c", i64 \00" }
@@ -397757,7 +397757,7 @@ L150281:
 @.str150712 = private global { i64, i64, [7 x i8] } { i64 -1, i64 6, [7 x i8] c", ptr \00" }
 @.str150717 = private global { i64, i64, [7 x i8] } { i64 -1, i64 6, [7 x i8] c", i64 \00" }
 @.str150722 = private global { i64, i64, [3 x i8] } { i64 -1, i64 2, [3 x i8] c")\0A\00" }
-@.const150735 = private global <{ i64, i64, [16 x i8] }> <{ i64 -1, i64 60, [16 x i8] zeroinitializer }>
+@.const150735 = private global <{ i64, i64, [16 x i8] }> <{ i64 -1, i64 55, [16 x i8] zeroinitializer }>
 @.str150773 = private global { i64, i64, [3 x i8] } { i64 -1, i64 2, [3 x i8] c"  \00" }
 @.str150777 = private global { i64, i64, [41 x i8] } { i64 -1, i64 40, [41 x i8] c" = call i64 @channel_select_timeout(ptr \00" }
 @.str150782 = private global { i64, i64, [7 x i8] } { i64 -1, i64 6, [7 x i8] c", i64 \00" }
@@ -397766,7 +397766,7 @@ L150281:
 @.str150796 = private global { i64, i64, [1 x i8] } { i64 -1, i64 0, [1 x i8] c"\00" }
 @.str150798 = private global { i64, i64, [1 x i8] } { i64 -1, i64 0, [1 x i8] c"\00" }
 @.str150800 = private global { i64, i64, [1 x i8] } { i64 -1, i64 0, [1 x i8] c"\00" }
-@.const150803 = private global <{ i64, i64, [16 x i8] }> <{ i64 -1, i64 60, [16 x i8] zeroinitializer }>
+@.const150803 = private global <{ i64, i64, [16 x i8] }> <{ i64 -1, i64 55, [16 x i8] zeroinitializer }>
 define ptr @plum.f.codegen.cg_select_wait.0.(ptr %p0, ptr %p1, i64 %p2, ptr %p3, ptr %p4, i64 %p5, ptr %p6, ptr %p7) !dbg !6533 {
 entry:
   %s0 = alloca ptr, !dbg !6534
@@ -412001,7 +412001,7 @@ entry:
 L155456:
   %t155457p = getelementptr i8, ptr %t155452, i64 8, !dbg !6716
   %t155457 = load i64, ptr %t155457p, !dbg !6716
-  %t155458 = icmp eq i64 %t155457, 63, !dbg !6716
+  %t155458 = icmp eq i64 %t155457, 58, !dbg !6716
   br i1 %t155458, label %L155459, label %L155463, !dbg !6716
 L155459:
   %frontier155460 = load ptr, ptr %match_owner155453, !dbg !6716
@@ -412021,7 +412021,7 @@ frontier_done155460:
 L155463:
   %t155464p = getelementptr i8, ptr %t155452, i64 8, !dbg !6716
   %t155464 = load i64, ptr %t155464p, !dbg !6716
-  %t155465 = icmp eq i64 %t155464, 61, !dbg !6716
+  %t155465 = icmp eq i64 %t155464, 56, !dbg !6716
   %t155466 = getelementptr i8, ptr %t155452, i64 16, !dbg !6716
   %t155467 = load ptr, ptr %t155466, !dbg !6716
   %t155470 = and i1 %t155465, 1, !dbg !6716
@@ -444524,7 +444524,7 @@ entry:
 L169902:
   %t169903p = getelementptr i8, ptr %t169898, i64 8, !dbg !7338
   %t169903 = load i64, ptr %t169903p, !dbg !7338
-  %t169904 = icmp eq i64 %t169903, 60, !dbg !7338
+  %t169904 = icmp eq i64 %t169903, 55, !dbg !7338
   br i1 %t169904, label %L169905, label %L169908, !dbg !7338
 L169905:
   %match_owner169899_reset169905 = load ptr, ptr %match_owner169899, !dbg !7338
@@ -444535,7 +444535,7 @@ L169905:
 L169908:
   %t169909p = getelementptr i8, ptr %t169898, i64 8, !dbg !7338
   %t169909 = load i64, ptr %t169909p, !dbg !7338
-  %t169910 = icmp eq i64 %t169909, 61, !dbg !7338
+  %t169910 = icmp eq i64 %t169909, 56, !dbg !7338
   %t169911 = getelementptr i8, ptr %t169898, i64 16, !dbg !7338
   %t169912 = load ptr, ptr %t169911, !dbg !7338
   %t169915 = and i1 %t169910, 1, !dbg !7338
@@ -444557,7 +444557,7 @@ L169916:
 L169919:
   %t169920p = getelementptr i8, ptr %t169898, i64 8, !dbg !7338
   %t169920 = load i64, ptr %t169920p, !dbg !7338
-  %t169921 = icmp eq i64 %t169920, 62, !dbg !7338
+  %t169921 = icmp eq i64 %t169920, 57, !dbg !7338
   br i1 %t169921, label %L169922, label %L169925, !dbg !7338
 L169922:
   %match_owner169899_reset169922 = load ptr, ptr %match_owner169899, !dbg !7338
@@ -444568,7 +444568,7 @@ L169922:
 L169925:
   %t169926p = getelementptr i8, ptr %t169898, i64 8, !dbg !7338
   %t169926 = load i64, ptr %t169926p, !dbg !7338
-  %t169927 = icmp eq i64 %t169926, 63, !dbg !7338
+  %t169927 = icmp eq i64 %t169926, 58, !dbg !7338
   br i1 %t169927, label %L169928, label %L169931, !dbg !7338
 L169928:
   %match_owner169899_reset169928 = load ptr, ptr %match_owner169899, !dbg !7338
@@ -444579,7 +444579,7 @@ L169928:
 L169931:
   %t169932p = getelementptr i8, ptr %t169898, i64 8, !dbg !7338
   %t169932 = load i64, ptr %t169932p, !dbg !7338
-  %t169933 = icmp eq i64 %t169932, 64, !dbg !7338
+  %t169933 = icmp eq i64 %t169932, 59, !dbg !7338
   br i1 %t169933, label %L169934, label %L169937, !dbg !7338
 L169934:
   %match_owner169899_reset169934 = load ptr, ptr %match_owner169899, !dbg !7338
@@ -444590,7 +444590,7 @@ L169934:
 L169937:
   %t169938p = getelementptr i8, ptr %t169898, i64 8, !dbg !7338
   %t169938 = load i64, ptr %t169938p, !dbg !7338
-  %t169939 = icmp eq i64 %t169938, 65, !dbg !7338
+  %t169939 = icmp eq i64 %t169938, 60, !dbg !7338
   br i1 %t169939, label %L169940, label %L169943, !dbg !7338
 L169940:
   %match_owner169899_reset169940 = load ptr, ptr %match_owner169899, !dbg !7338
@@ -444601,7 +444601,7 @@ L169940:
 L169943:
   %t169944p = getelementptr i8, ptr %t169898, i64 8, !dbg !7338
   %t169944 = load i64, ptr %t169944p, !dbg !7338
-  %t169945 = icmp eq i64 %t169944, 66, !dbg !7338
+  %t169945 = icmp eq i64 %t169944, 61, !dbg !7338
   br i1 %t169945, label %L169946, label %L169949, !dbg !7338
 L169946:
   %match_owner169899_reset169946 = load ptr, ptr %match_owner169899, !dbg !7338
@@ -444612,7 +444612,7 @@ L169946:
 L169949:
   %t169950p = getelementptr i8, ptr %t169898, i64 8, !dbg !7338
   %t169950 = load i64, ptr %t169950p, !dbg !7338
-  %t169951 = icmp eq i64 %t169950, 67, !dbg !7338
+  %t169951 = icmp eq i64 %t169950, 62, !dbg !7338
   br i1 %t169951, label %L169952, label %L169955, !dbg !7338
 L169952:
   %match_owner169899_reset169952 = load ptr, ptr %match_owner169899, !dbg !7338
@@ -444623,7 +444623,7 @@ L169952:
 L169955:
   %t169956p = getelementptr i8, ptr %t169898, i64 8, !dbg !7338
   %t169956 = load i64, ptr %t169956p, !dbg !7338
-  %t169957 = icmp eq i64 %t169956, 68, !dbg !7338
+  %t169957 = icmp eq i64 %t169956, 63, !dbg !7338
   %t169958 = getelementptr i8, ptr %t169898, i64 16, !dbg !7338
   %t169959 = load ptr, ptr %t169958, !dbg !7338
   %t169962 = and i1 %t169957, 1, !dbg !7338
@@ -444649,7 +444649,7 @@ L169963:
 L169972:
   %t169973p = getelementptr i8, ptr %t169898, i64 8, !dbg !7338
   %t169973 = load i64, ptr %t169973p, !dbg !7338
-  %t169974 = icmp eq i64 %t169973, 69, !dbg !7338
+  %t169974 = icmp eq i64 %t169973, 64, !dbg !7338
   br i1 %t169974, label %L169975, label %L169978, !dbg !7338
 L169975:
   %match_owner169899_reset169975 = load ptr, ptr %match_owner169899, !dbg !7338
@@ -444660,7 +444660,7 @@ L169975:
 L169978:
   %t169979p = getelementptr i8, ptr %t169898, i64 8, !dbg !7338
   %t169979 = load i64, ptr %t169979p, !dbg !7338
-  %t169980 = icmp eq i64 %t169979, 70, !dbg !7338
+  %t169980 = icmp eq i64 %t169979, 65, !dbg !7338
   %t169981 = getelementptr i8, ptr %t169898, i64 16, !dbg !7338
   %t169982 = load ptr, ptr %t169981, !dbg !7338
   %t169985 = and i1 %t169980, 1, !dbg !7338
@@ -444681,7 +444681,7 @@ L169986:
 L169988:
   %t169989p = getelementptr i8, ptr %t169898, i64 8, !dbg !7338
   %t169989 = load i64, ptr %t169989p, !dbg !7338
-  %t169990 = icmp eq i64 %t169989, 71, !dbg !7338
+  %t169990 = icmp eq i64 %t169989, 66, !dbg !7338
   %t169991 = getelementptr i8, ptr %t169898, i64 16, !dbg !7338
   %t169992 = load ptr, ptr %t169991, !dbg !7338
   %t169995 = and i1 %t169990, 1, !dbg !7338
@@ -444702,7 +444702,7 @@ L169996:
 L169998:
   %t169999p = getelementptr i8, ptr %t169898, i64 8, !dbg !7338
   %t169999 = load i64, ptr %t169999p, !dbg !7338
-  %t170000 = icmp eq i64 %t169999, 72, !dbg !7338
+  %t170000 = icmp eq i64 %t169999, 67, !dbg !7338
   %t170001 = getelementptr i8, ptr %t169898, i64 16, !dbg !7338
   %t170002 = load ptr, ptr %t170001, !dbg !7338
   %t170005 = and i1 %t170000, 1, !dbg !7338
@@ -444728,7 +444728,7 @@ L170006:
 L170015:
   %t170016p = getelementptr i8, ptr %t169898, i64 8, !dbg !7338
   %t170016 = load i64, ptr %t170016p, !dbg !7338
-  %t170017 = icmp eq i64 %t170016, 76, !dbg !7338
+  %t170017 = icmp eq i64 %t170016, 71, !dbg !7338
   %t170018 = getelementptr i8, ptr %t169898, i64 16, !dbg !7338
   %t170019 = load ptr, ptr %t170018, !dbg !7338
   %t170022 = and i1 %t170017, 1, !dbg !7338
@@ -444754,7 +444754,7 @@ L170023:
 L170032:
   %t170033p = getelementptr i8, ptr %t169898, i64 8, !dbg !7338
   %t170033 = load i64, ptr %t170033p, !dbg !7338
-  %t170034 = icmp eq i64 %t170033, 73, !dbg !7338
+  %t170034 = icmp eq i64 %t170033, 68, !dbg !7338
   %t170035 = getelementptr i8, ptr %t169898, i64 16, !dbg !7338
   %t170036 = load ptr, ptr %t170035, !dbg !7338
   %t170038 = and i1 %t170034, 1, !dbg !7338
@@ -444781,7 +444781,7 @@ L170044:
 L170050:
   %t170051p = getelementptr i8, ptr %t169898, i64 8, !dbg !7338
   %t170051 = load i64, ptr %t170051p, !dbg !7338
-  %t170052 = icmp eq i64 %t170051, 74, !dbg !7338
+  %t170052 = icmp eq i64 %t170051, 69, !dbg !7338
   %t170053 = getelementptr i8, ptr %t169898, i64 16, !dbg !7338
   %t170054 = load ptr, ptr %t170053, !dbg !7338
   %t170057 = and i1 %t170052, 1, !dbg !7338
@@ -444807,7 +444807,7 @@ L170058:
 L170069:
   %t170070p = getelementptr i8, ptr %t169898, i64 8, !dbg !7338
   %t170070 = load i64, ptr %t170070p, !dbg !7338
-  %t170071 = icmp eq i64 %t170070, 75, !dbg !7338
+  %t170071 = icmp eq i64 %t170070, 70, !dbg !7338
   %t170072 = getelementptr i8, ptr %t169898, i64 16, !dbg !7338
   %t170073 = load ptr, ptr %t170072, !dbg !7338
   %t170076 = and i1 %t170071, 1, !dbg !7338
@@ -445492,7 +445492,7 @@ entry:
 L170386:
   %t170387p = getelementptr i8, ptr %t170382, i64 8, !dbg !7349
   %t170387 = load i64, ptr %t170387p, !dbg !7349
-  %t170388 = icmp eq i64 %t170387, 61, !dbg !7349
+  %t170388 = icmp eq i64 %t170387, 56, !dbg !7349
   %t170389 = getelementptr i8, ptr %t170382, i64 16, !dbg !7349
   %t170390 = load ptr, ptr %t170389, !dbg !7349
   %t170392 = and i1 %t170388, 1, !dbg !7349
@@ -445990,7 +445990,7 @@ L170402:
   ret ptr %t170640, !dbg !7354
 }
 
-@.const170642 = private global <{ i64, i64, [16 x i8] }> <{ i64 -1, i64 62, [16 x i8] zeroinitializer }>
+@.const170642 = private global <{ i64, i64, [16 x i8] }> <{ i64 -1, i64 57, [16 x i8] zeroinitializer }>
 define i1 @plum.f.codegen.cg_is_checked_arith.0.(ptr %p0, ptr %p1) !dbg !7355 {
 entry:
   %s0 = alloca ptr, !dbg !7356
@@ -446208,7 +446208,7 @@ L170691:
 @.str170836 = private global { i64, i64, [2 x i8] } { i64 -1, i64 1, [2 x i8] c"\0A\00" }
 @.str170839 = private global { i64, i64, [3 x i8] } { i64 -1, i64 2, [3 x i8] c"  \00" }
 @.str170844 = private global { i64, i64, [4 x i8] } { i64 -1, i64 3, [4 x i8] c" = \00" }
-@.const170848 = private global <{ i64, i64, [16 x i8] }> <{ i64 -1, i64 60, [16 x i8] zeroinitializer }>
+@.const170848 = private global <{ i64, i64, [16 x i8] }> <{ i64 -1, i64 55, [16 x i8] zeroinitializer }>
 @.str170851 = private global { i64, i64, [6 x i8] } { i64 -1, i64 5, [6 x i8] c" i64 \00" }
 @.str170856 = private global { i64, i64, [3 x i8] } { i64 -1, i64 2, [3 x i8] c", \00" }
 @.str170861 = private global { i64, i64, [2 x i8] } { i64 -1, i64 1, [2 x i8] c"\0A\00" }
@@ -446575,7 +446575,7 @@ L170866:
   ret ptr %t170918, !dbg !7370
 }
 
-@.const170920 = private global <{ i64, i64, [16 x i8] }> <{ i64 -1, i64 62, [16 x i8] zeroinitializer }>
+@.const170920 = private global <{ i64, i64, [16 x i8] }> <{ i64 -1, i64 57, [16 x i8] zeroinitializer }>
 define i1 @plum.f.codegen.cg_is_int_division.0.(ptr %p0, ptr %p1) !dbg !7371 {
 entry:
   %s0 = alloca ptr, !dbg !7372
@@ -447048,7 +447048,7 @@ L171169:
   ret ptr %t171171, !dbg !7384
 }
 
-@.const171177 = private global <{ i64, i64, [16 x i8] }> <{ i64 -1, i64 62, [16 x i8] zeroinitializer }>
+@.const171177 = private global <{ i64, i64, [16 x i8] }> <{ i64 -1, i64 57, [16 x i8] zeroinitializer }>
 @.str171192 = private global { i64, i64, [5 x i8] } { i64 -1, i64 4, [5 x i8] c"fadd\00" }
 @.str171194 = private global { i64, i64, [4 x i8] } { i64 -1, i64 3, [4 x i8] c"add\00" }
 @.str171206 = private global { i64, i64, [5 x i8] } { i64 -1, i64 4, [5 x i8] c"fsub\00" }
@@ -450303,7 +450303,7 @@ reset_done172545:
 L172552:
   %t172553p = getelementptr i8, ptr %t172548, i64 8, !dbg !7421
   %t172553 = load i64, ptr %t172553p, !dbg !7421
-  %t172554 = icmp eq i64 %t172553, 72, !dbg !7421
+  %t172554 = icmp eq i64 %t172553, 67, !dbg !7421
   %t172555 = getelementptr i8, ptr %t172548, i64 16, !dbg !7421
   %t172556 = load ptr, ptr %t172555, !dbg !7421
   %t172558 = and i1 %t172554, 1, !dbg !7421
@@ -450557,7 +450557,7 @@ L172504:
 }
 
 @.str172628 = private global { i64, i64, [26 x i8] } { i64 -1, i64 25, [26 x i8] c"expected an Array, found \00" }
-@.const172635 = private global <{ i64, i64, [16 x i8] }> <{ i64 -1, i64 64, [16 x i8] zeroinitializer }>
+@.const172635 = private global <{ i64, i64, [16 x i8] }> <{ i64 -1, i64 59, [16 x i8] zeroinitializer }>
 define ptr @plum.f.codegen.cg_elem_ty.0.(ptr %p0) !dbg !7422 {
 entry:
   %s0 = alloca ptr, !dbg !7423
@@ -450574,7 +450574,7 @@ entry:
 L172615:
   %t172616p = getelementptr i8, ptr %t172611, i64 8, !dbg !7423
   %t172616 = load i64, ptr %t172616p, !dbg !7423
-  %t172617 = icmp eq i64 %t172616, 72, !dbg !7423
+  %t172617 = icmp eq i64 %t172616, 67, !dbg !7423
   %t172618 = getelementptr i8, ptr %t172611, i64 16, !dbg !7423
   %t172619 = load ptr, ptr %t172618, !dbg !7423
   %t172622 = and i1 %t172617, 1, !dbg !7423
@@ -452501,7 +452501,7 @@ L173593:
 L173594:
   %t173596 = phi ptr [ %t173590, %L173592 ], [ %t173595, %L173593 ], !dbg !7464
   %t173596_t = getelementptr i8, ptr %t173596, i64 8, !dbg !7464
-  store i64 71, ptr %t173596_t, !dbg !7464
+  store i64 66, ptr %t173596_t, !dbg !7464
   %t173607 = getelementptr i8, ptr %t173596, i64 16, !dbg !7464
   store ptr %t173589, ptr %t173607, !dbg !7464
   %t173608 = load ptr, ptr %t173553, !dbg !7464
@@ -452767,7 +452767,7 @@ L173747:
 L173748:
   %t173750 = phi ptr [ %t173744, %L173746 ], [ %t173749, %L173747 ], !dbg !7470
   %t173750_t = getelementptr i8, ptr %t173750, i64 8, !dbg !7470
-  store i64 71, ptr %t173750_t, !dbg !7470
+  store i64 66, ptr %t173750_t, !dbg !7470
   %t173755 = getelementptr i8, ptr %t173750, i64 16, !dbg !7470
   store ptr %t173743, ptr %t173755, !dbg !7470
   %t173756 = load ptr, ptr %t173705, !dbg !7470
@@ -454841,7 +454841,7 @@ L174680:
 @.str174699 = private global { i64, i64, [13 x i8] } { i64 -1, i64 12, [13 x i8] c" = call ptr \00" }
 @.str174705 = private global { i64, i64, [6 x i8] } { i64 -1, i64 5, [6 x i8] c"(ptr \00" }
 @.str174712 = private global { i64, i64, [3 x i8] } { i64 -1, i64 2, [3 x i8] c")\0A\00" }
-@.const174731 = private global <{ i64, i64, [16 x i8] }> <{ i64 -1, i64 65, [16 x i8] zeroinitializer }>
+@.const174731 = private global <{ i64, i64, [16 x i8] }> <{ i64 -1, i64 60, [16 x i8] zeroinitializer }>
 define ptr @plum.f.codegen.cg_str_call.0.(ptr %p0, ptr %p1, ptr %p2) !dbg !7522 {
 entry:
   %s0 = alloca ptr, !dbg !7523
@@ -456083,7 +456083,7 @@ L175404:
 L175405:
   %t175407 = phi ptr [ %t175401, %L175403 ], [ %t175406, %L175404 ], !dbg !7548
   %t175407_t = getelementptr i8, ptr %t175407, i64 8, !dbg !7548
-  store i64 72, ptr %t175407_t, !dbg !7548
+  store i64 67, ptr %t175407_t, !dbg !7548
   %t175414 = getelementptr i8, ptr %t175407, i64 16, !dbg !7548
   store ptr %t175400, ptr %t175414, !dbg !7548
   %t175415 = load i64, ptr %t175023, !dbg !7548
@@ -456211,7 +456211,7 @@ L175426:
 @.str175613 = private global { i64, i64, [9 x i8] } { i64 -1, i64 8, [9 x i8] c" = load \00" }
 @.str175619 = private global { i64, i64, [7 x i8] } { i64 -1, i64 6, [7 x i8] c", ptr \00" }
 @.str175625 = private global { i64, i64, [2 x i8] } { i64 -1, i64 1, [2 x i8] c"\0A\00" }
-@.const175635 = private global <{ i64, i64, [16 x i8] }> <{ i64 -1, i64 63, [16 x i8] zeroinitializer }>
+@.const175635 = private global <{ i64, i64, [16 x i8] }> <{ i64 -1, i64 58, [16 x i8] zeroinitializer }>
 @.str175636 = private global { i64, i64, [3 x i8] } { i64 -1, i64 2, [3 x i8] c", \00" }
 @.str175641 = private global { i64, i64, [2 x i8] } { i64 -1, i64 1, [2 x i8] c" \00" }
 @.str175655 = private global { i64, i64, [9 x i8] } { i64 -1, i64 8, [9 x i8] c"  br i1 \00" }
@@ -457212,7 +457212,7 @@ L176089:
 L176090:
   %t176092 = phi ptr [ %t176086, %L176088 ], [ %t176091, %L176089 ], !dbg !7572
   %t176092_t = getelementptr i8, ptr %t176092, i64 8, !dbg !7572
-  store i64 72, ptr %t176092_t, !dbg !7572
+  store i64 67, ptr %t176092_t, !dbg !7572
   %t176099 = getelementptr i8, ptr %t176092, i64 16, !dbg !7572
   store ptr %t176085, ptr %t176099, !dbg !7572
   %t176100 = load i64, ptr %t175552, !dbg !7572
@@ -457457,7 +457457,7 @@ reset_done176164:
 L176171:
   %t176172p = getelementptr i8, ptr %t176167, i64 8, !dbg !7574
   %t176172 = load i64, ptr %t176172p, !dbg !7574
-  %t176173 = icmp eq i64 %t176172, 72, !dbg !7574
+  %t176173 = icmp eq i64 %t176172, 67, !dbg !7574
   %t176174 = getelementptr i8, ptr %t176167, i64 16, !dbg !7574
   %t176175 = load ptr, ptr %t176174, !dbg !7574
   %t176177 = and i1 %t176173, 1, !dbg !7574
@@ -460077,7 +460077,7 @@ entry:
 @.const178638 = private global <{ i64, i64 }> <{ i64 -1, i64 0 }>
 @.const178695 = private global <{ i64, i64 }> <{ i64 -1, i64 0 }>
 @.const178744 = private global <{ i64, i64 }> <{ i64 -1, i64 0 }>
-@.const178774 = private global <{ i64, i64, [16 x i8] }> <{ i64 -1, i64 55, [16 x i8] zeroinitializer }>
+@.const178774 = private global <{ i64, i64, [16 x i8] }> <{ i64 -1, i64 72, [16 x i8] zeroinitializer }>
 @.const178775 = private global <{ i64, i64 }> <{ i64 -1, i64 0 }>
 @.const178776 = private global <{ i64, i64 }> <{ i64 -1, i64 0 }>
 @.const178777 = private global <{ i64, i64 }> <{ i64 -1, i64 0 }>
@@ -465218,22 +465218,22 @@ L179459:
 }
 
 @.str179531 = private global { i64, i64, [4 x i8] } { i64 -1, i64 3, [4 x i8] c"Int\00" }
-@.const179539 = private global <{ i64, i64, [16 x i8] }> <{ i64 -1, i64 60, [16 x i8] zeroinitializer }>
+@.const179539 = private global <{ i64, i64, [16 x i8] }> <{ i64 -1, i64 55, [16 x i8] zeroinitializer }>
 @.str179541 = private global { i64, i64, [6 x i8] } { i64 -1, i64 5, [6 x i8] c"Float\00" }
-@.const179549 = private global <{ i64, i64, [16 x i8] }> <{ i64 -1, i64 62, [16 x i8] zeroinitializer }>
+@.const179549 = private global <{ i64, i64, [16 x i8] }> <{ i64 -1, i64 57, [16 x i8] zeroinitializer }>
 @.str179551 = private global { i64, i64, [5 x i8] } { i64 -1, i64 4, [5 x i8] c"Bool\00" }
-@.const179559 = private global <{ i64, i64, [16 x i8] }> <{ i64 -1, i64 63, [16 x i8] zeroinitializer }>
+@.const179559 = private global <{ i64, i64, [16 x i8] }> <{ i64 -1, i64 58, [16 x i8] zeroinitializer }>
 @.str179561 = private global { i64, i64, [5 x i8] } { i64 -1, i64 4, [5 x i8] c"CStr\00" }
-@.const179569 = private global <{ i64, i64, [16 x i8] }> <{ i64 -1, i64 66, [16 x i8] zeroinitializer }>
+@.const179569 = private global <{ i64, i64, [16 x i8] }> <{ i64 -1, i64 61, [16 x i8] zeroinitializer }>
 @.str179571 = private global { i64, i64, [8 x i8] } { i64 -1, i64 7, [8 x i8] c"RawCStr\00" }
-@.const179579 = private global <{ i64, i64, [16 x i8] }> <{ i64 -1, i64 67, [16 x i8] zeroinitializer }>
+@.const179579 = private global <{ i64, i64, [16 x i8] }> <{ i64 -1, i64 62, [16 x i8] zeroinitializer }>
 @.str179581 = private global { i64, i64, [5 x i8] } { i64 -1, i64 4, [5 x i8] c"Unit\00" }
-@.const179589 = private global <{ i64, i64, [16 x i8] }> <{ i64 -1, i64 64, [16 x i8] zeroinitializer }>
+@.const179589 = private global <{ i64, i64, [16 x i8] }> <{ i64 -1, i64 59, [16 x i8] zeroinitializer }>
 @.const179599 = private global <{ i64, i64 }> <{ i64 -1, i64 228 }>
 @.str179609 = private global { i64, i64, [93 x i8] } { i64 -1, i64 92, [93 x i8] c"extern declarations can only use integer scalars/Float/Bool/CStr/RawCStr/RawPtr/Unit, found \00" }
-@.const179614 = private global <{ i64, i64, [16 x i8] }> <{ i64 -1, i64 60, [16 x i8] zeroinitializer }>
+@.const179614 = private global <{ i64, i64, [16 x i8] }> <{ i64 -1, i64 55, [16 x i8] zeroinitializer }>
 @.str179624 = private global { i64, i64, [56 x i8] } { i64 -1, i64 55, [56 x i8] c"extern declarations can only use simple types or RawPtr\00" }
-@.const179627 = private global <{ i64, i64, [16 x i8] }> <{ i64 -1, i64 60, [16 x i8] zeroinitializer }>
+@.const179627 = private global <{ i64, i64, [16 x i8] }> <{ i64 -1, i64 55, [16 x i8] zeroinitializer }>
 define ptr @plum.f.codegen.cg_of_ann.0.(ptr %p0) !dbg !7696 {
 entry:
   %s0 = alloca ptr, !dbg !7697
@@ -465386,7 +465386,7 @@ L179605:
 L179606:
   %t179603 = phi ptr [ %t179602, %L179604 ], [ %t179601, %L179605 ], !dbg !7698
   %t179603_t = getelementptr i8, ptr %t179603, i64 8, !dbg !7698
-  store i64 61, ptr %t179603_t, !dbg !7698
+  store i64 56, ptr %t179603_t, !dbg !7698
   %t179607 = getelementptr i8, ptr %t179603, i64 16, !dbg !7698
   store ptr %t179600, ptr %t179607, !dbg !7698
   store ptr %t179603, ptr %t179593, !dbg !7698
@@ -494914,7 +494914,7 @@ L192675:
 
 @.str192754 = private global { i64, i64, [3 x i8] } { i64 -1, i64 2, [3 x i8] c"  \00" }
 @.str192759 = private global { i64, i64, [4 x i8] } { i64 -1, i64 3, [4 x i8] c" = \00" }
-@.const192763 = private global <{ i64, i64, [16 x i8] }> <{ i64 -1, i64 60, [16 x i8] zeroinitializer }>
+@.const192763 = private global <{ i64, i64, [16 x i8] }> <{ i64 -1, i64 55, [16 x i8] zeroinitializer }>
 @.str192766 = private global { i64, i64, [6 x i8] } { i64 -1, i64 5, [6 x i8] c" i64 \00" }
 @.str192771 = private global { i64, i64, [3 x i8] } { i64 -1, i64 2, [3 x i8] c", \00" }
 @.str192776 = private global { i64, i64, [2 x i8] } { i64 -1, i64 1, [2 x i8] c"\0A\00" }
@@ -527908,7 +527908,7 @@ entry:
 L208155:
   %t208156p = getelementptr i8, ptr %t208151, i64 8, !dbg !8859
   %t208156 = load i64, ptr %t208156p, !dbg !8859
-  %t208157 = icmp eq i64 %t208156, 55, !dbg !8859
+  %t208157 = icmp eq i64 %t208156, 72, !dbg !8859
   br i1 %t208157, label %L208158, label %L208159, !dbg !8859
 L208158:
   %match_owner208152_reset208158 = load ptr, ptr %match_owner208152, !dbg !8859
@@ -527919,7 +527919,7 @@ L208158:
 L208159:
   %t208160p = getelementptr i8, ptr %t208151, i64 8, !dbg !8859
   %t208160 = load i64, ptr %t208160p, !dbg !8859
-  %t208161 = icmp eq i64 %t208160, 56, !dbg !8859
+  %t208161 = icmp eq i64 %t208160, 73, !dbg !8859
   %t208162 = getelementptr i8, ptr %t208151, i64 16, !dbg !8859
   %t208163 = load ptr, ptr %t208162, !dbg !8859
   %t208166 = and i1 %t208161, 1, !dbg !8859
@@ -527948,7 +527948,7 @@ L208172:
 L208177:
   %t208178p = getelementptr i8, ptr %t208151, i64 8, !dbg !8859
   %t208178 = load i64, ptr %t208178p, !dbg !8859
-  %t208179 = icmp eq i64 %t208178, 57, !dbg !8859
+  %t208179 = icmp eq i64 %t208178, 74, !dbg !8859
   %t208180 = getelementptr i8, ptr %t208151, i64 16, !dbg !8859
   %t208181 = load ptr, ptr %t208180, !dbg !8859
   %t208184 = and i1 %t208179, 1, !dbg !8859
@@ -527977,7 +527977,7 @@ L208190:
 L208195:
   %t208196p = getelementptr i8, ptr %t208151, i64 8, !dbg !8859
   %t208196 = load i64, ptr %t208196p, !dbg !8859
-  %t208197 = icmp eq i64 %t208196, 58, !dbg !8859
+  %t208197 = icmp eq i64 %t208196, 75, !dbg !8859
   %t208198 = getelementptr i8, ptr %t208151, i64 16, !dbg !8859
   %t208199 = load ptr, ptr %t208198, !dbg !8859
   %t208202 = and i1 %t208197, 1, !dbg !8859
@@ -528006,7 +528006,7 @@ L208208:
 L208213:
   %t208214p = getelementptr i8, ptr %t208151, i64 8, !dbg !8859
   %t208214 = load i64, ptr %t208214p, !dbg !8859
-  %t208215 = icmp eq i64 %t208214, 59, !dbg !8859
+  %t208215 = icmp eq i64 %t208214, 76, !dbg !8859
   %t208216 = getelementptr i8, ptr %t208151, i64 16, !dbg !8859
   %t208217 = load ptr, ptr %t208216, !dbg !8859
   %t208220 = and i1 %t208215, 1, !dbg !8859
@@ -528242,7 +528242,7 @@ L208296:
   ret ptr %t208298, !dbg !8861
 }
 
-@.const208322 = private global <{ i64, i64, [16 x i8] }> <{ i64 -1, i64 55, [16 x i8] zeroinitializer }>
+@.const208322 = private global <{ i64, i64, [16 x i8] }> <{ i64 -1, i64 72, [16 x i8] zeroinitializer }>
 define ptr @plum.f.codegen.lv_future_exprs.0.(ptr %p0, i64 %p1) !dbg !8862 {
 entry:
   %s0 = alloca ptr, !dbg !8863
@@ -528264,7 +528264,7 @@ L208320:
   %t208324 = load i64, ptr %s1, !dbg !8863
   %t208325 = call ptr @plum_alloc(i64 32), !dbg !8863
   %t208325_t = getelementptr i8, ptr %t208325, i64 8, !dbg !8863
-  store i64 56, ptr %t208325_t, !dbg !8863
+  store i64 73, ptr %t208325_t, !dbg !8863
   %t208326 = getelementptr i8, ptr %t208325, i64 16, !dbg !8863
   store ptr %t208323, ptr %t208326, !dbg !8863
   %t208327 = getelementptr i8, ptr %t208325, i64 24, !dbg !8863
@@ -530478,7 +530478,7 @@ entry:
 L209185:
   %t209186p = getelementptr i8, ptr %t209181, i64 8, !dbg !8886
   %t209186 = load i64, ptr %t209186p, !dbg !8886
-  %t209187 = icmp eq i64 %t209186, 55, !dbg !8886
+  %t209187 = icmp eq i64 %t209186, 72, !dbg !8886
   br i1 %t209187, label %L209188, label %L209191, !dbg !8886
 L209188:
   %frontier209189 = load ptr, ptr %match_owner209182, !dbg !8886
@@ -530522,7 +530522,7 @@ L209192:
 L209198:
   %t209199p = getelementptr i8, ptr %t209194, i64 8, !dbg !8886
   %t209199 = load i64, ptr %t209199p, !dbg !8886
-  %t209200 = icmp eq i64 %t209199, 55, !dbg !8886
+  %t209200 = icmp eq i64 %t209199, 72, !dbg !8886
   br i1 %t209200, label %L209201, label %L209204, !dbg !8886
 L209201:
   %frontier209202 = load ptr, ptr %match_owner209195, !dbg !8886
@@ -530575,7 +530575,7 @@ L209213:
 L209214:
   %t209211 = phi ptr [ %t209210, %L209212 ], [ %t209209, %L209213 ], !dbg !8886
   %t209211_t = getelementptr i8, ptr %t209211, i64 8, !dbg !8886
-  store i64 59, ptr %t209211_t, !dbg !8886
+  store i64 76, ptr %t209211_t, !dbg !8886
   %t209215 = getelementptr i8, ptr %t209211, i64 16, !dbg !8886
   store ptr %t209207, ptr %t209215, !dbg !8886
   %t209216 = getelementptr i8, ptr %t209211, i64 24, !dbg !8886
@@ -532220,7 +532220,7 @@ L209338:
   ret ptr %t209876, !dbg !8892
 }
 
-@.const209885 = private global <{ i64, i64, [16 x i8] }> <{ i64 -1, i64 55, [16 x i8] zeroinitializer }>
+@.const209885 = private global <{ i64, i64, [16 x i8] }> <{ i64 -1, i64 72, [16 x i8] zeroinitializer }>
 define ptr @plum.f.codegen.lv_future_fields.0.(ptr %p0, i64 %p1) !dbg !8893 {
 entry:
   %s0 = alloca ptr, !dbg !8894
@@ -532242,7 +532242,7 @@ L209883:
   %t209887 = load i64, ptr %s1, !dbg !8894
   %t209888 = call ptr @plum_alloc(i64 32), !dbg !8894
   %t209888_t = getelementptr i8, ptr %t209888, i64 8, !dbg !8894
-  store i64 58, ptr %t209888_t, !dbg !8894
+  store i64 75, ptr %t209888_t, !dbg !8894
   %t209889 = getelementptr i8, ptr %t209888, i64 16, !dbg !8894
   store ptr %t209886, ptr %t209889, !dbg !8894
   %t209890 = getelementptr i8, ptr %t209888, i64 24, !dbg !8894
@@ -543440,7 +543440,7 @@ L213915:
   ret ptr %t214183, !dbg !9072
 }
 
-@.const214192 = private global <{ i64, i64, [16 x i8] }> <{ i64 -1, i64 55, [16 x i8] zeroinitializer }>
+@.const214192 = private global <{ i64, i64, [16 x i8] }> <{ i64 -1, i64 72, [16 x i8] zeroinitializer }>
 define ptr @plum.f.codegen.lv_future_stmts.0.(ptr %p0, i64 %p1) !dbg !9073 {
 entry:
   %s0 = alloca ptr, !dbg !9074
@@ -543462,7 +543462,7 @@ L214190:
   %t214194 = load i64, ptr %s1, !dbg !9074
   %t214195 = call ptr @plum_alloc(i64 32), !dbg !9074
   %t214195_t = getelementptr i8, ptr %t214195, i64 8, !dbg !9074
-  store i64 57, ptr %t214195_t, !dbg !9074
+  store i64 74, ptr %t214195_t, !dbg !9074
   %t214196 = getelementptr i8, ptr %t214195, i64 16, !dbg !9074
   store ptr %t214193, ptr %t214196, !dbg !9074
   %t214197 = getelementptr i8, ptr %t214195, i64 24, !dbg !9074
@@ -560983,65 +560983,65 @@ entry:
   store ptr @.str1000028, ptr %t1000031
   store ptr %t1000030, ptr @g.plum.f.codegen.C_ABI_TARGET.0.
   store i64 400, ptr @g.plum.f.codegen.CYCLE_FUEL.0.
-  store ptr @.const1000064, ptr @g.plum.f.codegen.CG_SYMBOL_HEX.0.
-  %t1000065 = call ptr @plum_alloc(i64 16)
-  %t1000066 = getelementptr i8, ptr %t1000065, i64 8
-  store i1 0, ptr %t1000066
-  store ptr %t1000065, ptr @g.plum.f.codegen.DEBUG_FRAMES.0.
-  %t1000067 = call ptr @plum_alloc(i64 16)
-  %t1000068 = getelementptr i8, ptr %t1000067, i64 8
-  store i1 0, ptr %t1000068
-  store ptr %t1000067, ptr @g.plum.f.codegen.CORE_RUNTIME.0.
-  %t1000069 = call ptr @plum_alloc(i64 16)
-  %t1000070 = getelementptr i8, ptr %t1000069, i64 8
-  store i1 0, ptr %t1000070
-  store ptr %t1000069, ptr @g.plum.f.codegen.HEAP_STATS.0.
-  %t1000071 = call ptr @plum_alloc(i64 16)
-  %t1000072 = getelementptr i8, ptr %t1000071, i64 8
-  store i1 0, ptr %t1000072
-  store ptr %t1000071, ptr @g.plum.f.codegen.DEBUG_INFO.0.
-  %t1000073 = call ptr @plum.f.codegen.no_dbg_files.0.(i1 0)
-  %t1000074 = call ptr @plum_alloc(i64 16)
-  %t1000075 = getelementptr i8, ptr %t1000074, i64 8
-  store ptr %t1000073, ptr %t1000075
-  store ptr %t1000074, ptr @g.plum.f.codegen.DBG_FILES.0.
-  %t1000076 = call ptr @plum.f.codegen.no_dbg_meta.0.(i1 0)
-  %t1000077 = call ptr @plum_alloc(i64 16)
-  %t1000078 = getelementptr i8, ptr %t1000077, i64 8
-  store ptr %t1000076, ptr %t1000078
-  store ptr %t1000077, ptr @g.plum.f.codegen.DBG_META.0.
-  %t1000079 = call ptr @plum_alloc(i64 16)
-  %t1000080 = getelementptr i8, ptr %t1000079, i64 8
-  store i64 5, ptr %t1000080
-  store ptr %t1000079, ptr @g.plum.f.codegen.DBG_ID.0.
-  %t1000081 = call ptr @plum.f.codegen.no_dbg_locs.0.(i1 0)
-  %t1000082 = call ptr @plum_alloc(i64 16)
-  %t1000083 = getelementptr i8, ptr %t1000082, i64 8
-  store ptr %t1000081, ptr %t1000083
-  store ptr %t1000082, ptr @g.plum.f.codegen.DBG_LOCS.0.
-  %t1000084 = call ptr @plum_alloc(i64 16)
-  %t1000085 = getelementptr i8, ptr %t1000084, i64 8
-  store i64 0, ptr %t1000085
-  store ptr %t1000084, ptr @g.plum.f.codegen.TAIL_SITE.0.
-  %t1000087 = call ptr @plum_alloc(i64 16)
-  %t1000088 = getelementptr i8, ptr %t1000087, i64 8
-  store ptr @.const1000086, ptr %t1000088
-  store ptr %t1000087, ptr @g.plum.f.codegen.HASH_TYPES.0.
-  %t1000089 = call ptr @plum.f.codegen.cg_empty_type_set.0.(i1 0)
-  %t1000090 = call ptr @plum_alloc(i64 16)
-  %t1000091 = getelementptr i8, ptr %t1000090, i64 8
-  store ptr %t1000089, ptr %t1000091
-  store ptr %t1000090, ptr @g.plum.f.codegen.HASH_SEEN.0.
-  %t1000092 = call ptr @plum.f.codegen.cg_empty_type_set.0.(i1 0)
-  %t1000093 = call ptr @plum_alloc(i64 16)
-  %t1000094 = getelementptr i8, ptr %t1000093, i64 8
-  store ptr %t1000092, ptr %t1000094
-  store ptr %t1000093, ptr @g.plum.f.codegen.EQ_TYPES.0.
-  %t1000095 = call ptr @plum.f.codegen.cg_empty_type_set.0.(i1 0)
-  %t1000096 = call ptr @plum_alloc(i64 16)
-  %t1000097 = getelementptr i8, ptr %t1000096, i64 8
-  store ptr %t1000095, ptr %t1000097
-  store ptr %t1000096, ptr @g.plum.f.codegen.REL_TYPES.0.
+  %t1000032 = call ptr @plum_alloc(i64 16)
+  %t1000033 = getelementptr i8, ptr %t1000032, i64 8
+  store i1 0, ptr %t1000033
+  store ptr %t1000032, ptr @g.plum.f.codegen.DEBUG_FRAMES.0.
+  %t1000034 = call ptr @plum_alloc(i64 16)
+  %t1000035 = getelementptr i8, ptr %t1000034, i64 8
+  store i1 0, ptr %t1000035
+  store ptr %t1000034, ptr @g.plum.f.codegen.CORE_RUNTIME.0.
+  %t1000036 = call ptr @plum_alloc(i64 16)
+  %t1000037 = getelementptr i8, ptr %t1000036, i64 8
+  store i1 0, ptr %t1000037
+  store ptr %t1000036, ptr @g.plum.f.codegen.HEAP_STATS.0.
+  %t1000038 = call ptr @plum_alloc(i64 16)
+  %t1000039 = getelementptr i8, ptr %t1000038, i64 8
+  store i1 0, ptr %t1000039
+  store ptr %t1000038, ptr @g.plum.f.codegen.DEBUG_INFO.0.
+  %t1000040 = call ptr @plum.f.codegen.no_dbg_files.0.(i1 0)
+  %t1000041 = call ptr @plum_alloc(i64 16)
+  %t1000042 = getelementptr i8, ptr %t1000041, i64 8
+  store ptr %t1000040, ptr %t1000042
+  store ptr %t1000041, ptr @g.plum.f.codegen.DBG_FILES.0.
+  %t1000043 = call ptr @plum.f.codegen.no_dbg_meta.0.(i1 0)
+  %t1000044 = call ptr @plum_alloc(i64 16)
+  %t1000045 = getelementptr i8, ptr %t1000044, i64 8
+  store ptr %t1000043, ptr %t1000045
+  store ptr %t1000044, ptr @g.plum.f.codegen.DBG_META.0.
+  %t1000046 = call ptr @plum_alloc(i64 16)
+  %t1000047 = getelementptr i8, ptr %t1000046, i64 8
+  store i64 5, ptr %t1000047
+  store ptr %t1000046, ptr @g.plum.f.codegen.DBG_ID.0.
+  %t1000048 = call ptr @plum.f.codegen.no_dbg_locs.0.(i1 0)
+  %t1000049 = call ptr @plum_alloc(i64 16)
+  %t1000050 = getelementptr i8, ptr %t1000049, i64 8
+  store ptr %t1000048, ptr %t1000050
+  store ptr %t1000049, ptr @g.plum.f.codegen.DBG_LOCS.0.
+  %t1000051 = call ptr @plum_alloc(i64 16)
+  %t1000052 = getelementptr i8, ptr %t1000051, i64 8
+  store i64 0, ptr %t1000052
+  store ptr %t1000051, ptr @g.plum.f.codegen.TAIL_SITE.0.
+  %t1000054 = call ptr @plum_alloc(i64 16)
+  %t1000055 = getelementptr i8, ptr %t1000054, i64 8
+  store ptr @.const1000053, ptr %t1000055
+  store ptr %t1000054, ptr @g.plum.f.codegen.HASH_TYPES.0.
+  %t1000056 = call ptr @plum.f.codegen.cg_empty_type_set.0.(i1 0)
+  %t1000057 = call ptr @plum_alloc(i64 16)
+  %t1000058 = getelementptr i8, ptr %t1000057, i64 8
+  store ptr %t1000056, ptr %t1000058
+  store ptr %t1000057, ptr @g.plum.f.codegen.HASH_SEEN.0.
+  %t1000059 = call ptr @plum.f.codegen.cg_empty_type_set.0.(i1 0)
+  %t1000060 = call ptr @plum_alloc(i64 16)
+  %t1000061 = getelementptr i8, ptr %t1000060, i64 8
+  store ptr %t1000059, ptr %t1000061
+  store ptr %t1000060, ptr @g.plum.f.codegen.EQ_TYPES.0.
+  %t1000062 = call ptr @plum.f.codegen.cg_empty_type_set.0.(i1 0)
+  %t1000063 = call ptr @plum_alloc(i64 16)
+  %t1000064 = getelementptr i8, ptr %t1000063, i64 8
+  store ptr %t1000062, ptr %t1000064
+  store ptr %t1000063, ptr @g.plum.f.codegen.REL_TYPES.0.
+  store ptr @.const1000097, ptr @g.plum.f.codegen.CG_SYMBOL_HEX.0.
   %t1000102 = call ptr @plum.f.$3cprelude$3e.String$2esplit.0.(ptr @.str1000098, ptr @.str1000100)
   store ptr %t1000102, ptr @g.plum.f.highlight.HL_UPPER.0.
   store ptr @.str1000103, ptr @g.plum.f.lexer.PLUM_ALPHA.0.

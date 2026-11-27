@@ -2275,10 +2275,19 @@ pub let Set.insert[T: Eq + Hash] (s: Set[T]) (x: T): Set[T] = match s {
 /// Whether `x` is a member.
 pub let Set.contains[T: Eq + Hash] (s: Set[T]) (x: T): Bool = Map.contains(s.inner, x)
 
-/// A new set without `x`.
-pub let Set.remove[T: Eq + Hash] (s: Set[T]) (x: T): Set[T] = match s {
-    Set { inner } => Set { inner: Map.remove(inner, x) },
+let set_remove_hashed[T: Eq] (s: Set[T]) (hash: Int) (key: T): Set[T] = {
+    let position = map_node_key_position(s.inner.root, hash, key, 0);
+    if position == 0 { s }
+    else {
+        match s {
+            Set { inner } => Set { inner: map_remove_at(inner, hash, position) },
+        }
+    }
 }
+
+/// A new set without `x`.
+pub let Set.remove[T: Eq + Hash] (s: Set[T]) (x: T): Set[T] =
+    set_remove_hashed(s, value_hash(x), x)
 
 /// How many members.
 pub let Set.len[T] (s: Set[T]): Int = Map.len(s.inner)
@@ -3496,8 +3505,11 @@ pub let Set.difference[T: Eq + Hash] (a: Set[T]) (b: Set[T]): Set[T] = {
     if right_size == 0 { a }
     else if right_size <= Set.len(a) / 2 {
         // Visit at most as many keys as a rebuild would need to insert.
-        match a {
-            Set { inner } => Set { inner: set_collect(set_root(b), inner, SetErase) },
+        match b.inner.root {
+            MapLeaf(hash, key, _) => set_remove_hashed(a, hash, key),
+            _ => match a {
+                Set { inner } => Set { inner: set_collect(set_root(b), inner, SetErase) },
+            },
         }
     }
     else {
@@ -3507,9 +3519,7 @@ pub let Set.difference[T: Eq + Hash] (a: Set[T]) (b: Set[T]): Set[T] = {
             } else { a },
             _ => match set_nodes_overlap(a.inner.root, b.inner.root, 0, SharedMember, NoSetMatch) {
                 NoSetMatch => a,
-                OneSetMatch(hash, key) => match a {
-                    Set { inner } => Set { inner: map_remove_hashed(inner, hash, key) },
-                },
+                OneSetMatch(hash, key) => set_remove_hashed(a, hash, key),
                 StopSetScan => set_prune(a, b, false),
             },
         }
