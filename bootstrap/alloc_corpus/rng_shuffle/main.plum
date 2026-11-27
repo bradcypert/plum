@@ -1,0 +1,13 @@
+let main (): Unit = {
+    let size = 4096;
+    let mut xs: Array[Int] = [];
+    for i in 0..size {
+        xs = xs.push(i);
+    };
+    let (next, shuffled) = Rng.shuffle(Rng.from_seed(217), xs);
+    assert_eq(shuffled.len(), size);
+    let checksum = shuffled.fold(0, |sum: Int, value: Int| (sum * 101 + value) % 1000003);
+    assert_eq(checksum, 109779);
+    let (_, draw) = Rng.int_range(next, 0, 1000003);
+    assert_eq(draw, 92798);
+}

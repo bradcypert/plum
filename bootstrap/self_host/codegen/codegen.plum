@@ -4518,8 +4518,12 @@ let cg_fn_call_real
     (tail: Bool)
     (pending: String): Emit
 = {
-    let reverse = module_name == "<prelude>" && name == "Array.reverse" && args.len() == 1
-        && targs.len() == 1;
+    let permutation = if module_name == "<prelude>" && targs.len() == 1 {
+        if name == "Array.reverse" && args.len() == 1 { "@plum_array_reverse" }
+        else if name == "plum__array_swap_raw" && args.len() == 3 { "@plum_array_swap" }
+        else { "" }
+    } else { "" };
+    let permute = permutation != "";
     let slice = module_name == "<prelude>" && name == "Array.slice" && args.len() == 3
         && targs.len() == 1;
     let interleave = module_name == "<prelude>" && name == "plum__array_interleave_exact_raw"
@@ -4529,7 +4533,7 @@ let cg_fn_call_real
     let bytes_concat = module_name == "<prelude>" && name == "bytes_concat_raw" && args.len() == 2;
     let string_reverse = module_name == "<prelude>" && name == "plum__string_reverse_raw"
         && args.len() == 1;
-    let sym = if reverse { "@plum_array_reverse" } else if slice { "@plum_array_slice" }
+    let sym = if permute { permutation } else if slice { "@plum_array_slice" }
     else if interleave { "@plum_array_interleave_exact" }
     else if concat {
         if name == "Array.concat" { "@plum_array_concat" } else { "@plum_array_concat_exact" }
@@ -4558,7 +4562,7 @@ let cg_fn_call_real
             cg_rel_sym(cg_array_elem_ity(p, array))
         } else { "null" };
         a.vals.push("ptr ".concat(elem)).push("ptr ".concat(cg_rel_sym(array)))
-    } else if reverse || merge_arrays {
+    } else if permute || merge_arrays {
         a.vals.push("i1 ".concat(if cg_is_heap(cg_elem_ty(ret)) { "1" } else { "0" }))
             .push("ptr ".concat(cg_rel_sym(cg_concrete(p, typecheck.texpr_ty(p.subst, args[0])))))
     } else { a.vals };
@@ -4592,12 +4596,12 @@ let cg_fn_call_real
         // Padding and array operations consume their receivers. Array concat
         // and interleaving consume both arrays. Drop any remaining arguments.
         .concat(
-            if reverse || slice || merge_arrays || Option.is_some(cg_runtime_fn(module_name, name)) {
+            if permute || slice || merge_arrays || Option.is_some(cg_runtime_fn(module_name, name)) {
                 cg_dec_args(
                     p,
                     args,
                     a.vals,
-                    if merge_arrays { 2 } else if reverse || slice || bytes_concat || string_reverse
+                    if merge_arrays { 2 } else if permute || slice || bytes_concat || string_reverse
                         || name == "plum__string_pad_raw" { 1 } else { 0 },
                     ""
                 )
