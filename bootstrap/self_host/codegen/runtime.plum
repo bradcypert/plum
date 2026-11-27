@@ -4382,7 +4382,7 @@ pub let cg_runtime (heap: Bool): String = cg_lines([
     "width_check:",
     "  br i1 %same_size, label %reused, label %compact_check",
     "compact_check:",
-    "  %compact = call i1 @plum_str_compact_heap_cell(ptr %s, i64 %total)",
+    "  %compact = call i1 @plum_str_compact_heap_cell(ptr %s, i64 %total, i64 32)",
     "  br i1 %compact, label %reused, label %allocate",
     "reused:",
     "  br label %prepare",
