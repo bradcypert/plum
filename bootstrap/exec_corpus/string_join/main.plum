@@ -53,6 +53,13 @@ let main (): Unit = {
     assert_eq(source, original.concat("changed"));
     assert_eq(sep, original.concat("separator"));
     assert_eq(joined, want.concat("tail"));
+    let compact = "aé\x00".repeat(36);
+    let padded = ["", compact, ""];
+    let forwarded = Array.concat_all(padded);
+    let separator_only = ["", ""].join(compact);
+    assert_eq(forwarded.concat("tail"), "aé\x00".repeat(36).concat("tail"));
+    assert_eq(separator_only, compact);
+    assert_eq(padded[1], "aé\x00".repeat(36));
     let mut many = [];
     for i in 0..32768 {
         many = many.push("é\x00🙂");

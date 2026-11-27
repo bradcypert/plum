@@ -1272,8 +1272,9 @@ let plum__string_join_raw (parts: Array[String]) (sep: String): String = ""
 /// Joins parts in order with `sep` between adjacent entries. Empty parts
 /// still contribute separator boundaries.
 ///
-/// Copies parts and separators directly into one exact-sized allocation.
-/// Empty output uses shared static storage.
+/// Shares a compact part or separator when it supplies every output byte.
+/// Copies other nonempty results into exact-sized storage. Empty output
+/// uses shared static storage.
 pub let Array.join (parts: Array[String]) (sep: String): String = plum__string_join_raw(parts, sep)
 
 /// Int's minimum, which CANNOT be written as a literal: its
@@ -1796,8 +1797,9 @@ let string_concat_all_raw (parts: Array[String]): String = ""
 /// Concatenates parts in order, without a separator. The compiler's own
 /// emitter uses this for collected output fragments.
 ///
-/// Uses checked sizes and one exact-sized allocation for nonempty output;
-/// empty output uses shared static storage.
+/// Uses checked sizes and shares a single compact part when it supplies
+/// every output byte. Other nonempty results use exact-sized storage.
+/// Empty output uses shared static storage.
 pub let Array.concat_all (parts: Array[String]): String = string_concat_all_raw(parts)
 
 /// Decimal text to the NEAREST double, via libc `strtod`.

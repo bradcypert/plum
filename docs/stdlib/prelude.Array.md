@@ -119,8 +119,9 @@ associative, so a different order can give a different last digit.
 Joins parts in order with `sep` between adjacent entries. Empty parts
 still contribute separator boundaries.
 
-Copies parts and separators directly into one exact-sized allocation.
-Empty output uses shared static storage.
+Shares a compact part or separator when it supplies every output byte.
+Copies other nonempty results into exact-sized storage. Empty output
+uses shared static storage.
 
 <a id="Array.sort_by"></a>
 
@@ -160,8 +161,9 @@ Pairs elements positionally, stopping at the shorter array.
 Concatenates parts in order, without a separator. The compiler's own
 emitter uses this for collected output fragments.
 
-Uses checked sizes and one exact-sized allocation for nonempty output;
-empty output uses shared static storage.
+Uses checked sizes and shares a single compact part when it supplies
+every output byte. Other nonempty results use exact-sized storage.
+Empty output uses shared static storage.
 
 <a id="Array.sort_string"></a>
 
