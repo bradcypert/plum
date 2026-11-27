@@ -348,6 +348,25 @@ let check_owned_grafted_union (): Unit = {
     assert_eq(right, Set.from_array(right_keys));
 }
 
+let check_owned_overlapping_union (): Unit = {
+    let common = key_in_slot(0, 1);
+    let left_only = key_in_slot(2, 1);
+    let right_only = key_in_slot(3, 1);
+    let common_last = key_in_slot(4, 1);
+    let left = Set.from_array([common, left_only, common_last]);
+    let right_keys = [common, right_only, common_last];
+    let right = Set.from_array(right_keys);
+    let before = allocation_bytes();
+    let combined = Set.union(left, right);
+    let after = allocation_bytes();
+    if before >= 0 {
+        // Allow the merged trie, edit result, and allocation observer.
+        assert(after - before <= 208);
+    };
+    assert_eq(combined, Set.from_array([common, left_only, right_only, common_last]));
+    assert_eq(right, Set.from_array(right_keys));
+}
+
 let check_owned_ordered_graft (): Unit = {
     let left_keys = [key_in_slot(0, 1), key_in_slot(1, 1), key_in_slot(2, 1), key_in_slot(3, 1)];
     let removed = [key_in_slot(8, 1), key_in_slot(9, 1), key_in_slot(10, 1), key_in_slot(11, 1)];
@@ -883,6 +902,7 @@ let main (): Unit = {
     check_grafted_union(0);
     check_grafted_union(5);
     check_owned_grafted_union();
+    check_owned_overlapping_union();
     check_owned_ordered_graft();
     check_set_traversal();
     // These hashes share the first twelve trie levels. Test each kind

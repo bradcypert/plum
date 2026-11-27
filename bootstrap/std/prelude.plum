@@ -2886,8 +2886,12 @@ let set_merge_union_node[T: Eq]
 let set_union_branch_roots[T: Eq] (a: Set[T]) (b: Set[T]): Set[T] =
     match set_merge_union_node(a.inner.root, b.inner.root, 0) {
         SetMergeKeep => a,
-        SetMergeUpdated(root, added) => Set {
-            inner: Map { root: root, size: Set.len(a) + added }
+        SetMergeUpdated(root, added) => {
+            let size = Set.len(a) + added;
+            // Keep the edit in scope for Map reuse and consume the Set wrapper.
+            match a {
+                Set { inner: _ } => Set { inner: Map { root, size } },
+            }
         },
     }
 
