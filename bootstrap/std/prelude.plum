@@ -1365,9 +1365,9 @@ pub let String.parse_float (s: String): Result[Float, String] = {
 
 // --- Sorting ---
 
-// Merge into a fresh, uniquely owned accumulator. Tail calls move it
-// into the next push, so growth is amortized O(1) per element. Taking
-// the left element on equality preserves the original order of ties.
+// Merge into a fresh, uniquely owned accumulator reserved for the run.
+// Tail calls move it into the next push. Taking the left element on
+// equality preserves the original order of ties.
 let plum__array_sort_merge_acc[T]
     (left: Array[T])
     (right: Array[T])
@@ -1390,15 +1390,21 @@ let plum__array_sort_merge_acc[T]
 // Split index ranges rather than copying slices of the input. Only
 // the sorted runs and merge output allocate, with O(n) peak storage
 // and O(log n) stack depth for the recursive splits.
-let plum__array_sort_range[T] (arr: Array[T]) (le: (T, T) -> Bool) (lo: Int) (hi: Int): Array[T] =
-    if hi <= lo { [] }
-    else if hi - lo == 1 { [arr[lo]] }
-    else {
-        let mid = lo + (hi - lo) / 2;
+let plum__array_sort_range[T] (arr: Array[T]) (le: (T, T) -> Bool) (lo: Int) (hi: Int): Array[T] = {
+    let len = hi - lo;
+    if len <= 0 { [] }
+    else if len == 1 { [arr[lo]] }
+    else if len == 2 {
+        let left = arr[lo];
+        let right = arr[lo + 1];
+        if le(left, right) { [left, right] } else { [right, left] }
+    } else {
+        let mid = lo + len / 2;
         let left = plum__array_sort_range(arr, le, lo, mid);
         let right = plum__array_sort_range(arr, le, mid, hi);
-        plum__array_sort_merge_acc(left, right, le, 0, 0, [])
+        plum__array_sort_merge_acc(left, right, le, 0, 0, plum__array_reserve_empty_raw(len))
     }
+}
 
 /// Sorted by a \"less than or equal\" predicate.
 ///
