@@ -21,6 +21,20 @@ let main (): Unit = {
     assert_eq(replace(make(), "ab", "zy"), "zy\x00🙂".repeat(32));
     assert_eq(replace(make(), "ab", "longer"), "longer\x00🙂".repeat(32));
     assert_eq(replace(make(), "ab", ""), "\x00🙂".repeat(32));
+
+    let odd_run = "o".repeat(16386).concat("a".repeat(513));
+    let expanded = replace(odd_run, "aa", "z".repeat(32));
+    let expected = "o".repeat(16386).concat("z".repeat(8192)).concat("a");
+    assert_eq(expanded, expected);
+    assert_eq(unsafe { expanded.as_cstr().as_string() }, expected);
+    let early = "a".repeat(64).concat("o".repeat(448)).concat("o".repeat(64));
+    assert_eq(early.replace("aa", "z".repeat(8)), "z".repeat(256).concat("o".repeat(512)));
+
+    let source = "o".repeat(512).concat("x".repeat(64));
+    let alias = source.as_bytes();
+    let grown = source.replace("x", "yyyy");
+    assert_eq(grown, "o".repeat(512).concat("y".repeat(256)));
+    assert_eq(alias.at(575), Some(120));
     assert_eq(replace(make(), "", "!"), make());
     assert_eq(replace(make(), "missing", "!"), make());
     assert_eq("ab".repeat(32).replace("ab", ""), "");

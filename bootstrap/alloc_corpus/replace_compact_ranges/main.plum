@@ -1,0 +1,12 @@
+let main (): Unit = {
+    let grow_input = "o".repeat(512).concat("x".repeat(64));
+    let grown = grow_input.replace("x", "yyyy");
+    assert_eq(grown.len(), 768);
+    assert_eq(grown.starts_with("oo"), true);
+    assert_eq(grown.ends_with("yyyy"), true);
+
+    let shrink_input = Array.join(["xx", "é".repeat(64), "xx"], "");
+    let shorter = shrink_input.replace("xx", "x");
+    assert_eq(shorter.len(), 130);
+    assert_eq(shorter.char_len(), 66)
+}

@@ -61,11 +61,13 @@ let main (): Unit = {
     };
     let before = live();
     let tiny = compact_trim();
+    let replaced = "x".repeat(65536).concat("é").replace("x", "");
     let empty = empty_trim();
     if before >= 0 {
-        assert_eq(live() - before, 19);
+        assert_eq(live() - before, 38);
     };
     assert_eq(tiny, "é");
+    assert_eq(replaced, "é");
     assert_eq(empty, "");
     for count in [1, 2, 6, 7, 8, 9, 14, 15, 16, 17, 31, 32, 33, 128] {
         let text = "aé中🙂\x00,".repeat(count);

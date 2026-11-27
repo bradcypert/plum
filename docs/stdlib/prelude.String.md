@@ -175,9 +175,10 @@ Whether the string ends with `suffix`.
 
 Every occurrence of `from` replaced with `to`. An empty `from`
 leaves the string alone rather than looping.
-Unchanged nonempty results share the input cell. Equal-byte-length changes
-may reuse uniquely owned storage; other changed results allocate exactly.
-Empty results use static storage.
+Unchanged nonempty results share the input cell. Uniquely owned storage
+can be reused for equal-width replacements or when capacity fits the
+changed result with little spare space. Other changed results allocate
+exactly. Empty results use static storage.
 
 <a id="String.to_upper"></a>
 
