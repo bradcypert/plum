@@ -2175,9 +2175,11 @@ pub let Map.contains[K: Eq + Hash, V] (m: Map[K, V]) (k: K): Bool =
 // The caller supplies a leaf (-1) or a one-based collision position.
 let map_remove_at[K, V] (m: Map[K, V]) (hash: Int) (position: Int): Map[K, V] =
     match m {
-        Map { root, size } => Map {
-            root: map_node_remove_present(root, hash, position, 0, true),
-            size: size - 1
+        Map { root, size } => if size == 1 { Map.new(()) } else {
+            Map {
+                root: map_node_remove_present(root, hash, position, 0, true),
+                size: size - 1
+            }
         },
     }
 
@@ -2278,6 +2280,7 @@ pub let Set.contains[T: Eq + Hash] (s: Set[T]) (x: T): Bool = Map.contains(s.inn
 let set_remove_hashed[T: Eq] (s: Set[T]) (hash: Int) (key: T): Set[T] = {
     let position = map_node_key_position(s.inner.root, hash, key, 0);
     if position == 0 { s }
+    else if Set.len(s) == 1 { Set.new(()) }
     else {
         match s {
             Set { inner } => Set { inner: map_remove_at(inner, hash, position) },
@@ -3528,7 +3531,8 @@ pub let Set.difference[T: Eq + Hash] (a: Set[T]) (b: Set[T]): Set[T] = {
 
 /// A set of the array's elements, discarding duplicates.
 pub let Set.from_array[T: Eq + Hash] (arr: Array[T]): Set[T] =
-    Set { inner: Array.fold(arr, Map.new(()), |acc, elem| Map.insert(acc, elem, ())) }
+    if arr.len() == 0 { Set.new(()) }
+    else { Set { inner: Array.fold(arr, Map.new(()), |acc, elem| Map.insert(acc, elem, ())) } }
 
 // --- JSON ---
 
