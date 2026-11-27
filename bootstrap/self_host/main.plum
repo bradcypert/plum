@@ -4194,21 +4194,12 @@ let project_deps (dir: String): Array[pkg.Dep] = {
 // Native requirements are resolved from each input owner's declaration.
 // Direct Plum calls always select TLS, independently of native metadata.
 let needs_tls (ir: String) (native_tls: Bool): Bool = {
-    let tls = native_tls || declares_tls(ir.split("\n"), 0);
+    let tls = native_tls || codegen.cg_ir_declares_tls(ir);
     buildcache.diagnostic(
         if tls { "native dependencies: tls" } else { "native dependencies: none" }
     );
     tls
 }
-
-let declares_tls (lines: Array[String]) (i: Int): Bool =
-    if i >= lines.len() { false }
-    else if lines[i].starts_with("declare ")
-        && (
-            lines[i].contains("@tls_") || lines[i].contains("@mbedtls_") || lines[i]
-                .contains("@psa_")
-        ) { true }
-    else { declares_tls(lines, i + 1) }
 
 // Writes the required embedded shims into `dir`, returning the paths
 // clang should compile. Headers accompany their library sources.
@@ -4471,10 +4462,11 @@ let compile_with_scratch
                 buildcache.compiler_hash(())
             );
             let shim_dir = if cached && key != "" { stable_shims } else { scratch };
-            let first = if shim_dir == scratch { write_shims(scratch, needs_tls(ir, native.tls)) }
-            else { shared_shims(shim_dir, needs_tls(ir, native.tls)) };
+            let tls = needs_tls(ir, native.tls);
+            let first = if shim_dir == scratch { write_shims(scratch, tls) }
+            else { shared_shims(shim_dir, tls) };
             let written = if first.err != "" && shim_dir != scratch {
-                write_shims(scratch, needs_tls(ir, native.tls))
+                write_shims(scratch, tls)
             } else { first };
             buildcache.finish("shim extraction", shim_time);
             if written.err != "" { "build failed: ${written.err}" }
@@ -4488,7 +4480,7 @@ let compile_with_scratch
                     // Retry from private scratch; real source/link errors
                     // still fail, and no older executable is available.
                     buildcache.diagnostic("native cache unavailable; retrying uncached");
-                    let fresh = write_shims(scratch, needs_tls(ir, native.tls));
+                    let fresh = write_shims(scratch, tls);
                     if fresh.err != "" { "build failed: ${fresh.err}" }
                     else { link_ir_uncached(ll, fresh.files, out, extra, scratch, target, mode) }
                 } else { err }

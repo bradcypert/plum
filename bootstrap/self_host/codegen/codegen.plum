@@ -990,9 +990,67 @@ let cg_dbg_marker_off (l: String): Int =
 
 let str_of_bytes_raw (bytes: Bytes): String = ""
 
-let cg_dbg_line_end (body: Bytes) (size: Int) (i: Int): Int =
+let cg_ir_line_end (body: Bytes) (size: Int) (i: Int): Int =
     if i >= size || bytes_at_raw(body, i) == 10 { i }
-    else { cg_dbg_line_end(body, size, i + 1) }
+    else { cg_ir_line_end(body, size, i + 1) }
+
+let CG_IR_DECLARE: Bytes = "declare ".as_bytes()
+
+let CG_IR_TLS: Bytes = "tls_".as_bytes()
+
+let CG_IR_MBEDTLS: Bytes = "mbedtls_".as_bytes()
+
+let CG_IR_PSA: Bytes = "psa_".as_bytes()
+
+let cg_ir_prefix (ir: Bytes) (at: Int) (end: Int) (prefix: Bytes): Bool =
+    prefix.len() <= end - at && cg_ir_prefix_bytes(ir, at, prefix, prefix.len(), 0)
+
+let cg_ir_prefix_bytes (ir: Bytes) (at: Int) (prefix: Bytes) (size: Int) (i: Int): Bool =
+    if i >= size { true }
+    else if bytes_at_raw(ir, at + i) != bytes_at_raw(prefix, i) { false }
+    else { cg_ir_prefix_bytes(ir, at, prefix, size, i + 1) }
+
+let cg_ir_has_tls_symbol (ir: Bytes) (i: Int) (end: Int): Bool =
+    if i >= end { false }
+    else if bytes_at_raw(ir, i) == 64
+        && (
+            cg_ir_prefix(ir, i + 1, end, CG_IR_TLS)
+                || cg_ir_prefix(ir, i + 1, end, CG_IR_MBEDTLS)
+                || cg_ir_prefix(ir, i + 1, end, CG_IR_PSA)
+        ) { true }
+    else { cg_ir_has_tls_symbol(ir, i + 1, end) }
+
+// Both freshly emitted and cached IR can be scanned in place. Only
+// declaration rows count, and each symbol prefix must fit on its row.
+pub let cg_ir_declares_tls (ir: String): Bool =
+    cg_ir_tls_lines(ir.as_bytes(), ir.len(), 0)
+
+let cg_ir_tls_lines (ir: Bytes) (size: Int) (start: Int): Bool =
+    if start >= size { false }
+    else {
+        let end = cg_ir_line_end(ir, size, start);
+        if cg_ir_prefix(ir, start, end, CG_IR_DECLARE)
+            && cg_ir_has_tls_symbol(ir, start + CG_IR_DECLARE.len(), end) { true }
+        else if end < size { cg_ir_tls_lines(ir, size, end + 1) } else { false }
+    }
+
+pub let test_ir_declares_tls (): Unit = {
+    let samples = [
+        ("", false),
+        ("declare void @tls_close(i64)", true),
+        ("\ndeclare i32 @mbedtls_version_get_number()\n", true),
+        ("declare i32 @psa_crypto_init()\r\n", true),
+        ("declare i32 @plain()\n  call void @tls_close(i64 0)\n", false),
+        ("; café @tls_close\n  declare void @tls_close(i64)\n", false),
+        ("declare i32 @psa\n_init()", false),
+        ("declare i32 @TLS_close(i64)\n", false),
+        ("declare void @ordinary() ; @tls_extra", true),
+    ];
+    for item in samples {
+        let (ir, expected) = item;
+        assert_eq(cg_ir_declares_tls(ir), expected);
+    };
+}
 
 // Scan one line at a time and append its text and shared suffix as separate
 // fragments. The LF boundaries preserve the String's bytes, and one final
@@ -1012,7 +1070,7 @@ let cg_dbg_lines
 =
     if i >= size { Array.concat_all(parts) }
     else {
-        let end = cg_dbg_line_end(body, size, i);
+        let end = cg_ir_line_end(body, size, i);
         let line = str_of_bytes_raw(body.slice(i, end));
         let next = if end < size { end + 1 } else { size };
         let off = if in_list { 0 - 1 } else { cg_dbg_marker_off(line) };
