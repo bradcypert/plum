@@ -4525,7 +4525,9 @@ let cg_fn_call_real
     let string_reverse = module_name == "<prelude>" && name == "plum__string_reverse_raw"
         && args.len() == 1;
     let sym = if reverse { "@plum_array_reverse" } else if slice { "@plum_array_slice" }
-    else if concat { "@plum_array_concat" } else if bytes_concat { "@plum_str_concat_reuse" } else {
+    else if concat {
+        if name == "Array.concat" { "@plum_array_concat" } else { "@plum_array_concat_exact" }
+    } else if bytes_concat { "@plum_str_concat_reuse" } else {
         match cg_runtime_fn(module_name, name) {
             Some(rt) => rt,
             None => if cg_has_fn_in(p, module_name, name, 0) {
@@ -4631,7 +4633,8 @@ let cg_fn_call_real
 // Only the resolved prelude binding has the native consuming contract.
 // Calls, reachability, and payload-preserving self-assignment share this test.
 let cg_is_array_concat (module_name: String) (name: String) (targs: Array[typecheck.ITy]): Bool =
-    module_name == "<prelude>" && name == "Array.concat" && targs.len() == 1
+    module_name == "<prelude>" && (name == "Array.concat" || name == "plum__array_concat_exact_raw")
+        && targs.len() == 1
 
 let cg_runtime_fn (module_name: String) (name: String): Option[String] =
     if name == "chars_of" { Some("@plum_chars_of") }

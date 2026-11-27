@@ -8,6 +8,7 @@
 typedef struct { int64_t rc, len; uint64_t data[]; } Array;
 typedef struct { int64_t rc, value; } Child;
 extern void *plum_array_concat(void *, void *, _Bool, void (*)(void *));
+extern void *plum_array_concat_exact(void *, void *, _Bool, void (*)(void *));
 extern int64_t plum_array_concat_size(int64_t, int64_t);
 extern void plum_rc_inc(void *);
 extern size_t malloc_usable_size(void *);
@@ -120,6 +121,19 @@ static void retry_case(void) {
 #endif
     scalar_drop(out); CHECK(live() == baseline);
 }
+static void exact_allocating_case(int sparse) {
+    int64_t baseline = live();
+    Array *a = array(16, sparse ? 128 : 16, 0);
+    int64_t cap = ((int64_t)malloc_usable_size(a) - 16) / 8;
+    int64_t nb = sparse ? 2 : cap + 1 - a->len, total = a->len + nb;
+    Array *b = array(nb, nb, a->len);
+    attempts = 0;
+    Array *out = plum_array_concat_exact(a, b, 0, scalar_drop);
+    CHECK(attempts == 1 && requests[0] == 16 + 8 * total);
+    CHECK(out->len == total);
+    for (int64_t i = 0; i < total; i++) CHECK(out->data[i] == (uint64_t)i);
+    scalar_drop(out); CHECK(live() == baseline);
+}
 static void fatal(const char *kind) {
     struct { int64_t rc, len; } a = {2, 1}, b = {2, 1};
     if (!strcmp(kind, "negative-left")) a.len = -1;
@@ -143,7 +157,7 @@ int main(int argc, char **argv) {
         }
         heap_case(shared, 0); heap_case(shared, 1);
     }
-    alias_case(); retry_case();
+    alias_case(); retry_case(); exact_allocating_case(0); exact_allocating_case(1);
     puts("array-concat: reuse, exact copies, child ownership, reserve retry and accounting passed");
     return 0;
 }

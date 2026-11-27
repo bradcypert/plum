@@ -39,7 +39,8 @@ def main():
                     raise RuntimeError('incorrect concatenation fixture output')
             ir = run([compiler, 'emit-llvm', fixture, *flags])
             definitions = []
-            for name in ['plum_array_concat_size', 'plum_array_concat', 'plum_array_len',
+            for name in ['plum_array_concat_size', 'plum_array_concat', 'plum_array_concat_impl',
+                         'plum_array_concat_exact', 'plum_array_len',
                          'plum_array_copy', 'plum_array_inc_elems', 'plum_alloc_preferred_or_fail',
                          'plum_rc_inc', 'plum_free']:
                 match = re.search(r'^define [^\n]*@' + name + r'\([^\n]*\).*?^}', ir, re.M | re.S)
