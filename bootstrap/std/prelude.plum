@@ -151,6 +151,9 @@ let plum__array_concat_acc[T] (a: Array[T]) (b: Array[T]) (i: Int): Array[T] =
 /// changed.
 pub let Array.concat[T] (a: Array[T]) (b: Array[T]): Array[T] = plum__array_concat_acc(a, b, 0)
 
+// Fixed-size merges can reuse spare capacity and allocate exactly on a miss.
+let plum__array_concat_exact_raw[T] (a: Array[T]) (b: Array[T]): Array[T] = Array.concat(a, b)
+
 let plum__array_contains_acc[T] (xs: Array[T]) (needle: T) (i: Int): Bool =
     if i >= xs.len() { false } else if xs[i] == needle { true } else {
         plum__array_contains_acc(xs, needle, i + 1)
@@ -2546,7 +2549,9 @@ let set_graft_children[T]
     (left: Array[MapNode[T, Unit]])
     (right_bits: Int)
     (right: Array[MapNode[T, Unit]]): Array[MapNode[T, Unit]]
-= {
+= if left_bits < (right_bits & - right_bits) { plum__array_concat_exact_raw(left, right) }
+else if right_bits < (left_bits & - left_bits) { plum__array_concat_exact_raw(right, left) }
+else {
     let mut slots = left_bits | right_bits;
     let mut left_index = 0;
     let mut right_index = 0;
@@ -3035,6 +3040,48 @@ let set_replace_root[T] (set: Set[T]) (root: MapNode[T, Unit]) (size: Int): Set[
         Set { inner } => Set { inner: set_replace_map_root(inner, root, size) },
     }
 
+enum SetGraftRoute { DisjointBranches, OverlappingBranches, GeneralGraft }
+
+let set_root_graft_route[T]
+    (left: MapNode[T, Unit])
+    (right: MapNode[T, Unit]): SetGraftRoute
+= match left {
+    MapBranch(left_bits, _) => match right {
+        MapBranch(right_bits, _) => if (left_bits & right_bits) == 0 { DisjointBranches }
+        // Equal unary roots can still have disjoint child routes.
+        else if left_bits == right_bits && (left_bits & (left_bits - 1)) == 0 { GeneralGraft }
+        else { OverlappingBranches },
+        _ => GeneralGraft,
+    },
+    _ => GeneralGraft,
+}
+
+// This call is only reached after proving the root bitmaps are disjoint.
+let set_graft_disjoint_branches[T]
+    (left: MapNode[T, Unit])
+    (right: MapNode[T, Unit]): MapNode[T, Unit]
+= match right {
+    MapBranch(right_bits, right_children) => match left {
+        MapBranch(left_bits, left_children) => MapBranch(
+            left_bits | right_bits,
+            set_graft_children(left_bits, left_children, right_bits, right_children)
+        ),
+        _ => MapEmpty,
+    },
+    _ => MapEmpty,
+}
+
+let set_graft_disjoint_map[T]
+    (left: Map[T, Unit])
+    (right: MapNode[T, Unit])
+    (right_size: Int): Map[T, Unit]
+= match left {
+    Map { root, size } => {
+        let grafted = set_graft_disjoint_branches(root, right);
+        Map { root: grafted, size: size + right_size }
+    },
+}
+
 /// Everything in either set.
 pub let Set.union[T: Eq + Hash] (a: Set[T]) (b: Set[T]): Set[T] = {
     let right_size = Set.len(b);
@@ -3043,9 +3090,17 @@ pub let Set.union[T: Eq + Hash] (a: Set[T]) (b: Set[T]): Set[T] = {
     else if right_size == 0 { a }
     else if right_size == 1 { set_union_single_leaf(a, b) }
     else {
-        match set_graft_union(a.inner.root, b.inner.root, 0) {
-            MapEmpty => set_union_merge_routes(a, b),
-            root => set_replace_root(a, root, left_size + right_size),
+        match set_root_graft_route(a.inner.root, b.inner.root) {
+            DisjointBranches => match a {
+                Set { inner } => Set {
+                    inner: set_graft_disjoint_map(inner, set_root(b), right_size)
+                },
+            },
+            OverlappingBranches => set_union_merge_routes(a, b),
+            GeneralGraft => match set_graft_union(a.inner.root, b.inner.root, 0) {
+                MapEmpty => set_union_merge_routes(a, b),
+                root => set_replace_root(a, root, left_size + right_size),
+            },
         }
     }
 }
