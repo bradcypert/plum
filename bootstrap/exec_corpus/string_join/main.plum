@@ -9,7 +9,37 @@ let reference (parts: Array[String]) (sep: String): String = {
     out
 }
 
+let check_sliced_join (): Unit = {
+    let lo = -9223372036854775807 - 1;
+    let hi = 9223372036854775807;
+    let parts = ["before", "é", "\x00", "", "🙂", "after"];
+    assert_eq(Array.concat_all(Array.slice(parts, lo, hi)), "beforeé\x00🙂after");
+    assert_eq(Array.concat_all(Array.slice(parts, 1, 5)), "é\x00🙂");
+    assert_eq(Array.concat_all(Array.slice(parts, 4, 5)), "🙂");
+    assert_eq(Array.concat_all(Array.slice(parts, 3, 4)), "");
+    assert_eq(Array.concat_all(Array.slice(parts, 5, 2)), "");
+    assert_eq(Array.concat_all(Array.slice(parts, lo, lo)), "");
+    assert_eq(Array.concat_all(Array.slice(parts, hi, hi)), "");
+    assert_eq(Array.concat_all(Array.slice(parts, 5, hi)), "after");
+    let mut owned = ["first".repeat(2), "second".repeat(2), "third".repeat(2)];
+    let joined = Array.concat_all(Array.slice(
+        owned,
+        {
+            owned = ["changed"];
+            1
+        },
+        owned.len() + 1
+    ));
+    assert_eq(joined, "secondsecond");
+    assert_eq(owned[0], "changed");
+    let shared = ["discard".repeat(2), "keep".repeat(4), "skip".repeat(2)];
+    let kept = Array.concat_all(Array.slice(shared, 1, 2));
+    assert_eq(kept.concat("!"), "keepkeepkeepkeep!");
+    assert_eq(shared[1], "keepkeepkeepkeep");
+}
+
 let main (): Unit = {
+    check_sliced_join(());
     let raw = unsafe { Bytes.from_array([255, 128, 65]).as_cstr().as_string() };
     for parts in [
         [],

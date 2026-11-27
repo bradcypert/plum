@@ -4550,6 +4550,31 @@ let cg_handle_owner (name: String): String =
 
 let cg_ends_with (s: String) (suffix: String): Bool = s.ends_with(suffix)
 
+let cg_concat_array_range
+    (p: CgProgram)
+    (env: Array[CgSlot])
+    (n: Int)
+    (args: Array[typecheck.TExpr]): Emit
+= {
+    // Use ordinary argument preparation so a bound expression can rebind
+    // the original array's slot while this call holds its own reference.
+    let a = cg_args(p, env, n, args);
+    let array = cg_concrete(p, typecheck.texpr_ty(p.subst, args[0]));
+    let vals = a.vals.push("ptr ".concat(cg_rel_sym(array)));
+    let reg = cg_reg(a.n);
+    Emit {
+        code: a.code.concat(
+            "  ${reg} = call ptr @plum_str_concat_array_range(${cg_join_commas(vals)})\n"
+        ),
+        allocas: a.allocas,
+        releases: a.releases,
+        globals: a.globals,
+        val: reg,
+        ty: CgStr,
+        n: a.n + 1
+    }
+}
+
 let cg_fn_call
     (p: CgProgram)
     (env: Array[CgSlot])
@@ -4570,6 +4595,12 @@ let cg_fn_call
         // Keep a temporary owner when evaluating the index can invalidate
         // the byte source's slot. Stable reads use the slot's existing owner.
         cg_leaf_tail(p, tail, cg_borrowed_binop(p, env, n, args[0], args[1], "@plum_bytes_at", ret))
+    } else if module_name == "<prelude>" && name == "Array.concat_all" && args.len() == 1 {
+        match args[0].node {
+            TFnCall(m, f, xs, ts) if m == "<prelude>" && f == "Array.slice" && xs.len() == 3
+                && ts.len() == 1 => cg_leaf_tail(p, tail, cg_concat_array_range(p, env, n, xs)),
+            _ => cg_fn_call_real(p, env, n, module_name, name, args, targs, ret, tail, pending),
+        }
     } else if cg_is_array_zip_with(module_name, name) {
         cg_leaf_tail(p, tail, cg_array_zip_with(p, env, n, args[0], args[1], args[2]))
     } else if cg_is_array_insert(module_name, name) {
