@@ -332,6 +332,22 @@ let check_grafted_union (shift: Int): Unit = {
     };
 }
 
+let check_owned_grafted_union (): Unit = {
+    let left_keys = [key_in_slot(0, 1), key_in_slot(2, 1), key_in_slot(4, 1)];
+    let right_keys = [key_in_slot(1, 1), key_in_slot(3, 1), key_in_slot(5, 1)];
+    let left = Set.from_array(left_keys);
+    let right = Set.from_array(right_keys);
+    let before = allocation_bytes();
+    let combined = Set.union(left, right);
+    let after = allocation_bytes();
+    if before >= 0 {
+        // Allow the new branch, packed children and allocation observer.
+        assert(after - before <= 200);
+    };
+    assert_eq(combined, Set.from_array(Array.concat(left_keys, right_keys)));
+    assert_eq(right, Set.from_array(right_keys));
+}
+
 let check_owned_singleton_intersection (): Unit = {
     let left = Set.from_array([-0.0, 1.0, 2.0]);
     let right = Set.from_array([0.0]);
@@ -844,6 +860,7 @@ let main (): Unit = {
     check_union_identical_buckets(a, b, deep);
     check_grafted_union(0);
     check_grafted_union(5);
+    check_owned_grafted_union();
     check_set_traversal();
     // These hashes share the first twelve trie levels. Test each kind
     // of collapse in isolation, including removal from a shared root.

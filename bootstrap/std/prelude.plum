@@ -3024,16 +3024,28 @@ let set_union_single_leaf[T: Eq] (a: Set[T]) (b: Set[T]): Set[T] = {
     }
 }
 
+// An already selected root can reuse the input's owned wrappers.
+let set_replace_map_root[T] (map: Map[T, Unit]) (root: MapNode[T, Unit]) (size: Int): Map[T, Unit] =
+    match map {
+        Map { root: _, size: _ } => Map { root, size },
+    }
+
+let set_replace_root[T] (set: Set[T]) (root: MapNode[T, Unit]) (size: Int): Set[T] =
+    match set {
+        Set { inner } => Set { inner: set_replace_map_root(inner, root, size) },
+    }
+
 /// Everything in either set.
 pub let Set.union[T: Eq + Hash] (a: Set[T]) (b: Set[T]): Set[T] = {
     let right_size = Set.len(b);
-    if Set.len(a) == 0 { b }
+    let left_size = Set.len(a);
+    if left_size == 0 { b }
     else if right_size == 0 { a }
     else if right_size == 1 { set_union_single_leaf(a, b) }
     else {
         match set_graft_union(a.inner.root, b.inner.root, 0) {
             MapEmpty => set_union_merge_routes(a, b),
-            root => Set { inner: Map { root: root, size: Set.len(a) + right_size } },
+            root => set_replace_root(a, root, left_size + right_size),
         }
     }
 }
@@ -3059,12 +3071,6 @@ let set_find_leaf[T: Eq]
     },
 }
 
-// Install the left representative in the right singleton's Map wrapper.
-let set_replace_singleton_leaf[T] (map: Map[T, Unit]) (leaf: MapNode[T, Unit]): Map[T, Unit] =
-    match map {
-        Map { root: _, size: _ } => Map { root: leaf, size: 1 },
-    }
-
 /// Only what is in both.
 pub let Set.intersection[T: Eq + Hash] (a: Set[T]) (b: Set[T]): Set[T] = {
     let right_size = Set.len(b);
@@ -3077,9 +3083,7 @@ pub let Set.intersection[T: Eq + Hash] (a: Set[T]) (b: Set[T]): Set[T] = {
             _ => match b.inner.root {
                 MapLeaf(hash, key, _) => match set_find_leaf(set_root(a), hash, key, 0) {
                     MapEmpty => Set.new(()),
-                    leaf => match b {
-                        Set { inner } => Set { inner: set_replace_singleton_leaf(inner, leaf) },
-                    },
+                    leaf => set_replace_root(b, leaf, 1),
                 },
                 _ => {
                     let coverage = if Set.len(a) - 1 <= right_size {
