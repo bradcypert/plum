@@ -415,6 +415,28 @@ let check_owned_spare_graft (interleaved: Bool): Unit = {
     assert_eq(right, Set.from_array(right_keys));
 }
 
+let check_right_spare_graft (): Unit = {
+    let left_keys = [key_in_slot(0, 1), key_in_slot(2, 1), key_in_slot(4, 1)];
+    let right_keys = [key_in_slot(1, 1), key_in_slot(3, 1), key_in_slot(5, 1), key_in_slot(7, 1)];
+    let removed = [key_in_slot(8, 1), key_in_slot(9, 1), key_in_slot(10, 1), key_in_slot(11, 1)];
+    let left = Set.from_array(left_keys);
+    let prefix = Set.from_array(right_keys);
+    let mut right = Set.union(prefix, Set.from_array(removed));
+    for key in removed {
+        right = Set.remove(right, key);
+    };
+    let before = allocation_bytes();
+    let combined = Set.union(left, right);
+    let after = allocation_bytes();
+    if before >= 0 {
+        // Allow the shared left wrappers and the allocation observer.
+        assert(after - before <= 176);
+    };
+    assert_eq(combined, Set.from_array(Array.concat(left_keys, right_keys)));
+    assert_eq(left, Set.from_array(left_keys));
+    assert_eq(prefix, Set.from_array(right_keys));
+}
+
 let check_owned_singleton_intersection (): Unit = {
     let left = Set.from_array([-0.0, 1.0, 2.0]);
     let right = Set.from_array([0.0]);
@@ -932,6 +954,7 @@ let main (): Unit = {
     check_owned_overlapping_union();
     check_owned_spare_graft(false);
     check_owned_spare_graft(true);
+    check_right_spare_graft();
     check_set_traversal();
     // These hashes share the first twelve trie levels. Test each kind
     // of collapse in isolation, including removal from a shared root.

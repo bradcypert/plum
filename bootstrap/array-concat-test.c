@@ -191,6 +191,43 @@ static void interleave_heap_case(int shared) {
     child_drop(rchild);
     CHECK(children_freed == freed + 2 && live() == baseline);
 }
+static void owned_right_case(int shared_left, int interleaved, int sparse) {
+    int64_t baseline = live();
+    int freed = children_freed;
+    Child *lchild = malloc(sizeof *lchild), *rchild = malloc(sizeof *rchild);
+    CHECK(lchild && rchild);
+    *lchild = (Child){4, 2};
+    *rchild = (Child){4, 3};
+#ifdef PLUM_HEAP_STATS
+    plum_heap_adopt_origin(lchild, sizeof *lchild, PLUM_ORIGIN_RECORD);
+    plum_heap_adopt_origin(rchild, sizeof *rchild, PLUM_ORIGIN_RECORD);
+#endif
+    Array *left = array(3, 3, 0), *right = array(3, sparse ? 128 : 8, 0);
+    for (int i = 0; i < 3; i++) {
+        left->data[i] = (uintptr_t)lchild;
+        right->data[i] = (uintptr_t)rchild;
+    }
+    if (shared_left) plum_rc_inc(left);
+    uintptr_t right_id = (uintptr_t)right;
+    attempts = 0;
+    Array *out = interleaved
+        ? plum_array_interleave_exact(left, right, 26, 1, heap_drop)
+        : plum_array_concat_exact(left, right, 1, heap_drop);
+    CHECK(out->len == 6 && lchild->rc == (shared_left ? 7 : 4) && rchild->rc == 4);
+    CHECK(((uintptr_t)out == right_id) == !sparse);
+    CHECK(attempts == sparse);
+    if (sparse) CHECK(requests[0] == 64);
+    for (int i = 0; i < 6; i++) {
+        Child *expected = ((interleaved ? 26 : 56) & (1 << i)) ? rchild : lchild;
+        CHECK(out->data[i] == (uintptr_t)expected);
+    }
+    heap_drop(out);
+    if (shared_left) heap_drop(left);
+    CHECK(lchild->rc == 1 && rchild->rc == 1);
+    child_drop(lchild);
+    child_drop(rchild);
+    CHECK(children_freed == freed + 2 && live() == baseline);
+}
 static void fatal(const char *kind) {
     struct { int64_t rc, len; } a = {2, 1}, b = {2, 1};
     if (!strcmp(kind, "negative-left")) a.len = -1;
@@ -220,6 +257,12 @@ int main(int argc, char **argv) {
     alias_case(); retry_case(); exact_allocating_case(0); exact_allocating_case(1);
     interleave_case(3, 0); interleave_case(8, 0); interleave_case(8, 1); interleave_case(128, 0);
     interleave_heap_case(0); interleave_heap_case(1);
+    for (int shared = 0; shared < 2; shared++) {
+        for (int interleaved = 0; interleaved < 2; interleaved++) {
+            owned_right_case(shared, interleaved, 0);
+            owned_right_case(shared, interleaved, 1);
+        }
+    }
     puts("array-concat: reuse, exact copies, child ownership, reserve retry and accounting passed");
     return 0;
 }
