@@ -3028,9 +3028,9 @@ pub let Set.union[T: Eq + Hash] (a: Set[T]) (b: Set[T]): Set[T] = {
     let right_size = Set.len(b);
     if Set.len(a) == 0 { b }
     else if right_size == 0 { a }
+    else if right_size == 1 { set_union_single_leaf(a, b) }
     else {
         match set_graft_union(a.inner.root, b.inner.root, 0) {
-            MapEmpty if right_size == 1 => set_union_single_leaf(a, b),
             MapEmpty => set_union_merge_routes(a, b),
             root => Set { inner: Map { root: root, size: Set.len(a) + right_size } },
         }
