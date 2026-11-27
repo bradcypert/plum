@@ -121,11 +121,11 @@ static void retry_case(void) {
 #endif
     scalar_drop(out); CHECK(live() == baseline);
 }
-static void exact_growth_case(void) {
+static void exact_allocating_case(int sparse) {
     int64_t baseline = live();
-    Array *a = array(16, 16, 0);
+    Array *a = array(16, sparse ? 128 : 16, 0);
     int64_t cap = ((int64_t)malloc_usable_size(a) - 16) / 8;
-    int64_t nb = cap + 1 - a->len, total = a->len + nb;
+    int64_t nb = sparse ? 2 : cap + 1 - a->len, total = a->len + nb;
     Array *b = array(nb, nb, a->len);
     attempts = 0;
     Array *out = plum_array_concat_exact(a, b, 0, scalar_drop);
@@ -157,7 +157,7 @@ int main(int argc, char **argv) {
         }
         heap_case(shared, 0); heap_case(shared, 1);
     }
-    alias_case(); retry_case(); exact_growth_case();
+    alias_case(); retry_case(); exact_allocating_case(0); exact_allocating_case(1);
     puts("array-concat: reuse, exact copies, child ownership, reserve retry and accounting passed");
     return 0;
 }
