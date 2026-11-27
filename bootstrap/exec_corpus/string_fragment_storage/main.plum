@@ -40,6 +40,13 @@ let memory_round (): Unit = {
     let b = small[1];
     assert_eq(a, "alpha");
     assert_eq(b, "beta");
+
+    let before = live();
+    let short = Array.join([" ".repeat(17), "x"], "").trim_start();
+    if before >= 0 {
+        assert_eq(live() - before, 18);
+    };
+    assert_eq(short, "x")
 }
 
 let main (): Unit = {
