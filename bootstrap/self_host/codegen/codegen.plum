@@ -1757,7 +1757,7 @@ let cg_expr (p: CgProgram) (env: Array[CgSlot]) (n: Int) (e: typecheck.TExpr): E
             Some(h) => h,
             None => cg_extern_call(p, env, n, name, args, cg_ty(p, e)),
         },
-        TAsCStr(inner) => cg_as_cstr(p, env, n, inner),
+        TAsCStr(inner) => cg_retag_owned(p, env, n, inner, CgCStr),
         TAsString(inner) => cg_as_string(p, env, n, inner),
         TIntegerConvert(dest, mode, inner) => cg_integer_convert(p, env, n, dest, mode, inner),
         TRawPointer(op, args) => cg_raw_pointer(p, env, n, op, args, cg_ty(p, e)),
@@ -4467,7 +4467,11 @@ let cg_fn_call
     (tail: Bool)
     (pending: String): Emit
 =
-    if cg_is_array_zip_with(module_name, name) {
+    // Path and treefs also declare the private Bytes-to-String primitive.
+    // Match the runtime's existing name-based dispatch for these retags.
+    if (name == "bytes_of_str_raw" || name == "str_of_bytes_raw") && args.len() == 1 {
+        cg_leaf_tail(p, tail, cg_retag_owned(p, env, n, args[0], ret))
+    } else if cg_is_array_zip_with(module_name, name) {
         cg_leaf_tail(p, tail, cg_array_zip_with(p, env, n, args[0], args[1], args[2]))
     } else if cg_is_array_insert(module_name, name) {
         cg_leaf_tail(p, tail, cg_array_insert(p, env, n, args[0], args[1], args[2]))
@@ -4681,13 +4685,6 @@ let cg_runtime_fn (module_name: String) (name: String): Option[String] =
     // never text-aware: `@plum_str_len` reads a stored length,
     // `@plum_str_concat` is two `memcpy`s. Only a byte-indexed read, a
     // byte-indexed slice and construction from integers needed new IR.
-    //
-    // Both retag directions share one symbol, which is the honest
-    // spelling: `String` -> `Bytes` and `Bytes` -> `String` are the
-    // same no-op at runtime, and differ only in what the type system
-    // will then let you do with the result.
-    else if name == "bytes_of_str_raw" { Some("@plum_bytes_retag") }
-    else if name == "str_of_bytes_raw" { Some("@plum_bytes_retag") }
     else if name == "bytes_len_raw" { Some("@plum_str_len") }
     else if name == "bytes_concat_raw" { Some("@plum_str_concat") }
     else if name == "bytes_at_raw" { Some("@plum_bytes_at") }
@@ -6083,10 +6080,16 @@ let cg_arg_val (operand: String): String = {
     parts[parts.len() - 1]
 }
 
-// Retag an OWNED String/Bytes reference. No wrapper allocation or byte copy:
-// CStr participates in the same Perceus moves, duplicates and drops as its
-// source. The backing cell stays alive even when this value is stored/returned.
-let cg_as_cstr (p: CgProgram) (env: Array[CgSlot]) (n: Int) (inner: typecheck.TExpr): Emit = {
+// Forward one owned reference between String, Bytes, and CStr, which
+// share the same layout and destructor. Ordinary expression lowering
+// still moves a last use or acquires a reference for a shared input.
+let cg_retag_owned
+    (p: CgProgram)
+    (env: Array[CgSlot])
+    (n: Int)
+    (inner: typecheck.TExpr)
+    (ty: CgTy): Emit
+= {
     let b = cg_expr(p, env, n, inner);
     Emit {
         code: b.code,
@@ -6094,7 +6097,7 @@ let cg_as_cstr (p: CgProgram) (env: Array[CgSlot]) (n: Int) (inner: typecheck.TE
         releases: b.releases,
         globals: b.globals,
         val: b.val,
-        ty: CgCStr,
+        ty: ty,
         n: b.n,
     }
 }
