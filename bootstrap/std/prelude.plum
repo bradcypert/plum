@@ -2242,8 +2242,9 @@ pub let Map.from_arrays[K: Eq + Hash, V] (keys: Array[K]) (values: Array[V]): Ma
 /// IEEE equality makes it unequal to itself. References use identity.
 pub struct Set[T] { inner: Map[T, Unit] }
 
+// The compiler can hoist the complete literal, including the empty map.
 /// An empty set.
-pub let Set.new[T] (): Set[T] = Set { inner: Map.new(()) }
+pub let Set.new[T] (): Set[T] = Set { inner: Map { root: MapEmpty, size: 0 } }
 
 /// A new set with `x` added. Adding a member twice changes nothing.
 pub let Set.insert[T: Eq + Hash] (s: Set[T]) (x: T): Set[T] = match s {
