@@ -4685,6 +4685,9 @@ let cg_runtime_fn (module_name: String) (name: String): Option[String] =
     // never text-aware: `@plum_str_len` reads a stored length,
     // `@plum_str_concat` is two `memcpy`s. Only a byte-indexed read, a
     // byte-indexed slice and construction from integers needed new IR.
+    else if module_name == "<prelude>" && name == "plum__string_find_short_raw" {
+        Some("@plum_str_find_short")
+    }
     else if name == "bytes_len_raw" { Some("@plum_str_len") }
     else if name == "bytes_concat_raw" { Some("@plum_str_concat") }
     else if name == "bytes_at_raw" { Some("@plum_bytes_at") }
