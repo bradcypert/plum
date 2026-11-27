@@ -1,0 +1,13 @@
+let main (): Unit = {
+    let size = 4096;
+    let mut xs: Array[Int] = [];
+    for i in 0..size {
+        // Multiplication by an odd number permutes the power-of-two range.
+        xs = xs.push((i * 109 + 17) % size);
+    };
+    let sorted = Array.sort_int(xs);
+    assert_eq(sorted.len(), size);
+    for i in 0..size {
+        assert_eq(sorted[i], i);
+    };
+}
