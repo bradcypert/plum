@@ -374,6 +374,63 @@ let check_absent_set_removal (): Unit = {
     assert(Set.contains(excluded, absent));
 }
 
+let projection_map (keys: Array[Int]) (values: Array[String]): Map[Int, String] = {
+    let last = keys.len() - 1;
+    let prefix = Map.from_arrays(keys.take(last), values.take(last));
+    let map = Map.insert(prefix, keys[last], values[last]);
+    // Sharing the prefix makes the last insertion allocate exact storage.
+    assert_eq(Map.len(prefix), last);
+    map
+}
+
+let check_owned_projection (keys: Array[Int]): Unit = {
+    let values = Array.map(keys, |key| key.to_string());
+    let keys_map = projection_map(keys, values);
+    let values_map = projection_map(keys, values);
+    let before = allocation_bytes();
+    let projected_keys = Map.keys(keys_map);
+    let projected_values = Map.values(values_map);
+    let after = allocation_bytes();
+    if before >= 0 {
+        // Both projections fit their input arrays. Allow the observer.
+        assert(after - before <= 96);
+    };
+    assert_eq(projected_keys, keys);
+    assert_eq(projected_values, values);
+}
+
+let live_bytes (): Int = match Memory.snapshot() {
+    None => -1,
+    Some(snapshot) => snapshot.live_bytes,
+}
+
+let sparse_projection_set (keys: Array[Int]): Set[Int] = {
+    let prefix = Set.from_array(keys.take(16));
+    let suffix = Set.from_array(keys.drop(16));
+    let mut set = Set.union(prefix, suffix);
+    for i in 9..32 {
+        set = Set.remove(set, keys[i]);
+    };
+    assert_eq(Set.len(prefix), 16);
+    assert_eq(Set.len(suffix), 16);
+    set
+}
+
+let check_sparse_projection (): Unit = {
+    let mut keys: Array[Int] = [];
+    for slot in 0..32 {
+        keys = keys.push(key_in_slot(slot, 1));
+    };
+    let before = live_bytes();
+    let result = Set.to_array(sparse_projection_set(keys));
+    let after = live_bytes();
+    if before >= 0 {
+        // Keep the exact nine-slot result without the old branch capacity.
+        assert(after - before <= 112);
+    };
+    assert_eq(result, keys.take(9));
+}
+
 let check_owned_overlapping_union (): Unit = {
     let common = key_in_slot(0, 1);
     let left_only = key_in_slot(2, 1);
@@ -959,6 +1016,11 @@ let main (): Unit = {
     check_grafted_union(5);
     check_owned_grafted_union();
     check_absent_set_removal();
+    check_owned_projection(
+        [key_in_slot(0, 1), key_in_slot(2, 1), key_in_slot(4, 1), key_in_slot(6, 1)]
+    );
+    check_owned_projection([a, b]);
+    check_sparse_projection();
     check_owned_overlapping_union();
     check_owned_spare_graft(false);
     check_owned_spare_graft(true);

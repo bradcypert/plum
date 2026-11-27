@@ -2214,25 +2214,70 @@ let map_node_collect[K, V, T]
         (),
         |out, entry, get, unused1, unused2| out.push(get(entry.key, entry.value))
     ),
-    MapBranch(_, children) => plum__array_fold_context_raw(
-        children,
-        acc,
-        project,
-        (),
-        (),
-        |out, child, get, unused1, unused2| map_node_collect(child, out, get)
-    ),
+    MapBranch(_, children) => map_collect_children(children, acc, project),
+}
+
+let map_collect_children[K, V, T]
+    (children: Array[MapNode[K, V]])
+    (acc: Array[T])
+    (project: (K, V) -> T): Array[T]
+= plum__array_fold_context_raw(
+    children,
+    acc,
+    project,
+    (),
+    (),
+    |out, child, get, unused1, unused2| map_node_collect(child, out, get)
+)
+
+let plum__array_map_exact_raw[T, U] (source: Array[T]) (project: (T) -> U): Array[U] =
+    Array.map(source, project)
+
+let map_project[K, V, T]
+    (m: Map[K, V])
+    (project: (K, V) -> T)
+    (leaf_project: (MapNode[K, V]) -> T)
+    (entry_project: (MapEntry[K, V]) -> T): Array[T]
+= match m {
+    Map { root, size } => match root {
+        MapEmpty => [],
+        MapLeaf(_, key, value) => [project(key, value)],
+        MapCollision(_, entries) => plum__array_map_exact_raw(entries, entry_project),
+        MapBranch(_, children) => {
+            // Branch children are nonempty. One member per slot means they are leaves.
+            if children.len() == size { plum__array_map_exact_raw(children, leaf_project) }
+            else { map_collect_children(children, plum__array_reserve_empty_raw(size), project) }
+        },
+    },
+}
+
+let map_project_nonleaf[T] (): T = {
+    panic_raw("flat map projection requires a leaf");
+    let none: Array[T] = [];
+    none[0]
 }
 
 /// Every key, in no particular order.
-pub let Map.keys[K, V] (m: Map[K, V]): Array[K] = match m {
-    Map { root, size } => map_node_collect(root, plum__array_reserve_empty_raw(size), |k, v| k),
-}
+pub let Map.keys[K, V] (m: Map[K, V]): Array[K] = map_project(
+    m,
+    |k, v| k,
+    |node| match node {
+        MapLeaf(_, key, _) => key,
+        _ => map_project_nonleaf(()),
+    },
+    |entry| entry.key
+)
 
 /// Every value, in the same order as `Map.keys`.
-pub let Map.values[K, V] (m: Map[K, V]): Array[V] = match m {
-    Map { root, size } => map_node_collect(root, plum__array_reserve_empty_raw(size), |k, v| v),
-}
+pub let Map.values[K, V] (m: Map[K, V]): Array[V] = map_project(
+    m,
+    |k, v| v,
+    |node| match node {
+        MapLeaf(_, _, value) => value,
+        _ => map_project_nonleaf(()),
+    },
+    |entry| entry.value
+)
 
 // The compiler folds both arrays directly, transferring eligible slots.
 // Older bootstrap compilers can read the same bounded prefix by index.
