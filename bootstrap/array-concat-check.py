@@ -41,6 +41,7 @@ def main():
             definitions = []
             for name in ['plum_array_concat_size', 'plum_array_concat', 'plum_array_concat_impl',
                          'plum_array_concat_exact', 'plum_array_interleave_exact', 'plum_array_interleave_slots',
+                         'plum_array_merge_fits', 'plum_array_try_reuse_right',
                          'plum_u32_count_ones', 'plum_array_len',
                          'plum_array_copy', 'plum_array_inc_elems', 'plum_alloc_preferred_or_fail',
                          'plum_rc_inc', 'plum_free']:
@@ -56,6 +57,7 @@ def main():
             constants = re.findall(r'^@(?:plum_[nb]_alloc|plum_n_array|\.plum_array_empty|\.plum_aconcat_(?:size_error|alloc_error)|\.plum_ainterleave_error) = .*$', ir, re.M)
             declarations = '''declare ptr @concat_test_malloc(i64)
 declare ptr @memcpy(ptr, ptr, i64)
+declare ptr @memmove(ptr, ptr, i64)
 declare void @free(ptr)
 declare i64 @malloc_usable_size(ptr)
 declare void @plum_memory_fatal(ptr, i64) noreturn
