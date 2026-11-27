@@ -119,37 +119,45 @@ pub enum InterpPiece {
 }
 
 // --- Character classification ---
-//
-// Plum has no char-code/ord conversion (checked directly — no such
-// primitive exists), so these are membership checks against a fixed
-// alphabet, not range arithmetic the way the Rust lexer's
-// `is_ascii_alphabetic`/`is_ascii_digit` work.
-//
-// The alphabets are pre-split into `Array[String]` GLOBALS (evaluated
-// exactly once at startup) and tested with `Array.contains`, rather
-// than calling `String.index_of(<alphabet>, c)` per character. That
-// looks equivalent but isn't: `String.index_of` is defined as
-// `string_index_of_acc(chars_of(s), chars_of(needle), 0)`, so every
-// single call re-split the whole 52-character alphabet into 52
-// separate heap-allocated one-character strings. With classification
-// running two or three times per source character, that was ~7 million
-// string allocations while tokenizing this project's own 69KB parser
-// source — the dominant cost by a wide margin, measured with
-// `PLUM_ALLOC_STATS`. Hoisting the split to a global makes it 52
-// allocations total, once, for the whole program.
-let PLUM_ALPHA: String = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ"
 
-let PLUM_DIGITS: String = "0123456789"
+let bytes_at_raw (bytes: Bytes) (i: Int): Int = 0
 
-let PLUM_ALPHA_CHARS: Array[String] = chars_of(PLUM_ALPHA)
+let ascii_upper (byte: Int): Bool = byte >= 65 && byte <= 90
 
-let PLUM_DIGIT_CHARS: Array[String] = chars_of(PLUM_DIGITS)
+// chars_of groups continuation bytes with the first byte. A malformed
+// group starting with an ASCII capital must behave like the same unit
+// produced by the lexer.
+pub let is_capitalized (name: String): Bool = {
+    let size = name.len();
+    if size == 0 { false }
+    else {
+        let bytes = name.as_bytes();
+        if !ascii_upper(bytes_at_raw(bytes, 0)) { false }
+        else if size == 1 { true }
+        else {
+            let next = bytes_at_raw(bytes, 1);
+            next < 128 || next >= 192
+        }
+    }
+}
 
-let is_digit_char (c: String): Bool = Array.contains(PLUM_DIGIT_CHARS, c)
+// Identifier and digit syntax accept only single-byte ASCII units.
+let ascii_char_byte (c: String): Int =
+    if c.len() == 1 { bytes_at_raw(c.as_bytes(), 0) } else { 0 - 1 }
 
-let is_ident_start_char (c: String): Bool = Array.contains(PLUM_ALPHA_CHARS, c) || c == "_"
+let ascii_digit (byte: Int): Bool = byte >= 48 && byte <= 57
 
-let is_ident_continue_char (c: String): Bool = is_ident_start_char(c) || is_digit_char(c)
+let ascii_ident_start (byte: Int): Bool =
+    ascii_upper(byte) || (byte >= 97 && byte <= 122) || byte == 95
+
+let is_digit_char (c: String): Bool = ascii_digit(ascii_char_byte(c))
+
+let is_ident_start_char (c: String): Bool = ascii_ident_start(ascii_char_byte(c))
+
+let is_ident_continue_char (c: String): Bool = {
+    let byte = ascii_char_byte(c);
+    ascii_ident_start(byte) || ascii_digit(byte)
+}
 
 // --- Whitespace/comment skipping ---
 
@@ -1189,6 +1197,31 @@ pub let render_tokens (tokens: Array[Token]): String =
         ),
         |t| render_token(t)
     ))
+
+pub let test_ascii_identifier_classification (): Unit = {
+    let upper = "ABCDEFGHIJKLMNOPQRSTUVWXYZ";
+    let letters = "abcdefghijklmnopqrstuvwxyz".concat(upper);
+    let digits = "0123456789";
+    for byte in 0..128 {
+        let text = if byte == 0 { "\x00" } else {
+            unsafe { Bytes.from_array([byte]).as_cstr().as_string() }
+        };
+        let start = letters.contains(text) || text == "_";
+        let digit = digits.contains(text);
+        assert_eq(is_ident_start_char(text), start);
+        assert_eq(is_ident_continue_char(text), start || digit);
+        assert_eq(is_digit_char(text), digit);
+        assert_eq(is_capitalized(text), upper.contains(text));
+    };
+    assert(is_capitalized("Zé"));
+    assert(!is_capitalized("Ä"));
+    assert(!is_capitalized(""));
+    assert(!is_ident_start_char("aa"));
+    assert(!is_digit_char("١"));
+    let grouped = unsafe { Bytes.from_array([65, 128]).as_cstr().as_string() };
+    assert(!is_capitalized(grouped));
+    assert(!is_ident_start_char(grouped));
+}
 
 pub let test_source_positions_newlines (): Unit = {
     for newline in ["\n", "\r", "\r\n"] {

@@ -1897,7 +1897,9 @@ let infer_ident
                 Some(sig) => infer_partial_call(p2, state, env, acc, sig, []),
                 None => match builtin_sig(name) {
                     Some(sig) => infer_partial_call(p2, state, env, acc, sig, []),
-                    None => if is_capitalized_name(name) { infer_variant_ref(p2, state, acc, name) } else {
+                    None => if lexer.is_capitalized(name) {
+                        infer_variant_ref(p2, state, acc, name)
+                    } else {
                         {
                             fail_tc("unbound variable: ".concat(name));
                             ir_unsupported(acc, state, "unbound variable ".concat(name))
@@ -1998,15 +2000,6 @@ let find_global_acc
     if i >= globals.len() { None } else if globals[i].name == name { Some(globals[i]) } else {
         find_global_acc(globals, name, i + 1)
     }
-
-// Pre-split uppercase alphabet as a GLOBAL (evaluated once), tested
-// with `Array.contains` — NOT `String.index_of("ABC...", c)`, which
-// re-splits the whole 26-character literal into 26 fresh heap strings
-// on every single call. See `lexer/lexer.plum`'s own character-
-// classification comment for the measurement behind this.
-let UPPERCASE_CHARS: Array[String] = chars_of("ABCDEFGHIJKLMNOPQRSTUVWXYZ")
-
-let is_capitalized_name (name: String): Bool = Array.contains(UPPERCASE_CHARS, chars_of(name)[0])
 
 // `()` is the UNIT VALUE, not a zero-element tuple — the parser
 // produces `ETuple([])` for it (there's no separate unit literal node),
@@ -4339,7 +4332,7 @@ let infer_named_call
                     let r = infer_optional_expected(p2, state, env, acc, args[0], inner);
                     ir_leaf(ITRef(subst_apply(r.subst, r.ty)), r.subst, r.state, TRefNew(r.texpr))
                 } else {
-                    if is_capitalized_name(name) {
+                    if lexer.is_capitalized(name) {
                         match resolve_variant(p2, name) {
                             Some(v) => infer_variant_call_expected(
                                 p2,

@@ -80,9 +80,10 @@ let hl_class (t: lexer.Token) (text: String): String =
         // deliberate over-approximation: a variable called `require`
         // would be painted as a keyword. That is the right trade for a
         // highlighter, where a rare false positive costs a colour and
-        // the alternative costs a parse.
+        // the alternative costs a parse. A leading ASCII capital
+        // conventionally names a type or variant.
         TokIdent(name) => if hl_is_contextual_keyword(name) { "k" }
-        else if hl_starts_upper(name) { "t" }
+        else if lexer.is_capitalized(name) { "t" }
         else { "" },
         TokUnderscore => "k",
         TokEof => "",
@@ -95,17 +96,6 @@ let hl_class (t: lexer.Token) (text: String): String =
 
 let hl_is_contextual_keyword (name: String): Bool =
     Array.contains(["handle", "require", "ensure", "on_drop"], name)
-
-// A leading capital means a type or a variant, by convention that the
-// whole standard library follows. There is no other signal available
-// without running the type checker, and running the type checker to
-// colour a fenced snippet -- which may not even be a whole program --
-// would be the wrong trade.
-let hl_starts_upper (name: String): Bool =
-    if String.is_empty(name) { false }
-    else { Array.contains(HL_UPPER, String.slice(name, 0, 1)) }
-
-let HL_UPPER: Array[String] = String.split("ABCDEFGHIJKLMNOPQRSTUVWXYZ", "")
 
 // --- Escaping -----------------------------------------------------
 //
@@ -246,7 +236,7 @@ let hl_class_in (in_def: Bool) (tok: lexer.Token) (text: String): String =
             // `let mut x` -- `mut` follows `let`, and is a keyword, not
             // a name.
             TokIdent(name) => if hl_is_contextual_keyword(name) { "k" }
-            else if hl_starts_upper(name) { "t" }
+            else if lexer.is_capitalized(name) { "t" }
             else { "f" },
             _ => hl_class(tok, text),
         }
