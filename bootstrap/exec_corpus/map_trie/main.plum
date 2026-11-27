@@ -348,6 +348,24 @@ let check_owned_grafted_union (): Unit = {
     assert_eq(right, Set.from_array(right_keys));
 }
 
+let check_absent_set_removal (): Unit = {
+    let left = Set.from_array([key_in_slot(0, 1), key_in_slot(2, 1), key_in_slot(4, 1)]);
+    let absent = key_in_slot(3, 1);
+    let excluded = Set.from_array([absent]);
+    let before = allocation_bytes();
+    for i in 0..64 {
+        assert_eq(Set.len(Set.remove(left, absent)), 3);
+        assert_eq(Set.len(Set.difference(left, excluded)), 3);
+    };
+    let after = allocation_bytes();
+    if before >= 0 {
+        // The lookup misses leave only the allocation observer.
+        assert(after - before <= 96);
+    };
+    assert_eq(Set.len(left), 3);
+    assert(Set.contains(excluded, absent));
+}
+
 let check_owned_overlapping_union (): Unit = {
     let common = key_in_slot(0, 1);
     let left_only = key_in_slot(2, 1);
@@ -910,6 +928,7 @@ let main (): Unit = {
     check_grafted_union(0);
     check_grafted_union(5);
     check_owned_grafted_union();
+    check_absent_set_removal();
     check_owned_overlapping_union();
     check_owned_spare_graft(false);
     check_owned_spare_graft(true);
