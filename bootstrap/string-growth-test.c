@@ -630,7 +630,28 @@ static int replace_reference(char *out, const char *src, int n, const char *from
     }
     return j;
 }
+static void replacement_reuses(const char *source, const char *from,
+                               const char *to, const char *expected) {
+    int64_t n = (int64_t)strlen(source), length = (int64_t)strlen(expected);
+    void *input = text(source, n, n > length ? n : length);
+    int64_t from_length = (int64_t)strlen(from), to_length = (int64_t)strlen(to);
+    void *pattern = text(from, from_length, from_length);
+    void *target = text(to, to_length, to_length);
+    int64_t allocs = plum_n_alloc, bytes = plum_b_alloc, live = field(3);
+    attempts = 0;
+    void *result = plum_str_replace(input, pattern, target);
+    CHECK(result == input && attempts == 0);
+    CHECK(plum_n_alloc == allocs && plum_b_alloc == bytes && field(3) == live);
+    CHECK(*(int64_t *)result == 1);
+    CHECK(*(int64_t *)pattern == 1 && *(int64_t *)target == 1);
+    value(result, expected, length);
+    plum_rel_str(target); plum_rel_str(pattern); plum_rel_str(result);
+}
+
 static void replacement(void) {
+    replacement_reuses("aaaaa", "aa", "bbb", "bbbbbba");
+    replacement_reuses("xyzaaaaa", "aa", "bbb", "xyzbbbbbba");
+    replacement_reuses("xyxy!", "xy", "q", "qq!");
     uint64_t state = 492;
     for (int trial = 0; trial < 2048; ++trial) {
         state = state * UINT64_C(6364136223846793005) + 1;
@@ -1088,8 +1109,11 @@ int main(int argc, char **argv) {
             else if (!strcmp(argv[1], "replace-header-overflow")) { plum_str_replace_length(max, 1, 2, 1); return 4; }
             else if (!strcmp(argv[1], "replace-signed-overflow")) { plum_str_replace_length(max, 1, max, 1); return 4; }
             else if (!strcmp(argv[1], "replace-oom")) {
-                struct {int64_t rc, n; char data[3];} s = {1, 1, "a"}, f = {1, 1, "a"}, t = {1, 2, "bb"};
-                failures = 1; plum_str_replace(&s, &f, &t); return 4;
+                void *input = text("a", 1, 1);
+                struct {int64_t rc, n; char data[2];} pattern = {1, 1, "a"};
+                /* Request one more byte than the owned receiver can hold. */
+                int64_t target[] = {1, (int64_t)malloc_usable_size(input) - 16};
+                failures = 1; plum_str_replace(input, &pattern, target); return 4;
             }
             else return 3;
             /* Invalid headers fail before any payload or reference update. */
