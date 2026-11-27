@@ -1674,11 +1674,17 @@ let plum__mod_floor (a: Int) (m: Int): Int = {
 /// The raw step: advance by SplitMix64's golden-ratio increment, then
 /// mix all 64 bits. Keep the sign bit here: wide integer ranges need
 /// the full signed domain. Each caller reduces the output as needed.
-let rng_step (r: Rng): (Rng, Int) = {
-    let next = Rng { state: Int.wrapping_add(r.state, RNG_GAMMA) };
-    let z1 = Int.wrapping_mul(next.state ^ Int.shr_logical(next.state, 30), RNG_MIX_1);
+let rng_advance (state: Int): Int = Int.wrapping_add(state, RNG_GAMMA)
+
+let rng_mix (state: Int): Int = {
+    let z1 = Int.wrapping_mul(state ^ Int.shr_logical(state, 30), RNG_MIX_1);
     let z2 = Int.wrapping_mul(z1 ^ Int.shr_logical(z1, 27), RNG_MIX_2);
-    (next, z2 ^ Int.shr_logical(z2, 31))
+    z2 ^ Int.shr_logical(z2, 31)
+}
+
+let rng_step (r: Rng): (Rng, Int) = {
+    let next = rng_advance(r.state);
+    (Rng { state: next }, rng_mix(next))
 }
 
 /// A `Float` in `[0.0, 1.0)`. Use 53 exactly representable bits so
@@ -1728,12 +1734,20 @@ let rng_wide (r: Rng) (lo: Int) (hi: Int): (Rng, Int) = {
     if z < lo || z >= hi { rng_wide(next, lo, hi) } else { (next, z) }
 }
 
+let rng_below_limit (span: Int): Int = RNG_RANGE - plum__mod_floor(RNG_RANGE, span)
+
+let rng_nonnegative_sample (state: Int): Int = rng_mix(state) & RNG_RANGE
+
+// Return the accepted state alone. The caller can mix it again without
+// allocating a tuple for each draw or each retry.
+let rng_below_state (state: Int) (limit: Int): Int = {
+    let next = rng_advance(state);
+    if rng_nonnegative_sample(next) >= limit { rng_below_state(next, limit) } else { next }
+}
+
 let rng_below (r: Rng) (span: Int) (lo: Int): (Rng, Int) = {
-    let range = RNG_RANGE;
-    let limit = range - plum__mod_floor(range, span);
-    let (next, raw) = rng_step(r);
-    let z = raw & RNG_RANGE;
-    if z >= limit { rng_below(next, span, lo) } else { (next, lo + plum__mod_floor(z, span)) }
+    let next = rng_below_state(r.state, rng_below_limit(span));
+    (Rng { state: next }, lo + plum__mod_floor(rng_nonnegative_sample(next), span))
 }
 
 /// A boolean, evenly, and the next generator.
@@ -1745,16 +1759,20 @@ pub let Rng.bool (r: Rng): (Rng, Bool) = {
 /// Fisher-Yates, walking from the end so every permutation is equally
 /// likely. The naive version, swapping each element with any other, is
 /// not uniform, and looks fine until somebody counts.
-pub let Rng.shuffle[T] (r: Rng) (xs: Array[T]): (Rng, Array[T]) =
-    rng_shuffle_acc(r, xs, xs.len() - 1)
+pub let Rng.shuffle[T] (r: Rng) (xs: Array[T]): (Rng, Array[T]) = {
+    let last = xs.len() - 1;
+    if last <= 0 { (r, xs) } else { rng_shuffle_acc(r.state, xs, last) }
+}
 
-let rng_shuffle_acc[T] (r: Rng) (xs: Array[T]) (i: Int): (Rng, Array[T]) =
-    if i <= 0 { (r, xs) } else {
-        let (next, j) = Rng.int_range(r, 0, i + 1);
-        rng_shuffle_acc(next, plum__swap(xs, i, j), i - 1)
+let rng_shuffle_acc[T] (state: Int) (xs: Array[T]) (i: Int): (Rng, Array[T]) =
+    if i <= 0 { (Rng { state }, xs) } else {
+        let span = i + 1;
+        let next = rng_below_state(state, rng_below_limit(span));
+        let j = plum__mod_floor(rng_nonnegative_sample(next), span);
+        rng_shuffle_acc(next, plum__array_swap_raw(xs, i, j), i - 1)
     }
 
-let plum__swap[T] (xs: Array[T]) (i: Int) (j: Int): Array[T] =
+let plum__array_swap_raw[T] (xs: Array[T]) (i: Int) (j: Int): Array[T] =
     if i == j { xs } else {
         let a = xs[i];
         let b = xs[j];

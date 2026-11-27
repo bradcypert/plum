@@ -91,9 +91,24 @@ let main (): Unit = {
     println("seed -7 ".concat(ints(draw(Rng.from_seed(0 - 7), 4, []))));
 
     // A shuffle is a permutation, and an empty range draws nothing.
-    let (_, shuffled) = Rng.shuffle(Rng.from_seed(7), [1, 2, 3, 4, 5, 6]);
+    let (shuffle_state, shuffled) = Rng.shuffle(Rng.from_seed(7), [1, 2, 3, 4, 5, 6]);
     println("shuffle ".concat(ints(shuffled)));
     println("sorted  ".concat(ints(Array.sort_int(shuffled))));
+    let expected_words = shuffled.map(|i| i.to_string());
+    let words = [1, 2, 3, 4, 5, 6].map(|i| i.to_string());
+    let (shared_state, shared_words) = Rng.shuffle(Rng.from_seed(7), words);
+    assert_eq(words, ["1", "2", "3", "4", "5", "6"]);
+    assert_eq(shared_words, expected_words);
+    let (owned_state, owned_words) = Rng.shuffle(
+        Rng.from_seed(7),
+        [1, 2, 3, 4, 5, 6].map(|i| i.to_string())
+    );
+    assert_eq(owned_words, expected_words);
+    let (_, expected_draw) = Rng.int_range(shuffle_state, 0, 1000003);
+    let (_, shared_draw) = Rng.int_range(shared_state, 0, 1000003);
+    let (_, owned_draw) = Rng.int_range(owned_state, 0, 1000003);
+    assert_eq(shared_draw, expected_draw);
+    assert_eq(owned_draw, expected_draw);
     let (_, empty) = Rng.int_range(Rng.from_seed(1), 4, 4);
     println("empty   ".concat(empty.to_string()));
 
