@@ -332,6 +332,26 @@ let check_grafted_union (shift: Int): Unit = {
     };
 }
 
+let check_owned_singleton_intersection (): Unit = {
+    let left = Set.from_array([-0.0, 1.0, 2.0]);
+    let right = Set.from_array([0.0]);
+    let before = allocation_bytes();
+    let result = Set.intersection(left, right);
+    let after = allocation_bytes();
+    if before >= 0 {
+        // The right wrappers fit the result. Allow the allocation observer.
+        assert(after - before <= 96);
+    };
+    assert_eq(Set.len(result), 1);
+    assert_eq(Set.to_array(result)[0].to_string(), "-0");
+    assert_eq(Set.len(left), 3);
+
+    let shared_right = Set.from_array([0.0]);
+    let shared_result = Set.intersection(left, shared_right);
+    assert_eq(Set.to_array(shared_result)[0].to_string(), "-0");
+    assert_eq(Set.to_array(shared_right)[0].to_string(), "0");
+}
+
 let check_single_candidate_intersection (a: Int) (b: Int) (deep: Int): Unit = {
     // Only slot zero is shared. Each right set is too small for the coverage scan.
     let outside = key_in_slot(4, 1);
@@ -814,6 +834,7 @@ let main (): Unit = {
     check_collision_replacements(a, b, deep);
     check_set_snapshots(a, b, deep);
     check_single_candidate_intersection(a, b, deep);
+    check_owned_singleton_intersection();
     check_pruned_terminals(a, b, deep);
     check_pruned_bucket(a, b);
     check_set_union_collision_order(a, b, deep);
