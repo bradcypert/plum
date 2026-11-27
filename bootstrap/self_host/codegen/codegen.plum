@@ -789,14 +789,29 @@ let cg_dbg_emit (line: String): Unit = if line == "" { () } else {
 // the whole source and walks it per call, which is fine for one error
 // message and quadratic across the thousands of functions a build
 // emits.
-let cg_line_starts (src: String): Array[Int] = cg_line_starts_acc(chars_of(src), 0, [0])
+let cg_line_starts (src: String): Array[Int] =
+    cg_line_starts_acc(src.as_bytes(), src.len(), 0, 0, [0])
 
-let cg_line_starts_acc (cs: Array[String]) (i: Int) (acc: Array[Int]): Array[Int] =
-    if i >= cs.len() { acc }
+// TreeFS validates the source as UTF-8. Count leading bytes to match the
+// lexer's character offsets. CRLF occupies two characters on one line.
+let cg_line_starts_acc
+    (src: Bytes)
+    (size: Int)
+    (i: Int)
+    (offset: Int)
+    (starts: Array[Int]): Array[Int]
+=
+    if i >= size { starts }
     else {
-        let width = lexer.source_newline_width(cs, i);
-        if width > 0 { cg_line_starts_acc(cs, i + width, acc.push(i + width)) }
-        else { cg_line_starts_acc(cs, i + 1, acc) }
+        let byte = bytes_at_raw(src, i);
+        if byte == 13 && i + 1 < size && bytes_at_raw(src, i + 1) == 10 {
+            cg_line_starts_acc(src, size, i + 2, offset + 2, starts.push(offset + 2))
+        } else if byte == 13 || byte == 10 {
+            cg_line_starts_acc(src, size, i + 1, offset + 1, starts.push(offset + 1))
+        } else {
+            let next = offset + if byte < 128 || byte >= 192 { 1 } else { 0 };
+            cg_line_starts_acc(src, size, i + 1, next, starts)
+        }
     }
 
 // The 1-based line holding `offset`, by binary search over the starts.
@@ -899,34 +914,20 @@ pub struct DbgRef { pub sp: Int, pub loc: Int }
 
 let cg_dbg_none (unit: Unit): DbgRef = DbgRef { sp: 0 - 1, loc: 0 - 1 }
 
-pub struct DbgLoc { pub line: Int, pub id: Int }
+struct DbgLoc { line: Int, suffix: String }
 
-let no_dbg_locs (unit: Unit): Array[DbgLoc] = []
+let cg_dbg_loc_seen (ls: Array[DbgLoc]) (line: Int) (i: Int): String =
+    if i >= ls.len() { "" }
+    else if ls[i].line == line { ls[i].suffix }
+    else { cg_dbg_loc_seen(ls, line, i + 1) }
 
-let DBG_LOCS: Ref[Array[DbgLoc]] = ref(no_dbg_locs(()))
-
-let cg_dbg_loc_seen (ls: Array[DbgLoc]) (line: Int) (i: Int): Int =
-    if i >= ls.len() { 0 - 1 } else if ls[i].line == line { ls[i].id } else {
-        cg_dbg_loc_seen(ls, line, i + 1)
-    }
-
-// The location for one statement. Cached per function -- `DBG_LOCS` is
-// cleared by `cg_dbg_fn` -- because a block of ten statements in a loop
-// would otherwise emit a metadata node per instruction rather than per
-// line.
-let cg_dbg_loc (sp: Int) (f: DbgFile) (off: Int): Int = {
-    let line = cg_line_at(f.starts, off);
-    let seen = cg_dbg_loc_seen(DBG_LOCS.get(), line, 0);
-    if seen >= 0 { seen }
-    else {
-        let id = cg_dbg_next(());
-        cg_dbg_emit(
-            "!${id} = !DILocation(line: ${line}"
-                .concat(", column: 1, scope: !").concat(sp.to_string()).concat(")\n")
-        );
-        DBG_LOCS.set(DBG_LOCS.get().push(DbgLoc { line: line, id: id }));
-        id
-    }
+let cg_dbg_loc (sp: Int) (line: Int): String = {
+    let id = cg_dbg_next(());
+    cg_dbg_emit(
+        "!${id} = !DILocation(line: ${line}"
+            .concat(", column: 1, scope: !").concat(sp.to_string()).concat(")\n")
+    );
+    cg_dbg_suffix(id)
 }
 
 let cg_dbg_fn (shown: String) (path: String) (offset: Int): DbgRef =
@@ -934,10 +935,6 @@ let cg_dbg_fn (shown: String) (path: String) (offset: Int): DbgRef =
     else {
         let f = cg_dbg_file(path);
         let line = cg_line_at(f.starts, offset);
-        // Locations are cached per FUNCTION: two functions may sit on
-        // the same line of different files, and a node's scope is its
-        // own subprogram.
-        DBG_LOCS.set(no_dbg_locs(()));
         let sp = cg_dbg_next(());
         let loc = cg_dbg_next(());
         // `distinct`, because two instantiations of one generic
@@ -975,8 +972,10 @@ let cg_dbg_fn (shown: String) (path: String) (offset: Int): DbgRef =
 // several lines between `[` and `]`, so annotating its cases would put
 // metadata inside an operand list and produce IR that does not parse.
 let cg_dbg_attach (body: String) (loc: Int) (sp: Int) (f: DbgFile): String =
-    if loc < 0 { body }
-    else { cg_dbg_lines(String.split(body, "\n"), 0, loc, false, [], sp, f) }
+    if loc < 0 || body == "" { body }
+    else { cg_dbg_lines(body.as_bytes(), body.len(), 0, cg_dbg_suffix(loc), false, [], [], sp, f) }
+
+let cg_dbg_suffix (loc: Int): String = ", !dbg !${loc}\n"
 
 // A `; plum.off N` marker moves the current location to the line
 // holding offset N; every instruction after it is attributed there.
@@ -989,45 +988,82 @@ let cg_dbg_marker_off (l: String): Int =
     }
     else { 0 - 1 }
 
-// Thread an owned fragment array through tail calls, appending once per
-// branch. Later assignments to the same name conservatively pin earlier
-// reads, so build each line before pushing it. Join the complete body once.
+let str_of_bytes_raw (bytes: Bytes): String = ""
+
+let cg_dbg_line_end (body: Bytes) (size: Int) (i: Int): Int =
+    if i >= size || bytes_at_raw(body, i) == 10 { i }
+    else { cg_dbg_line_end(body, size, i + 1) }
+
+// Scan one line at a time and append its text and shared suffix as separate
+// fragments. The LF boundaries preserve the String's bytes, and one final
+// join copies each line into the output.
+// The location cache belongs to this function's debug scope and grows with
+// the same owned-accumulator pattern as the output fragments.
 let cg_dbg_lines
-    (ls: Array[String])
+    (body: Bytes)
+    (size: Int)
     (i: Int)
-    (loc: Int)
+    (suffix: String)
     (in_list: Bool)
     (parts: Array[String])
+    (locations: Array[DbgLoc])
     (sp: Int)
     (f: DbgFile): String
 =
-    if i >= ls.len() { Array.concat_all(parts) }
+    if i >= size { Array.concat_all(parts) }
     else {
-        let l = ls[i];
-        let off = cg_dbg_marker_off(l);
-        // The last element of a split on a trailing newline is empty;
-        // re-emitting it would double the newline.
-        if i == ls.len() - 1 && l == "" { Array.concat_all(parts) }
-        else if in_list {
-            parts = parts.push(l.concat("\n"));
-            cg_dbg_lines(ls, i + 1, loc, !(String.trim_end(l) == "  ]"), parts, sp, f)
-        }
-        else if off >= 0 {
-            parts = parts.push(l.concat("\n"));
-            cg_dbg_lines(ls, i + 1, cg_dbg_loc(sp, f, off), false, parts, sp, f)
-        }
-        else if l.starts_with("  ") && !l.starts_with("  ;") && String.trim_end(l) != "" {
-            let opens = l.ends_with("[");
-            parts = parts.push(
-                l.concat(if opens { "" } else { ", !dbg !".concat(loc.to_string()) }).concat("\n")
-            );
-            cg_dbg_lines(ls, i + 1, loc, opens, parts, sp, f)
-        }
-        else {
-            parts = parts.push(l.concat("\n"));
-            cg_dbg_lines(ls, i + 1, loc, false, parts, sp, f)
+        let end = cg_dbg_line_end(body, size, i);
+        let line = str_of_bytes_raw(body.slice(i, end));
+        let next = if end < size { end + 1 } else { size };
+        let off = if in_list { 0 - 1 } else { cg_dbg_marker_off(line) };
+        if off >= 0 {
+            let source_line = cg_line_at(f.starts, off);
+            let mut next_locations = locations;
+            let cached = cg_dbg_loc_seen(next_locations, source_line, 0);
+            let updated = if cached == "" {
+                let added = cg_dbg_loc(sp, source_line);
+                next_locations = next_locations.push(DbgLoc { line: source_line, suffix: added });
+                added
+            } else { cached };
+            cg_dbg_lines(
+                body,
+                size,
+                next,
+                updated,
+                false,
+                parts.push(line).push("\n"),
+                next_locations,
+                sp,
+                f
+            )
+        } else {
+            let instruction = !in_list && line.starts_with("  ") && !line.starts_with("  ;")
+                && String.trim_end(line) != "";
+            let next_in_list = if in_list { String.trim_end(line) != "  ]" }
+            else { instruction && line.ends_with("[") };
+            let ending = if instruction && !next_in_list { suffix } else { "\n" };
+            cg_dbg_lines(
+                body,
+                size,
+                next,
+                suffix,
+                next_in_list,
+                parts.push(line).push(ending),
+                locations,
+                sp,
+                f
+            )
         }
     }
+
+pub let test_debug_line_starts_match_lexer_offsets (): Unit = {
+    for source in ["", "first\n", "\r\n", "a\r\rb", "é🚀\r\na\u{2028}b\r終\nlast"] {
+        let starts = cg_line_starts(source);
+        for offset in 0..(String.char_len(source) + 2) {
+            assert_eq(cg_line_at(starts, offset), lexer.line_col(source, offset).line);
+        };
+    };
+}
 
 pub let test_debug_annotation_text_and_locations (): Unit = {
     cg_dbg_reset(());
@@ -1042,14 +1078,15 @@ pub let test_debug_annotation_text_and_locations (): Unit = {
     assert_eq(cg_dbg_attach(body, 7, 8, file), expected);
     assert_eq(cg_dbg_attach("", 7, 8, file), "");
     assert_eq(cg_dbg_attach("  ret i64 0", 7, 8, file), "  ret i64 0, !dbg !7\n");
+    assert_eq(cg_dbg_attach("\n  \t\n  ; café\nentry:", 7, 8, file), "\n  \t\n  ; café\nentry:\n");
     assert_eq(cg_dbg_attach(body, 0 - 1, 8, file), body);
-    let markers = "  ; plum.off 8\n  ret i64 1\n  ; plum.off 4\n  ret i64 2\n";
+    let markers = "  ; plum.off 8\n  ret i64 1\n  ; plum.off 4\n  ret i64 2\n  ; plum.off 8\n  ret i64 3\n";
     assert_eq(
         cg_dbg_attach(markers, 7, 8, file),
-        "  ; plum.off 8\n  ret i64 1, !dbg !6\n  ; plum.off 4\n  ret i64 2, !dbg !5\n"
+        "  ; plum.off 8\n  ret i64 1, !dbg !6\n  ; plum.off 4\n  ret i64 2, !dbg !7\n  ; plum.off 8\n  ret i64 3, !dbg !6\n"
     );
     assert(cg_dbg_module(()).ends_with(
-        "!5 = !DILocation(line: 2, column: 1, scope: !8)\n!6 = !DILocation(line: 3, column: 1, scope: !8)\n"
+        "!5 = !DILocation(line: 2, column: 1, scope: !8)\n!6 = !DILocation(line: 3, column: 1, scope: !8)\n!7 = !DILocation(line: 2, column: 1, scope: !8)\n"
     ));
     cg_dbg_reset(());
     set_debug_info(false)
