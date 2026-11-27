@@ -68,9 +68,38 @@ let closures (): Unit = {
     assert_eq(unsafe { slice_count() }, 12);
 }
 
+let compact_handles (): Unit = {
+    let ys = slice(
+        [make(17), make(18), make(19), make(20), make(21), make(22), make(23), make(24)],
+        2,
+        5
+    );
+    check_order(16, [17, 18, 22, 23, 24]);
+    for i in 0..3 {
+        assert_eq(unsafe { ys[i].raw() }, 19 + i);
+    };
+}
+
 let live (): Int = match Memory.snapshot() {
     Some(s) => s.live_bytes,
     None => -1
+}
+
+let allocated (): Int = match Memory.snapshot() {
+    Some(s) => s.allocated_bytes,
+    None => -1,
+}
+
+let reuse_work (): Unit = {
+    let xs = ints(10);
+    let before = allocated();
+    let middle = slice(xs, 1, 3);
+    let after = allocated();
+    if before >= 0 {
+        // The observer allocates 80 bytes. An extra two-slot cell would add 32.
+        assert(after - before <= 96);
+    };
+    assert_eq(middle, [11, 12]);
 }
 
 let tiny (end: Int): Array[Int] = Array.slice("x".repeat(4096).as_bytes().to_array(), 1, end)
@@ -90,9 +119,23 @@ let compact_work (): Unit = {
     assert_eq(one[0], 120);
 }
 
+let reserved_work (): Unit = {
+    let before = live();
+    let reserved = "x".repeat(64).concat("y".repeat(4032)).as_bytes().to_array();
+    let filtered = reserved.filter(|x| x == 120);
+    let result = slice(filtered, 1, 63);
+    if before >= 0 {
+        assert_eq(live() - before, 512);
+    };
+    assert_eq(result.len(), 62);
+    assert_eq(result[61], 120);
+}
+
 let main (): Unit = {
     let before = live();
     compact_work();
+    reserved_work();
+    reuse_work();
     if before >= 0 {
         assert_eq(live(), before);
     };
@@ -214,5 +257,7 @@ let main (): Unit = {
     check_order(9, [12, 10, 11]);
     closures();
     check_order(12, [16, 13, 14, 15]);
+    compact_handles();
+    check_order(16, [17, 18, 22, 23, 24, 19, 20, 21]);
     println("Array.slice: clamped ranges, compact copies, operand order and scoped owners")
 }

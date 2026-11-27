@@ -4552,7 +4552,13 @@ let cg_fn_call_real
     // Owned array operations need the concrete input destructor. Normal
     // argument preparation evaluates every operand before consumption and
     // preserves scoped lifetime rules for closures and native handles.
-    let vals = if reverse || slice || merge_arrays {
+    let vals = if slice {
+        let array = cg_concrete(p, typecheck.texpr_ty(p.subst, args[0]));
+        let elem = if cg_is_heap(cg_elem_ty(ret)) {
+            cg_rel_sym(cg_array_elem_ity(p, array))
+        } else { "null" };
+        a.vals.push("ptr ".concat(elem)).push("ptr ".concat(cg_rel_sym(array)))
+    } else if reverse || merge_arrays {
         a.vals.push("i1 ".concat(if cg_is_heap(cg_elem_ty(ret)) { "1" } else { "0" }))
             .push("ptr ".concat(cg_rel_sym(cg_concrete(p, typecheck.texpr_ty(p.subst, args[0])))))
     } else { a.vals };

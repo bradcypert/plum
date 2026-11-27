@@ -41,7 +41,7 @@ def main():
             definitions = []
             for name in ['plum_array_concat_size', 'plum_array_concat', 'plum_array_concat_impl',
                          'plum_array_concat_exact', 'plum_array_interleave_exact', 'plum_array_interleave_slots',
-                         'plum_array_merge_fits', 'plum_array_try_reuse_right',
+                         'plum_array_reuse_fits', 'plum_array_try_reuse_right',
                          'plum_u32_count_ones', 'plum_array_len',
                          'plum_array_copy', 'plum_array_inc_elems', 'plum_alloc_preferred_or_fail',
                          'plum_rc_inc', 'plum_free']:
