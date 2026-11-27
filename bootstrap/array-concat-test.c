@@ -74,7 +74,7 @@ static void scalar_case(int64_t na, int64_t nb, int64_t cap, int shared) {
     scalar_drop(out); if (shared) scalar_drop(a);
     CHECK(live() == baseline);
 }
-static void heap_case(int shared, int spare) {
+static void heap_case(int shared_left, int shared_right, int spare) {
     int64_t baseline = live(); int freed = children_freed;
     Child *c = malloc(sizeof *c); CHECK(c); c->rc = 1; c->value = 7;
 #ifdef PLUM_HEAP_STATS
@@ -85,14 +85,17 @@ static void heap_case(int shared, int spare) {
     a->data[0] = a->data[1] = (uint64_t)(uintptr_t)c;
     for (int64_t i = 0; i < nb; i++) b->data[i] = (uint64_t)(uintptr_t)c;
     c->rc += total;
-    if (shared) plum_rc_inc(a);
+    if (shared_left) plum_rc_inc(a);
+    if (shared_right) plum_rc_inc(b);
     int drops = heap_drops;
     Array *out = plum_array_concat(a, b, 1, heap_drop);
-    CHECK(out->len == total && c->rc == total + (shared ? 3 : 1));
-    /* A unique prefix transfers; freeing its old cell never drops children. */
-    CHECK(heap_drops == drops + (shared ? 2 : 1));
+    CHECK(out->len == total && c->rc == total + 1 + (shared_left ? 2 : 0) + (shared_right ? nb : 0));
+    /* Transfer unique children directly. Shared arrays still use the typed release. */
+    CHECK(heap_drops == drops + shared_left + shared_right);
     for (int64_t i = 0; i < total; i++) CHECK(out->data[i] == (uint64_t)(uintptr_t)c);
-    heap_drop(out); if (shared) heap_drop(a);
+    heap_drop(out);
+    if (shared_left) heap_drop(a);
+    if (shared_right) heap_drop(b);
     CHECK(c->rc == 1); child_drop(c);
     CHECK(children_freed == freed + 1 && live() == baseline);
 }
@@ -103,6 +106,28 @@ static void alias_case(void) {
     CHECK(attempts == 1 && requests[0] == 48 && out->len == 4);
     for (int i = 0; i < 4; i++) CHECK(out->data[i] == (uint64_t)(i % 2));
     scalar_drop(out); CHECK(live() == baseline);
+}
+static void heap_alias_case(void) {
+    int64_t baseline = live();
+    int freed = children_freed;
+    Child *child = malloc(sizeof *child);
+    CHECK(child);
+    *child = (Child){3, 7};
+#ifdef PLUM_HEAP_STATS
+    plum_heap_adopt_origin(child, sizeof *child, PLUM_ORIGIN_RECORD);
+#endif
+    Array *a = array(2, 8, 0);
+    a->data[0] = a->data[1] = (uintptr_t)child;
+    plum_rc_inc(a);
+    plum_rc_inc(a);
+    Array *out = plum_array_concat(a, a, 1, heap_drop);
+    CHECK(out != a && a->len == 2 && out->len == 4 && child->rc == 7);
+    for (int i = 0; i < 4; i++) CHECK(out->data[i] == (uintptr_t)child);
+    heap_drop(out);
+    heap_drop(a);
+    CHECK(child->rc == 1);
+    child_drop(child);
+    CHECK(children_freed == freed + 1 && live() == baseline);
 }
 static void retry_case(void) {
     int64_t baseline = live(); Array *a = array(16, 16, 0);
@@ -252,9 +277,12 @@ int main(int argc, char **argv) {
             scalar_case(n, 7, n, shared); scalar_case(n, 7, n + 100, shared);
             scalar_case(n, 0, n + 100, shared); scalar_case(0, n, 4096, shared);
         }
-        heap_case(shared, 0); heap_case(shared, 1);
+        for (int shared_right = 0; shared_right < 2; shared_right++) {
+            heap_case(shared, shared_right, 0);
+            heap_case(shared, shared_right, 1);
+        }
     }
-    alias_case(); retry_case(); exact_allocating_case(0); exact_allocating_case(1);
+    alias_case(); heap_alias_case(); retry_case(); exact_allocating_case(0); exact_allocating_case(1);
     interleave_case(3, 0); interleave_case(8, 0); interleave_case(8, 1); interleave_case(128, 0);
     interleave_heap_case(0); interleave_heap_case(1);
     for (int shared = 0; shared < 2; shared++) {
