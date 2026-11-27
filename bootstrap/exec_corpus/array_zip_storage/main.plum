@@ -57,6 +57,29 @@ let owned_nested (right_shorter: Bool): Unit = {
     }
 }
 
+let sparse_words (prefix: String): Array[String] = {
+    let mut values: Array[String] = [];
+    for i in 0..4096 {
+        values = values.push(prefix.concat(i.to_string()));
+    };
+    let size = prefix.len() + 1;
+    values.filter(|word| word.len() == size)
+}
+
+let oversized_heap_inputs (): Unit = {
+    let before = live_bytes();
+    let pairs = Array.zip(sparse_words("left"), sparse_words("right"));
+    let live = live_bytes();
+    if before >= 0 {
+        assert(live - before < 8192);
+    };
+    assert_eq(pairs.len(), 10);
+    for i in 0..10 {
+        assert_eq(pairs[i].first, "left".concat(i.to_string()));
+        assert_eq(pairs[i].second, "right".concat(i.to_string()));
+    };
+}
+
 let main (): Unit = {
     let empty: Array[String] = [];
     assert_eq(Array.zip(empty, [1]).len(), 0);
@@ -99,6 +122,7 @@ let main (): Unit = {
     };
 
     oversized_input();
+    oversized_heap_inputs();
     owned_nested(false);
     owned_nested(true);
     exercise_scoped();

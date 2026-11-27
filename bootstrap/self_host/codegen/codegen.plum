@@ -6906,9 +6906,9 @@ let cg_array_pair_length (left: String) (right: String) (len: String): String =
         .concat("  ${len}_left = icmp slt i64 ${len}_a, ${len}_b\n")
         .concat("  ${len} = select i1 ${len}_left, i64 ${len}_a, i64 ${len}_b\n")
 
-// Own both inputs through the fill. A reused input transfers each old slot
-// into the callback before the result overwrites it. The other input retains
-// its own reference. Only the result type may release the reused array.
+// Own both inputs through the fill. Unique eligible inputs transfer their
+// consumed elements into the callback. Shared and scoped inputs keep their
+// references. The result type alone releases a reused array header.
 let cg_array_zip_with
     (p: CgProgram)
     (env: Array[CgSlot])
@@ -6955,10 +6955,8 @@ let cg_array_zip_with
     Emit {
         code: left.code.concat(right.code).concat(pair.code).concat(bounds)
             .concat(storage)
-            .concat(if reuse_left { "  ${l}_move = icmp eq ptr ${left.val}, ${out}\n" } else { "" })
-            .concat(
-                if reuse_right { "  ${r}_move = icmp eq ptr ${right.val}, ${out}\n" } else { "" }
-            )
+            .concat(cg_zip_ownership(left.val, left_ty, out, l, reuse_left))
+            .concat(cg_zip_ownership(right.val, right_ty, out, r, reuse_right))
             .concat(loop.pre).concat(body).concat(loop.post)
             .concat(cg_dec_cg(pair.ty, pair.val))
             .concat(cg_zip_release(p, right_e, right, r, reuse_right))
@@ -6974,6 +6972,14 @@ let cg_array_zip_with
 
 let cg_zip_can_reuse (p: CgProgram) (src: typecheck.TExpr): Bool =
     cg_rc_enabled(()) && cg_can_release_early(p, cg_concrete(p, typecheck.texpr_ty(p.subst, src)))
+
+let cg_zip_ownership (src: String) (ty: CgTy) (out: String) (reg: String) (eligible: Bool): String =
+    if !eligible { "" } else {
+        let reused = "  ${reg}_reuse = icmp eq ptr ${src}, ${out}\n";
+        if cg_is_heap(ty) {
+            reused.concat("  ${reg}_move = call i1 @plum_rc_unique(ptr ${src})\n")
+        } else { reused }
+    }
 
 let cg_array_owned_element
     (src: BorrowEmit)
@@ -7000,7 +7006,7 @@ let cg_zip_release
 =
     if reuse {
         let ity = cg_concrete(p, typecheck.texpr_ty(p.subst, src));
-        "  ${reg}_release = select i1 ${reg}_move, ptr null, ptr ${owned.val}\n"
+        "  ${reg}_release = select i1 ${reg}_reuse, ptr null, ptr ${owned.val}\n"
             .concat(cg_dec(ity, reg.concat("_release")))
     } else { owned.drop }
 
