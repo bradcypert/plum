@@ -154,6 +154,24 @@ pub let Array.concat[T] (a: Array[T]) (b: Array[T]): Array[T] = plum__array_conc
 // Fixed-size merges reuse fitting buffers with up to four spare slots.
 let plum__array_concat_exact_raw[T] (a: Array[T]) (b: Array[T]): Array[T] = Array.concat(a, b)
 
+// Interleave up to 32 packed elements. A mask bit selects the right array.
+let plum__array_interleave_exact_raw[T] (a: Array[T]) (b: Array[T]) (right_slots: Int): Array[T] = {
+    let total = a.len() + b.len();
+    let mut merged = plum__array_reserve_empty_raw(total);
+    let mut left_index = 0;
+    let mut right_index = 0;
+    for i in 0..total {
+        if (right_slots & (1 << i)) != 0 {
+            merged = merged.push(b[right_index]);
+            right_index = right_index + 1;
+        } else {
+            merged = merged.push(a[left_index]);
+            left_index = left_index + 1;
+        };
+    };
+    merged
+}
+
 let plum__array_contains_acc[T] (xs: Array[T]) (needle: T) (i: Int): Bool =
     if i >= xs.len() { false } else if xs[i] == needle { true } else {
         plum__array_contains_acc(xs, needle, i + 1)
@@ -2553,22 +2571,16 @@ let set_graft_children[T]
 else if right_bits < (left_bits & - left_bits) { plum__array_concat_exact_raw(right, left) }
 else {
     let mut slots = left_bits | right_bits;
-    let mut left_index = 0;
-    let mut right_index = 0;
+    let mut right_destinations = 0;
     let size = left.len() + right.len();
-    let mut children = plum__array_reserve_empty_raw(size);
     for i in 0..size {
         let bit = slots & - slots;
-        slots = slots & ~bit;
-        if (left_bits & bit) != 0 {
-            children = children.push(left[left_index]);
-            left_index = left_index + 1;
-        } else {
-            children = children.push(right[right_index]);
-            right_index = right_index + 1;
+        slots = slots & (slots - 1);
+        if (right_bits & bit) != 0 {
+            right_destinations = right_destinations | (1 << i);
         };
     };
-    children
+    plum__array_interleave_exact_raw(left, right, right_destinations)
 }
 
 // A successful graft keeps every key from both inputs. A shared full
