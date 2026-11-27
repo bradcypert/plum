@@ -59,7 +59,8 @@ Bytes from `start` up to but not including `end`, with bounds
 clamped. A slice can split a multi-byte character, so the result is
 not guaranteed to be valid UTF-8.
 Whole ranges share their owned storage; empty ranges use shared static
-storage. Other ranges copy only the selected bytes into compact storage.
+storage. Other ranges reuse compact uniquely owned storage when possible
+or copy the selected bytes.
 
 <a id="Bytes.concat"></a>
 
