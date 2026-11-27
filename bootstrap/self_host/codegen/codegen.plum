@@ -4520,11 +4520,15 @@ let cg_fn_call_real
         && targs.len() == 1;
     let slice = module_name == "<prelude>" && name == "Array.slice" && args.len() == 3
         && targs.len() == 1;
+    let interleave = module_name == "<prelude>" && name == "plum__array_interleave_exact_raw"
+        && args.len() == 3 && targs.len() == 1;
     let concat = cg_is_array_concat(module_name, name, targs) && args.len() == 2;
+    let merge_arrays = concat || interleave;
     let bytes_concat = module_name == "<prelude>" && name == "bytes_concat_raw" && args.len() == 2;
     let string_reverse = module_name == "<prelude>" && name == "plum__string_reverse_raw"
         && args.len() == 1;
     let sym = if reverse { "@plum_array_reverse" } else if slice { "@plum_array_slice" }
+    else if interleave { "@plum_array_interleave_exact" }
     else if concat {
         if name == "Array.concat" { "@plum_array_concat" } else { "@plum_array_concat_exact" }
     } else if bytes_concat { "@plum_str_concat_reuse" } else {
@@ -4546,7 +4550,7 @@ let cg_fn_call_real
     // Owned array operations need the concrete input destructor. Normal
     // argument preparation evaluates every operand before consumption and
     // preserves scoped lifetime rules for closures and native handles.
-    let vals = if reverse || slice || concat {
+    let vals = if reverse || slice || merge_arrays {
         a.vals.push("i1 ".concat(if cg_is_heap(cg_elem_ty(ret)) { "1" } else { "0" }))
             .push("ptr ".concat(cg_rel_sym(cg_concrete(p, typecheck.texpr_ty(p.subst, args[0])))))
     } else { a.vals };
@@ -4577,15 +4581,15 @@ let cg_fn_call_real
         // Runtime calls normally borrow every prepared owned argument. Bytes
         // concat shares String's consuming kernel: a Bytes cell has the same
         // layout, and the second prepared owner keeps even self-aliases shared.
-        // Padding and array operations also consume their receivers; Array
-        // concat consumes both. Only remaining language arguments drop here.
+        // Padding and array operations consume their receivers. Array concat
+        // and interleaving consume both arrays. Drop any remaining arguments.
         .concat(
-            if reverse || slice || concat || Option.is_some(cg_runtime_fn(module_name, name)) {
+            if reverse || slice || merge_arrays || Option.is_some(cg_runtime_fn(module_name, name)) {
                 cg_dec_args(
                     p,
                     args,
                     a.vals,
-                    if concat { 2 } else if reverse || slice || bytes_concat || string_reverse
+                    if merge_arrays { 2 } else if reverse || slice || bytes_concat || string_reverse
                         || name == "plum__string_pad_raw" { 1 } else { 0 },
                     ""
                 )

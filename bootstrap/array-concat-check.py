@@ -40,7 +40,8 @@ def main():
             ir = run([compiler, 'emit-llvm', fixture, *flags])
             definitions = []
             for name in ['plum_array_concat_size', 'plum_array_concat', 'plum_array_concat_impl',
-                         'plum_array_concat_exact', 'plum_array_len',
+                         'plum_array_concat_exact', 'plum_array_interleave_exact', 'plum_array_interleave_slots',
+                         'plum_u32_count_ones', 'plum_array_len',
                          'plum_array_copy', 'plum_array_inc_elems', 'plum_alloc_preferred_or_fail',
                          'plum_rc_inc', 'plum_free']:
                 match = re.search(r'^define [^\n]*@' + name + r'\([^\n]*\).*?^}', ir, re.M | re.S)
@@ -52,7 +53,7 @@ def main():
                         raise RuntimeError('preferred-allocation seam changed')
                     body = body.replace('call ptr @malloc(', 'call ptr @concat_test_malloc(')
                 definitions.append(body)
-            constants = re.findall(r'^@(?:plum_[nb]_alloc|plum_n_array|\.plum_array_empty|\.plum_aconcat_(?:size_error|alloc_error)) = .*$', ir, re.M)
+            constants = re.findall(r'^@(?:plum_[nb]_alloc|plum_n_array|\.plum_array_empty|\.plum_aconcat_(?:size_error|alloc_error)|\.plum_ainterleave_error) = .*$', ir, re.M)
             declarations = '''declare ptr @concat_test_malloc(i64)
 declare ptr @memcpy(ptr, ptr, i64)
 declare void @free(ptr)
@@ -76,6 +77,8 @@ declare void @plum_memory_fatal(ptr, i64) noreturn
                 for case in ['negative-left', 'negative-right', 'large-left', 'large-right', 'combined', 'oom']:
                     message = 'cannot allocate concatenation storage' if case == 'oom' else 'invalid concatenation size'
                     run([binary, case], error=f'Plum Array: {message}\n')
+                for case in ('mask-range', 'mask-count', 'mask-total'):
+                    run([binary, case], error='Plum Array: invalid interleave slots\n')
                 print(f'array-concat: {optimization} tracked={tracked} passed', flush=True)
 
 
