@@ -330,7 +330,24 @@ static void joining(void) {
     (void)origins;
 #endif
     plum_rel_str(out); CHECK(field(3) == live);
-    parts.length = 4; parts.items[1] = blank; parts.items[2] = source; parts.items[3] = blank;
+    void *compact = text(chunk, 4, 4);
+    parts.items[0] = compact;
+    n = plum_n_alloc; bytes = plum_b_alloc; live = field(3); attempts = 0;
+    out = plum_str_join(&parts, source);
+    CHECK(out == compact && *(int64_t *)compact == 2);
+    value(out, chunk, 4); plum_rel_str(out);
+    parts.length = 3; parts.items[0] = blank; parts.items[1] = compact; parts.items[2] = blank;
+    out = plum_str_concat_all(&parts);
+    CHECK(out == compact && *(int64_t *)compact == 2);
+    value(out, chunk, 4); plum_rel_str(out);
+    parts.length = 2; parts.items[1] = blank;
+    out = plum_str_join(&parts, compact);
+    CHECK(out == compact && *(int64_t *)compact == 2);
+    value(out, chunk, 4); plum_rel_str(out);
+    CHECK(*(int64_t *)compact == 1 && attempts == 0);
+    CHECK(plum_n_alloc == n && plum_b_alloc == bytes && field(3) == live);
+    plum_rel_str(compact);
+    parts.length = 4; parts.items[0] = source; parts.items[1] = blank; parts.items[2] = source; parts.items[3] = blank;
     plum_rc_inc(source); plum_rc_inc(blank); /* duplicate array edges */
     char expected[20]; for (int i = 0; i < 5; ++i) memcpy(expected + 4*i, chunk, 4);
     attempts = 0;
@@ -976,8 +993,10 @@ int main(int argc, char **argv) {
             else if (!strcmp(argv[1], "join-product-overflow")) { parts.length = 3; huge[1] = INT64_MAX; sep = huge; }
             else if (!strcmp(argv[1], "join-separator-header-overflow")) { parts.length = 2; huge[1] = INT64_MAX - 16; sep = huge; }
             else if (!strcmp(argv[1], "join-combined-overflow")) { parts.length = 2; sep = huge; }
-            else if (!strcmp(argv[1], "join-oom")) failures = 1;
-            else if (!strcmp(argv[1], "concat-all-oom")) { failures = 1; plum_str_concat_all(&parts); return 4; }
+            else if (!strcmp(argv[1], "join-oom") || !strcmp(argv[1], "concat-all-oom")) {
+                parts.length = 2; parts.items[1] = one; failures = 1;
+                if (!strcmp(argv[1], "concat-all-oom")) { plum_str_concat_all(&parts); return 4; }
+            }
             else return 3;
             /* OOM cases have no byte payload: failure must precede copying. */
             plum_str_join(&parts, sep);
