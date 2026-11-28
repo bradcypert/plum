@@ -17,6 +17,8 @@ let main (): Unit = {
     show("é中🙂é!", "!");
     show("é中🙂é!", "é!");
     show("ééé中", "éé中");
+    assert_eq(String.index_of("éaaaaaaaaab", "aaaaaaaa"), Some(1));
+    assert_eq(String.index_of("éaaaaaaaaab", "aaaaaaaaa"), Some(1));
     show(
         Bytes.as_string(Bytes.from_array([97, 0, 98, 0, 99])).unwrap_or(""),
         Bytes.as_string(Bytes.from_array([0, 99])).unwrap_or("")

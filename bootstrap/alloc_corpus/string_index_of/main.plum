@@ -1,6 +1,5 @@
-// Search must not materialize one heap string per character. The
-// needle's prefix table grows geometrically; haystack length adds no
-// search allocations. Includes misses, hits, and Unicode offsets.
+// Search reserves the long needle's prefix table at its final size.
+// Short needles and haystack length add no scratch allocations.
 let doubled (s: String) (n: Int): String = if n <= 0 { s } else { doubled(s.concat(s), n - 1) }
 
 let main (): Unit = {
