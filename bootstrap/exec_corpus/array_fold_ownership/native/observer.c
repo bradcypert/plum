@@ -1,9 +1,10 @@
 #include <stdint.h>
 #include <stdlib.h>
 extern int64_t plum_heap_snapshot(void), plum_heap_snapshot_field(int64_t, int64_t);
-static int64_t closed[12], order[12], total;
+enum { resource_count = 15 };
+static int64_t closed[resource_count], order[resource_count], total;
 void fold_close(int64_t n) {
-    if (n < 0 || n >= 12 || closed[n] || total >= 12) abort();
+    if (n < 0 || n >= resource_count || closed[n] || total >= resource_count) abort();
     closed[n]++; order[total++] = n;
 }
 int64_t fold_total(void) { return total; }
