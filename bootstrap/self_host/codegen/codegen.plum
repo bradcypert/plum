@@ -4508,6 +4508,10 @@ let cg_fn_call
     // Match the runtime's existing name-based dispatch for these retags.
     if (name == "bytes_of_str_raw" || name == "str_of_bytes_raw") && args.len() == 1 {
         cg_leaf_tail(p, tail, cg_retag_owned(p, env, n, args[0], ret))
+    } else if name == "bytes_at_raw" && args.len() == 2 {
+        // Keep a temporary owner when evaluating the index can invalidate
+        // the byte source's slot. Stable reads use the slot's existing owner.
+        cg_leaf_tail(p, tail, cg_borrowed_binop(p, env, n, args[0], args[1], "@plum_bytes_at", ret))
     } else if cg_is_array_zip_with(module_name, name) {
         cg_leaf_tail(p, tail, cg_array_zip_with(p, env, n, args[0], args[1], args[2]))
     } else if cg_is_array_insert(module_name, name) {
@@ -5013,16 +5017,16 @@ let cg_method_call
     else if method_name == "to_int" { cg_to_int(p, env, n, base) }
     else if method_name == "round_to_int" { cg_round_to_int(p, env, n, base) }
     else if method_name == "ends_with" {
-        cg_str_binop(p, env, n, base, args[0], "@plum_str_ends_with", CgBool)
+        cg_borrowed_binop(p, env, n, base, args[0], "@plum_str_ends_with", CgBool)
     }
     else if method_name == "starts_with" {
-        cg_str_binop(p, env, n, base, args[0], "@plum_str_starts_with", CgBool)
+        cg_borrowed_binop(p, env, n, base, args[0], "@plum_str_starts_with", CgBool)
     }
     else if method_name == "contains" {
-        cg_str_binop(p, env, n, base, args[0], "@plum_str_contains", CgBool)
+        cg_borrowed_binop(p, env, n, base, args[0], "@plum_str_contains", CgBool)
     }
     else if method_name == "split" {
-        cg_str_binop(p, env, n, base, args[0], "@plum_str_split", CgArray(CgStr))
+        cg_borrowed_binop(p, env, n, base, args[0], "@plum_str_split", CgArray(CgStr))
     }
     // Ported verbatim from the real backend -- see `runtime.plum`'s
     // "Unicode string operations".
@@ -5239,7 +5243,7 @@ let cg_str_consume
     }
 }
 
-let cg_str_binop
+let cg_borrowed_binop
     (p: CgProgram)
     (env: Array[CgSlot])
     (n: Int)
@@ -5253,8 +5257,9 @@ let cg_str_binop
     let reg = cg_reg(b.n);
     Emit {
         code: a.code.concat(b.code).concat("  ").concat(reg).concat(" = call ")
-            .concat(cg_llvm_ty(ret)).concat(" ").concat(fn_name).concat("(ptr ").concat(a.val)
-            .concat(", ptr ").concat(b.val).concat(")\n")
+            .concat(
+                "${cg_llvm_ty(ret)} ${fn_name}(${cg_llvm_ty(a.ty)} ${a.val}, ${cg_llvm_ty(b.ty)} ${b.val})\n"
+            )
             .concat(a.drop).concat(b.drop),
         allocas: a.allocas.concat(b.allocas),
         releases: a.releases.concat(b.releases),

@@ -15,6 +15,13 @@
 // is checked. This fixture pins both directions of that conversion, and
 // the cases where the two types genuinely disagree.
 
+let bytes_at_raw (bytes: Bytes) (i: Int): Int = 0
+
+let read_last (bytes: Bytes): Int = bytes_at_raw(bytes, {
+    let length = bytes.len();
+    length - 1
+})
+
 let main (): Unit = {
     // --- Text in, bytes out ---
     let hi = Bytes.from_string("hi");
@@ -67,6 +74,17 @@ let main (): Unit = {
     let half = accented.slice(0, 1);
     println("half hex: ".concat(half.to_hex()));
     println("half is_utf8: ".concat(half.is_utf8().to_string()));
+
+    // The read owns the original buffer while the index changes its slot.
+    let mut bytes = Bytes.from_array([65]);
+    let previous = bytes_at_raw(bytes, {
+        bytes = Bytes.from_array([90]);
+        0
+    });
+    assert_eq(previous, 65);
+    assert_eq(bytes.at(0), Some(90));
+    assert_eq(bytes_at_raw(Bytes.from_array([87]), 0), 87);
+    assert_eq(read_last(Bytes.from_array([29, 30, 255])), 255);
 
     // --- at / concat / to_array / equality ---
     match hi.at(0) {
