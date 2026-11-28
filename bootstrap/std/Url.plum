@@ -23,10 +23,11 @@ pub struct Url {
     pub fragment: String,
 }
 
-let byte_at (b: Bytes) (i: Int): Int = match b.at(i) {
-    Some(v) => v,
-    None => 0
-}
+// The compiler lowers this private helper to a scalar byte load.
+let bytes_at_raw (b: Bytes) (i: Int): Int = 0
+
+let byte_at (b: Bytes) (i: Int): Int =
+    if i < 0 || i >= b.len() { 0 } else { bytes_at_raw(b, i) }
 
 /// Ports the schemes this module knows about default to. An unknown
 /// scheme gets 0; see `Url`'s note.
@@ -129,8 +130,8 @@ let validate_pct_acc
 
 // Keep decoded UTF-8 checks separate from the raw URI alphabet. Parsing
 // establishes the text contract that lets query_get return only Option.
-let validate_pct (context: String) (s: String): Result[Unit, String] =
-    match validate_pct_acc(s.as_bytes(), 0, [], 0) {
+let validate_pct (context: String) (b: Bytes): Result[Unit, String] =
+    match validate_pct_acc(b, 0, [], 0) {
         Ok(_) => Ok(()),
         Err(Utf8) => Err("Url.parse: ".concat(context).concat(" is not valid UTF-8 once decoded")),
         Err(Escape(e)) => Err("Url.parse: ".concat(context).concat(": ").concat(e)),
@@ -161,20 +162,27 @@ let component_char (kind: Component) (c: Int): Bool =
         Fragment => c == 58 || c == 64 || c == 47 || c == 63,
     }
 
-// Scan raw syntax without allocating decoded text. '%' is provisionally
-// allowed, but its triplet and decoded UTF-8 must pass validate_pct below.
-// All other bytes must be ASCII members of this component's grammar.
-let component_ok (b: Bytes) (kind: Component) (i: Int): Bool =
-    if i >= b.len() { true }
-    else if byte_at(b, i) == 37 || component_char(kind, byte_at(b, i)) {
-        component_ok(b, kind, i + 1)
-    } else { false }
+enum ComponentSyntax { InvalidComponent, PlainComponent, EscapedComponent }
 
-let validate_component (context: String) (kind: Component) (s: String): Result[Unit, String] =
-    if !component_ok(s.as_bytes(), kind, 0) {
-        Err("Url.parse: invalid raw character in ".concat(context))
-    } else if String.contains(s, "%") { validate_pct(context, s) }
-    else { Ok(()) }
+// Check all raw syntax before decoding escapes, and remember whether
+// the component needs that second pass.
+let scan_component (b: Bytes) (kind: Component) (i: Int) (escaped: Bool): ComponentSyntax =
+    if i >= b.len() { if escaped { EscapedComponent } else { PlainComponent } }
+    else {
+        let c = byte_at(b, i);
+        if c == 37 { scan_component(b, kind, i + 1, true) }
+        else if component_char(kind, c) { scan_component(b, kind, i + 1, escaped) }
+        else { InvalidComponent }
+    }
+
+let validate_component (context: String) (kind: Component) (s: String): Result[Unit, String] = {
+    let b = s.as_bytes();
+    match scan_component(b, kind, 0, false) {
+        InvalidComponent => Err("Url.parse: invalid raw character in ".concat(context)),
+        PlainComponent => Ok(()),
+        EscapedComponent => validate_pct(context, b),
+    }
+}
 
 let hex_digit (c: Int): Bool =
     (c >= 48 && c <= 57) || (c >= 65 && c <= 70) || (c >= 97 && c <= 102)

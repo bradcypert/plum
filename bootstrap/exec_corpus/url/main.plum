@@ -95,6 +95,7 @@ let main (): Unit = {
     show("http://h/a\\b");
     show("http://h/<x>");
     show("http://h/?q=[x]");
+    show("http://h/?q=%gg[x]");
     show("http://h/#a#b");
     show("http://é/");
     show("http://h/é");
