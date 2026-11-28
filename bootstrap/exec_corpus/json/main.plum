@@ -22,6 +22,22 @@ let main (): Unit = {
     println(round_trip("[1, 2.5, -3, 1e2]"));
     println(round_trip("\"escaped: \\\"quoted\\\"\""));
     println(round_trip("{bad"));
+    for truncated in [
+        "t",
+        "tr",
+        "tru",
+        "f",
+        "fa",
+        "fal",
+        "fals",
+        "n",
+        "nu",
+        "nul",
+        "[true,tr",
+        "{\"flag\":fa"
+    ] {
+        assert_eq(round_trip(truncated), "error: invalid literal");
+    };
 }
 
 // These fixtures construct finite JSON. Fail loudly if that invariant changes.
