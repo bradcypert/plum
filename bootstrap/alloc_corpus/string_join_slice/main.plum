@@ -1,0 +1,8 @@
+let main (): Unit = {
+    let parts = ["before", "", "owned by the caller", "", "after"];
+    for i in 0..1000 {
+        let joined = Array.concat_all(Array.slice(parts, 1, 4));
+        assert_eq(joined, "owned by the caller");
+    };
+    assert_eq(parts.len(), 5)
+}

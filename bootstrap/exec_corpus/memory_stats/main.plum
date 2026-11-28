@@ -12,6 +12,19 @@ let peak_bytes (): Int = match Memory.snapshot() {
     None => -1
 }
 
+let check_owned_slice_join_peak (): Unit = {
+    let mut parts = ["discard".repeat(100000)];
+    for i in 0..8 {
+        parts = parts.push("x".repeat(16384));
+    };
+    parts = parts.push("skip".repeat(100000));
+    let before = peak_bytes();
+    let joined = Array.concat_all(Array.slice(parts, 1, 9));
+    // A unique slice releases the excluded strings before allocating the result.
+    assert_eq(peak_bytes() <= before + 1024, true);
+    assert_eq(joined.len(), 131072)
+}
+
 let bounded_work (): Unit = {
     let mut values: Array[String] = [];
     let mut map: Map[Int, String] = Map.new(());
@@ -38,6 +51,8 @@ let main (): Unit = {
         println("memory diagnostics disabled")
     } else {
         let baseline = live_bytes();
+        check_owned_slice_join_peak(());
+        assert_eq(live_bytes(), baseline);
         let old_peak = peak_bytes();
         for i in 0..4 {
             bounded_work();
