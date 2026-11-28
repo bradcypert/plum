@@ -1,0 +1,13 @@
+let main (): Unit = {
+    let source = "x".repeat(128);
+    let bytes = source.as_bytes();
+    let empty = Bytes.empty();
+    for i in 0..1024 {
+        assert_eq(source.concat("").len(), 128);
+        assert_eq("".concat(source).len(), 128);
+        assert_eq(Bytes.concat(bytes, empty).len(), 128);
+        assert_eq(Bytes.concat(empty, bytes).len(), 128);
+    };
+    assert_eq(source.len(), 128);
+    assert_eq(bytes.len(), 128)
+}

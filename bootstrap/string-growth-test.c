@@ -167,6 +167,43 @@ static void ownership(void) {
     r = plum_str_concat_reuse(a, b); CHECK(r == a); value(r, "", 0);
     plum_rel_str(r); plum_rel_str(b);
 }
+static void concat_identities(void) {
+    int64_t baseline = field(3);
+    void *compact = text("abc", 3, 3), *empty = text("", 0, 0);
+    int64_t allocs = plum_n_alloc, bytes = plum_b_alloc;
+    attempts = 0;
+    plum_rc_inc(compact);
+    void *out = plum_str_concat_reuse(compact, empty);
+    CHECK(out == compact && *(int64_t *)compact == 2 && attempts == 0);
+    plum_rel_str(out);
+
+    out = plum_str_concat_reuse(empty, compact);
+    CHECK(out == compact && *(int64_t *)compact == 2 && attempts == 0);
+    CHECK(plum_n_alloc == allocs && plum_b_alloc == bytes);
+    value(out, "abc", 3);
+    plum_rel_str(out); plum_rel_str(compact);
+
+    char payload[64]; memset(payload, 'x', sizeof payload);
+    void *wide = text(payload, sizeof payload, 4096);
+    empty = text("", 0, 0);
+    attempts = 0;
+    out = plum_str_concat_reuse(empty, wide);
+    CHECK(out != wide && attempts == 1 && requests[0] == 81);
+    value(out, payload, sizeof payload); plum_rel_str(out);
+
+    empty = text("", 0, 0);
+    plum_rc_inc(wide);
+    attempts = 0;
+    out = plum_str_concat_reuse(wide, empty);
+    CHECK(out != wide && *(int64_t *)wide == 1 && attempts == 1 && requests[0] == 81);
+    value(out, payload, sizeof payload); plum_rel_str(out);
+    attempts = 0;
+    out = plum_str_concat_reuse(wide, empty);
+    CHECK(out == wide && attempts == 0);
+    value(out, payload, sizeof payload); plum_rel_str(out); plum_rel_str(empty);
+    CHECK(field(3) == baseline);
+}
+
 static void growth_fallback(void) {
     char data[128]; memset(data, 'x', sizeof(data));
     void *a = text(data, 128, 128), *b = text("z", 1, 1);
@@ -198,7 +235,11 @@ static void snapshots(void) {
         saved[i] = s; plum_rc_inc(s);
         attempts = 0;
         s = plum_str_concat_reuse(s, b);
-        CHECK(attempts == 1 && requests[0] == i + 18);
+        if (i == 0) {
+            CHECK(s == b && attempts == 0);
+        } else {
+            CHECK(attempts == 1 && requests[0] == i + 18);
+        }
     }
     for (int i = 0; i < 128; ++i) {
         CHECK(((int64_t *)saved[i])[1] == i);
@@ -1124,7 +1165,7 @@ int main(int argc, char **argv) {
         else return 3;
         return 4;
     }
-    arithmetic(); fallback(); ownership(); growth_fallback(); snapshots();
+    arithmetic(); fallback(); ownership(); growth_fallback(); concat_identities(); snapshots();
     for (int steps = 512; steps <= 4096; steps *= 2) traffic(steps);
     repetition(); hexadecimal(); joining(); percent_encoding(); base64_encoding(); base64_decoding(); percent_decoding(); hex_decoding(); replacement(); case_conversion(); owned_transforms(); reversal(); bytes_array_conversion();
     return 0;
