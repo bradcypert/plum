@@ -1,5 +1,5 @@
-// Parse-time validation should not split query fields or construct Params.
-// Keep this query-heavy workload sensitive to reintroducing those temporaries.
+// Keep this workload sensitive to split query fields, per-byte Options,
+// and other temporary allocations during parse-time validation.
 use Url;
 
 let run (text: String) (left: Int) (total: Int): Int =

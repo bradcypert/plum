@@ -27,6 +27,7 @@ http://h/#a b -> Url.parse: raw whitespace or control character
 http://h/a\b -> Url.parse: invalid raw character in path
 http://h/<x> -> Url.parse: invalid raw character in path
 http://h/?q=[x] -> Url.parse: invalid raw character in query
+http://h/?q=%gg[x] -> Url.parse: invalid raw character in query
 http://h/#a#b -> Url.parse: invalid raw character in fragment
 http://é/ -> Url.parse: invalid raw character in host
 http://h/é -> Url.parse: invalid raw character in path
