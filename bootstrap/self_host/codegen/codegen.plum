@@ -2980,18 +2980,9 @@ let cg_for
     }
 }
 
-// `for x in xs` over an ARRAY: an index loop that loads each element
-// into the binding's slot. Structurally `cg_for`'s sibling -- same
-// counter, same three blocks -- with the bound read from the array's
-// length header instead of a second operand.
-//
-// Ownership follows `cg_array_map`'s rule exactly. The array is an
-// owned temporary here (`cg_expr`, not `cg_borrow`), released once the
-// loop is done. Each element is BORROWED from it for the duration of
-// one iteration: the binding takes its own reference on the way in and
-// gives it back on the way out, so a body that stores the element
-// somewhere longer-lived has already incremented it independently, and
-// a body that merely reads it leaves the count where it started.
+// An array iteration owns its source through the loop. A unique array
+// transfers each ordinary element to its binding when that iteration starts.
+// Shared arrays and scoped element types retain a separate binding owner.
 let cg_for_array
     (p: CgProgram)
     (env: Array[CgSlot])
@@ -3000,76 +2991,58 @@ let cg_for_array
     (arr_e: typecheck.TExpr)
     (body: typecheck.TExpr): Emit
 = {
-    let a = cg_expr(p, env, n, arr_e);
+    let a = cg_borrow_owned(p, env, n, arr_e);
     let elem_ity = cg_elem_ity(p, arr_e);
     let elem = cg_of_ity(elem_ity);
     let lty = cg_llvm_ty(elem);
-    let iv = cg_reg(a.n);
-    let slot = cg_reg(a.n + 1);
-    let len_slot = cg_reg(a.n + 2);
-    let cond_label = cg_label(a.n + 3);
-    let body_label = cg_label(a.n + 4);
-    let end_label = cg_label(a.n + 5);
-    let cur = cg_reg(a.n + 6);
-    let bound = cg_reg(a.n + 7);
-    let test = cg_reg(a.n + 8);
-    let ep = cg_reg(a.n + 9);
-    let ev = cg_reg(a.n + 10);
-    let len0 = cg_reg(a.n + 11);
+    let move = cg_rc_enabled(()) && cg_is_heap(elem) && cg_can_release_early(p, elem_ity);
+    let len = cg_reg(a.n);
+    let iv = cg_reg(a.n + 1);
+    let slot = cg_reg(a.n + 2);
+    let loop = cg_array_loop(iv, len, a.n + 3);
+    let value = cg_reg(loop.body_n);
+    let name = cg_let_name(pattern);
+    // Each iteration creates a new binding. Its ownership proof belongs
+    // to that binding, including when it shadows an outer parameter.
+    let owns_last_use = move && cg_single_owner_read(name, body);
+    let body_program = if owns_last_use { CgProgram { movable: p.movable.push(name), ..p } }
+    else if cg_is_movable(p, name) {
+        CgProgram { movable: Array.filter(p.movable, |outer| outer != name), ..p }
+    } else { p };
     let b = cg_expr(
-        p,
+        body_program,
         env.push(CgSlot {
-            name: cg_let_name(pattern),
+            name: name,
             ptr: slot,
             ty: elem,
             ity: elem_ity
         }),
-        a.n + 12,
+        loop.body_n + 1,
         body
     );
-    let step_cur = cg_reg(b.n);
-    let step_next = cg_reg(b.n + 1);
-    let code = a.code
-        .concat("  ").concat(len0).concat(" = call i64 @plum_array_len(ptr ").concat(a.val)
-        .concat(")\n")
-        .concat("  store i64 0, ptr ").concat(iv).concat("\n")
-        .concat("  store i64 ").concat(len0).concat(", ptr ").concat(len_slot).concat("\n")
-        .concat("  br label %").concat(cond_label).concat("\n")
-        .concat(cond_label).concat(":\n")
-        .concat("  ").concat(cur).concat(" = load i64, ptr ").concat(iv).concat("\n")
-        .concat("  ").concat(bound).concat(" = load i64, ptr ").concat(len_slot).concat("\n")
-        .concat("  ").concat(test).concat(" = icmp slt i64 ").concat(cur).concat(", ").concat(bound)
-        .concat("\n")
-        .concat("  br i1 ").concat(test).concat(", label %").concat(body_label).concat(", label %")
-        .concat(end_label).concat("\n")
-        .concat(body_label).concat(":\n")
-        .concat(cg_elem_ptr_lines_at(a.val, cur, ep))
-        .concat("  ").concat(ev).concat(" = load ").concat(lty).concat(", ptr ").concat(ep)
-        .concat("\n")
-        .concat(cg_inc(elem, ev))
-        .concat("  store ").concat(lty).concat(" ").concat(ev).concat(", ptr ").concat(slot)
-        .concat("\n")
+    let prepare = "  ${len} = call i64 @plum_array_len(ptr ${a.val})\n"
+        .concat(
+            if move { "  ${value}_move = call i1 @plum_rc_unique(ptr ${a.val})\n" } else { "" }
+        );
+    let held = cg_reg(b.n);
+    let release = if owns_last_use {
+        // The consuming path clears the slot before taking its owner.
+        "  ${held} = load ptr, ptr ${slot}\n".concat(cg_dec(elem_ity, held))
+    } else { cg_dec(elem_ity, value) };
+    let iteration = cg_array_owned_element(a, elem, loop.idx_reg, value, move)
+        .concat("  store ${lty} ${value}, ptr ${slot}\n")
         .concat(b.code)
         .concat(cg_dec(cg_concrete(p, typecheck.texpr_ty(p.subst, body)), b.val))
-        .concat(cg_dec(elem_ity, ev))
-        .concat("  ").concat(step_cur).concat(" = load i64, ptr ").concat(iv).concat("\n")
-        .concat("  ").concat(step_next).concat(" = add i64 ").concat(step_cur).concat(", 1\n")
-        .concat("  store i64 ").concat(step_next).concat(", ptr ").concat(iv).concat("\n")
-        .concat("  br label %").concat(cond_label).concat("\n")
-        .concat(end_label).concat(":\n")
-        .concat(cg_dec(cg_concrete(p, typecheck.texpr_ty(p.subst, arr_e)), a.val));
-    let allocas = "  ${iv} = alloca i64\n"
-        .concat("  ").concat(len_slot).concat(" = alloca i64\n")
-        .concat("  ").concat(slot).concat(" = alloca ").concat(lty).concat("\n")
-        .concat(a.allocas).concat(b.allocas);
+        .concat(release);
     Emit {
-        code: code,
-        allocas: allocas,
+        code: a.code.concat(prepare).concat(loop.pre).concat(iteration).concat(loop.post)
+            .concat(a.drop),
+        allocas: "  ${iv} = alloca i64\n  ${slot} = alloca ${lty}\n${a.allocas}${b.allocas}",
         releases: a.releases.concat(b.releases),
         globals: a.globals.concat(b.globals),
         val: "0",
         ty: CgUnit,
-        n: b.n + 2
+        n: if owns_last_use { b.n + 1 } else { b.n }
     }
 }
 
@@ -3366,18 +3339,19 @@ let cg_movable_params
             body,
             ps,
             i + 1,
-            if cg_reads_max(ps[i].name, body) <= 1 && !lv_reset_conflict(ps[i].name, body) {
+            if cg_single_owner_read(ps[i].name, body) {
                 acc.push(ps[i].name)
             } else { acc }
         )
     }
 
-// Captures belong to the closure cell and must never enter this set.
-// Count the rewritten body, including any additional reuse-candidate reads,
-// just as named functions do. A lifted closure owns only its parameters.
-// Scoped parameters retain their original cleanup time within each call.
-// The set is name-based: reject rebound names so it cannot authorize a
+// The proof is name-based. Reject rebound names so it cannot authorize a
 // move from a different local slot that happens to have the same spelling.
+let cg_single_owner_read (name: String) (body: typecheck.TExpr): Bool =
+    cg_reads_max(name, body) <= 1 && !lv_reset_conflict(name, body)
+
+// Captures belong to the closure cell. Count the rewritten body and its
+// reuse-candidate reads. Scoped parameters keep their cleanup timing.
 let cg_closure_movable
     (p: CgProgram)
     (body: typecheck.TExpr)
@@ -3393,9 +3367,8 @@ let cg_closure_movable
             params,
             itys,
             i + 1,
-            if cg_can_release_early(p, cg_concrete(p, itys[i])) && cg_reads_max(params[i], body)
-                <= 1
-                && !lv_reset_conflict(params[i], body) { acc.push(params[i]) } else { acc }
+            if cg_can_release_early(p, cg_concrete(p, itys[i]))
+                && cg_single_owner_read(params[i], body) { acc.push(params[i]) } else { acc }
         )
     }
 
