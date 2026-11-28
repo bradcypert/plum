@@ -3700,16 +3700,24 @@ let parse_number (bytes: Bytes) (pos: Int): Result[ParseResult[Float], String] =
     }
 }
 
+let json_literal_matches (bytes: Bytes) (pos: Int) (word: Bytes) (i: Int): Bool =
+    if i >= bytes_len_raw(word) { true }
+    else if bytes_at_raw(bytes, pos + i) != bytes_at_raw(word, i) { false }
+    else { json_literal_matches(bytes, pos, word, i + 1) }
+
 let parse_literal
     (bytes: Bytes)
     (pos: Int)
     (word: String)
     (value: JsonValue): Result[ParseResult[JsonValue], String]
-=
-    if str_of_bytes_raw(bytes_slice_raw(bytes, pos, pos + word.len())) == word {
-        Ok(ParseResult { value: value, next_pos: pos + word.len() })
-    }
+= {
+    let width = word.len();
+    if width <= bytes_len_raw(bytes) - pos
+        && json_literal_matches(bytes, pos, bytes_of_str_raw(word), 0) {
+            Ok(ParseResult { value: value, next_pos: pos + width })
+        }
     else { Err("invalid literal") }
+}
 
 let json_hex (c: Int): Int =
     if c >= 48 && c <= 57 { c - 48 }
