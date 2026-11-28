@@ -1,7 +1,7 @@
 #include <stdint.h>
 #include <stdlib.h>
 extern int64_t plum_heap_snapshot(void), plum_heap_snapshot_field(int64_t, int64_t);
-enum { resource_count = 15 };
+enum { resource_count = 19 };
 static int64_t closed[resource_count], order[resource_count], total;
 void fold_close(int64_t n) {
     if (n < 0 || n >= resource_count || closed[n] || total >= resource_count) abort();

@@ -111,6 +111,56 @@ let scoped_scan (): Unit = {
     assert_eq(total(()), 15)
 }
 
+let find_values (): Unit = {
+    let calls = ref(0);
+    let found = Array.find(big_words(), |s| {
+        let i = calls.get();
+        calls.set(i + 1);
+        if i == 63 {
+            let bytes = unsafe { fold_live() };
+            if bytes >= 0 { assert(bytes < 8192) };
+            String.len(s) == 1024
+        } else { false }
+    });
+    assert_eq(found, Some("x".repeat(1024)));
+    assert_eq(calls.get(), 64);
+    assert_eq(Array.find(texts(), |s| s == "missing"), None);
+    let empty: Array[String] = [];
+    assert_eq(Array.find(empty, |s| true), None);
+    let narrow: Array[U8] = [1, 2, 4];
+    let two: U8 = 2;
+    assert_eq(Array.find(narrow, |v| v > 1), Some(two));
+    assert_eq(Array.find([true, false], |v| !v), Some(false));
+    let aliases = texts();
+    assert_eq(Array.find(aliases, |s| s == aliases[0]), Some(aliases[0]));
+    let saved = ref("");
+    let result = Array.find(texts(), |s| {
+        saved.set(s);
+        true
+    });
+    assert_eq(result, Some("a".repeat(32)));
+    assert_eq(saved.get(), "a".repeat(32));
+}
+
+let scoped_find (): Unit = {
+    let result = Array.find([make(15), make(16), make(17)], {
+        let captured = make(18);
+        |r: Resource| {
+            assert_eq(total(()), 15);
+            assert_eq(unsafe { Resource.raw(captured) }, 18);
+            unsafe { Resource.raw(r) } == 16
+        }
+    });
+    assert_eq(total(()), 18);
+    match result {
+        Some(r) => {
+            assert_eq(unsafe { Resource.raw(r) }, 16);
+            assert_eq(total(()), 18)
+        },
+        None => assert(false),
+    }
+}
+
 let scoped (): Unit = {
     assert_eq(
         Array.fold(resources(0), 0, |n, r| {
@@ -289,6 +339,7 @@ let main (): Unit = {
     let baseline = live();
     assert_eq(reclaim(), 64);
     short_scans(());
+    find_values(());
     round();
     scoped();
     scoped_scan(());
@@ -298,6 +349,15 @@ let main (): Unit = {
     assert_eq(total(), 15);
     for i in 0..15 {
         assert_eq(unsafe { fold_at(i) }, i);
+    };
+    scoped_find(());
+    assert_eq(total(), 19);
+    let order = [15, 17, 18, 16];
+    for i in 0..order.len() {
+        assert_eq(unsafe { fold_at(i + 15) }, order[i]);
+    };
+    if baseline >= 0 {
+        assert_eq(live(), baseline)
     };
     println("Array.fold: owned arguments, prompt reclamation, operand aliases and scoped cleanup")
 }

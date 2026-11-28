@@ -222,13 +222,28 @@ pub let Array.reverse[T] (xs: Array[T]): Array[T] = plum__array_reverse_acc(xs, 
 pub let Array.all[T] (xs: Array[T]) (f: (T) -> Bool): Bool =
     plum__array_short_scan_raw(xs, f, false) < 0
 
-let plum__array_find_acc[T] (xs: Array[T]) (f: (T) -> Bool) (i: Int): Option[T] =
-    if i >= xs.len() { None } else if f(xs[i]) { Some(xs[i]) } else {
-        plum__array_find_acc(xs, f, i + 1)
+let plum__array_find_acc[T, R]
+    (xs: Array[T])
+    (f: (T) -> Bool)
+    (match_value: (T) -> R)
+    (missing: R)
+    (i: Int): R
+=
+    if i >= xs.len() { missing } else if f(xs[i]) { match_value(xs[i]) } else {
+        plum__array_find_acc(xs, f, match_value, missing, i + 1)
     }
 
+let plum__array_find_map_raw[T, R]
+    (xs: Array[T])
+    (f: (T) -> Bool)
+    (match_value: (T) -> R)
+    (missing: R): R
+=
+    plum__array_find_acc(xs, f, match_value, missing, 0)
+
 /// The first element `f` accepts, or `None`.
-pub let Array.find[T] (xs: Array[T]) (f: (T) -> Bool): Option[T] = plum__array_find_acc(xs, f, 0)
+pub let Array.find[T] (xs: Array[T]) (f: (T) -> Bool): Option[T] =
+    plum__array_find_map_raw(xs, f, |value| Some(value), None)
 
 /// The index of the first element `f` accepts, or `None`.
 pub let Array.find_index[T] (xs: Array[T]) (f: (T) -> Bool): Option[Int] = {

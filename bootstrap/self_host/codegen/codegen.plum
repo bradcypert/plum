@@ -4609,6 +4609,8 @@ let cg_fn_call
         cg_leaf_tail(p, tail, cg_array_map(p, env, n, args[0], args[1], true))
     } else if cg_is_array_short_scan(module_name, name, args.len()) {
         cg_leaf_tail(p, tail, cg_array_short_scan(p, env, n, args[0], args[1], args[2]))
+    } else if cg_is_array_find_map(module_name, name, args.len()) {
+        cg_leaf_tail(p, tail, cg_array_find_map(p, env, n, args))
     } else if cg_is_array_remove_compact(module_name, name) {
         cg_leaf_tail(p, tail, cg_array_remove(p, env, n, args[0], args[1], ret, true))
     } else if cg_is_array_reserve_empty(module_name, name) {
@@ -7075,11 +7077,87 @@ let cg_array_short_scan
     }
 }
 
+let cg_array_find_map
+    (p: CgProgram)
+    (env: Array[CgSlot])
+    (n: Int)
+    (args: Array[typecheck.TExpr]): Emit
+= {
+    let input = cg_borrow_owned(p, env, n, args[0]);
+    let pred = cg_expr(p, env, input.n, args[1]);
+    let hit_fn = cg_expr(p, env, pred.n, args[2]);
+    let miss = cg_expr(p, env, hit_fn.n, args[3]);
+    let elem = cg_elem_ty(input.ty);
+    let ret = cg_closure_ret(hit_fn.ty);
+    let arr_ity = cg_concrete(p, typecheck.texpr_ty(p.subst, args[0]));
+    let elem_ity = cg_array_elem_ity(p, arr_ity);
+    let move = cg_rc_enabled(()) && cg_is_heap(elem) && cg_can_release_early(p, elem_ity);
+    let len = cg_reg(miss.n);
+    let iv = cg_reg(miss.n + 1);
+    let result = cg_reg(miss.n + 2);
+    let loop = cg_array_loop(iv, len, miss.n + 3);
+    let b = loop.body_n;
+    let value = cg_reg(b);
+    let hit = cg_label(b + 1);
+    let rejected = cg_label(b + 2);
+    let retire = cg_label(b + 3);
+    let advance = cg_label(b + 4);
+    let accepted = cg_reg(b + 6);
+    let selected = cg_reg(b + 7);
+    let produced = cg_reg(b + 9);
+    let out = cg_reg(b + 10);
+    let prepare = "  ${len} = call i64 @plum_array_len(ptr ${input.val})\n"
+        .concat(
+            if move { "  ${value}_move = call i1 @plum_rc_unique(ptr ${input.val})\n" } else { "" }
+        )
+        .concat("  store ${cg_llvm_ty(ret)} ${miss.val}, ptr ${result}\n");
+    let slot = value.concat("_slot");
+    // The predicate gets a separate owner. A successful value still
+    // needs a reference for the result callback.
+    let inspect = cg_array_owned_element(input, elem, loop.idx_reg, value, false)
+        .concat(cg_invoke(pred.val, CgBool, ", ${cg_llvm_ty(elem)} ${value}", b + 5))
+        .concat("  br i1 ${accepted}, label %${hit}, label %${rejected}\n");
+    let result_value = if move {
+        "  ${selected} = call ptr @plum_array_owned_arg(ptr ${slot}, i1 ${value}_move)\n"
+    } else { cg_inc(elem, value) };
+    let selected_operand = if move { selected } else { value };
+    let prepare_hit = "${hit}:\n".concat(result_value)
+        .concat(cg_invoke(hit_fn.val, ret, ", ${cg_llvm_ty(elem)} ${selected_operand}", b + 8))
+        .concat(cg_dec(cg_concrete(p, typecheck.texpr_ty(p.subst, args[3])), miss.val))
+        .concat("  store ${cg_llvm_ty(ret)} ${produced}, ptr ${result}\n")
+        .concat("  br label %${loop.end_label}\n");
+    let retire_rejected = if move {
+        "  br i1 ${value}_move, label %${retire}, label %${advance}\n"
+            .concat("${retire}:\n  store ptr null, ptr ${slot}\n")
+            .concat(cg_dec(elem_ity, value))
+            .concat("  br label %${advance}\n")
+    } else { "  br label %${advance}\n" };
+    let body = inspect.concat(prepare_hit).concat("${rejected}:\n")
+        .concat(retire_rejected).concat("${advance}:\n");
+    Emit {
+        code: input.code.concat(pred.code).concat(hit_fn.code).concat(miss.code).concat(prepare)
+            .concat(loop.pre).concat(body).concat(loop.post)
+            .concat("  ${out} = load ${cg_llvm_ty(ret)}, ptr ${result}\n")
+            .concat(input.drop).concat(cg_dec_cg(pred.ty, pred.val))
+            .concat(cg_dec_cg(hit_fn.ty, hit_fn.val)),
+        allocas: "  ${iv} = alloca i64\n  ${result} = alloca ${cg_llvm_ty(ret)}\n${input.allocas}${pred.allocas}${hit_fn.allocas}${miss.allocas}",
+        releases: input.releases.concat(pred.releases).concat(hit_fn.releases)
+            .concat(miss.releases),
+        globals: input.globals.concat(pred.globals).concat(hit_fn.globals).concat(miss.globals),
+        val: out,
+        ty: ret,
+        n: b + 11
+    }
+}
+
 let cg_is_array_zip_with (module_name: String) (name: String): Bool =
     module_name == "<prelude>" && name == "plum__array_zip_with_raw"
 
 let cg_is_array_short_scan (module_name: String) (name: String) (count: Int): Bool =
     name == "plum__array_short_scan_raw" && module_name == "<prelude>" && count == 3
+
+let cg_is_array_find_map (module_name: String) (name: String) (count: Int): Bool =
+    name == "plum__array_find_map_raw" && module_name == "<prelude>" && count == 4
 
 let cg_array_pair_length (left: String) (right: String) (len: String): String =
     "  ${len}_a = call i64 @plum_array_len(ptr ${left})\n"
@@ -13039,13 +13117,14 @@ let cg_calls_in (p: CgProgram) (e: typecheck.TExpr) (acc: Array[CgInst]): Array[
         TReleaseBefore(_, body) => cg_calls_in(p, body, acc),
         TFnCall(m, name, args, targs) => {
             // The inlined scan still needs the calls nested in its operands.
-            let with_callee = if cg_is_array_short_scan(m, name, args.len()) { acc } else {
-                acc.push(CgInst {
-                    module: m,
-                    name: name,
-                    targs: cg_concrete_list(p, targs, 0, [])
-                })
-            };
+            let with_callee = if cg_is_array_short_scan(m, name, args.len())
+                || cg_is_array_find_map(m, name, args.len()) { acc } else {
+                    acc.push(CgInst {
+                        module: m,
+                        name: name,
+                        targs: cg_concrete_list(p, targs, 0, [])
+                    })
+                };
             cg_calls_in_list(p, args, with_callee)
         },
         TClosureCall(callee, args) => cg_calls_in_list(p, args, cg_calls_in(p, callee, acc)),
