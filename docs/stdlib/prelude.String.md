@@ -28,8 +28,8 @@ Characters from `start` up to but not including `end`, counted in
 CODEPOINTS rather than bytes. Out-of-range bounds are clamped.
 Scans only as far as the requested boundaries, without allocating an
 array or individual characters. Whole ranges share their owned storage;
-empty ranges use shared static storage. Other ranges copy only the
-selected bytes into compact storage.
+empty ranges use shared static storage. Other ranges reuse compact
+uniquely owned storage when possible or copy the selected bytes.
 
 <a id="String.repeat"></a>
 
@@ -202,8 +202,8 @@ Lowercased with the same platform mapping and storage rules as `String.to_upper`
 ## `let String.trim (s: String): String`
 
 Whitespace removed from both ends, including Unicode spaces.
-Unchanged input shares its owned storage; changed input copies only
-the retained UTF-8 bytes.
+Unchanged input shares its storage. A shorter result can reuse compact,
+uniquely owned storage or copy the retained UTF-8 bytes.
 
 <a id="String.as_bytes"></a>
 
@@ -255,18 +255,16 @@ subnormal value or signed zero.
 ## `let String.trim_start (s: String): String`
 
 Whitespace removed from the start, using the same Unicode whitespace
-predicate as String.trim. Unchanged input shares its owned storage;
-changed nonempty input copies only the retained UTF-8 bytes. Empty
-results use shared static storage.
+predicate and storage rules as String.trim. Empty results use shared
+static storage.
 
 <a id="String.trim_end"></a>
 
 ## `let String.trim_end (s: String): String`
 
 Whitespace removed from the end, using the same Unicode whitespace
-predicate as String.trim. Unchanged input shares its owned storage;
-changed nonempty input copies only the retained UTF-8 bytes. Empty
-results use shared static storage.
+predicate and storage rules as String.trim. Empty results use shared
+static storage.
 
 <a id="String.lines"></a>
 
