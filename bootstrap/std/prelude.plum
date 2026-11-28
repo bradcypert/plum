@@ -189,7 +189,8 @@ let plum__array_short_scan_raw[T] (xs: Array[T]) (f: (T) -> Bool) (stop: Bool): 
 
 /// Whether `f` holds for at least one element. Stops at the first
 /// that passes; false for an empty array.
-pub let Array.any[T] (xs: Array[T]) (f: (T) -> Bool): Bool = plum__array_short_scan_raw(xs, f, true) >= 0
+pub let Array.any[T] (xs: Array[T]) (f: (T) -> Bool): Bool =
+    plum__array_short_scan_raw(xs, f, true) >= 0
 
 /// Clamped at both ends, like the real prelude's own: a slice past
 /// the end is the tail, not a crash, which matters because this
@@ -218,7 +219,8 @@ pub let Array.reverse[T] (xs: Array[T]): Array[T] = plum__array_reverse_acc(xs, 
 /// Whether `f` holds for every element. Stops at the first that
 /// fails; TRUE for an empty array, which is the convention everywhere
 /// and still surprises people.
-pub let Array.all[T] (xs: Array[T]) (f: (T) -> Bool): Bool = plum__array_short_scan_raw(xs, f, false) < 0
+pub let Array.all[T] (xs: Array[T]) (f: (T) -> Bool): Bool =
+    plum__array_short_scan_raw(xs, f, false) < 0
 
 let plum__array_find_acc[T] (xs: Array[T]) (f: (T) -> Bool) (i: Int): Option[T] =
     if i >= xs.len() { None } else if f(xs[i]) { Some(xs[i]) } else {

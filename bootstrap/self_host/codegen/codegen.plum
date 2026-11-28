@@ -4607,7 +4607,7 @@ let cg_fn_call
         cg_leaf_tail(p, tail, cg_array_insert(p, env, n, args[0], args[1], args[2]))
     } else if module_name == "<prelude>" && name == "plum__array_map_exact_raw" && args.len() == 2 {
         cg_leaf_tail(p, tail, cg_array_map(p, env, n, args[0], args[1], true))
-    } else if module_name == "<prelude>" && name == "plum__array_short_scan_raw" && args.len() == 3 {
+    } else if cg_is_array_short_scan(module_name, name, args.len()) {
         cg_leaf_tail(p, tail, cg_array_short_scan(p, env, n, args[0], args[1], args[2]))
     } else if cg_is_array_remove_compact(module_name, name) {
         cg_leaf_tail(p, tail, cg_array_remove(p, env, n, args[0], args[1], ret, true))
@@ -7077,6 +7077,9 @@ let cg_array_short_scan
 
 let cg_is_array_zip_with (module_name: String) (name: String): Bool =
     module_name == "<prelude>" && name == "plum__array_zip_with_raw"
+
+let cg_is_array_short_scan (module_name: String) (name: String) (count: Int): Bool =
+    name == "plum__array_short_scan_raw" && module_name == "<prelude>" && count == 3
 
 let cg_array_pair_length (left: String) (right: String) (len: String): String =
     "  ${len}_a = call i64 @plum_array_len(ptr ${left})\n"
@@ -13024,7 +13027,7 @@ let cg_find_tfn (p: CgProgram) (module_name: String) (name: String) (i: Int): Op
     else if p.fns[i].name == name && p.fns[i].module == module_name { Some(p.fns[i]) }
     else { cg_find_tfn(p, module_name, name, i + 1) }
 
-// Every `TFnCall` in a body, with its type arguments resolved through
+// Each emitted call in a body, with its type arguments resolved through
 // the enclosing specialization. A separate traversal from emission on
 // purpose: discovery must complete for the WHOLE program before any
 // function is emitted, since a call may be the first mention of an
@@ -13034,11 +13037,17 @@ let cg_calls_in (p: CgProgram) (e: typecheck.TExpr) (acc: Array[CgInst]): Array[
         TResetBefore(_, _, body) => cg_calls_in(p, body, acc),
         TMatchReleaseBefore(_, body) => cg_calls_in(p, body, acc),
         TReleaseBefore(_, body) => cg_calls_in(p, body, acc),
-        TFnCall(m, name, args, targs) => cg_calls_in_list(p, args, acc.push(CgInst {
-            module: m,
-            name: name,
-            targs: cg_concrete_list(p, targs, 0, [])
-        })),
+        TFnCall(m, name, args, targs) => {
+            // The inlined scan still needs the calls nested in its operands.
+            let with_callee = if cg_is_array_short_scan(m, name, args.len()) { acc } else {
+                acc.push(CgInst {
+                    module: m,
+                    name: name,
+                    targs: cg_concrete_list(p, targs, 0, [])
+                })
+            };
+            cg_calls_in_list(p, args, with_callee)
+        },
         TClosureCall(callee, args) => cg_calls_in_list(p, args, cg_calls_in(p, callee, acc)),
         TMethodCall(_, base, args) => cg_calls_in_list(p, args, cg_calls_in(p, base, acc)),
         TArrayNs(_, args) => cg_calls_in_list(p, args, acc),
