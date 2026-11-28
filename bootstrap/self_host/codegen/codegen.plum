@@ -7208,12 +7208,11 @@ let cg_array_ns_reuse
 // over-allocated cell. A cell whose header says 3 when it has room for
 // 8 is what an array literally is here, so nothing else has to change.
 //
-// The elements filtered OUT are the sharp case: their slots are
-// compacted over, and the cell is not released either because it IS the
-// result, so nothing else would ever drop them. The loop drops the
-// source's reference to EVERY element it visits, kept or not -- a kept
-// one has already taken a second reference for its new slot by then.
-// See `cg_reuse_elem_drop`.
+// The predicate consumes a retained argument while the original slot
+// stays owned. With reused storage, a kept element's reference transfers
+// into its compacted slot and a rejected element drops its reference.
+// A fresh result retains its kept references and releases the untouched
+// source after the final predicate call.
 let cg_array_filter_reuse
     (p: CgProgram)
     (env: Array[CgSlot])
@@ -7264,27 +7263,34 @@ let cg_array_filter_owned
     let skip_label = cg_label(b + 7);
     let cur_cnt = cg_reg(b + 8);
     let next_cnt = cg_reg(b + 9);
+    let transfer = reuse && cg_is_heap(elem);
+    let discard_label = if transfer { cg_label(b + 18) } else { skip_label };
+    let keep_ref = if transfer {
+        let copied = ev.concat("_copied");
+        "  ${copied} = select i1 ${same}, ptr null, ptr ${ev}\n".concat(cg_inc(elem, copied))
+    } else { cg_inc(elem, ev) };
+    let discard = if transfer {
+        "${discard_label}:\n".concat(cg_reuse_elem_drop(elem_ity, same, ev, b + 13))
+            .concat("  br label %${skip_label}\n")
+    } else { "" };
     let body = cg_elem_ptr_lines(old, lp.idx_reg, b)
         .concat("  ").concat(ev).concat(" = load ").concat(cg_llvm_ty(elem)).concat(", ptr ")
         .concat(cg_elem_ptr_reg(b)).concat("\n")
         .concat(cg_inc(elem, ev))
         .concat(cg_invoke(f.val, CgBool, ", ${cg_llvm_ty(elem)} ${ev}", b + 4))
         .concat("  br i1 ").concat(cg_reg(b + 5)).concat(", label %").concat(keep_label)
-        .concat(", label %").concat(skip_label).concat("\n")
+        .concat(", label %").concat(discard_label).concat("\n")
         .concat(keep_label).concat(":\n")
         .concat("  ").concat(cur_cnt).concat(" = load i64, ptr ").concat(cnt).concat("\n")
         .concat(cg_elem_ptr_lines(out, cur_cnt, b + 10))
-        .concat(cg_inc(elem, ev))
+        .concat(keep_ref)
         .concat("  store ").concat(cg_llvm_ty(elem)).concat(" ").concat(ev).concat(", ptr ")
         .concat(cg_elem_ptr_reg(b + 10)).concat("\n")
         .concat("  ").concat(next_cnt).concat(" = add i64 ").concat(cur_cnt).concat(", 1\n")
         .concat("  store i64 ").concat(next_cnt).concat(", ptr ").concat(cnt).concat("\n")
         .concat("  br label %").concat(skip_label).concat("\n")
-        .concat(skip_label).concat(":\n")
-        // After the join, so it runs once per element whether
-        // it was kept or dropped. A kept element already holds
-        // the second reference stored into its new slot.
-        .concat(if reuse { cg_reuse_elem_drop(elem_ity, same, ev, b + 13) } else { "" });
+        .concat(discard)
+        .concat(skip_label).concat(":\n");
     let final_cnt = cg_reg(b + 15);
     let ldrop = cg_label(b + 16);
     let lskip = cg_label(b + 17);
@@ -7320,7 +7326,7 @@ let cg_array_filter_owned
         globals: a.globals.concat(f.globals),
         val: out,
         ty: CgArray(elem),
-        n: b + 18,
+        n: if transfer { b + 19 } else { b + 18 },
     }
 }
 
