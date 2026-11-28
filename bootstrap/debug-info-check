@@ -113,7 +113,7 @@ fi
 
 # Exercise the public emission path at two widths. The release run removes
 # shared parsing/type-checking/emission costs from the debug allocation budget.
-# Repeatedly copying the annotated prefix grows faster than these linear caps.
+# Bound both the per-line fragments and the growth of the location table.
 if ! python3 - "$plum" "$work" <<'PYDEBUG'
 import os
 from pathlib import Path
@@ -153,7 +153,7 @@ for count in (128, 256):
     locations = {int(line) for line in re.findall(rb"!DILocation\(line: ([0-9]+),", debug_ir)}
     if not set(range(2, count + 2)).issubset(locations):
         sys.exit("wide allocation fixture lost statement locations")
-    ceiling = count * 31250
+    ceiling = count * 2000
     print("  debug allocation width=%d extra=%d bytes (ceiling %d)" %
           (count, extra, ceiling), flush=True)
     if extra > ceiling:
