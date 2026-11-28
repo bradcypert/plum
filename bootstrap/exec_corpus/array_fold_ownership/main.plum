@@ -56,6 +56,61 @@ let reclaim (): Int = Array.fold(big_words(), 0, |n, s| {
     n + if s.len() == 1024 { 1 } else { 0 }
 })
 
+let short_scans (): Unit = {
+    let calls = ref(0);
+    let found = Array.find_index(big_words(), |s| {
+        let i = calls.get();
+        calls.set(i + 1);
+        if i == 63 {
+            let bytes = unsafe { fold_live() };
+            if bytes >= 0 { assert(bytes < 8192) };
+            s.len() == 1024
+        } else { false }
+    });
+    assert_eq(found, Some(63));
+    assert_eq(calls.get(), 64);
+    calls.set(0);
+    assert(!Array.all([true, false, true], |value| {
+        calls.set(calls.get() + 1);
+        value
+    }));
+    assert_eq(calls.get(), 2);
+    let empty: Array[String] = [];
+    assert(!Array.any(empty, |s| true));
+    assert(Array.all(empty, |s| false));
+    assert_eq(Array.find_index(empty, |s| true), None);
+    let narrow: Array[U8] = [1, 2, 4];
+    assert_eq(Array.find_index(narrow, |v| v > 1), Some(1));
+    assert_eq(Array.find_index([1.5, 2.0, 2.5], |v| v > 2.0), Some(2));
+    let aliases = texts();
+    assert(Array.any(aliases, |s| s == aliases[1]));
+    let saved = ref("");
+    assert(Array.any(texts(), |s| {
+        saved.set(s);
+        true
+    }));
+    assert_eq(saved.get(), "a".repeat(32));
+    let mut source = texts();
+    assert(Array.any(source, {
+        source = ["new"];
+        |s: String| String.len(s) == 32
+    }));
+    assert_eq(source, ["new"]);
+}
+
+let scoped_scan (): Unit = {
+    let result = Array.find_index(resources(12), {
+        let captured = make(14);
+        |r: Resource| {
+            assert_eq(total(()), 12);
+            assert_eq(unsafe { Resource.raw(captured) }, 14);
+            unsafe { Resource.raw(r) } == 12
+        }
+    });
+    assert_eq(result, Some(0));
+    assert_eq(total(()), 15)
+}
+
 let scoped (): Unit = {
     assert_eq(
         Array.fold(resources(0), 0, |n, r| {
@@ -233,13 +288,15 @@ let round (): Unit = {
 let main (): Unit = {
     let baseline = live();
     assert_eq(reclaim(), 64);
+    short_scans(());
     round();
     scoped();
+    scoped_scan(());
     if baseline >= 0 {
         assert_eq(live(), baseline);
     };
-    assert_eq(total(), 12);
-    for i in 0..12 {
+    assert_eq(total(), 15);
+    for i in 0..15 {
         assert_eq(unsafe { fold_at(i) }, i);
     };
     println("Array.fold: owned arguments, prompt reclamation, operand aliases and scoped cleanup")

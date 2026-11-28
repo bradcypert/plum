@@ -180,12 +180,17 @@ let plum__array_contains_acc[T] (xs: Array[T]) (needle: T) (i: Int): Bool =
 /// Whether any element equals `needle`, compared structurally.
 pub let Array.contains[T] (xs: Array[T]) (needle: T): Bool = plum__array_contains_acc(xs, needle, 0)
 
-let plum__array_any_acc[T] (xs: Array[T]) (f: (T) -> Bool) (i: Int): Bool =
-    if i >= xs.len() { false } else if f(xs[i]) { true } else { plum__array_any_acc(xs, f, i + 1) }
+let plum__array_first_matching_index[T] (xs: Array[T]) (f: (T) -> Bool) (stop: Bool) (i: Int): Int =
+    if i >= xs.len() { -1 } else if f(xs[i]) == stop { i }
+    else { plum__array_first_matching_index(xs, f, stop, i + 1) }
+
+let plum__array_short_scan_raw[T] (xs: Array[T]) (f: (T) -> Bool) (stop: Bool): Int =
+    plum__array_first_matching_index(xs, f, stop, 0)
 
 /// Whether `f` holds for at least one element. Stops at the first
 /// that passes; false for an empty array.
-pub let Array.any[T] (xs: Array[T]) (f: (T) -> Bool): Bool = plum__array_any_acc(xs, f, 0)
+pub let Array.any[T] (xs: Array[T]) (f: (T) -> Bool): Bool =
+    plum__array_short_scan_raw(xs, f, true) >= 0
 
 /// Clamped at both ends, like the real prelude's own: a slice past
 /// the end is the tail, not a crash, which matters because this
@@ -211,13 +216,11 @@ let plum__array_reverse_acc[T] (xs: Array[T]) (i: Int) (acc: Array[T]): Array[T]
 /// A new array in the opposite order.
 pub let Array.reverse[T] (xs: Array[T]): Array[T] = plum__array_reverse_acc(xs, xs.len() - 1, [])
 
-let plum__array_all_acc[T] (xs: Array[T]) (f: (T) -> Bool) (i: Int): Bool =
-    if i >= xs.len() { true } else if f(xs[i]) { plum__array_all_acc(xs, f, i + 1) } else { false }
-
 /// Whether `f` holds for every element. Stops at the first that
 /// fails; TRUE for an empty array, which is the convention everywhere
 /// and still surprises people.
-pub let Array.all[T] (xs: Array[T]) (f: (T) -> Bool): Bool = plum__array_all_acc(xs, f, 0)
+pub let Array.all[T] (xs: Array[T]) (f: (T) -> Bool): Bool =
+    plum__array_short_scan_raw(xs, f, false) < 0
 
 let plum__array_find_acc[T] (xs: Array[T]) (f: (T) -> Bool) (i: Int): Option[T] =
     if i >= xs.len() { None } else if f(xs[i]) { Some(xs[i]) } else {
@@ -227,14 +230,11 @@ let plum__array_find_acc[T] (xs: Array[T]) (f: (T) -> Bool) (i: Int): Option[T] 
 /// The first element `f` accepts, or `None`.
 pub let Array.find[T] (xs: Array[T]) (f: (T) -> Bool): Option[T] = plum__array_find_acc(xs, f, 0)
 
-let plum__array_find_index_acc[T] (xs: Array[T]) (f: (T) -> Bool) (i: Int): Option[Int] =
-    if i >= xs.len() { None } else if f(xs[i]) { Some(i) } else {
-        plum__array_find_index_acc(xs, f, i + 1)
-    }
-
 /// The index of the first element `f` accepts, or `None`.
-pub let Array.find_index[T] (xs: Array[T]) (f: (T) -> Bool): Option[Int] =
-    plum__array_find_index_acc(xs, f, 0)
+pub let Array.find_index[T] (xs: Array[T]) (f: (T) -> Bool): Option[Int] = {
+    let i = plum__array_short_scan_raw(xs, f, true);
+    if i < 0 { None } else { Some(i) }
+}
 
 /// The index of the first element equal to `needle`, or `None`.
 pub let Array.index_of[T] (xs: Array[T]) (needle: T): Option[Int] =
