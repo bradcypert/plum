@@ -8,6 +8,7 @@ struct Owner { resource: Resource }
 
 extern "C" {
     fn fold_close(n: Int) -> Unit; fn fold_total() -> Int; fn fold_at(i: Int) -> Int; fn fold_live() -> Int;
+    fn fold_requests() -> Int;
 }
 
 handle Resource { on_drop: fold_close }
@@ -159,6 +160,75 @@ let scoped_find (): Unit = {
         },
         None => assert(false),
     }
+}
+
+let appendable_word (): String = {
+    let base = "x".repeat(128);
+    base.concat("y".repeat(32))
+}
+
+let appendable_words (): Array[String] = {
+    let mut words: Array[String] = [];
+    for i in 0..64 {
+        words = words.push(appendable_word(()));
+    };
+    words
+}
+
+let owned_iteration (): Unit = {
+    let mut calls = 0;
+    for word in big_words() {
+        calls = calls + 1;
+        if calls == 64 {
+            let bytes = unsafe { fold_live() };
+            if bytes >= 0 { assert(bytes < 8192) };
+        };
+        assert_eq(word.len(), 1024);
+    };
+    assert_eq(calls, 64);
+    let values = appendable_words(());
+    let before = unsafe { fold_requests() };
+    let mut length = 0;
+    for word in values {
+        length = length + word.concat("!").len();
+    };
+    if before >= 0 { assert_eq(unsafe { fold_requests() }, before) };
+    assert_eq(length, 64 * 161);
+    let mut source = texts();
+    let saved = ref("");
+    for word in source {
+        source = ["rebound"];
+        saved.set(word)
+    };
+    assert_eq(source, ["rebound"]);
+    assert_eq(saved.get(), "b".repeat(32));
+    for word in texts() {
+        assert_eq(word.concat("!").len(), 33);
+        assert_eq(word.len(), 32)
+    };
+    for word in texts() {
+        let word = "shadow".repeat(8);
+        assert_eq(word.concat("!").len(), 49);
+        assert_eq(word.len(), 48)
+    };
+}
+
+let scoped_iteration (): Unit = {
+    let mut sum = 0;
+    for resource in resources(19) {
+        assert_eq(total(()), 19);
+        sum = sum + unsafe { Resource.raw(resource) };
+    };
+    assert_eq(total(()), 21);
+    for work in [captured(21), captured(22)] {
+        assert_eq(total(()), 21);
+        sum = sum + work();
+    };
+    assert_eq(sum, 82);
+    assert_eq(total(()), 23);
+    for i in 19..23 {
+        assert_eq(unsafe { fold_at(i) }, i)
+    };
 }
 
 let scoped (): Unit = {
@@ -340,6 +410,7 @@ let main (): Unit = {
     assert_eq(reclaim(), 64);
     short_scans(());
     find_values(());
+    owned_iteration(());
     round();
     scoped();
     scoped_scan(());
@@ -356,6 +427,7 @@ let main (): Unit = {
     for i in 0..order.len() {
         assert_eq(unsafe { fold_at(i + 15) }, order[i]);
     };
+    scoped_iteration(());
     if baseline >= 0 {
         assert_eq(live(), baseline)
     };
