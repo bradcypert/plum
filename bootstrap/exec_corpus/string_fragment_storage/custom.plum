@@ -1,0 +1,6 @@
+// The runtime contract belongs to the prelude bindings.
+pub let bytes_slice_raw (b: Bytes) (lo: Int) (hi: Int): Bytes = "local slice".as_bytes()
+
+pub let plum__string_trim_start_raw (s: String): String = "local start"
+
+pub let plum__string_trim_end_raw (s: String): String = "local end"

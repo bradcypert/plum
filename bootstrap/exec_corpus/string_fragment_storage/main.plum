@@ -1,4 +1,5 @@
 use Memory;
+use custom;
 
 let live (): Int = match Memory.snapshot() {
     Some(s) => s.live_bytes,
@@ -50,6 +51,9 @@ let memory_round (): Unit = {
 }
 
 let main (): Unit = {
+    assert_eq(bytes_slice_raw("source".as_bytes(), 0, 6), "local slice".as_bytes());
+    assert_eq(plum__string_trim_start_raw(" start"), "local start");
+    assert_eq(plum__string_trim_end_raw("end "), "local end");
     let baseline = live();
     memory_round();
     if baseline >= 0 {
