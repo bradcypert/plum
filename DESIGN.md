@@ -18145,9 +18145,8 @@ unchanged -- not binary-safe variants of them, the same symbols, because
 they were never text-aware to begin with. `Os.read_bytes` and
 `Os.write_bytes` reuse the whole-file symbols outright: `Array[Bytes]`
 and `Array[String]` have identical layout and identical element release,
-so one piece of IR serves both. Conversion in either direction is
-`@plum_bytes_retag` -- one refcount increment, no copy, the same pointer
-back.
+so one piece of IR serves both. Conversion in either direction forwards
+the owned reference, with the same lowering used for managed CStr views.
 
 Only three operations genuinely did not exist for `String`: a
 byte-indexed read, a byte-indexed slice, and construction from
@@ -18162,13 +18161,6 @@ full validator rather than a lead-byte check: it rejects overlong forms
 surrogate block (`ED A0..BF`), and everything past U+10FFFF. Each of
 those is a real way for a decoder downstream to disagree about what a
 buffer says, and a continuation-bytes-only check accepts all four.
-
-The retag's increment is not an optimisation detail. A runtime primitive
-BORROWS its arguments and the call site releases them afterwards, while
-a return value carries +1 out -- so returning the argument pointer
-unchanged would let the call site's release free a cell the caller is
-still holding. Same convention mismatch that cost 12x in the RC work,
-one function later.
 
 ### What the checker had to be told, and what it was not
 

@@ -87,5 +87,17 @@ let main (): Unit = {
         Ok(s) => println("as_string: ".concat(s)),
         Err(e) => println("as_string: ".concat(e)),
     };
-    println("as_bytes hex: ".concat("hi".as_bytes().to_hex()))
+    println("as_bytes hex: ".concat("hi".as_bytes().to_hex()));
+
+    let source = "aé\x00".repeat(32);
+    let encoded = source.as_bytes();
+    let decoded = Result.unwrap_or(encoded.as_string(), "");
+    let appended = decoded.concat("!");
+    assert_eq(appended, source.concat("!"));
+    assert_eq(encoded.len(), 128);
+    assert_eq(encoded.at(127), Some(0));
+
+    let moved = "aé".repeat(32).as_bytes();
+    assert_eq(Result.unwrap_or(moved.as_string(), ""), "aé".repeat(32));
+    assert(Result.is_err(Bytes.from_array([195]).as_string()))
 }
