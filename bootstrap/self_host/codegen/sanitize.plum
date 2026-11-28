@@ -1,22 +1,59 @@
 // Clang's -fsanitize flag links the runtime but does not opt arbitrary LLVM
-// functions into address checks. Cover runtime helpers and synthesized
-// destructors as well as source functions, including their frame pointers.
-pub let cg_sanitize_address (ir: String): String = {
-    let mut out: Array[String] = [];
-    for line in ir.split("\n") {
-        if line.starts_with("define ") {
-            let attributes = " sanitize_address \"frame-pointer\"=\"all\"";
-            let at = match String.index_of(line, " !dbg ") {
-                Some(n) => n,
-                None => line.len() - 2
-            };
-            if !line.ends_with(" {") {
+// functions into address checks. Cover every emitted definition.
+let CG_ASAN_DEFINE: Bytes = "define ".as_bytes()
+
+let CG_ASAN_LOCATION: Bytes = " !dbg ".as_bytes()
+
+let CG_ASAN_HEADER_END: Bytes = " {".as_bytes()
+
+let CG_ASAN_ATTRIBUTES: String = " sanitize_address \"frame-pointer\"=\"all\""
+
+// Keep each unchanged run in one fragment and join once. The shared line
+// scanner uses byte offsets, which also preserve comments and whitespace.
+pub let cg_sanitize_address (ir: String): String =
+    cg_sanitize_spans(ir.as_bytes(), ir.len(), 0, 0, [])
+
+let cg_sanitize_spans
+    (bytes: Bytes)
+    (size: Int)
+    (line: Int)
+    (previous: Int)
+    (out: Array[String]): String
+= {
+    if line >= size {
+        if out.len() == 0 { str_of_bytes_raw(bytes) }
+        else { Array.concat_all(out.push(str_of_bytes_raw(bytes.slice(previous, size)))) }
+    } else {
+        let end = cg_ir_line_end(bytes, size, line);
+        if cg_ir_prefix(bytes, line, end, CG_ASAN_DEFINE) {
+            let brace = end - CG_ASAN_HEADER_END.len();
+            if brace < line || !cg_ir_prefix(bytes, brace, end, CG_ASAN_HEADER_END) {
                 cg_fail("unexpected LLVM function header during address instrumentation")
             };
-            out = out.push(line.slice(0, at).concat(attributes).concat(line.slice(at, line.len())));
+            let at = cg_sanitize_header_position(bytes, line, brace, end);
+            let slice = str_of_bytes_raw(bytes.slice(previous, at));
+            cg_sanitize_spans(bytes, size, end + 1, at, out.push(slice).push(CG_ASAN_ATTRIBUTES))
         } else {
-            out = out.push(line);
+            cg_sanitize_spans(bytes, size, end + 1, previous, out)
         }
-    };
-    Array.join(out, "\n")
+    }
+}
+
+let cg_sanitize_header_position (bytes: Bytes) (at: Int) (brace: Int) (end: Int): Int =
+    if at >= brace || cg_ir_prefix(bytes, at, end, CG_ASAN_LOCATION) { at }
+    else { cg_sanitize_header_position(bytes, at + 1, brace, end) }
+
+pub let test_address_attributes_preserve_llvm_rows (): Unit = {
+    assert_eq(cg_sanitize_address(""), "");
+    let untouched = "; café define void @comment() {\n\ndeclare void @declaration()\n";
+    assert_eq(cg_sanitize_address(untouched), untouched);
+    let prefix = untouched.concat("define void @plain()");
+    let between = " {\n  ret void\n}\n\ndefine void @debugged()";
+    let tail = " !dbg !7 {";
+    let ir = Array.concat_all([prefix, between, tail]);
+    let expected = Array.concat_all(
+        [prefix, CG_ASAN_ATTRIBUTES, between, CG_ASAN_ATTRIBUTES, tail]
+    );
+    assert_eq(cg_sanitize_address(ir), expected);
+    assert_eq(cg_sanitize_address(ir.concat("\n")), expected.concat("\n"));
 }
