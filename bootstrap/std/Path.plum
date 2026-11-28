@@ -30,7 +30,11 @@ let normalize_in (windows: Bool) (p: String): String =
 
 // All indices below are UTF-8 byte offsets. Separators, dots and drive
 // letters are ASCII, so boundaries found here cannot split a codepoint.
-let byte_at (b: Bytes) (i: Int): Int = Option.unwrap_or(b.at(i), 0)
+// The compiler lowers this private helper to a scalar byte load.
+let bytes_at_raw (b: Bytes) (i: Int): Int = 0
+
+let byte_at (b: Bytes) (i: Int): Int =
+    if i < 0 || i >= b.len() { 0 } else { bytes_at_raw(b, i) }
 
 let alpha (c: Int): Bool = (c >= 65 && c <= 90) || (c >= 97 && c <= 122)
 
@@ -112,46 +116,73 @@ pub let is_absolute (p: String): Bool = is_absolute_in(IS_WINDOWS, p)
 /// elsewhere. Resolving that needs syscalls and is a different
 /// function; `Os.remove_tree` already refuses to follow links out of
 /// a tree rather than trying to reason about them.
-// An owned linked stack gives constant-time push/pop without Array.remove
-// or Array.slice copying a growing prefix. Drain it explicitly at the end
-// so neither scanning nor releasing a deep path grows the machine stack.
-enum Segments { NoSegments, Segment(String, Segments) }
-
-let segment_strings (stack: Segments) (parts: Array[String]): Array[String] = match stack {
-    NoSegments => Array.reverse(parts),
-    Segment(part, rest) => {
-        parts = parts.push(part);
-        segment_strings(rest, parts)
-    },
+// Keep byte ranges on a reusable stack. A parent component only changes
+// its active length; text is copied for the final surviving ranges.
+let span_parts (b: Bytes) (spans: Array[Int]) (used: Int): Array[String] = {
+    let mut parts: Array[String] = [];
+    for i in 0..(used / 2) {
+        parts = parts.push(text_range(b, spans[i * 2], spans[i * 2 + 1]));
+    };
+    parts
 }
 
-let clean_parts (b: Bytes) (i: Int) (rooted: Bool) (stack: Segments): Array[String] =
-    if i >= b.len() { segment_strings(stack, []) }
-    else {
+let parent_span (b: Bytes) (start: Int) (end: Int): Bool =
+    end - start == 2 && byte_at(b, start) == 46 && byte_at(b, start + 1) == 46
+
+let clean_parts (b: Bytes) (i: Int) (rooted: Bool) (spans: Array[Int]) (used: Int): Array[String] =
+    if i >= b.len() { span_parts(b, spans, used) } else {
         let end = segment_end(b, i);
-        let part = text_range(b, i, end);
-        if part == "" || part == "." { clean_parts(b, end + 1, rooted, stack) }
-        else if part == ".." {
-            match stack {
-                Segment(top, rest) => if top != ".." { clean_parts(b, end + 1, rooted, rest) }
-                else { clean_parts(b, end + 1, rooted, Segment(part, Segment(top, rest))) },
-                NoSegments => if rooted { clean_parts(b, end + 1, rooted, NoSegments) }
-                else { clean_parts(b, end + 1, rooted, Segment(part, NoSegments)) },
+        let size = end - i;
+        if size == 0 || (size == 1 && byte_at(b, i) == 46) {
+            clean_parts(b, end + 1, rooted, spans, used)
+        } else {
+            let parent = parent_span(b, i, end);
+            if parent && used > 0 && !parent_span(b, spans[used - 2], spans[used - 1]) {
+                clean_parts(b, end + 1, rooted, spans, used - 2)
+            } else if parent && rooted && used == 0 {
+                clean_parts(b, end + 1, rooted, spans, used)
+            } else {
+                let next = if used == spans.len() { spans.push(i).push(end) }
+                else { spans.set(used, i).set(used + 1, end) };
+                clean_parts(b, end + 1, rooted, next, used + 2)
             }
-        } else { clean_parts(b, end + 1, rooted, Segment(part, stack)) }
+        }
     }
 
-/// Removes duplicate separators, `.` segments, and resolvable `..`
-/// segments, and drops a trailing separator. An empty result is `.`,
-/// matching Go's `filepath.Clean`. The empty string is not a path,
-/// and `.` is the one it means. Windows UNC server/share components
-/// form the root: parent segments cannot climb above that share.
-pub let clean_in (windows: Bool) (p: String): String = {
+// A canonical path has no empty or dot components and already uses the
+// requested separators. UNC roots go through the root parser.
+let canonical_segment_end (b: Bytes) (i: Int) (end: Int) (separator: Int): Int =
+    if i >= end { i } else {
+        let ch = byte_at(b, i);
+        if ch == separator || (separator == 92 && ch == 47) { i }
+        else { canonical_segment_end(b, i + 1, end, separator) }
+    }
+
+let canonical_parts (b: Bytes) (start: Int) (end: Int) (separator: Int): Bool = {
+    let stop = canonical_segment_end(b, start, end, separator);
+    let size = stop - start;
+    if size == 0 || (size == 1 && byte_at(b, start) == 46) || parent_span(b, start, stop) { false }
+    else if stop == end { true }
+    else if byte_at(b, stop) != separator || stop + 1 >= end { false }
+    else { canonical_parts(b, stop + 1, end, separator) }
+}
+
+let clean_canonical (windows: Bool) (b: Bytes): Bool = {
+    let drive = drive_end(windows, b);
+    let end = b.len();
+    if end == drive { false } else {
+        let separator = if windows { 92 } else { 47 };
+        let first = drive + if byte_at(b, drive) == separator { 1 } else { 0 };
+        first == end || canonical_parts(b, first, end, separator)
+    }
+}
+
+let clean_with_segments (windows: Bool) (p: String): String = {
     let n = normalize_in(windows, p);
     let b = n.as_bytes();
     let split = bounds(windows, b);
     let drive = text_range(b, 0, split.drive);
-    let parts = clean_parts(b, split.root, split.rooted, NoSegments);
+    let parts = clean_parts(b, split.root, split.rooted, [], 0);
     let joined = Array.join(parts, separator_in(windows));
     let root = if split.unc {
         let names = drop_empty(String.split(text_range(b, 2, split.root), "/"), 0, []);
@@ -163,6 +194,16 @@ pub let clean_in (windows: Bool) (p: String): String = {
     } else if split.unc && split.root > 2 { root.concat(separator_in(windows)).concat(joined) }
     else { root.concat(joined) }
 }
+
+/// Removes duplicate separators, `.` segments, and resolvable `..`
+/// segments, and drops a trailing separator. An empty result is `.`,
+/// matching Go's `filepath.Clean`. The empty string is not a path,
+/// and `.` is the one it means. Windows UNC server/share components
+/// form the root: parent segments cannot climb above that share.
+pub let clean_in (windows: Bool) (p: String): String =
+    // The one-piece join shares compact storage and copies oversized cells.
+    if clean_canonical(windows, p.as_bytes()) { Array.concat_all([p]) }
+    else { clean_with_segments(windows, p) }
 
 pub let clean (p: String): String = clean_in(IS_WINDOWS, p)
 

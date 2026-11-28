@@ -1,7 +1,7 @@
 use Path;
 
-// Exercise long names, trailing separators, many surviving segments,
-// a deep prefix popped in full, and repeated push/pop after a deep prefix.
+// Exercise long names, trailing separators, already clean paths, a deep
+// prefix popped in full, and repeated push/pop after a deep prefix.
 // Bound bytes as well as allocation count: linear counts can hide
 // quadratic copying. Use both conventions on every CI host.
 // Build inputs once from fragments; String.repeat itself can copy growing
@@ -27,6 +27,7 @@ let main (): Unit = {
         assert(Path.clean_in(windows, popped) == ".");
         let churn = deep.concat(repeated("b/../", 1000)).concat("leaf");
         let want = String.replace(deep.concat("leaf"), "/", Path.separator_in(windows));
+        assert(Path.clean_in(windows, want) == want);
         assert(Path.clean_in(windows, churn) == want);
     };
     println("path allocation checks passed")
