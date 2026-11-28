@@ -1471,7 +1471,7 @@ let parse_primary_pattern (tokens: Array[lexer.Token]) (pos: Int): PatResult =
         // the last segment back into a type name -- the parser stopped
         // at the first dot and never gave them the segments.
         TokIdent(name) => {
-            if is_capitalized(name) || check(tokens, pos + 1, TokDot) {
+            if lexer.is_capitalized(name) || check(tokens, pos + 1, TokDot) {
                 parse_path_shaped_pattern(tokens, pos)
             }
             else { PatResult { value: PIdent(name, offset_at(pos)), next_pos: pos + 1 } }
@@ -1482,15 +1482,6 @@ let parse_primary_pattern (tokens: Array[lexer.Token]) (pos: Int): PatResult =
             PatResult { value: PWildcard, next_pos: pos }
         },
     }
-
-// Pre-split uppercase alphabet as a GLOBAL (evaluated once), tested
-// with `Array.contains` — NOT `String.index_of("ABC...", c)`, which
-// re-splits the whole 26-character literal into 26 fresh heap strings
-// on every single call. See `lexer/lexer.plum`'s own character-
-// classification comment for the measurement behind this.
-let UPPERCASE_CHARS: Array[String] = chars_of("ABCDEFGHIJKLMNOPQRSTUVWXYZ")
-
-let is_capitalized (name: String): Bool = Array.contains(UPPERCASE_CHARS, chars_of(name)[0])
 
 let parse_path_shaped_pattern (tokens: Array[lexer.Token]) (pos: Int): PatResult = {
     let path_r = parse_dotted_path_acc(tokens, pos, []);
@@ -2165,7 +2156,7 @@ let parse_postfix_from (tokens: Array[lexer.Token]) (pos: Int) (expr: PExpr) (ns
 let next_bracket_is_generic (tokens: Array[lexer.Token]) (pos: Int): Bool =
     match tokens[pos] {
         TokIdent(name) => {
-            let capitalized = is_capitalized(name);
+            let capitalized = lexer.is_capitalized(name);
             if check(tokens, pos + 1, TokDot) { next_bracket_is_generic(tokens, pos + 2) } else {
                 capitalized
             }
@@ -2368,7 +2359,7 @@ let parse_paren_or_tuple (tokens: Array[lexer.Token]) (pos: Int): ExprResult = {
 let parse_path_shaped_expr (tokens: Array[lexer.Token]) (pos: Int) (ns: Bool): ExprResult = {
     let path_r = parse_expr_path_acc(tokens, pos, []);
     let last_name = path_r.value[path_r.value.len() - 1];
-    if check(tokens, path_r.next_pos, TokLBrace) && is_capitalized(last_name) && !ns {
+    if check(tokens, path_r.next_pos, TokLBrace) && lexer.is_capitalized(last_name) && !ns {
         note_type_site(pos, path_r.value, TypeConstructionSite);
         parse_struct_literal(tokens, path_r.next_pos, path_r.value)
     } else {
